@@ -12,19 +12,27 @@ bullets of the step. `<scripts>` is the plugin's scripts folder — build-screen
 
 ## Record the evidence in the plan (`verification`)
 
-On web, `--compare … --record-plan` writes the tool-owned keys from the report — `mode` (`"static-only"` + its
-`reason` when the measured file was static-only), `renderer`, `artifacts`, the open high/medium `deltas`, `a11y`
-(from `report.behaviour.summary`, when the behaviour checks ran) and a `recorded` block with the report's sha256 —
-and leaves your hand keys alone; **you still write `coverage`:{rendered:[…], notChecked:[{what, why}]}** (and any
-notes). It owns `deltas`: a row you wrote there is replaced (with a note) — a residual you chose to keep goes in
-`deviations[]`, with its reason.
+On web, `--compare … --record-plan` writes ONE tool-owned block from the report, `verification.recorded`, whole
+every run: the report's file, sha256, verdict, headline and counts, `mode` (`"static-only"` + its `reason` when the
+measured file was static-only), `renderer`, `artifacts`, the open high/medium `deltas` and `a11y` (from
+`report.behaviour.summary`, when the behaviour checks ran). It leaves the rest of `verification` alone; **you still
+write `coverage`:{rendered:[…], notChecked:[{what, why}]}** (and any notes). Never edit the block: the hook
+**blocks** on a key it does not write, a value of the wrong kind, or anything the report it names (same sha256)
+decides — verdict, headline, counts, mode, reason, renderer, the deltas, a11y — that is not what that report says;
+the edit reopens a plan the hook had closed, and `--status` then reads blocked (or failed, when a report says fail —
+that comes first). Re-run `--compare --record-plan` (or restore the block); a residual you chose to keep goes in
+`deviations[]`, with its reason. A plan recorded before the block held all of this keeps `mode`, `artifacts`,
+`deltas`, `a11y`… at the top level of `verification`: the first `--record-plan` removes the ones the new record
+holds (the record has its own, written from the report; with a note) — a hand `a11y`, or a `reason` (static-only) or
+`renderer` (rendered) this report does not give, stays at the top level and is still read from there; after that, a
+key the record holds — or a hand `headline`/`verdict` — at the top level is ignored, with a warning.
 
 Elsewhere (or by hand) the shape is `{mode:"rendered", renderer, artifacts:[<paths on disk>], deltas:[<the
-report's open high/medium deltas, [] if none>], coverage:{…}, a11y:{tool, violations, warnings, report}?}` (copied from
-`report.behaviour.summary`) — an `a11y` result and an a11y entry in `notChecked` never sit side by side (the hook
-flags a block that contradicts itself). A recorded block older than its report draws a warning: re-run
-`--compare --record-plan` after the last change. Nothing can render: `{mode:"static-only", reason:<what you checked
-for and didn't find>}`.
+report's open high/medium deltas, [] if none>], coverage:{…}, a11y:{tool, violations, warnings, report}?}` (copied
+from `report.behaviour.summary`), at the top level of `verification` — an `a11y` result and an a11y entry in
+`notChecked` never sit side by side (the hook flags a block that contradicts itself). A recorded block older than its
+report draws a warning: re-run `--compare --record-plan` after the last change. Nothing can render:
+`{mode:"static-only", reason:<what you checked for and didn't find>}`.
 
 ## What the Stop hook checks
 
@@ -37,8 +45,8 @@ a builder claimed none.
 
 It **blocks** on: a raw colour in a source file of `files[]` whose value the plan resolved to a real token (`#hex`,
 `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and a line that *defines* a
-token, e.g. `--color-figma-brand-600: #5B5FC7`, is not a usage), a visible design node with no anchor, and — web
-profiles — no `data-dt-node` tag in any plan's files.
+token, e.g. `--color-figma-brand-600: #5B5FC7`, is not a usage), a visible design node with no anchor, — web
+profiles — no `data-dt-node` tag in any plan's files, and a hand edit of `verification.recorded` (above).
 
 The rest warns: merged Figma tokens, missing a11y/coverage evidence, tag coverage below 50%, `[16px]` where a token
 exists, a `reused` module nothing that renders the screen imports, a colour `codeToken` declared nowhere (skipped

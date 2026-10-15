@@ -46,6 +46,16 @@ export function readJson<T>(file: string, guard: DocGuard<T>): ReadResult<T> {
   return { doc: parsed };
 }
 
+/** A regular file's bytes, or null when it is absent, unreadable or not a regular file (a directory, a FIFO, a device —
+ *  a path a hand-edited document names must not hang a hook: /dev/zero never ends, a FIFO's open waits for a writer).
+ *  Checked before the open (opening a FIFO blocks) and again on the open descriptor. */
+export function readRegularFile(file: string): Buffer | null {
+  try { if (!fs.statSync(file).isFile()) return null; } catch { return null; }
+  let fd: number;
+  try { fd = fs.openSync(file, "r"); } catch { return null; }
+  try { return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null; } catch { return null; } finally { fs.closeSync(fd); }
+}
+
 /** The document, or null when it is absent, unreadable or the wrong shape — for best-effort lookups. */
 export function readJsonOrNull<T>(file: string, guard: DocGuard<T>): T | null {
   const r = readJson(file, guard);

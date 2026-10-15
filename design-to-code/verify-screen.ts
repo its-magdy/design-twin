@@ -36,7 +36,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
-import { parsePlanText, recordPlan, updatePlan } from "./plan-record.ts";
+import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
   isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
@@ -193,8 +193,11 @@ function main(argv: string[]): number | Promise<number> {
     "      The plan for this frame (--plan <plan.json>; else the plan file --expect merged interactions from, while it exists;\n" +
     "      else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted\n" +
     "      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).\n" +
-    "      --record-plan: then writes the tool-owned keys of that plan's verification block from the report (mode, renderer,\n" +
-    "      artifacts, open high/medium deltas, a11y, recorded{report sha, verdict, counts}); hand keys (coverage, notes) stay.\n" +
+    "      --record-plan: then writes that plan's verification.recorded from the report, whole — report sha, verdict,\n" +
+    "      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay. Of the\n" +
+    "      record's keys at verification's top level (an older record, a hand-written plan), one the new record holds is\n" +
+    "      removed (the record has its own, from the report); one it lacks stays — an a11y, or the reason of a static-only\n" +
+    "      or the renderer of a rendered report that gives none.\n" +
     "      No plan, or several and no --plan: exit 2 before comparing. A failed record — e.g. a report outside the project\n" +
     "      (the plan records project-relative paths only) — leaves the report written (exit 1).\n" +
     `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
@@ -263,9 +266,10 @@ function main(argv: string[]): number | Promise<number> {
 
 /** The CLI's output: the expectation (--expect) or the report and its .md (--compare) beside `base`, atomically; no base = stdout. */
 function write(doExpect: boolean, base: string | undefined, obj: unknown, md?: string): void {
-  if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
-  // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+  if (!base) { process.stdout.write(reportFileText(obj)); return; }
+  // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation. The report's text is
+  // the one --record-plan hashes (plan-record.ts reportFileText).
+  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
   if (md) writeFileAtomic(base + ".report.md", md);
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }
@@ -573,7 +577,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
   if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — ` +
     `fixed? drop them`);
-  // the report just written → the tool-owned keys of plan.verification (plan-record.ts). A failure leaves
+  // the report just written → plan.verification.recorded, the tool-owned block (plan-record.ts). A failure leaves
   // the report in place and says so (exit 1): the plan then still holds the previous record.
   if (recordPlanFlag && planHit) {
     // relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
@@ -583,7 +587,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
-      console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification)` : `${planHit.file}: plan.verification already records ${reportRel} — unchanged`);
+      console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification.recorded)` : `${planHit.file}: plan.verification.recorded already records ${reportRel} — unchanged`);
     } catch (e) {
       console.error(`error  --record-plan: ${errMsg(e)} — ${reportRel} is written; ${planHit.file} was not updated`);
       return 1;

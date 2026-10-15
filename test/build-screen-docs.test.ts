@@ -390,11 +390,11 @@ console.log("build-screen docs:");
   check("verify skill: a \"Behaviour and accessibility\" paragraph — checks never change the verdict, a fail is a Stop-hook warning, a measurable a11y failure is never waived",
     /\*\*Behaviour and accessibility\b/.test(verifySkill) && /never change the verdict/.test(verifySkill) && /Stop hook/.test(verifySkill)
     && /a measurable accessibility failure is never waived/.test(verifySkill) && /raise a designer question/.test(verifySkill));
-  check("verify skill: copy report.behaviour.summary into plan.verification.a11y (tool, violations = fail, warnings = warn)",
-    /copies `report\.behaviour\.summary` into `plan\.verification\.a11y`/.test(verifySkill) && /`tool` being `"axe-core <version>"` when axe-core ran, else\s+`"verify-probe behaviour checks"`/.test(verifySkill) // the strings plan-record writes
+  check("verify skill: --record-plan writes report.behaviour.summary as plan.verification.recorded.a11y (tool, violations = fail, warnings = warn)",
+    /it writes `report\.behaviour\.summary` as `plan\.verification\.recorded\.a11y`/.test(verifySkill) && /`tool` being `"axe-core <version>"` when axe-core ran, else\s+`"verify-probe behaviour checks"`/.test(verifySkill) // the strings plan-record writes
     && /violations: summary\.fail/.test(verifySkill) && /warnings: summary\.warn/.test(verifySkill));
-  check("verify skill: a11y.report names the report copied from; summary.fail counts a +N more row's elements; keys only on a button-like opener, outside clicks only on a backdrop, the safe close never a link, closed-menu openers not-run",
-    /report: "<the report\.json you copied it from>"/.test(verifySkill) && /`summary\.fail` counts the elements behind a "\+N more" row/.test(verifySkill)
+  check("verify skill: a11y.report names the report it came from; summary.fail counts a +N more row's elements; keys only on a button-like opener, outside clicks only on a backdrop, the safe close never a link, closed-menu openers not-run",
+    /report: "<the report\.json it came from>"/.test(verifySkill) && /`summary\.fail` counts the elements behind a "\+N more" row/.test(verifySkill)
     && /Enter\/Space are pressed only on the opener itself when it is a button-like control/.test(verifySkill)
     && /a click outside a dialog lands only on its backdrop or scrim/.test(verifySkill) && /the safe close is a button clicked with the mouse, or a link only when its `href` is `#`, empty or `javascript:`/.test(verifySkill)
     && /never on another control inside a card or row opener/.test(verifySkill)
@@ -814,10 +814,18 @@ console.log("build-screen docs:");
     [verifier, verifySkill].every((d) => /`inferred\[\]`/.test(d) && /\{"?nodeId"?\??, "?state"?, "?built"?, "?why"?\??\}/.test(d) && /Inferred, not designed/.test(d)) && [verifier, verifySkill].every((d) => /never graded and never in the verdict/.test(d)));
   check("visual-verifier and verify skill: quote the report's own delta text (it names the axis/dimension), never restate a bound",
     [verifier, verifySkill].every((d) => /Quote the report's own delta text — it names the axis or dimension — and never restate a bound/.test(d)));
-  check("verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y/recorded; coverage stays hand-written; no 'Record the result by hand'",
+  check("verify skill, build-screen and references/verify.md: --record-plan writes mode/renderer/artifacts/deltas/a11y inside the tool's recorded block; coverage stays hand-written; no 'Record the result by hand'",
     /--record-plan/.test(verifySkill) && /--compare … --record-plan/.test(skill) && /--record-plan/.test(verifyRef) && !/Record the result by hand/.test(verifySkill)
-    && /`mode`, `renderer`, `artifacts`, the open high\/medium `deltas`/.test(verifySkill) && /you still write `coverage`/.test(skill) && /\(yours to write\)/.test(verifyRef)
+    && /inside the tool's `recorded` block beside `mode`, `renderer`, `artifacts`, the open high\/medium `deltas`/.test(verifySkill) && /you still write `coverage`/.test(skill) && /\(yours to write\)/.test(verifyRef)
     && /none, or several and no `--plan`, is exit 2 before anything is compared/.test(verifySkill));
+  check("verify skill, build-screen, hook-and-status and references/verify.md: verification.recorded is the tool's, written whole; a hand edit blocks; residuals go in deviations[]; the first record removes the older top-level keys it holds, and a11y/reason/renderer it lacks stay",
+    /writes the plan's `verification\.recorded` block from this report/.test(verifySkill) && /The block is the tool's, written whole every run/.test(verifySkill)
+    && /Never edit it: `verify-build` \*\*blocks\*\* on a key it does not write, a value of the wrong kind, or a verdict, headline or count that the report it names \(same sha256\) does not say/.test(verifySkill)
+    && /the first `--record-plan` removes the ones the new record holds \(the record has its own, written from the report\)/.test(verifySkill) && /a hand `a11y`, or a `reason` \(static-only\) or `renderer` \(rendered\) this report does not give, stays at the top level and is still read from there/.test(verifySkill) && /at the top level is ignored, with a warning/.test(verifySkill)
+    && [verifySkill, skill].every((d) => /the edit reopens a plan the hook had closed, and `--status` then reads blocked \(or failed, when a report says fail — that comes first\)/.test(d)) && /`--record-plan` removes the ones the new record holds \(the record has its own, written from the report; with a note\)/.test(skill) && /a hand `a11y`, or a `reason` \(static-only\) or `renderer` \(rendered\) this report does not give, stays at the top level/.test(skill)
+    && /tool-owned `verification\.recorded` block from the report \(never edit it\)/.test(skill) && /and a hand edit of `verification\.recorded`, and warns on the rest/.test(skill)
+    && /writes ONE tool-owned block from the report, `verification\.recorded`, whole every run/.test(skill) && /a residual you chose to keep goes in `deviations\[\]`/.test(skill)
+    && /and a hand edit of `verification\.recorded` \(above\)/.test(skill) && /write `verification\.recorded`, the tool's block/.test(verifyRef));
   check("build-screen and references/verify.md: record the deviations you already know about at build time, with a reason",
     /record a deviation you already know about when you build it, with its reason/.test(skill) && /Record the differences you already know about as `deviations\[\]` \(with a reason\) when you build them/.test(verifyRef));
   check("verify skill and build-screen: a deviations[] row with field \"reference\" marks the reference illustrative; it never waives a delta",

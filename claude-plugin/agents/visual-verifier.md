@@ -104,8 +104,9 @@ screenshot behind it (and `<screen>-dark.png`, `<screen>-rtl.png`, `<screen>-lar
 
 **Re-render right before you write each artifact, and take every measurement from that same load.**
 Your caller may keep editing while you run, and a dev server with hot reload picks those edits up mid-pass: a
-saved screenshot can then show strings the shipped code does not have, while the plan's own
-`verification.artifacts` points at it as proof. An artifact that does not depict the build it claims to depict is
+saved screenshot can then show strings the shipped code does not have, while the plan's own artifact list —
+`verification.recorded.artifacts`, which `--record-plan` writes, or `verification.artifacts` in a plan with no
+record — points at it as proof. An artifact that does not depict the build it claims to depict is
 worse than no artifact. If the build changes under you, say so in `notes`: name the file and its `stat` mtime (or
 the probe's navigation log) showing it moved between loads; no evidence, no claim (§6).
 

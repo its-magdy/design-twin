@@ -415,6 +415,7 @@ function updateJsonLike(file, fn, opts = {}) {
 }
 
 // design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -610,6 +611,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -619,6 +621,53 @@ function isPlan(x) {
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function parsePlan(x) {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var recClosed = (o, at, fields) => {
+  const out = Object.keys(o).filter((k) => !Object.hasOwn(fields, k)).map((k) => `${at}${k}`);
+  for (const [k, f] of Object.entries(fields)) if (o[k] === void 0 ? f.need : !f.ok(o[k])) out.push(`${at}${k}`);
+  return out;
+};
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
+var RECORD_FIELDS = {
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
+var RECORD_V1_KEYS = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+function recordV2OnlyKeys(rec) {
+  return Object.keys(rec).filter((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+}
+function isRecordV2Shaped(rec) {
+  return rec.schema !== void 0 || recordV2OnlyKeys(rec).length > 0;
+}
+function recordProblems(rec) {
+  const out = recClosed(rec, "", RECORD_FIELDS);
+  if (isJsonObject(rec.counts)) out.push(...recClosed(rec.counts, "counts.", RECORD_COUNTS));
+  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...isJsonObject(d) ? recClosed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`]));
+  if (isJsonObject(rec.a11y)) out.push(...recClosed(rec.a11y, "a11y.", RECORD_A11Y));
+  return out;
+}
+function isVerificationRecord(x) {
+  return isJsonObject(x) && isRecordV2Shaped(x) && recordProblems(x).length === 0;
 }
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
@@ -633,6 +682,29 @@ function isStringRecord(x) {
   return isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
+
+// design-to-code/plan-waivers.ts
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+function planInteractionsSha256(plan) {
+  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
+  return sha256Hex(canonical(rows));
+}
 
 // design-to-code/run-cache.ts
 import fs7 from "node:fs";
@@ -717,13 +789,13 @@ function realpath(p) {
   }
   return fs7.realpathSync(p);
 }
-function canonical(p) {
+function canonical2(p) {
   const abs = path5.resolve(p);
   try {
     return realpath(abs);
   } catch {
     const parent = path5.dirname(abs);
-    return parent === abs ? abs : path5.join(canonical(parent), path5.basename(abs));
+    return parent === abs ? abs : path5.join(canonical2(parent), path5.basename(abs));
   }
 }
 var hasPnp = (d) => exists(path5.join(d, ".pnp.cjs")) || exists(path5.join(d, ".pnp.js"));
@@ -755,7 +827,7 @@ function installRootOf(dir) {
   return P;
 }
 function runCacheOf(verifyDir) {
-  const v = canonical(verifyDir);
+  const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
     const cache = path5.join(root, "node_modules", ".cache", CACHE_NAME);
@@ -768,7 +840,7 @@ function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 function planLockOf(planFile) {
-  const abs = canonical(planFile);
+  const abs = canonical2(planFile);
   const root = installRootOf(path5.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path5.relative(root, abs).split(path5.sep).join("/");
@@ -799,14 +871,73 @@ var RunCacheUnwritable = class extends Error {
 // design-to-code/plan-record.ts
 var slash = (p) => p.split(path6.sep).join("/").split("\\").join("/");
 var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
+var reportFileText = (report) => JSON.stringify(report, null, 2) + "\n";
 function parsePlanText(raw, file) {
   const parsed = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
   const pp = parsePlan(parsed);
   if (!("plan" in pp)) throw new Error(`${file} ${pp.error}`);
   return pp.plan;
 }
-var RECORDED_DELTA_KEYS = /* @__PURE__ */ new Set(["nodeId", "field", "severity", "expected", "actual"]);
-var isRecordedDelta = (d) => isJsonObject(d) && typeof d.nodeId === "string" && typeof d.field === "string" && (d.severity === "high" || d.severity === "medium") && Object.keys(d).every((k) => RECORDED_DELTA_KEYS.has(k));
+var TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
+function recordFacts(report, reportAt) {
+  const count = (x) => typeof x === "number" && Number.isFinite(x) ? x : 0;
+  const text = (x) => typeof x === "string" && x ? x : void 0;
+  const s = report.summary;
+  const all = Array.isArray(report.deltas) ? report.deltas : [];
+  const b = report.behaviour;
+  const notMeasured = report.coverage && typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : Array.isArray(report.notMeasured) ? report.notMeasured.length : 0;
+  const counts = {
+    high: count(s && s.high),
+    medium: count(s && s.medium),
+    low: count(s && s.low),
+    accepted: s && typeof s.accepted === "number" ? count(s.accepted) : all.filter((d) => d.accepted).length,
+    notMeasured: count(notMeasured),
+    inferred: s && typeof s.inferred === "number" ? count(s.inferred) : Array.isArray(report.inferred) ? report.inferred.length : 0
+  };
+  const deltas = [];
+  for (const d of all) {
+    if (d.accepted || typeof d.nodeId !== "string" || typeof d.field !== "string") continue;
+    const severity = d.severity === "high" ? "high" : d.severity === "medium" ? "medium" : null;
+    if (severity) deltas.push({ nodeId: d.nodeId, field: d.field, severity, ...ifDefined("expected", d.expected), ...ifDefined("actual", d.actual) });
+  }
+  const staticOnly = report.mode === "static-only";
+  const ran = !!b && b.ran === true;
+  const tool = b && b.axe && "version" in b.axe && typeof b.axe.version === "string" ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
+  return {
+    verdict: typeof report.verdict === "string" ? report.verdict : "",
+    headline: typeof report.headline === "string" ? report.headline : "",
+    ...ifDefined("behaviourHeadline", text(b && b.headline)),
+    counts,
+    mode: staticOnly ? "static-only" : "rendered",
+    ...staticOnly ? ifDefined("reason", text(report.reason)) : ifDefined("renderer", text(report.renderer)),
+    deltas,
+    ...ran && b ? { a11y: { tool, violations: count(b.summary && b.summary.fail), warnings: count(b.summary && b.summary.warn), report: reportAt } } : {}
+  };
+}
+function verificationFacts(v) {
+  const top = v && typeof v === "object" ? v : {};
+  const rec = top.recorded;
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
+    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
+  }
+  const r = rec;
+  const has = (k) => r[k] !== void 0;
+  const str = (x) => typeof x === "string" ? x : void 0;
+  const num2 = (x) => typeof x === "number" ? x : void 0;
+  const a = r.a11y;
+  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num2(a.violations)), ...ifDefined("warnings", num2(a.warnings)), ...ifDefined("report", str(a.report)) } : void 0;
+  return {
+    at: "verification.recorded",
+    a11yAt: has("a11y") ? "verification.recorded" : "verification",
+    record: isVerificationRecord(r) ? r : null,
+    mode: has("mode") ? str(r.mode) : top.mode,
+    reason: has("reason") ? str(r.reason) : top.reason,
+    renderer: has("renderer") ? str(r.renderer) : top.renderer,
+    artifacts: has("artifacts") ? r.artifacts : top.artifacts,
+    deltas: has("deltas") ? r.deltas : top.deltas,
+    a11y: has("a11y") ? a11y : top.a11y
+  };
+}
 function recordPlan(planFile, report, reportRel, opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const abs = path6.resolve(cwd, planFile);
@@ -853,35 +984,35 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
       if (typeof a === "string") addArtifact(a);
       else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
     }
-    if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.artifacts (project-relative paths only): ${outside.join(", ")}`);
-    const deltas = report.deltas;
-    const compact = deltas.filter((d) => !d.accepted && (d.severity === "high" || d.severity === "medium")).map((d) => ({ nodeId: d.nodeId, field: d.field, severity: d.severity, expected: d.expected, actual: d.actual }));
-    const s = report.summary;
-    const notMeasured = typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : report.notMeasured.length;
-    let reportSha256;
+    if (outside.length) notes.push(`${outside.length} artifact(s) outside the project not recorded in verification.recorded.artifacts (project-relative paths only): ${outside.join(", ")}`);
+    const text = reportFileText(report);
+    const reportSha256 = sha256Hex(text);
+    let onDisk = null;
     try {
-      reportSha256 = sha256Hex(fs8.readFileSync(path6.resolve(cwd, reportAt)));
+      onDisk = fs8.readFileSync(path6.resolve(cwd, reportAt));
     } catch {
-      reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
-      notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
     }
+    if (onDisk === null) notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
+    else if (sha256Hex(onDisk) !== reportSha256) notes.push(`${reportAt} on disk is not the report this run wrote (another --compare rewrote it?) \u2014 recorded this run's report; verify-build warns that the plan records an older run until --compare --record-plan runs again`);
     const b = report.behaviour;
+    const asWritten = JSON.parse(text);
+    const facts = recordFacts(isVerifyReport(asWritten) ? asWritten : report, reportAt);
     const recorded = {
+      schema: PLAN_VERIFICATION_RECORD_SCHEMA,
       by: "verify-screen --record-plan",
       at: opts.now ?? (/* @__PURE__ */ new Date()).toISOString(),
       report: reportAt,
       reportSha256,
-      verdict: report.verdict,
-      headline: report.headline,
-      ...b.headline ? { behaviourHeadline: b.headline } : {},
-      counts: {
-        high: s.high,
-        medium: s.medium,
-        low: s.low,
-        accepted: s.accepted ?? deltas.filter((d) => d.accepted).length,
-        notMeasured,
-        inferred: s.inferred ?? (report.inferred ? report.inferred.length : 0)
-      }
+      verdict: facts.verdict,
+      headline: facts.headline,
+      ...ifDefined("behaviourHeadline", facts.behaviourHeadline),
+      counts: facts.counts,
+      mode: facts.mode,
+      ...ifDefined("reason", facts.reason),
+      ...ifDefined("renderer", facts.renderer),
+      artifacts,
+      deltas: facts.deltas,
+      ...ifDefined("a11y", facts.a11y)
     };
     const v = plan.verification ?? {};
     const hook = v.hook;
@@ -890,34 +1021,22 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
       notes.push("the hook's record held an older plan hash that also covered verification \u2014 re-stamped with the current one, so this record does not reopen the plan");
     }
     const prev = v.recorded;
-    if (prev && typeof prev.at === "string" && JSON.stringify({ ...prev, at: "" }) === JSON.stringify({ ...recorded, at: "" })) recorded.at = prev.at;
-    if (report.mode === "static-only") {
-      v.mode = "static-only";
-      if (report.reason) v.reason = report.reason;
-      delete v.renderer;
-    } else {
-      if (v.mode === "static-only") delete v.reason;
-      v.mode = "rendered";
-      if (typeof report.renderer === "string" && report.renderer) v.renderer = report.renderer;
-    }
-    v.artifacts = artifacts;
-    const hand = Array.isArray(v.deltas) ? v.deltas.filter((d) => !isRecordedDelta(d)) : [];
-    if (hand.length) notes.push(`${hand.length} row(s) in verification.deltas were not written by --record-plan and are replaced by the report's open deltas (${hand.map((d) => isJsonObject(d) && typeof d.nodeId === "string" ? `${d.nodeId}${typeof d.field === "string" ? ` ${d.field}` : ""}` : JSON.stringify(d).slice(0, 40)).join(", ")}) \u2014 put builder-chosen residuals in deviations[] (with the why), never in verification.deltas`);
-    else if (v.deltas !== void 0 && !Array.isArray(v.deltas)) notes.push(`verification.deltas was a hand-written ${v.deltas === null ? "null" : typeof v.deltas} (${JSON.stringify(v.deltas).slice(0, 60)}), replaced by the report's open deltas (an array) \u2014 the counts are in verification.recorded.counts; put builder-chosen residuals in deviations[] (with the why)`);
-    v.deltas = compact;
-    const handText = (x) => typeof x === "string" ? x.trim() : isJsonObject(x) && typeof x.verdict === "string" ? x.verdict.trim() : null;
-    const stale = [];
-    const handHeadline = "headline" in v ? handText(v.headline) : null;
-    if (handHeadline !== null && handHeadline !== recorded.headline.trim()) stale.push(`verification.headline ("${handHeadline.slice(0, 60)}")`);
-    for (const k of ["verdict", "verifyScreenVerdict"]) {
-      const t = handText(v[k]);
-      if (t !== null && t.toLowerCase() !== recorded.verdict.toLowerCase()) stale.push(`verification.${k} ("${t.slice(0, 40)}")`);
-    }
-    if (stale.length) notes.push(`${stale.join(" and ")} \u2014 hand-written, and not what this report says (verdict "${recorded.verdict}"); stale beside verification.recorded, which is the record \u2014 update or remove ${stale.length > 1 ? "them" : "it"} by hand`);
-    if (b.ran) {
-      const tool = b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
-      v.a11y = { tool, violations: b.summary.fail, warnings: b.summary.warn, report: reportAt };
-    } else if (v.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 verification.a11y left as it was`);
+    const before = verificationFacts(v);
+    if (isJsonObject(prev) && typeof prev.at === "string" && canonical({ ...prev, at: "" }) === canonical({ ...recorded, at: "" })) recorded.at = prev.at;
+    const foreign = isJsonObject(prev) ? Object.keys(prev).filter((k) => !RECORD_KEYS.includes(k)) : [];
+    if (foreign.length) notes.push(`verification.recorded held ${foreign.map((k) => `\`${k}\``).join(", ")}, which --record-plan does not write \u2014 dropped (the block is the tool's): put a residual in deviations[] (with the why), anything else in notes`);
+    if (!b.ran && before.a11y !== void 0) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 this record has no a11y`);
+    const present = TOOL_KEYS.filter((k) => v[k] !== void 0);
+    const replaced = present.filter((k) => recorded[k] !== void 0);
+    const stale = present.filter((k) => recorded[k] === void 0 && k === (recorded.mode === "static-only" ? "renderer" : "reason"));
+    const kept = present.filter((k) => !replaced.includes(k) && !stale.includes(k));
+    for (const k of [...replaced, ...stale]) delete v[k];
+    const list = (ks) => ks.map((k) => `verification.${k}`).join(", ");
+    if (replaced.length || stale.length) notes.push([
+      ...replaced.length ? [`${list(replaced)}: the record's ${replaced.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) \u2014 the top-level ${replaced.length > 1 ? "ones are" : "one is"} removed`] : [],
+      ...stale.length ? [`${list(stale)} removed: ${recorded.mode === "static-only" ? "this report is static-only, so no renderer is claimed" : 'this report was rendered, so the "why no render" no longer holds'}`] : [],
+      ...kept.length ? [`${list(kept)} ${kept.length > 1 ? "stay" : "stays"} at the top level: this report gives none, so ${kept.length > 1 ? "they are" : "it is"} still read from there`] : []
+    ].join("; ") + "; coverage and notes stay yours, and a residual goes in deviations[] (with the why)");
     v.recorded = recorded;
     plan.verification = v;
     return plan;
@@ -936,29 +1055,6 @@ function readDocFile(file, what, guard, hint) {
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
   process.exit(2);
-}
-
-// design-to-code/plan-waivers.ts
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical2(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical2).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical2(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical2({ descopes, waivers }));
-}
-function planInteractionsSha256(plan) {
-  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
-  return sha256Hex(canonical2(rows));
 }
 
 // design-to-code/verify-run.ts
@@ -1244,7 +1340,7 @@ function prepareStaged(stageDir, destDir) {
   } catch (e) {
     return { error: `--publish ${stageDir}: ${firstLine(e)}` };
   }
-  if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
+  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
@@ -1910,7 +2006,7 @@ function parseSteps(x) {
   return { steps };
 }
 function stepsSha256(steps) {
-  return sha256Hex(canonical2(steps));
+  return sha256Hex(canonical(steps));
 }
 function isPlanExpect(x) {
   return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
@@ -5435,8 +5531,11 @@ function main(argv) {
       The plan for this frame (--plan <plan.json>; else the plan file --expect merged interactions from, while it exists;
       else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted
       delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).
-      --record-plan: then writes the tool-owned keys of that plan's verification block from the report (mode, renderer,
-      artifacts, open high/medium deltas, a11y, recorded{report sha, verdict, counts}); hand keys (coverage, notes) stay.
+      --record-plan: then writes that plan's verification.recorded from the report, whole \u2014 report sha, verdict,
+      counts, mode, renderer, artifacts, open high/medium deltas, a11y; hand keys (coverage, notes) stay. Of the
+      record's keys at verification's top level (an older record, a hand-written plan), one the new record holds is
+      removed (the record has its own, from the report); one it lacks stays \u2014 an a11y, or the reason of a static-only
+      or the renderer of a rendered report that gives none.
       No plan, or several and no --plan: exit 2 before comparing. A failed record \u2014 e.g. a report outside the project
       (the plan records project-relative paths only) \u2014 leaves the report written (exit 1).
   ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
@@ -5560,10 +5659,10 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
 }
 function write(doExpect, base, obj, md) {
   if (!base) {
-    process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+    process.stdout.write(reportFileText(obj));
     return;
   }
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
   if (md) writeFileAtomic(base + ".report.md", md);
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }
@@ -5854,7 +5953,7 @@ function compareMain(files, flags, USAGE) {
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
-      console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification)` : `${planHit.file}: plan.verification already records ${reportRel} \u2014 unchanged`);
+      console.error(r.written ? `recorded ${reportRel} in ${planHit.file} (plan.verification.recorded)` : `${planHit.file}: plan.verification.recorded already records ${reportRel} \u2014 unchanged`);
     } catch (e) {
       console.error(`error  --record-plan: ${errMsg(e)} \u2014 ${reportRel} is written; ${planHit.file} was not updated`);
       return 1;

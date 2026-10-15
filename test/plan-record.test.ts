@@ -1,13 +1,14 @@
-// Offline tests for design-to-code/plan-record.ts (`verify-screen --compare --record-plan` writes the
-// tool-owned keys of plan.verification) and the verify-build side of it: planHash does not cover `verification`
-// (the legacy formula is still accepted), and the recorded-report sha warning.
+// Offline tests for design-to-code/plan-record.ts (`verify-screen --compare --record-plan` writes
+// plan.verification.recorded, the tool-owned block, whole) and the verify-build side of it: planHash does not cover
+// `verification` (the legacy formula is still accepted), the recorded-report sha warning, the block on a hand-edited
+// record and the warning on the record's keys left at the top level.
 //   node test/plan-record.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { recordPlan, updatePlan } from "../design-to-code/plan-record.ts";
+import { recordPlan, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
@@ -16,8 +17,8 @@ import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped, planHash } 
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
-import { isPlan, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import type { MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanVerification, VerifyReportV2 } from "../design-to-code/types.ts";
+import { isPlan, isVerificationRecord, isVerifyReport } from "../design-to-code/doc-guards.ts";
+import type { JsonObject, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanVerification, VerifyReportV2 } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { must, readFixture, screenExport } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
@@ -94,18 +95,24 @@ console.log("recordPlan:");
   const text = fs.readFileSync(path.join(root, REL), "utf8");
   const after = planOf(root);
   const v = must(after.verification, "verification");
-  check(`written: true, one note — the hand row it replaced in verification.deltas (got ${JSON.stringify(r)})`,
-    r.written && r.notes.length === 1 && /^1 row\(s\) in verification\.deltas were not written by --record-plan/.test(r.notes[0] ?? ""));
-  check("mode \"rendered\", renderer = report.renderer", v.mode === "rendered" && v.renderer === "playwright-chromium");
-  check(`artifacts = the report .json + .md + the report's artifact that exists (the missing one is dropped) (got ${JSON.stringify(v.artifacts)})`,
-    JSON.stringify(v.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]));
-  check(`deltas = the OPEN high + medium only, compact {nodeId, field, severity, expected, actual}; the hand row, the accepted medium and the lows are gone (got ${JSON.stringify(v.deltas)})`,
-    JSON.stringify(v.deltas) === JSON.stringify([
+  check(`written: true, ONE note — the plan's top-level mode + deltas (a hand-written plan) are the record's now, moved into it (got ${JSON.stringify(r)})`,
+    r.written && r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level ones are removed")
+    && /a residual goes in deviations\[\]/.test(r.notes[0] ?? ""));
+  check(`verification keeps the agent's keys + the hook's, and the record — the top-level mode/deltas are gone (got ${JSON.stringify(Object.keys(v))})`,
+    JSON.stringify(Object.keys(v)) === JSON.stringify(["coverage", "hook", "recorded"]) && !("mode" in v) && !("deltas" in v) && !("artifacts" in v) && !("a11y" in v) && !("renderer" in v));
+  const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
+  check(`recorded is the closed @2 block, exactly these keys in this order (got ${JSON.stringify(Object.keys(rec))})`,
+    JSON.stringify(Object.keys(rec)) === JSON.stringify(["schema", "by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts", "mode", "renderer", "artifacts", "deltas", "a11y"])
+    && rec.schema === "designtwin/plan-verification-record@2");
+  check("recorded.mode \"rendered\", recorded.renderer = report.renderer, no reason", rec.mode === "rendered" && rec.renderer === "playwright-chromium" && !("reason" in rec));
+  check(`recorded.artifacts = the report .json + .md + the report's artifact that exists (the missing one is dropped) (got ${JSON.stringify(rec.artifacts)})`,
+    JSON.stringify(rec.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]));
+  check(`recorded.deltas = the OPEN high + medium only, compact {nodeId, field, severity, expected, actual}; the hand row, the accepted medium and the lows are gone (got ${JSON.stringify(rec.deltas)})`,
+    JSON.stringify(rec.deltas) === JSON.stringify([
       { nodeId: "80:2", field: "background", severity: "high", expected: "#5b5fc7ff", actual: "#ff0000ff" },
       { nodeId: "80:5", field: "width", severity: "medium", expected: 400, actual: 412 }]));
-  check(`a11y = report.behaviour.summary {tool, violations: fail, warnings: warn, report} (got ${JSON.stringify(v.a11y)})`,
-    JSON.stringify(v.a11y) === JSON.stringify({ tool: "axe-core 4.13.0", violations: 1, warnings: 1, report: REPORT }));
-  const rec = must(v.recorded, "recorded");
+  check(`recorded.a11y = report.behaviour.summary {tool, violations: fail, warnings: warn, report} (got ${JSON.stringify(rec.a11y)})`,
+    JSON.stringify(rec.a11y) === JSON.stringify({ tool: "axe-core 4.13.0", violations: 1, warnings: 1, report: REPORT }));
   check(`recorded {by, at, report, reportSha256 = sha256 of the report file, verdict, headline, behaviourHeadline, counts} (got ${JSON.stringify({ ...rec, headline: "…" })})`,
     rec.by === "verify-screen --record-plan" && rec.at === NOW && rec.report === REPORT && rec.reportSha256 === sha256(fs.readFileSync(path.join(root, REPORT)))
     && rec.verdict === "fail" && rec.headline === rep.headline && rec.behaviourHeadline === rep.behaviour.headline
@@ -113,9 +120,8 @@ console.log("recordPlan:");
   check("hand keys untouched: coverage, deviations[], waivers[], status, the hook record",
     JSON.stringify(v.coverage) === JSON.stringify(before.verification?.coverage) && JSON.stringify(after.deviations) === JSON.stringify(before.deviations)
     && JSON.stringify(after.waivers) === JSON.stringify(before.waivers) && after.status === "pending" && JSON.stringify(v.hook) === JSON.stringify(before.verification?.hook));
-  check("the file keeps its 4-space indentation and key order (top level and inside verification; new keys appended)",
-    /^\{\n {4}"status": "pending",\n {4}"screenName"/.test(text) && JSON.stringify(Object.keys(after)) === JSON.stringify(Object.keys(before))
-    && JSON.stringify(Object.keys(v)) === JSON.stringify(["mode", "coverage", "deltas", "hook", "renderer", "artifacts", "a11y", "recorded"]) && text.endsWith("}\n"));
+  check("the file keeps its 4-space indentation and key order (top level; inside verification the record is appended)",
+    /^\{\n {4}"status": "pending",\n {4}"screenName"/.test(text) && JSON.stringify(Object.keys(after)) === JSON.stringify(Object.keys(before)) && text.endsWith("}\n"));
   check("everything outside verification is byte-identical", JSON.stringify({ ...after, verification: null }) === JSON.stringify({ ...before, verification: null }));
   // the core: recording must not send a closed plan back to pending (mutation: keep verification in planHash)
   const st = statusOf(root);
@@ -127,8 +133,9 @@ console.log("recordPlan:");
   check("…and the Stop hook's fast path stays silent on it (closed)", quiet.status === 0 && quiet.stderr === "");
   const again = recordPlan(REL, rep, REPORT, { cwd: root, now: "2026-10-08T00:00:00.000Z" });
   check("recording the same report again: written false, the bytes (and recorded.at) unchanged", !again.written && fs.readFileSync(path.join(root, REL), "utf8") === text);
-  check("the recorded report → no recorded-sha warning, and verification.deltas lists what the report's open high/medium are (no 'copy them' warning)",
-    !checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings.some((w) => /records an older run|verification\.deltas is \[\]/.test(w)));
+  const fresh = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`the recorded report → no block on the record, no recorded-sha / 'ignored' warning, and the record's deltas list what the report's open high/medium are (no 'copy them' warning) (got ${JSON.stringify(fresh.blocking)})`,
+    !fresh.blocking.some((b) => /verification\.recorded/.test(b)) && !fresh.warnings.some((w) => /records an older run|deltas is \[\]|ignored — verification\.recorded/.test(w)));
   // the report is rewritten after the record (another --compare without --record-plan, or a hand edit)
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify({ ...rep, headline: rep.headline + " (edited)" }, null, 2) + "\n");
   const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
@@ -138,14 +145,47 @@ console.log("recordPlan:");
   check("the plan text before the record was not the plan text after (sanity)", beforeText !== text);
 }
 {
-  // behaviour did not run: a11y is not invented — a hand a11y stays, with a note
+  // behaviour did not run: a11y is not invented — the record has none, and a hand a11y at the top level (which this report
+  // does not replace) stays there and is still read; the note says exactly what moved and what stayed
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, a11y: { tool: "manual", violations: 0 } } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(noBehaviour, null, 2) + "\n");
   const r = recordPlan(REL, noBehaviour, REPORT, { cwd: root, now: NOW });
-  const v = planOf(root).verification;
-  check(`behaviour did not run → a11y left as it was, a note says why; the record still counts the deltas (got ${JSON.stringify(v?.a11y)}; notes ${JSON.stringify(r.notes)})`,
-    JSON.stringify(v?.a11y) === JSON.stringify({ tool: "manual", violations: 0 }) && r.notes.some((n) => /behaviour\/a11y checks did not run/.test(n)) && v?.recorded?.counts.high === 1);
+  const v = must(planOf(root).verification, "verification");
+  const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
+  check(`behaviour did not run → the record has no a11y, the hand top-level one stays, two notes (got ${JSON.stringify(v.a11y)}; notes ${JSON.stringify(r.notes)})`,
+    !("a11y" in rec) && JSON.stringify(v.a11y) === JSON.stringify({ tool: "manual", violations: 0 }) && r.notes.length === 2
+    && /^behaviour\/a11y checks did not run \(.+\) — this record has no a11y$/.test(r.notes[0] ?? "")
+    && r.notes[1] === "verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level ones are removed; "
+      + "verification.a11y stays at the top level: this report gives none, so it is still read from there; coverage and notes stay yours, and a residual goes in deviations[] (with the why)"
+    && rec.counts.high === 1);
+  const facts = verificationFacts(v);
+  const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
+  check(`…the readers take mode/deltas from the record and that a11y from the top level, with no 'ignored' warning for it (got at ${facts.at}, a11yAt ${facts.a11yAt})`,
+    facts.at === "verification.recorded" && facts.a11yAt === "verification" && facts.a11y?.tool === "manual" && facts.mode === "rendered"
+    && !w.some((x) => /ignored — verification\.recorded/.test(x)) && !w.some((x) => /has no a11y|a11y is missing/.test(x)));
+}
+{
+  // a static-only measured file that gives no reason: a hand reason at the top level stays and is read; one beside a
+  // rendered record no longer holds and is removed
+  const so: VerifyReportV2 = compare(exp, { mode: "static-only", nodes: [] }, {});
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, mode: "static-only", reason: "no simulator on this machine" } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(so, null, 2) + "\n");
+  const r = recordPlan(REL, so, REPORT, { cwd: root, now: NOW });
+  const v = must(planOf(root).verification, "verification");
+  const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
+  const res = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`static-only with no reason in the report → the record has none, the hand reason stays and is read (no 'no reason' warning, no block) (got ${JSON.stringify({ rec: rec.reason, top: v.reason, notes: r.notes })})`,
+    rec.mode === "static-only" && !("reason" in rec) && v.reason === "no simulator on this machine" && verificationFacts(v).reason === "no simulator on this machine"
+    && /verification\.reason stays at the top level: this report gives none/.test(r.notes.join(" ")) && !res.warnings.some((x) => /with no `reason`|ignored — verification\.recorded/.test(x))
+    && !res.blocking.some((b) => /verification\.recorded/.test(b)));
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  const r2 = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  check(`…a later rendered record removes that reason, and says why (got ${JSON.stringify(r2.notes)})`,
+    planOf(root).verification?.reason === undefined && r2.notes.some((n) => n.startsWith("verification.reason removed: this report was rendered, so the \"why no render\" no longer holds")));
 }
 {
   // a report of lows only: deltas [] is the record, not a "copy them" gap
@@ -158,46 +198,110 @@ console.log("recordPlan:");
     && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
 }
 
-console.log("a hand row in deltas, a static-only run, one format-preserving plan writer:");
+console.log("the record is replaced whole; a recorded@1 plan is migrated; a static-only run; one format-preserving plan writer:");
 {
-  // verification.deltas is the report's — a builder's residual there is replaced, never silently
+  // hand rows in deltas, a non-array deltas, a stale hand headline/verdict: no detector of its own any more — the
+  // top-level deltas is the record's key (moved, one note); a hand headline/verdict is left, and verify-build says it is ignored
+  for (const [what, extra] of [
+    ["a hand residual row in deltas", { deltas: [{ nodeId: "80:2", field: "boxShadow", note: "platform shadow approximation" }] }],
+    ["a hand-written object in deltas", { deltas: { high: 4, medium: 9, interactions: "1 pass, 2 fail of 3" } }],
+    ["a stale hand headline + verdict", { deltas: [], headline: "4 high, 9 medium (round 2)", verdict: "pass" }],
+  ] as const) {
+    const root = project();
+    const p = planOf(root);
+    fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, ...extra } }, null, 2) + "\n");
+    const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+    const v = must(planOf(root).verification, "verification");
+    check(`${what} → ONE note, the move into the record — no hand-row, non-array or stale note (got ${JSON.stringify(r.notes)})`,
+      r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.mode, verification.deltas: the record's keys are kept in verification.recorded now")
+      && !r.notes.some((n) => /were not written by --record-plan|was a hand-written|stale beside/.test(n)) && !("deltas" in v));
+    if ("headline" in extra) {
+      const vh: unknown = "headline" in v ? v.headline : undefined;
+      check("…the hand headline/verdict are left as they were (the agent's keys)", vh === "4 high, 9 medium (round 2)" && v.verdict === "pass");
+    }
+  }
+}
+{
+  // re-recording the same report over its own record: nothing to say, nothing written
   const root = project();
-  const p = planOf(root);
-  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [{ nodeId: "80:2", field: "boxShadow", note: "platform shadow approximation" }] } }, null, 2) + "\n");
-  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`replacing a hand row in verification.deltas says so, names it and points at deviations[] (got ${JSON.stringify(r.notes)})`,
-    r.notes.some((n) => /^1 row\(s\) in verification\.deltas .*not written by --record-plan.*\(80:2 boxShadow\).*deviations\[\]/.test(n)));
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
   const again = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`…re-recording over its own rows adds no note (got ${JSON.stringify(again.notes)})`, !again.written && again.notes.length === 0);
+  check(`re-recording over its own record adds no note and writes nothing (got ${JSON.stringify(again)})`, !again.written && again.notes.length === 0);
+  // a key added inside the record by hand is dropped on the next record, with one note naming it
+  const p = planOf(root);
+  const v = must(p.verification, "verification");
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...v, recorded: { ...v.recorded, residuals: [{ nodeId: "80:2", why: "shadow" }] } } }, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const recKeys = Object.keys(must(planOf(root).verification?.recorded, "recorded"));
+  check(`a hand key inside verification.recorded → dropped, ONE note naming it and pointing at deviations[] (got ${JSON.stringify(r.notes)})`,
+    r.written && r.notes.length === 1 && (r.notes[0] ?? "").startsWith("verification.recorded held `residuals`, which --record-plan does not write — dropped") && /deviations\[\]/.test(r.notes[0] ?? "")
+    && !recKeys.includes("residuals"));
 }
 {
-  // a hand-written NON-array verification.deltas (counts copied from a report) is replaced with a note too
+  // two --compare runs at once: the other run rewrites the report file between this run's write and its record. The
+  // record's sha256 and its facts come from this run's report text, so it never reads as a hand edit — only as an older
+  // run until this report is on disk again
+  const root = project();
+  const other: VerifyReportV2 = { ...rep, verdict: "pass", headline: rep.headline + " (the other run)" };
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(other, null, 2) + "\n");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const got = planOf(root).verification?.recorded;
+  const rec = must(isVerificationRecord(got) ? got : undefined, "recorded@2");
+  const raced = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`the report rewritten by another run before the record → the record names THIS run's report (sha256 of its text, its verdict and headline), no block on it, the older-run warning, one note (got ${JSON.stringify(raced.blocking)}; ${JSON.stringify(r.notes)})`,
+    rec.reportSha256 === sha256(JSON.stringify(rep, null, 2) + "\n") && rec.verdict === rep.verdict && rec.headline === rep.headline
+    && !raced.blocking.some((b) => /verification\.recorded/.test(b)) && raced.warnings.some((w) => w.startsWith(`plan.verification records an older run of ${REPORT}`))
+    && r.notes.some((n) => n.startsWith(`${REPORT} on disk is not the report this run wrote (another --compare rewrote it?)`)));
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  const back = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check("…with this run's report back on disk the record matches it: no block, no older-run warning",
+    !back.blocking.some((b) => /verification\.recorded/.test(b)) && !back.warnings.some((w) => /records an older run/.test(w)));
+}
+{
+  // a recorded@1 plan (no schema; mode … a11y at the top level, as the first record wrote them), closed by the hook:
+  // read with the fallback, then migrated by the first record — the hook's hash does not cover verification, so it stays closed
   const root = project();
   const p = planOf(root);
-  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: { high: 4, medium: 9, interactions: "1 pass, 2 fail of 3" } } }, null, 2) + "\n");
+  const v1 = { mode: "rendered", coverage: { rendered: ["default"], notChecked: [] }, renderer: "playwright-chromium",
+    artifacts: [REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"], deltas: [{ nodeId: "80:2", field: "background", severity: "high", expected: "#5b5fc7ff", actual: "#ff0000ff" }],
+    a11y: { tool: "axe-core 4.13.0", violations: 1, warnings: 1, report: REPORT },
+    recorded: { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
+      counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 } } };
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: v1 }, null, 2) + "\n");
+  runHook(root);
+  const facts = verificationFacts(planOf(root).verification);
+  const res = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`recorded@1 is read with the fallback: the top-level keys, no block, no 'ignored' warning (got at ${facts.at}, mode ${String(facts.mode)}; blocking ${JSON.stringify(res.blocking)})`,
+    facts.at === "verification" && facts.record === null && facts.mode === "rendered" && JSON.stringify(facts.artifacts) === JSON.stringify(v1.artifacts)
+    && !res.blocking.some((b) => /verification\.recorded/.test(b)) && !res.warnings.some((w) => /is ignored|are ignored/.test(w)) && !openOf(root));
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  check(`a hand-written object in verification.deltas → replaced by the report's array, with a note naming its type (got ${JSON.stringify(r.notes)})`,
-    Array.isArray(planOf(root).verification?.deltas) && r.notes.some((n) => /^verification\.deltas was a hand-written object \(\{"high":4,.*replaced by the report's open deltas/.test(n)));
+  const v = must(planOf(root).verification, "verification");
+  check(`the first record migrates it: the top-level mode/renderer/artifacts/deltas/a11y are gone, ONE note names them, recorded is @2 (got keys ${JSON.stringify(Object.keys(v))}; ${JSON.stringify(r.notes)})`,
+    r.written && JSON.stringify(Object.keys(v)) === JSON.stringify(["coverage", "recorded", "hook"]) && r.notes.length === 1
+    && (r.notes[0] ?? "").startsWith("verification.mode, verification.renderer, verification.artifacts, verification.deltas, verification.a11y: the record's keys are kept in verification.recorded now")
+    && isVerificationRecord(v.recorded) && v.recorded.mode === "rendered" && v.recorded.renderer === "playwright-chromium" && v.recorded.a11y?.violations === 1);
+  check("…and the plan stays closed (planHash leaves verification out; no re-stamp needed)", !openOf(root) && !r.notes.some((n) => /re-stamped/.test(n)));
 }
 {
-  // hand-written headline / verdict keys that disagree with the record stay, named as stale; agreeing ones add no note
+  // a recorded@1 block a person added keys to that no record writes: ONE block naming them (not one per @2 key it
+  // lacks), the plan still read the older way; the next record drops them
   const root = project();
   const p = planOf(root);
-  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], headline: "4 high, 9 medium (round 2)", verdict: "pass" } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], recorded: {
+    by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
+    counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 }, residuals: [{ nodeId: "80:2", why: "shadow" }], note: "checked by hand" } } }, null, 2) + "\n");
+  const blocks = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).blocking.filter((b) => /verification\.recorded/.test(b));
+  check(`a recorded@1 with hand keys \`residuals\`, \`note\` → ONE block naming both and what to do (got ${JSON.stringify(blocks)})`,
+    blocks.length === 1 && (blocks[0] ?? "").startsWith("verification.recorded is a record in the first format (no schema) with `residuals`, `note` added by hand, which verify-screen --compare --record-plan never writes — remove them, or re-run verify-screen --compare --record-plan")
+    && /residuals go in deviations\[\]/.test(blocks[0] ?? "") && verificationFacts(planOf(root).verification).at === "verification");
   const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  const v = planOf(root).verification;
-  const vh: unknown = v && "headline" in v ? v.headline : undefined;
-  check(`stale hand headline + verdict → one note naming both as stale beside verification.recorded (got ${JSON.stringify(r.notes)})`,
-    r.notes.some((n) => n.startsWith("verification.headline (\"4 high, 9 medium (round 2)\") and verification.verdict (\"pass\") — hand-written") && /stale beside verification\.recorded/.test(n)));
-  check("…the hand keys are left as they were", vh === "4 high, 9 medium (round 2)" && v?.verdict === "pass");
-  const root2 = project();
-  const p2 = planOf(root2);
-  fs.writeFileSync(path.join(root2, REL), JSON.stringify({ ...p2, verification: { ...p2.verification, deltas: [], headline: rep.headline, verdict: rep.verdict.toUpperCase() } }, null, 2) + "\n");
-  const r2 = recordPlan(REL, rep, REPORT, { cwd: root2, now: NOW });
-  check(`control: hand headline/verdict that agree with the report → no stale note (got ${JSON.stringify(r2.notes)})`, !r2.notes.some((n) => /stale/.test(n)));
+  const recKeys = Object.keys(must(planOf(root).verification?.recorded, "recorded"));
+  check(`…the next record drops them with one note, and nothing blocks on the record (got ${JSON.stringify(r.notes)})`,
+    r.notes.some((n) => n.startsWith("verification.recorded held `residuals`, `note`, which --record-plan does not write — dropped")) && !recKeys.includes("residuals") && !recKeys.includes("note")
+    && !checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).blocking.some((b) => /verification\.recorded/.test(b)));
 }
 {
-  // a static-only measured file → the report says so, and the plan records static-only + the why, no renderer
+  // a static-only measured file → the report says so, and the record is static-only + the why, no renderer
   const so: VerifyReportV2 = compare(exp, { mode: "static-only", reason: "no dev server, no Playwright", nodes: [] }, {});
   check(`compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,
     so.mode === "static-only" && so.reason === "no dev server, no Playwright" && rep.mode === undefined && !("reason" in rep));
@@ -207,13 +311,21 @@ console.log("a hand row in deltas, a static-only run, one format-preserving plan
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify(so, null, 2) + "\n");
   recordPlan(REL, so, REPORT, { cwd: root, now: NOW });
   const v = must(planOf(root).verification, "verification");
-  check(`--record-plan of it: mode "static-only" + the report's reason, no renderer (got ${JSON.stringify({ mode: v.mode, reason: v.reason, renderer: v.renderer })})`,
-    v.mode === "static-only" && v.reason === "no dev server, no Playwright" && v.renderer === undefined);
+  const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
+  check(`--record-plan of it: recorded.mode "static-only" + the report's reason, no renderer anywhere (got ${JSON.stringify({ mode: rec.mode, reason: rec.reason, renderer: rec.renderer, top: v.renderer })})`,
+    rec.mode === "static-only" && rec.reason === "no dev server, no Playwright" && !("renderer" in rec) && v.renderer === undefined);
+  // no report on disk: computeStatus reads the record (the hook passed it)
+  fs.rmSync(path.join(root, "design/verify"), { recursive: true });
+  runHook(root);
+  const st = statusOf(root);
+  check(`…computeStatus with no report reads the record: static-only, with its reason (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
+    st.status === "static-only" && st.reasons.includes("built and checked statically — not rendered (no dev server, no Playwright)"));
+  fs.mkdirSync(path.join(root, "design/verify"), { recursive: true });
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
   recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
-  const v2 = must(planOf(root).verification, "verification");
-  check(`…a later rendered record: mode "rendered" + renderer, the static-only reason gone (got ${JSON.stringify({ mode: v2.mode, reason: v2.reason, renderer: v2.renderer })})`,
-    v2.mode === "rendered" && v2.renderer === "playwright-chromium" && v2.reason === undefined);
+  const rec2 = must(planOf(root).verification?.recorded, "recorded");
+  check(`…a later rendered record: mode "rendered" + renderer, the static-only reason gone (got ${JSON.stringify(rec2)})`,
+    isVerificationRecord(rec2) && rec2.mode === "rendered" && rec2.renderer === "playwright-chromium" && !("reason" in rec2));
 }
 {
   // --accept and the verify-build hook write the plan as --record-plan does — BOM, indentation and CRLF kept
@@ -303,10 +415,125 @@ console.log("recording a plan the old hook closed, project-relative paths only:"
   const withOutside: VerifyReportV2 = { ...rep, artifacts: [...rep.artifacts, path.join(outside, "shot.png"), "../" + path.basename(outside) + "/shot.png"] };
   const r = recordPlan(REL, withOutside, "./design/verify/../verify/Crates.report.json", { cwd: root, now: NOW });
   const v = planOf(root).verification;
-  check(`an artifact outside the project (absolute or ../) → left out with ONE note; the report path is normalised (got ${JSON.stringify(v?.artifacts)}; ${JSON.stringify(r.notes)})`,
-    JSON.stringify(v?.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]) && v?.recorded?.report === REPORT && v.a11y?.report === REPORT
-    && r.notes.filter((n) => /artifact\(s\) outside the project not recorded/.test(n)).length === 1 && !JSON.stringify(v).includes(outside));
+  const rec = must(isVerificationRecord(v?.recorded) ? v.recorded : undefined, "recorded@2");
+  check(`an artifact outside the project (absolute or ../) → left out with ONE note; the report path is normalised (got ${JSON.stringify(rec.artifacts)}; ${JSON.stringify(r.notes)})`,
+    JSON.stringify(rec.artifacts) === JSON.stringify([REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"]) && rec.report === REPORT && rec.a11y?.report === REPORT
+    && r.notes.filter((n) => /artifact\(s\) outside the project not recorded in verification\.recorded\.artifacts/.test(n)).length === 1 && !JSON.stringify(v).includes(outside));
   fs.rmSync(outside, { recursive: true, force: true });
+}
+
+console.log("verify-build on the record: a hand edit of it blocks; its keys left at the top level are ignored:");
+{
+  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`;
+  const root = project();
+  runHook(root);
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const recorded = planOf(root);
+  check("setup: recorded@2 and closed", !openOf(root) && isVerificationRecord(recorded.verification?.recorded));
+  // the recorded plan with `patch` applied to verification (and its record), written to disk; → checkPlan of it
+  const write = (patch: (v: JsonObject, rec: JsonObject) => void): void => {
+    const p = structuredClone(recorded);
+    const v: unknown = p.verification;
+    const rec: unknown = isJsonObject(v) ? v.recorded : undefined;
+    if (isJsonObject(v) && isJsonObject(rec)) patch(v, rec);
+    fs.writeFileSync(path.join(root, REL), JSON.stringify(p, null, 2) + "\n");
+  };
+  const checked = () => checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  const recordBlocks = (): string[] => checked().blocking.filter((b) => b.startsWith("verification.recorded"));
+  write((_, rec) => { rec.verdict = "pass"; });
+  check(`the verdict edited while reportSha256 still names the report → BLOCKS: "${EDITED("verdict")}" (got ${JSON.stringify(recordBlocks())})`,
+    JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("verdict")]));
+  write((_, rec) => { rec.headline = "PASS — all good"; if (isJsonObject(rec.counts)) rec.counts.high = 0; });
+  check(`the headline and counts.high edited → one block each (got ${JSON.stringify(recordBlocks())})`,
+    JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("headline"), EDITED("counts.high")]));
+  // everything else the report decides is checked the same way: the deltas, the mode, the reason, the renderer, a11y
+  const deltaEdits: Array<[string, (rec: JsonObject) => void, string[]]> = [
+    ["the deltas emptied", (rec) => { rec.deltas = []; }, ["deltas"]],
+    ["a delta's actual set to its expected", (rec) => { const d = Array.isArray(rec.deltas) ? rec.deltas[0] : undefined; if (isJsonObject(d)) d.actual = d.expected ?? null; }, ["deltas"]],
+    ["the mode switched to static-only (renderer dropped, a reason added)", (rec) => { rec.mode = "static-only"; delete rec.renderer; rec.reason = "no browser"; }, ["mode", "reason", "renderer"]],
+    ["the renderer changed", (rec) => { rec.renderer = "webkit"; }, ["renderer"]],
+    ["the a11y violations zeroed", (rec) => { if (isJsonObject(rec.a11y)) rec.a11y.violations = 0; }, ["a11y"]],
+    ["the a11y removed", (rec) => { delete rec.a11y; }, ["a11y"]],
+  ];
+  for (const [what, patch, keys] of deltaEdits) {
+    write((_, rec) => patch(rec));
+    check(`${what}, the sha still matching → BLOCKS on exactly ${keys.join(", ")} (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify(keys.map(EDITED)));
+  }
+  // key order is not content: an editor that reorders the record's keys (and those of its a11y and delta rows) edits nothing
+  const reversed = (o: JsonObject): JsonObject => Object.fromEntries(Object.entries(o).reverse());
+  write((v, rec) => {
+    const rows = Array.isArray(rec.deltas) ? rec.deltas.map((d) => (isJsonObject(d) ? reversed(d) : d)) : [];
+    v.recorded = reversed({ ...rec, deltas: rows, ...(isJsonObject(rec.a11y) ? { a11y: reversed(rec.a11y) } : {}), ...(isJsonObject(rec.counts) ? { counts: reversed(rec.counts) } : {}) });
+  });
+  const reordered: unknown = planOf(root).verification?.recorded;
+  check(`the record's keys reordered (top level, a11y, counts, delta rows), values unchanged → no block (got ${JSON.stringify(recordBlocks())})`,
+    recordBlocks().length === 0 && isJsonObject(reordered) && Object.keys(reordered)[0] === "a11y" && isJsonObject(reordered.a11y) && Object.keys(reordered.a11y)[0] === "report");
+  // a @2 block with its schema removed is not a recorded@1: it holds keys that record never wrote
+  write((_, rec) => { delete rec.schema; });
+  const noSchema = recordBlocks();
+  check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS once, saying the schema is missing (got ${JSON.stringify(noSchema)})`,
+    noSchema.length === 1 && /^verification\.recorded has no schema but holds `mode`, .*`artifacts`.*, which only a @2 record writes; it lacks `schema` — re-run verify-screen --compare --record-plan \(or restore the block\); residuals go in deviations\[\]$/.test(noSchema[0] ?? ""));
+  // --status says blocked at once for a closed plan whose record was edited (the hook's next check would block)
+  write((_, rec) => { rec.verdict = "pass"; });
+  const edited = statusOf(root);
+  check(`--status of a closed plan with an edited record: the failing report first, then the hook named blocked by the edit (got ${edited.status}: ${edited.reasons.join(" | ").slice(0, 200)})`,
+    edited.status === "failed" && edited.reasons.includes(`hook: ${EDITED("verdict")}`));
+  const st2 = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL), reports: [] });
+  check(`…with no failing report in the way, the computed status is "blocked", the edit its first reason (got ${st2.status}: ${st2.reasons[0] ?? ""})`,
+    st2.status === "blocked" && st2.reasons[0] === EDITED("verdict"));
+  // the Stop hook: the plan was closed, and planHash leaves verification out — the edit still reopens it, and it blocks
+  write((_, rec) => { rec.verdict = "pass"; });
+  const open = openOf(root);
+  const h = runHook(root);
+  const hook = planOf(root).verification?.hook;
+  check(`…a closed plan whose record is then edited is open again; the Stop hook BLOCKS with the message and records it (open ${open}, exit ${h.status})`,
+    open && h.status === 2 && h.stderr.includes(EDITED("verdict")) && hook?.result === "blocked" && hook.blocking.includes(EDITED("verdict")));
+  const fix = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const h2 = runHook(root);
+  check(`…--compare --record-plan repairs it: the record is rewritten whole and the hook passes again (written ${fix.written}, exit ${h2.status})`,
+    fix.written && recordBlocks().length === 0 && h2.status === 0 && planOf(root).verification?.hook?.result === "pass" && !openOf(root));
+  // the report rewritten since the record (its sha no longer matches): the record is older, not edited — a warning, no block
+  write((_, rec) => { rec.verdict = "pass"; });
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify({ ...rep, headline: rep.headline + " (re-run)" }, null, 2) + "\n");
+  const older = checked();
+  check(`control: the report rewritten since (sha differs) + an edited verdict → no block, the older-run warning (got ${JSON.stringify(older.blocking)})`,
+    !older.blocking.some((b) => /verification\.recorded/.test(b)) && older.warnings.some((w) => w.startsWith(`plan.verification records an older run of ${REPORT}`)));
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  // the record's keys (and a hand verdict) at the top level beside a valid recorded@2: ignored, one warning; the readers keep reading the record
+  write((v) => { v.mode = "static-only"; v.deltas = []; v.verdict = "pass"; });
+  const shadow = checked();
+  const ignored = shadow.warnings.filter((w) => /ignored — verification\.recorded is the record/.test(w));
+  check(`top-level mode/deltas/verdict beside recorded@2 → ONE warning "verification.mode, verification.deltas, verification.verdict are ignored — verification.recorded is the record …" (got ${JSON.stringify(ignored)})`,
+    ignored.length === 1 && (ignored[0] ?? "").startsWith("verification.mode, verification.deltas, verification.verdict are ignored — verification.recorded is the record (")
+    && /a residual goes in deviations\[\]/.test(ignored[0] ?? "") && !shadow.blocking.some((b) => /verification\.recorded/.test(b)));
+  check("…the top-level static-only (no reason) and verdict \"pass\" are not read: no static-only warning, no 'says \"pass\" but' contradiction",
+    !shadow.warnings.some((w) => /static-only" with no `reason`|says "pass" but/.test(w)) && verificationFacts(planOf(root).verification).mode === "rendered");
+  write(() => undefined);
+  check("control: the record alone → no 'ignored' warning", !checked().warnings.some((w) => /ignored — verification\.recorded/.test(w)));
+  // a record naming something that is not a regular file — a FIFO (whose open waits for a writer) or /dev/zero (which
+  // never ends) — is read as no report: the hook's fast path and the sha warning return at once
+  if (process.platform !== "win32") {
+    const fifo = path.join(root, "design/verify/pipe.report.json");
+    const made = spawnSync("mkfifo", [fifo]).status === 0;
+    for (const target of [...(made ? [fifo] : []), "/dev/zero"]) {
+      write((_, rec) => { rec.report = target; rec.verdict = "pass"; });
+      const t0 = Date.now();
+      const p = planOf(root);
+      const out = [verifyBuild.recordedEdits(p, root).length, verifyBuild.recordedReportWarnings(p, root).length, openOf(root) ? 1 : 0];
+      check(`a record naming ${target === fifo ? "a FIFO" : target} → no report read, no hang (no edit block, no sha warning, still closed) in ${Date.now() - t0} ms`,
+        JSON.stringify(out) === "[0,0,0]" && Date.now() - t0 < 5000);
+    }
+    if (!made) console.log("  (mkfifo unavailable: only /dev/zero checked)");
+  } else console.log("  (skipped: FIFO and /dev/zero are POSIX)");
+}
+{
+  // a plan with no `recorded` (hand-written, native) keeps the top-level reading: a hand verdict "pass" against a failing report is the contradiction
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, verdict: "pass" } }, null, 2) + "\n");
+  const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
+  check("no recorded block: verification.verdict \"pass\" beside a failing report → \"…the report is the verdict; the plan cannot overrule it\", and no 'ignored' warning",
+    w.some((x) => x === `verification.verdict says "pass" but ${REPORT} says verdict "fail" — the report is the verdict; the plan cannot overrule it`) && !w.some((x) => /ignored — verification\.recorded/.test(x)));
 }
 
 console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
@@ -330,6 +557,28 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
     const rec = planOf(root2).verification?.recorded;
     check(`--compare --record-plan --plan <plan>: the report is written and the plan records its sha256 (exit ${r2.status}, verdict ${String(written.verdict)})`,
       !!rec && rec.verdict === written.verdict && rec.headline === written.headline && rec.reportSha256 === sha256(fs.readFileSync(path.join(root2, REPORT))) && rec.report === REPORT);
+    // round trip: whatever the measured file holds, a fresh --compare --record-plan writes a record the hook accepts
+    // (a value of the wrong kind is left out of the record, never written as is — else the hook blocks and re-recording
+    // writes the same block again)
+    const cases: Array<[string, Record<string, unknown>, (r: JsonObject) => boolean]> = [
+      ["a rendered file", { measuredAt: measured.measuredAt, renderer: measured.renderer, nodes, behaviour }, (r) => r.mode === "rendered" && r.renderer === "playwright-chromium" && isJsonObject(r.a11y)],
+      ["a static-only file with a string reason", { mode: "static-only", reason: "no simulator", nodes: [] }, (r) => r.mode === "static-only" && r.reason === "no simulator" && !("renderer" in r)],
+      ["a static-only file with a non-string reason", { mode: "static-only", reason: { why: "no simulator" }, nodes: [] }, (r) => r.mode === "static-only" && !("reason" in r)],
+      ["a rendered file with an object renderer", { measuredAt: measured.measuredAt, renderer: { name: "chromium", version: "153" }, nodes }, (r) => r.mode === "rendered" && !("renderer" in r)],
+    ];
+    for (const [what, file, shape] of cases) {
+      const root3 = project();
+      fs.writeFileSync(path.join(root3, "design/verify/Crates.expected.json"), JSON.stringify(exp, null, 2));
+      fs.writeFileSync(path.join(root3, "design/verify/Crates.measured.json"), JSON.stringify(file));
+      const run = () => spawnSync(process.execPath, [VS, "--compare", "design/verify/Crates.expected.json", "design/verify/Crates.measured.json", "--plan", REL, "--record-plan"], { cwd: root3, encoding: "utf8" });
+      const c1 = run();
+      const rec3: unknown = planOf(root3).verification?.recorded;
+      const blocks1 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));
+      const c2 = run();
+      const blocks2 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));
+      check(`round trip, ${what}: --compare --record-plan → a valid @2 record, checkPlan blocks nothing on it, and a second run neither (exit ${c1.status}/${c2.status}; blocks ${JSON.stringify(blocks1)}; ${c1.stderr.split("\n").filter((l) => /error/.test(l)).join(" | ")})`,
+        isVerificationRecord(rec3) && isJsonObject(rec3) && shape(rec3) && blocks1.length === 0 && blocks2.length === 0 && !/error {2}--record-plan/.test(c1.stderr + c2.stderr));
+    }
   }
 }
 

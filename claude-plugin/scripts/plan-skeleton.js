@@ -6,6 +6,7 @@ import fs9 from "node:fs";
 import path7 from "node:path";
 
 // design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -756,6 +757,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
   for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
@@ -766,6 +768,31 @@ isPlan.expected = "a plan (started by the plan-skeleton script): an object whose
 function parsePlan(x) {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
 }
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
+var RECORD_FIELDS = {
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
   return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);

@@ -418,10 +418,11 @@ Copy this checklist into your notes and keep it updated:
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
    - **Record the evidence in the plan** under `verification`: on web `--compare … --record-plan` writes the
-     tool-owned keys from the report, and you still write `coverage` (`hook-and-status.md` has both shapes).
+     tool-owned `verification.recorded` block from the report (never edit it), and you still write `coverage`
+     (`hook-and-status.md` has both shapes).
    - **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
-     **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, and (web) no
-     `data-dt-node` tag, and warns on the rest; run it by hand with
+     **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
+     `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json`.
    - **Status is computed, never stored**:
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<screen>.json` derives it from the
@@ -438,7 +439,7 @@ Copy this checklist into your notes and keep it updated:
    Resolve whatever the `Stop` hook blocked on earlier in this turn before writing this report.
 
    **Report the status you expect, not a status** — the hook runs after you hand back, so you cannot have seen
-   one. Report the evidence (`verification.mode`, what you rendered, the `--compare` verdict and coverage line)
+   one. Report the evidence (`verification.recorded.mode` — or `verification.mode` where nothing records it —, what you rendered, the `--compare` verdict and coverage line)
    and the expected status:
 
    > Verification: rendered (`<renderer>`, `design/verify/<screen>.png`); `--compare` verdict `pass`,
