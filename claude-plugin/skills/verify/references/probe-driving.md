@@ -33,13 +33,14 @@ when the app sends it elsewhere (an expired session bouncing to a login page), a
 page from the screen. A root that never shows, on a page that shows fewer than half of the expectation's own tags,
 is exit 4 naming the default and the count — a redirect after load (a login page, another origin) included, never
 "kept navigating", and so is another section whose shared shell carries a few of this frame's ids. A page that shows
-at least half of the screen root's other tags but not the root's (an untagged root, a shell that keeps another
-frame's ids) is measured as the screen once the root's wait runs out (`--timeout`, or what is left of a navigation's
-10 s window), with the note "the screen root is not tagged" saying how the root was found — report it for the builder
+at least half of the screen root's other tags but not the root's (an untagged root; a shell that keeps another
+frame's ids on its parts counts them through their component path and aliases) is measured as the screen once the
+root's wait runs out (`--timeout`, or what is left of a navigation's 10 s window), with the note "the screen root is not tagged" saying how the root was found — report it for the builder
 to tag the root. Only the first root's tags count (a multi-root export's dialog is closed at load); a visible element
 tagged with an id the expectation does not name that has the frame's size (±2 px) or encloses most of those tags is
-another screen's root — exit 4 naming it, never measured; and every later load of the run (the re-run, the driven
-pages, a new document) waits for the same rule, never for any one tag. Pass `--ready <selector>` only for a root tagged otherwise, and
+another screen's root — exit 4 naming it, never measured (a shared shell whose root carries another frame's id is
+one: it needs this frame's id on a wrapper the screen owns, or `--ready <root selector>`); and every later load of
+the run (the re-run, the driven pages, a new document) waits for the same rule, never for any one tag. Pass `--ready <selector>` only for a root tagged otherwise, and
 `--ready none` only to wait for nothing. A plan with `"tagging": {"off": true, …}` has no tag to wait for: the probe
 reads it from the plan passed as `--steps` and waits for no frame tag (a note says so) — pass `--ready <root
 selector>` there when the screen has a root to wait for. The probe records

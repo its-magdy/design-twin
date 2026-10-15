@@ -717,7 +717,29 @@ function focusablePath(path10) {
   return parts.join(" > ");
 }
 function screenTags(a) {
-  const want = new Set(a.ids), known = new Set(a.known);
+  const want = new Set(a.ids), known = new Set(a.known), alias = new Map(Object.entries(a.alias));
+  const suffix = (id) => {
+    const i = id.indexOf(";");
+    return i === -1 ? null : id.slice(i + 1);
+  };
+  const ownBySuffix = /* @__PURE__ */ new Map(), knownSuffix = /* @__PURE__ */ new Set();
+  for (const id of a.ids) {
+    const s = suffix(id);
+    if (s !== null && !ownBySuffix.has(s)) ownBySuffix.set(s, id);
+  }
+  for (const id of a.known) {
+    const s = suffix(id);
+    if (s !== null) knownSuffix.add(s);
+  }
+  const ownOf = (id) => {
+    if (want.has(id)) return id;
+    const viaAlias = alias.get(id);
+    if (viaAlias !== void 0) return viaAlias;
+    if (known.has(id)) return "";
+    const s = suffix(id);
+    if (s === null) return null;
+    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+  };
   const visible = (el) => {
     const st = getComputedStyle(el);
     if (st.getPropertyValue("display") === "contents") {
@@ -740,13 +762,13 @@ function screenTags(a) {
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
     if (id === null) continue;
-    const mine = want.has(id);
-    if (!mine && known.has(id)) continue;
+    const mine = ownOf(id);
+    if (mine === "") continue;
     if (!visible(el)) continue;
-    if (mine) {
-      const l = own.get(id);
+    if (mine !== null) {
+      const l = own.get(mine);
       if (l) l.push(el);
-      else own.set(id, [el]);
+      else own.set(mine, [el]);
     } else foreign.push({ id, el });
   }
   const shown = own.size;
@@ -6497,13 +6519,18 @@ async function docTokenOrNull(page) {
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
 var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
-async function screenTagsNow(page, root) {
-  try {
-    return await page.evaluate(screenTags, { ids: root.ids, known: root.known, frame: root.frame });
-  } catch (e) {
-    if (errorKind(e, page) === "gone") throw gone(e);
-    return { shown: 0, foreign: null };
-  }
+var SCREEN_LOOK_CAP_MS = 2e3;
+async function screenTagsNow(page, root, capMs) {
+  const look = (async () => {
+    try {
+      return await page.evaluate(screenTags, { ids: root.ids, known: root.known, alias: root.alias, frame: root.frame });
+    } catch (e) {
+      if (errorKind(e, page) === "gone") throw gone(e);
+      return { shown: 0, foreign: null };
+    }
+  })();
+  look.catch(() => void 0);
+  return Promise.race([look, sleep5(Math.max(1, capMs), null, { ref: false })]);
 }
 var WaitTimeoutError = class extends Error {
   constructor(what, ms) {
@@ -6514,7 +6541,8 @@ var WaitTimeoutError = class extends Error {
 async function waitForScreenTags(page, root, timeout) {
   const end = Date.now() + timeout;
   for (; ; ) {
-    if (screenTagsMet(await screenTagsNow(page, root), root.ids.length)) return;
+    const look = await screenTagsNow(page, root, end - Date.now());
+    if (look !== null && screenTagsMet(look, root.ids.length)) return;
     const left = end - Date.now();
     if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
     await sleep5(Math.min(POLL_MS3, left));
@@ -6619,9 +6647,10 @@ async function settle(page, log, ready, timeout, root) {
         continue;
       }
       if (next === "kept") throw kept();
-      const look = readyWait && root !== void 0 && pwErrorKind(e) === "timeout" ? await screenTagsNow(page, root) : null;
+      const asked = readyWait && root !== void 0 && pwErrorKind(e) === "timeout";
+      const look = asked && root !== void 0 ? await screenTagsNow(page, root, SCREEN_LOOK_CAP_MS) : null;
       if (root === void 0 || look === null || !screenTagsMet(look, root.ids.length)) {
-        const why = look === null || root === void 0 ? "" : screenTagsWhy(look, root.ids.length);
+        const why = look === null || root === void 0 ? asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1e3}s when its tags were counted)` : "" : screenTagsWhy(look, root.ids.length);
         throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== void 0 ? refusingRoot(look, root.ids.length) : null);
       }
       if (!root.seen) root.waitedMs = readyMs;
@@ -7211,7 +7240,7 @@ var USAGE = `usage:
       20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,
       1024/320 px widths, and the keyboard/scroll battery on modal overlays \u2014 measured.behaviour (+ <out>.forced-colors.png),
       never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so) \u2014 for the
-      probe's own tests only: it needs ${BEHAVIOUR_OFF_ENV}=1 in the environment, else exit 2.
+      probe's own tests only: every other run is refused (exit 2).
       Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the
       reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png
       (informational \u2014 never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/\u2026 PNG is read
@@ -7279,22 +7308,33 @@ function planTaggingOff(doc) {
 function ownTagsOf(exp, frameId) {
   const hidden = new Set(exp.hidden && exp.hidden.ids || []);
   const ids = /* @__PURE__ */ new Set(), others = /* @__PURE__ */ new Set(), known = /* @__PURE__ */ new Set([frameId, ...hidden]);
+  const otherRoot = (f) => f !== void 0 && f !== frameId;
   for (const s of exp.nodes || []) {
     known.add(s.nodeId);
-    if (s.frameId !== void 0 && s.frameId !== frameId) others.add(s.nodeId);
+    if (otherRoot(s.frameId)) others.add(s.nodeId);
     else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
   }
   for (const i of exp.instances || []) {
     known.add(i.nodeId);
-    if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
+    if (otherRoot(i.frameId)) others.add(i.nodeId);
+    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
   }
   for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
   ids.delete(frameId);
+  const alias = /* @__PURE__ */ new Map();
+  const named = new Set(known);
+  for (const s of exp.nodes || []) {
+    for (const a of s.aliases || []) {
+      known.add(a);
+      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
+    }
+  }
   const w = exp.frame?.w, h = exp.frame?.h;
-  return ids.size ? { ids: [...ids], known: [...known], frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
+  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
 }
-var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : via === "tag" ? "its root found by its tag after all (the tag showed after the wait)" : "its root not found";
+var untaggedRootFound = (via) => via === "size-and-fill" ? "its root found as the outermost element with the frame's size (\xB12 px) and a fill" : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)" : "its root not found";
 function untaggedRootNote(ready, waitedMs, via) {
+  if (via === "tag") return null;
   return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} \u2014 tag the root ${ready.slice(1, -1)}, or pass --ready <root selector>`;
 }
 function defaultReadyMissed(ready, withSteps) {
@@ -7387,7 +7427,7 @@ ${USAGE}`);
     return 2;
   }
   if (f.behaviour === "off" && process.env[BEHAVIOUR_OFF_ENV] !== "1") {
-    console.error(`verify-probe: --behaviour off is for the probe's own tests (${BEHAVIOUR_OFF_ENV}=1) \u2014 a run without the behaviour checks is not a verification
+    console.error(`verify-probe: --behaviour off is for the probe's own tests only \u2014 a run without the behaviour checks is not a verification
 ${USAGE}`);
     return 2;
   }
@@ -7614,7 +7654,10 @@ ${USAGE}`);
       }
       throw e;
     }
-    if (untaggedRoot?.seen === true && ready !== void 0) notes.push(untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0));
+    if (untaggedRoot?.seen === true && ready !== void 0) {
+      const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0);
+      if (note !== null) notes.push(note);
+    }
     let driven2 = null, driveNote2 = null;
     let wedged = false;
     const rows = run2.kind === "ok" ? drivable(expectation) : [];
@@ -7902,12 +7945,14 @@ export {
   resolvePlaywright,
   runProbe,
   screenTagsMet,
+  screenTagsNow,
   screenTagsWhy,
   settleMiss,
   statusRefusalOf,
   takesForScreen,
   untaggedRootNote,
-  visibleOnly
+  visibleOnly,
+  waitForScreenTags
 };
 /*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
  * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:

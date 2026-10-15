@@ -359,29 +359,37 @@ export const visibleOnly = (sel: string): string => `${sel} >> visible=true`;
  *  `waitedMs` is how long the frame's tag was waited for: that page is measured as the screen (the root found as an
  *  untagged one), and every later load (the re-run, the driven pages, a new document) waits for the same rule
  *  (waitForScreenTags) instead of the frame's tag. */
-export interface UntaggedRoot { ids: string[]; known: string[]; frame: { w: number; h: number } | null; seen: boolean; waitedMs?: number }
+export interface UntaggedRoot { ids: string[]; known: string[]; alias: Record<string, string>; frame: { w: number; h: number } | null; seen: boolean; waitedMs?: number }
 /** Whether a page whose frame tag never showed is the screen: it shows at least half of the expectation's own tags. */
 export const takesForScreen = (shown: number, total: number): boolean => total > 0 && shown * 2 >= total;
 /** The untagged-root rule on what the page shows: at least half of the own tags, and no other screen's tagged root. */
 export const screenTagsMet = (s: ScreenTags, total: number): boolean => takesForScreen(s.shown, total) && s.foreign === null;
-/** What the page shows of the expectation's tags now (no wait); a page mid-navigation shows none. */
-async function screenTagsNow(page: Page, root: UntaggedRoot): Promise<ScreenTags> {
-  try { return await page.evaluate(screenTags, { ids: root.ids, known: root.known, frame: root.frame }); } catch (e) {
-    if (errorKind(e, page) === "gone") throw gone(e);
-    return { shown: 0, foreign: null };
-  }
+/** How long the look after the frame's wait ran out may take: one page.evaluate, which a hung main thread never answers. */
+const SCREEN_LOOK_CAP_MS = 2_000;
+/** What the page shows of the expectation's tags now (no wait); a page mid-navigation shows none; null when the page
+ *  does not answer within `capMs` (a hung main thread never answers a page.evaluate). */
+export async function screenTagsNow(page: Pick<Page, "evaluate" | "isClosed">, root: UntaggedRoot, capMs: number): Promise<ScreenTags | null> {
+  const look = (async (): Promise<ScreenTags> => {
+    try { return await page.evaluate(screenTags, { ids: root.ids, known: root.known, alias: root.alias, frame: root.frame }); } catch (e) {
+      if (errorKind(e, page) === "gone") throw gone(e);
+      return { shown: 0, foreign: null };
+    }
+  })();
+  look.catch(() => undefined); // a page gone after the race ended is the next call's to find
+  return Promise.race([look, sleep(Math.max(1, capMs), null, { ref: false })]);
 }
 /** A wait that ran out, named and worded as Playwright's (pwErrorKind reads it as a timeout). */
 class WaitTimeoutError extends Error {
   constructor(what: string, ms: number) { super(`${what}: Timeout ${ms}ms exceeded.`); this.name = "TimeoutError"; }
 }
 /** The --ready wait of every load after an untagged root was seen: met once the page shows at least half of the
- *  expectation's own tags and no other screen's tagged root (screenTagsMet), polled every POLL_MS; past `timeout` a
- *  TimeoutError, as the frame tag's locator wait would throw. */
-async function waitForScreenTags(page: Page, root: UntaggedRoot, timeout: number): Promise<void> {
+ *  expectation's own tags and no other screen's tagged root (screenTagsMet), polled every POLL_MS, each look bounded by
+ *  the time left; past `timeout` a TimeoutError, as the frame tag's locator wait would throw. */
+export async function waitForScreenTags(page: Pick<Page, "evaluate" | "isClosed">, root: UntaggedRoot, timeout: number): Promise<void> {
   const end = Date.now() + timeout;
   for (;;) {
-    if (screenTagsMet(await screenTagsNow(page, root), root.ids.length)) return;
+    const look = await screenTagsNow(page, root, end - Date.now());
+    if (look !== null && screenTagsMet(look, root.ids.length)) return;
     const left = end - Date.now();
     if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
     await sleep(Math.min(POLL_MS, left));
@@ -528,9 +536,12 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
       // the default --ready's wait ran out (a timeout only — a selector or any other error is not a page to judge) on a
       // page that shows at least half of the expectation's own tags and no other screen's tagged root: the screen, with
       // an untagged root — measured (the root found as an untagged one) and said in a note; else not the screen
-      const look = readyWait && root !== undefined && pwErrorKind(e) === "timeout" ? await screenTagsNow(page, root) : null;
+      const asked = readyWait && root !== undefined && pwErrorKind(e) === "timeout";
+      const look = asked && root !== undefined ? await screenTagsNow(page, root, SCREEN_LOOK_CAP_MS) : null;
       if (root === undefined || look === null || !screenTagsMet(look, root.ids.length)) {
-        const why = look === null || root === undefined ? "" : screenTagsWhy(look, root.ids.length);
+        const why = look === null || root === undefined
+          ? (asked ? ` (the page did not answer within ${SCREEN_LOOK_CAP_MS / 1000}s when its tags were counted)` : "")
+          : screenTagsWhy(look, root.ids.length);
         throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e), look !== null && root !== undefined ? refusingRoot(look, root.ids.length) : null);
       }
       if (!root.seen) root.waitedMs = readyMs;
@@ -1200,7 +1211,7 @@ const USAGE =
   "      20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,\n" +
   "      1024/320 px widths, and the keyboard/scroll battery on modal overlays — measured.behaviour (+ <out>.forced-colors.png),\n" +
   "      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so) — for the\n" +
-  `      probe's own tests only: it needs ${BEHAVIOUR_OFF_ENV}=1 in the environment, else exit 2.\n` +
+  "      probe's own tests only: every other run is refused (exit 2).\n" +
   "      Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the\n" +
   "      reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png\n" +
   "      (informational — never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/… PNG is read\n" +
@@ -1332,36 +1343,50 @@ export function planTaggingOff(doc: unknown): boolean {
 }
 /** What the untagged-root rule reads of the expectation (UntaggedRoot): `ids` — the screen root's own node ids, the
  *  frame's excepted: its visible nodes (a multi-root export's other roots — a dialog, an overlay — carry a frameId and
- *  are left out, as are those roots themselves) and its instances that are no other root's; `known` — every id the
- *  expectation names (any root, hidden ones, the frames), so a tag outside it is another screen's; `frame` — the frame's
- *  size, when it states one. Null when the root names no node. */
-export function ownTagsOf(exp: Expectation, frameId: string): { ids: string[]; known: string[]; frame: { w: number; h: number } | null } | null {
+ *  are left out, as are those roots themselves) and its instances that are no other root's (an instance row's frameId,
+ *  else a spec's); `known` — every id the expectation names (any root, hidden ones, the frames, every spec's aliases),
+ *  so a tag outside it is another screen's; `alias` — an own node's alias → its id (a shared shell tagged with a sibling
+ *  screen's ids shows this screen's nodes, as the measurement's tag-alias match reads them; an alias that is itself one
+ *  of the expectation's ids is that node's); `frame` — the frame's size, when it states one. Null when the root names
+ *  no node. */
+export function ownTagsOf(exp: Expectation, frameId: string): { ids: string[]; known: string[]; alias: Record<string, string>; frame: { w: number; h: number } | null } | null {
   const hidden = new Set((exp.hidden && exp.hidden.ids) || []);
   const ids = new Set<string>(), others = new Set<string>(), known = new Set<string>([frameId, ...hidden]);
+  const otherRoot = (f: string | undefined): boolean => f !== undefined && f !== frameId;
   for (const s of exp.nodes || []) {
     known.add(s.nodeId);
-    if (s.frameId !== undefined && s.frameId !== frameId) others.add(s.nodeId);
+    if (otherRoot(s.frameId)) others.add(s.nodeId);
     else if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
   }
   for (const i of exp.instances || []) {
     known.add(i.nodeId);
-    if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
+    if (otherRoot(i.frameId)) others.add(i.nodeId);
+    else if (!hidden.has(i.nodeId) && !others.has(i.nodeId)) ids.add(i.nodeId);
   }
   for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") known.add(fr.nodeId);
   ids.delete(frameId);
+  const alias = new Map<string, string>();
+  const named = new Set(known);
+  for (const s of exp.nodes || []) {
+    for (const a of s.aliases || []) {
+      known.add(a);
+      if (ids.has(s.nodeId) && !named.has(a) && !alias.has(a)) alias.set(a, s.nodeId);
+    }
+  }
   const w = exp.frame?.w, h = exp.frame?.h;
-  return ids.size ? { ids: [...ids], known: [...known], frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
+  return ids.size ? { ids: [...ids], known: [...known], alias: Object.fromEntries(alias), frame: typeof w === "number" && typeof h === "number" ? { w, h } : null } : null;
 }
 /** How the measurement found a screen root that carries no tag (resolveFrame's `via`). */
 const untaggedRootFound = (via: ResolvedFrame["via"] | undefined): string =>
   via === "size-and-fill" ? "its root found as the outermost element with the frame's size (±2 px) and a fill"
     : via === "viewport" ? "no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)"
-      : via === "tag" ? "its root found by its tag after all (the tag showed after the wait)"
-        : "its root not found";
+      : "its root not found";
 /** The measured file's note when the frame's tag never showed but at least half of the expectation's own tags did:
  *  `waitedMs` — how long the frame's tag was waited for (the --timeout, or what was left of a navigation's ≤ 10 s
- *  window); `via` — how the measurement found the root. */
-export function untaggedRootNote(ready: string, waitedMs: number, via: ResolvedFrame["via"] | undefined): string {
+ *  window); `via` — how the measurement found the root. Null when the measurement found the root by its tag (it
+ *  showed after a wait a navigation cut short): the root is tagged, and the measurement is the usual one. */
+export function untaggedRootNote(ready: string, waitedMs: number, via: ResolvedFrame["via"] | undefined): string | null {
+  if (via === "tag") return null;
   return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(waitedMs / 100) / 10}s, but the page shows at least ` +
     `half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, ${untaggedRootFound(via)} — tag the root ` +
     `${ready.slice(1, -1)}, or pass --ready <root selector>`;
@@ -1443,7 +1468,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   if (f.behaviour !== undefined && f.behaviour !== "on" && f.behaviour !== "off") { console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'\n${USAGE}`); return 2; }
   if (f.behaviour !== undefined && f.check) { console.error(`verify-probe: --behaviour does not apply to --check\n${USAGE}`); return 2; }
   if (f.behaviour === "off" && process.env[BEHAVIOUR_OFF_ENV] !== "1") {
-    console.error(`verify-probe: --behaviour off is for the probe's own tests (${BEHAVIOUR_OFF_ENV}=1) — a run without the behaviour checks is not a verification\n${USAGE}`); return 2;
+    console.error(`verify-probe: --behaviour off is for the probe's own tests only — a run without the behaviour checks is not a verification\n${USAGE}`); return 2;
   }
   if (f.ready !== undefined && f.ready.trim() === "") { console.error(`verify-probe: --ready must be a selector or none, got '${f.ready}'\n${USAGE}`); return 2; }
   const behaviourOn = f.behaviour !== "off";
@@ -1625,8 +1650,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       if (pwErrorKind(e) === "timeout") { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
       throw e;
     }
-    // the frame's tag never showed, but the page showed the expectation's own tags: measured as the screen
-    if (untaggedRoot?.seen === true && ready !== undefined) notes.push(untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run.kind === "ok" ? run.result.frames[0]?.via : undefined));
+    // the frame's tag never showed, but the page showed the expectation's own tags: measured as the screen (no note
+    // when the tag showed after all and the measurement found the root by it)
+    if (untaggedRoot?.seen === true && ready !== undefined) {
+      const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run.kind === "ok" ? run.result.frames[0]?.via : undefined);
+      if (note !== null) notes.push(note);
+    }
     // drive the overlay interactions, each on a fresh page, after the measurement pass and before the
     // browser closes — within min(60 s, what --max-time leaves less 15 s). Never blocks the measured file, never exit 4.
     let driven: InteractionEvidence[] | null = null, driveNote: string | null = null;

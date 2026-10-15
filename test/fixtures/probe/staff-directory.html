@@ -50,8 +50,7 @@
       <svg data-dt-node="50:5" width="16" height="16" viewBox="0 0 16 16"><path d="M0 0h16v16H0z" fill="#ff8800"/></svg>
       <img data-dt-node="50:6" width="16" height="16" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' fill='%2300aa55'/%3E%3C/svg%3E">
     </div>
-    <!-- the name is tagged too: with it, 12 of the expectation's 24 own tags show at load (the untagged root's way out) -->
-    <div class="row" data-dt-node="50:7"><span data-dt-node="50:10">Jordan Avery</span><button class="row-edit" data-dt-node="50:11">Edit</button></div>
+    <div class="row" data-dt-node="50:7"><span>Jordan Avery</span><button class="row-edit" data-dt-node="50:11">Edit</button></div>
     <input class="search" data-dt-node="50:12" aria-label="Search staff" placeholder="Find staff">
     <div class="card" data-dt-node="50:13"></div>
     <!-- H1: the same date designed in two rows; the build shows it only in the first -->
@@ -83,6 +82,14 @@
     setTimeout(() => location.reload(), 200);
   }
   if (mode === "reload-forever") setTimeout(() => location.reload(), 200);
+  // the default --ready on this untagged root: 11 of the expectation's 24 own tags show at load. ?mode=untagged-root
+  // tags five more nodes (16 of 24 — more than half: measured as the screen); ?mode=untagged-few drops three (8 of 24)
+  if (mode === "untagged-root") {
+    const tag = (sel, id) => document.querySelector(sel).setAttribute("data-dt-node", id);
+    tag("nav", "50:2"); tag("nav li:nth-child(1) button", "50:3"); tag("nav li:nth-child(2) button", "50:8");
+    tag(".row > span", "50:10"); tag(".shift > span", "50:15");
+  }
+  if (mode === "untagged-few") for (const id of ["50:22", "50:24", "50:26"]) document.querySelector(`[data-dt-node="${id}"]`).removeAttribute("data-dt-node");
   // F-107: a script that never yields once the page has loaded — every evaluate after it hangs
   if (mode === "busy") addEventListener("load", () => setTimeout(() => { for (;;) { /* never yields */ } }, 50));
   // DT-81: a dev server's client module, as Vite serves it

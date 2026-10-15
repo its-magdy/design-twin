@@ -469,17 +469,38 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     return sel !== null && sel.ids.join(" ") === "1:2 1:4" && [...sel.known].sort().join(" ") === "1:1 1:2 1:3 1:4 9:1 9:2 9:3" && sel.frame?.w === 1280 && sel.frame.h === 800
       && VP.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [] }, "1:1") === null && VP.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [{ nodeId: "1:2", name: "L", type: "TEXT" }] }, "1:1")?.frame === null;
   });
+  t("[ready] ownTagsOf: every spec's aliases are known; an own node's alias maps to it (alias), another root's node's alias and an alias that is itself a named id do not", () => {
+    const al = VP.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+      nodes: [{ nodeId: "1:2", name: "Nav", type: "FRAME", aliases: ["8:2", "8:3"] }, { nodeId: "1:3", name: "Item", type: "TEXT", aliases: ["1:2"] },
+        { nodeId: "9:2", name: "Title", type: "TEXT", frameId: "9:1", aliases: ["8:9"] }] }, "1:1");
+    return al !== null && JSON.stringify(al.alias) === JSON.stringify({ "8:2": "1:2", "8:3": "1:2" })
+      && ["8:2", "8:3", "8:9"].every((id) => al.known.includes(id)) && al.ids.join(" ") === "1:2 1:3";
+  });
+  t("[ready] ownTagsOf: an instance row of another root (its frameId) is not counted, even when no spec names it; known", () => {
+    const inst = VP.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+      nodes: [{ nodeId: "1:2", name: "Label", type: "TEXT" }], instances: [{ nodeId: "1:4", name: "Button" }, { nodeId: "9:5", name: "Chip", frameId: "9:1" }] }, "1:1");
+    return inst !== null && inst.ids.join(" ") === "1:2 1:4" && inst.known.includes("9:5");
+  });
   {
     // a multi-root export (a screen + a dialog root), built as verify-expect builds it: the dialog's rows carry its frameId
     const multi = buildExpectation([{ label: "Panel", doc: screenExport([
       { type: "FRAME", id: "1:1", name: "Panel", box: { x: 0, y: 0, w: 1280, h: 800 }, fills: [{ type: "solid", color: "#ffffff" }],
-        children: [text("1:2", "Title", "Panel", FONT), text("1:3", "Body", "Body", FONT)] },
+        children: [text("1:2", "Title", "Panel", FONT), text("1:3", "Body", "Body", FONT), { type: "INSTANCE", id: "1:6", name: "Tag", box: { x: 0, y: 0, w: 40, h: 20 }, mainComponent: { name: "Tag", key: "k-tag" } }] },
       { type: "FRAME", id: "5:1", name: "Dialog", box: { x: 0, y: 0, w: 400, h: 300 }, fills: [{ type: "solid", color: "#ffffff" }],
-        children: [text("5:2", "Heading", "Confirm", FONT), text("5:3", "Text", "Sure?", FONT), text("5:4", "Ok", "OK", FONT)] },
+        children: [text("5:2", "Heading", "Confirm", FONT), text("5:3", "Text", "Sure?", FONT), text("5:4", "Ok", "OK", FONT),
+          { type: "INSTANCE", id: "5:5", name: "Chip", box: { x: 0, y: 0, w: 40, h: 20 }, mainComponent: { name: "Chip", key: "k-chip" } }] },
     ], { screen: "Panel" }) }]);
     const own = VP.ownTagsOf(multi, "1:1");
-    t("[ready] ownTagsOf on a built screen + dialog expectation → only the screen root's nodes (1:2 1:3); the dialog's root and nodes are known, not counted", () =>
-      own !== null && own.ids.join(" ") === "1:2 1:3" && ["5:1", "5:2", "5:3", "5:4"].every((id) => own.known.includes(id)));
+    t("[ready] ownTagsOf on a built screen + dialog expectation → only the screen root's nodes and instance (1:2 1:3 1:6); the dialog's root, nodes and instance are known, not counted", () =>
+      own !== null && own.ids.join(" ") === "1:2 1:3 1:6" && ["5:1", "5:2", "5:3", "5:4", "5:5"].every((id) => own.known.includes(id)));
+    t("[ready] verify-expect: a multi-root export's instance rows under a later root carry its frameId; the first root's carry none", () =>
+      (multi.instances || []).map((i) => `${i.nodeId}:${i.frameId ?? "-"}`).join(" ") === "1:6:- 5:5:5:1");
+    const single = buildExpectation([{ label: "Solo", doc: screenExport([
+      { type: "FRAME", id: "1:1", name: "Solo", box: { x: 0, y: 0, w: 1280, h: 800 },
+        children: [{ type: "INSTANCE", id: "1:6", name: "Tag", box: { x: 0, y: 0, w: 40, h: 20 }, mainComponent: { name: "Tag", key: "k-tag" } }] },
+    ], { screen: "Solo" }) }]);
+    t("[ready] …a single-root export's instance rows carry no frameId (its output unchanged)", () =>
+      JSON.stringify(single.instances) === JSON.stringify([{ nodeId: "1:6", name: "Tag", setName: "Tag", setKey: "k-tag" }]));
   }
   t("[ready] takesForScreen: a page without the frame's tag is the screen only when it shows at least half of the expectation's own tags (a shell's few never are)", () =>
     VP.takesForScreen(5, 10) && VP.takesForScreen(10, 10) && !VP.takesForScreen(4, 10) && !VP.takesForScreen(3, 20) && !VP.takesForScreen(0, 0));
@@ -490,6 +511,24 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 30_000, "size-and-fill") === `${NOTE_HEAD}30s${NOTE_MID}its root found as the outermost element with the frame's size (±2 px) and a fill${NOTE_TAIL}`);
   t("[ready] …a wait cut short by a navigation's window says its own length (2.4s), and a root the measurement could not find says the viewport stands in for it", () =>
     VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 2_400, "viewport") === `${NOTE_HEAD}2.4s${NOTE_MID}no element has the frame's size and a fill, so the viewport stands in for its root (positions are relative to the viewport)${NOTE_TAIL}`);
+  t("[ready] …and no note when the frame's tag showed after a wait a navigation cut short (the measurement found the root by its tag): the root is tagged", () =>
+    VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 0, "tag") === null);
+  {
+    // a hung main thread never answers page.evaluate: the look and the wait end on their own bound
+    const hung = { evaluate: (): Promise<never> => new Promise<never>(() => undefined), isClosed: () => false };
+    const root: VP.UntaggedRoot = { ids: ["1:2"], known: ["1:1", "1:2"], alias: {}, frame: null, seen: true };
+    // (the bounds' timers do not hold the process open — a live browser connection does in a real run, this one here)
+    const keepAlive = setInterval(() => undefined, 1_000);
+    const t0 = Date.now();
+    const look = await VP.screenTagsNow(hung, root, 50);
+    const lookMs = Date.now() - t0;
+    t("[ready] screenTagsNow on a page that never answers → null within its bound (50 ms), never a hang", () => look === null && lookMs < 1_000);
+    const t1 = Date.now();
+    const waited = await VP.waitForScreenTags(hung, root, 200).then(() => "met", (e: unknown) => (e instanceof Error ? e.name : "?"));
+    const waitMs = Date.now() - t1;
+    clearInterval(keepAlive);
+    t("[ready] waitForScreenTags on a page that never answers → a TimeoutError once its 200 ms run out, never held past them", () => waited === "TimeoutError" && waitMs < 1_500);
+  }
   // a plan that opts out of tagging, passed as --steps: no default --ready (the stubbed project ends at exit 4 after the note)
   const planOff = path.join(goneProj, "plan-tagging-off.json");
   fs.writeFileSync(planOff, JSON.stringify({ screen: "Orders", tagging: { off: true, reason: "the markup comes from a third-party renderer" } }));
@@ -658,13 +697,13 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     };
     const txt = (w: number, h: number): FakeText => ({ nodeType: 3, nodeValue: "x", w, h });
     const all = (r: FakeTagEl): FakeTagEl[] => [r, ...r.children.flatMap(all)];
-    const look = (root: FakeTagEl, a: PP.ScreenTagsInput): PP.ScreenTags => {
+    const look = (root: FakeTagEl, a: Omit<PP.ScreenTagsInput, "alias"> & { alias?: Record<string, string> }): PP.ScreenTags => {
       Object.assign(globalThis, {
         document: { querySelectorAll: () => all(root).filter((e) => e.dt !== null),
           createRange: () => { const r: { n: FakeText | null } = { n: null }; return { selectNodeContents: (x: FakeText) => { r.n = x; }, getBoundingClientRect: () => ({ width: r.n?.w ?? 0, height: r.n?.h ?? 0 }) }; } },
         getComputedStyle: (e: FakeTagEl) => ({ getPropertyValue: (k: string) => e.css[k] ?? (k === "visibility" ? "visible" : k === "display" ? "block" : "") }),
       });
-      try { return PP.screenTags(a); } finally { Reflect.deleteProperty(globalThis, "document"); Reflect.deleteProperty(globalThis, "getComputedStyle"); }
+      try { return PP.screenTags({ alias: {}, ...a }); } finally { Reflect.deleteProperty(globalThis, "document"); Reflect.deleteProperty(globalThis, "getComputedStyle"); }
     };
     const ids = ["1:2", "1:3", "1:4", "1:5", "1:6"];
     const vis = look(el(null, 1280, 800, [
@@ -690,6 +729,22 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
       encloses.shown === 3 && encloses.foreign?.id === "7:1" && encloses.foreign.by === "encloses" && encloses.foreign.encloses === 2);
     const minority = look(el(null, 1440, 900, [el("7:1", 300, 200, [el("1:2", 10, 10)]), el("1:3", 10, 10), el("1:4", 10, 10)]), { ids: ["1:2", "1:3", "1:4"], known: [...known, "1:4"], frame });
     t("[ready] …one that encloses a minority of them (1 of 3: a shared widget) is not", () => minority.shown === 3 && minority.foreign === null);
+    // a shared shell kept from a sibling screen: its parts carry that screen's ids — this screen's aliases, or ids with
+    // the same component path (the part after the first `;`)
+    const shellIds = ["1:2", "1:3", "I1:5;3:4"], shellKnown = ["1:1", ...shellIds, "8:2", "8:6"];
+    const shellPage = look(el(null, 1440, 900, [
+      el("8:1", 1100, 700, [el("8:2", 100, 20), el("I8:5;3:4", 100, 20), el("8:6", 100, 20), el("1:3", 100, 20)]),
+    ]), { ids: shellIds, known: shellKnown, alias: { "8:2": "1:2" }, frame });
+    t("[ready] screenTags: a shared shell's part tagged with an own node's alias, or with an id of the same component path, shows that own node (3 of 3)", () =>
+      shellPage.shown === 3);
+    t("[ready] …and the part tagged with another root's alias (known) is not foreign, while the shell's root 8:1 (another frame's id, which the expectation does not name) enclosing them is another screen's root", () =>
+      shellPage.foreign?.id === "8:1" && shellPage.foreign.by === "encloses");
+    const aliasRoot = look(el(null, 1440, 900, [el("8:2", 1280, 800, [el("1:3", 10, 10)])]), { ids: ["1:2", "1:3"], known: ["1:1", "1:2", "1:3", "8:2"], alias: { "8:2": "1:2" }, frame });
+    t("[ready] screenTags: an alias-tagged element of the frame's size is the own node it stands for (counted shown), never another screen's root", () =>
+      aliasRoot.shown === 2 && aliasRoot.foreign === null);
+    const knownAlias = look(el(null, 1440, 900, [el("9:7", 1280, 800, [el("1:2", 10, 10), el("1:3", 10, 10)])]), { ids: ["1:2", "1:3"], known: ["1:1", "1:2", "1:3", "9:6", "9:7"], frame });
+    t("[ready] …an element tagged with an alias of another root's node (known, not own) is neither counted nor foreign", () =>
+      knownAlias.shown === 2 && knownAlias.foreign === null);
   }
 
   // --steps with a plan that has no navigate list: no steps, a note — never exit 2
@@ -707,16 +762,16 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   // --behaviour off only with the test-only env var
   const { [VP.BEHAVIOUR_OFF_ENV]: _off, ...envNoOff } = process.env;
   const offRefused = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: envNoOff });
-  t("[behaviour] --behaviour off without DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 → exit 2 before any run or browser: \"--behaviour off is for the probe's own tests (DESIGNTWIN_TEST_BEHAVIOUR_OFF=1) — …\"", () =>
-    offRefused.status === 2 && offRefused.stderr.startsWith("verify-probe: --behaviour off is for the probe's own tests (DESIGNTWIN_TEST_BEHAVIOUR_OFF=1) — a run without the behaviour checks is not a verification\n")
-    && !/^run {4}/m.test(offRefused.stderr));
+  t("[behaviour] --behaviour off without the test-only env var → exit 2 before any run or browser: \"--behaviour off is for the probe's own tests only — …\" (the env var is never named)", () =>
+    offRefused.status === 2 && offRefused.stderr.startsWith("verify-probe: --behaviour off is for the probe's own tests only — a run without the behaviour checks is not a verification\n")
+    && !/^run {4}/m.test(offRefused.stderr) && !offRefused.stderr.includes(VP.BEHAVIOUR_OFF_ENV));
   const offOk = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: { ...envNoOff, [VP.BEHAVIOUR_OFF_ENV]: "1" } });
   t("[behaviour] …with DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 it is accepted (the probe goes on: exit 4 from the stub)", () => offOk.status === 4 && !/--behaviour off is for/.test(offOk.stderr));
   const helpText = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
-  t("[help] --help names --ready <selector> | none and its default, the plan with no navigate, the counted --run failures, and the env var --behaviour off needs", () =>
+  t("[help] --help names --ready <selector> | none and its default, the plan with no navigate, the counted --run failures, and that --behaviour off is refused outside the probe's tests (the env var unnamed)", () =>
     helpText.status === 0 && helpText.stdout.includes("[--ready <selector> | none]") && helpText.stdout.includes("by default the frame's tag [data-dt-node=\"<frame id>\"]")
     && helpText.stdout.includes("a plan with none is no steps") && helpText.stdout.includes("the second ends the run `failed` — the probe writes it")
-    && helpText.stdout.includes("it needs DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 in the environment, else exit 2"));
+    && helpText.stdout.includes("probe's own tests only: every other run is refused (exit 2)") && !helpText.stdout.includes(VP.BEHAVIOUR_OFF_ENV));
   t("[run] probeAttemptLine after an exit 4: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
     VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 4) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
     && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 4) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");

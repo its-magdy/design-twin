@@ -24,14 +24,17 @@ measurement aid, never component identity — that is the plan's `components[]` 
 
 **The screen root carries its frame id**: the element that is the frame gets `data-dt-node="<frame id>"`. Step 5's
 probe waits for that tag after every load (its default `--ready`), so a page that is not the screen — a login bounce,
-another section — is never measured. A root that cannot carry it (a shell shared by several screens keeps ONE
-frame's ids, a layout component the screen does not own) still measures: when the frame's tag never shows but at
-least half of the screen root's other tags do, the probe measures the page as the screen once the wait for the tag
-runs out (its `--timeout`, or what is left of a navigation's 10 s window), finds the root by the frame's size and a
-fill (else the viewport stands in for it), and says how in a note. Fewer is another section that shares the shell, and
+another section — is never measured. A root that cannot carry it (an untagged shell root, a layout component the
+screen does not own) still measures: when the frame's tag never shows but at least half of the screen root's other
+tags do (a shared shell's tags kept from another screen count through their component path and aliases), the probe
+measures the page as the screen once the wait for the tag runs out (its `--timeout`, or what is left of a
+navigation's 10 s window), finds the root by the frame's size and a fill (else the viewport stands in for it), and
+says how in a note. Fewer is another section that shares the shell, and
 an element tagged with an id the expectation does not name that has the frame's size, or encloses most of those tags,
 is another screen's root: both exit 4. Later loads of the run wait for the same — so tag a wrapper the screen owns
-with the frame id where you can. A project that
+with the frame id where you can. A shared shell whose root carries ONE frame's id exits 4 on every other screen
+(that element is another screen's root there) — leave the shell's root untagged and put each screen's frame id on a
+wrapper the screen owns, or verify passes `--ready <root selector>`. A project that
 cannot tag at all (the opt-out below) has no tag to wait for: verify then passes `--ready <root selector>`, or
 `--ready none`.
 
@@ -40,7 +43,8 @@ cannot tag at all (the opt-out below) has no tag to wait for: verify then passes
 A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where one exists; a shell shared by
 several screens may keep the ids of ONE frame (the one it was built from) — verify recovers much of it on the other
 screens by component path, and by name path through the aliases `--expect` builds from the sibling exports (re-run
-`--expect` after re-exporting a sibling), but not repeated names, a shell used twice, or a hand-written probe; a
+`--expect` after re-exporting a sibling), but not repeated names, a shell used twice, or a hand-written probe — and
+never its root: a root tagged with that frame's id is another screen's root on the others (above); a
 per-screen id table (each screen's own ids from its export) still measures more. Either is fine — never invent ids.
 Both follow the reuse rules; untagged sets are reported as tag coverage, never as "missing".
 

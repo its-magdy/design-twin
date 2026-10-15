@@ -655,18 +655,36 @@ export function focusablePath(path: string): string | null {
   return parts.join(" > ");
 }
 /** What screenTags reads: `ids` — the expectation's own node ids (its first root's, the frame's own excepted); `known` —
- *  every id the expectation names (any root, hidden ones, the frames); `frame` — the frame's size, when it states one. */
-export interface ScreenTagsInput { ids: string[]; known: string[]; frame: { w: number; h: number } | null }
+ *  every id the expectation names (any root, hidden ones, the frames, every spec's aliases); `alias` — an own node's
+ *  alias (its id in a sibling screen's export) → that own id; `frame` — the frame's size, when it states one. */
+export interface ScreenTagsInput { ids: string[]; known: string[]; alias: Record<string, string>; frame: { w: number; h: number } | null }
 /** A visible element tagged with an id the expectation does not name that looks like another screen's root: it has the
  *  frame's size (±2 px), or it encloses most of the visible own tags (`encloses` of them). */
 export interface ForeignRoot { id: string; by: "size" | "encloses"; encloses: number }
 export interface ScreenTags { shown: number; foreign: ForeignRoot | null }
 /** How far a page whose frame tag is missing looks like the screen: how many of `ids` tag at least one visible element,
- *  and another screen's tagged root on it, if any (ForeignRoot). Visible as Playwright reads it: a display:contents
- *  element by its children (a visible child element or a text node with a box), any other one by checkVisibility(),
- *  visibility "visible" and a box with a size. SELF-CONTAINED. */
+ *  and another screen's tagged root on it, if any (ForeignRoot). An own node shows by its own tag, or as the
+ *  measurement matches a shared shell kept from another screen: by a tag that is one of its aliases (tag-alias), or
+ *  an id with the same component path — the part after the first `;` (tag-shared-path); a tag with a known id's
+ *  component path is known too. Visible as Playwright reads it: a display:contents element by its children (a visible
+ *  child element or a text node with a box), any other one by checkVisibility(), visibility "visible" and a box with a
+ *  size. SELF-CONTAINED. */
 export function screenTags(a: ScreenTagsInput): ScreenTags {
-  const want = new Set(a.ids), known = new Set(a.known);
+  const want = new Set(a.ids), known = new Set(a.known), alias = new Map(Object.entries(a.alias));
+  const suffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
+  const ownBySuffix = new Map<string, string>(), knownSuffix = new Set<string>();
+  for (const id of a.ids) { const s = suffix(id); if (s !== null && !ownBySuffix.has(s)) ownBySuffix.set(s, id); }
+  for (const id of a.known) { const s = suffix(id); if (s !== null) knownSuffix.add(s); }
+  /** the own node a tag shows (its own id, an alias, the same component path), "" for another known node's, else null */
+  const ownOf = (id: string): string | null => {
+    if (want.has(id)) return id;
+    const viaAlias = alias.get(id);
+    if (viaAlias !== undefined) return viaAlias;
+    if (known.has(id)) return "";
+    const s = suffix(id);
+    if (s === null) return null;
+    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+  };
   const visible = (el: PageElement): boolean => {
     const st = getComputedStyle(el);
     if (st.getPropertyValue("display") === "contents") {
@@ -688,10 +706,10 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
     if (id === null) continue;
-    const mine = want.has(id);
-    if (!mine && known.has(id)) continue;
+    const mine = ownOf(id);
+    if (mine === "") continue;
     if (!visible(el)) continue;
-    if (mine) { const l = own.get(id); if (l) l.push(el); else own.set(id, [el]); } else foreign.push({ id, el });
+    if (mine !== null) { const l = own.get(mine); if (l) l.push(el); else own.set(mine, [el]); } else foreign.push({ id, el });
   }
   const shown = own.size;
   for (const { id, el } of foreign) {

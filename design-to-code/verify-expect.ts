@@ -738,11 +738,12 @@ function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): v
         : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})` });
   }
   bx.notComparable.push(...gaps);
-  addInstance(bx, n);
+  addInstance(bx, n, w.frameId);
   addReactions(bx, n, w.sourceFile);
 }
-/** an INSTANCE's row: its main component's set, key, variant and props */
-function addInstance(bx: ExpectBuild, n: IrNode): void {
+/** an INSTANCE's row: its main component's set, key, variant and props, and the root it is under on a multi-root
+ *  export's later roots (as a spec's frameId) */
+function addInstance(bx: ExpectBuild, n: IrNode, frameId: string | undefined): void {
   if (n.type === "INSTANCE" && n.mainComponent) {
     bx.instances.push({
       nodeId: n.id,
@@ -751,6 +752,7 @@ function addInstance(bx: ExpectBuild, n: IrNode): void {
       ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
       ...ifDefined("variant", n.mainComponent.variant),
       ...ifDefined("props", n.props || undefined),
+      ...ifDefined("frameId", frameId),
     });
   }
 }

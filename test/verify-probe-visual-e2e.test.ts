@@ -135,7 +135,6 @@ for (const pkg of ["playwright", "playwright-core"]) {
 }
 // --behaviour off is taken only with the test-only env var
 const OFF_ENV: NodeJS.ProcessEnv = { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" };
-// (--behaviour off is taken only with the test-only env var)
 const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj], 0, OFF_ENV);
 const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
 const out = (name: string): string => path.join("design", "verify", name);

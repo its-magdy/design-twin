@@ -2563,10 +2563,10 @@ function visibleNode(bx, w, n, c) {
     });
   }
   bx.notComparable.push(...gaps);
-  addInstance(bx, n);
+  addInstance(bx, n, w.frameId);
   addReactions(bx, n, w.sourceFile);
 }
-function addInstance(bx, n) {
+function addInstance(bx, n, frameId) {
   if (n.type === "INSTANCE" && n.mainComponent) {
     bx.instances.push({
       nodeId: n.id,
@@ -2574,7 +2574,8 @@ function addInstance(bx, n) {
       setName: n.mainComponent.setName || n.mainComponent.name,
       ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
       ...ifDefined("variant", n.mainComponent.variant),
-      ...ifDefined("props", n.props || void 0)
+      ...ifDefined("props", n.props || void 0),
+      ...ifDefined("frameId", frameId)
     });
   }
 }
