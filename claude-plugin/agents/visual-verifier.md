@@ -123,8 +123,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
 
 Pass the screen's plan as `--steps` (a plan with no `navigate` list runs no steps). After every load the probe waits
 for the screen root's tag `[data-dt-node="<frame id>"]` — its default `--ready` — so a login bounce or another
-section is an exit 4, never measured (`probe-driving.md` has the step vocabulary and which page loads are a step's
-own). Rebuild a preview or static
+section is an exit 4, never measured; a page that shows at least half of the screen's other tags but not the root's is measured with
+the note "the screen root is not tagged" (report it). For a plan with `"tagging": {"off": true, …}` the probe has no
+default: pass `--ready <root selector>`, or `--ready none` (`probe-driving.md` has the step vocabulary, the readiness
+rules and which page loads are a step's own). Rebuild a preview or static
 build before measuring it. The probe writes `design/verify/<Screen>.measured.json` and `<Screen>.png`, including
 `expectationSha256`, the probe's identity, `matchedBy` per node, `notMeasured` and the hover/focus states of every
 spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured` status itself. Always pass your
@@ -132,7 +134,9 @@ spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured
 
 - **Never write your own probe, and never edit, patch or rewrite `measured.json`.** Its sha is the probe's
   identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run.
-- **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
+- **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself. The probe counts it
+  as a failed attempt in your run (`failed probe attempt 1 of 2: ask the user …`): re-run it once in this run after
+  the user fixes the renderer; a second exit 3 or 4 ends the run `failed` (the probe writes it).
   **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
   out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes, or `--max-time`, or
   the page or browser closed or crashed; nothing written) → the probe counts the failed attempt in your run's

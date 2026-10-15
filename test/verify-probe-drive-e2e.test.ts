@@ -124,9 +124,13 @@ const r1 = await P.noSteps;
 check("[ready-only] no --steps + --ready on the section's root (only there after a click) → exit 4, nothing written", r1.status === 4 && !written(out("NoSteps")));
 // the same with no --ready at all: the probe waits for the frame's tag by default, so the default section is never measured
 const r1d = await P.noStepsDefault;
-check("[ready-default] no --steps and no --ready → the default --ready (the frame's tag) never shows: exit 4 naming it as the default, nothing written",
-  r1d.status === 4 && r1d.stderr.includes("ready  [data-dt-node=\"70:1\"] (the frame's tag, the default;") && r1d.stderr.includes("--ready '[data-dt-node=\"70:1\"]' never became visible")
-  && r1d.stderr.includes("[data-dt-node=\"70:1\"] is the default --ready (the frame's tag): the page the probe reached is not the screen") && !written(out("NoStepsDefault")));
+// the default section shows the shared nav tagged with this frame's ids — a few of its tags, never enough to be taken
+// for the screen
+check("[ready-default] no --steps and no --ready → the default --ready (the frame's tag) never shows, and the default section shows only the nav's few tags of this frame: exit 4 naming the default and the count, the hint says to reach a section with --steps; nothing written",
+  r1d.status === 4 && r1d.stderr.includes("ready  [data-dt-node=\"70:1\"] (the frame's tag, the default;")
+  && /--ready '\[data-dt-node="70:1"\]' never became visible \(the page shows \d+ of the expectation's \d+ own tags — fewer than half\)/.test(r1d.stderr)
+  && r1d.stderr.includes("[data-dt-node=\"70:1\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
+  && r1d.stderr.includes("a screen that is a section of the app is reached with --steps <plan.json>") && !written(out("NoStepsDefault")));
 
 // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare (one queued task: P.main)
 const { runId, r2, done, c2 } = await P.main;

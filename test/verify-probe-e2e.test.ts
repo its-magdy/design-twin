@@ -78,6 +78,13 @@ const server = http.createServer((req, res) => {
     res.end(html.replace("</body>", extra + "</body>"));
     return;
   }
+  // a page that sends itself to a login page 300 ms after load (an expired session), and that login page
+  if (pathname === "/session-bounce") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><p>checking the session</p><script>addEventListener(\"load\", () => setTimeout(() => location.replace(\"/login-wall\"), 300))</script>");
+    return;
+  }
+  if (pathname === "/login-wall") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><h1>Sign in</h1><form><input name=\"user\"></form>"); return; }
   if (pathname === "/no-content") { res.writeHead(204); res.end(); return; }
   if (pathname === "/download") { res.writeHead(200, { "content-type": "application/octet-stream", "content-disposition": "attachment; filename=x.bin" }); res.end("x"); return; }
   const name = path.basename(pathname);
@@ -108,8 +115,8 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
 // The staff-directory pages leave the frame root untagged (the probe finds it by size and fill), so the frame tag the
 // probe waits for by default never shows there: those runs pass --ready none. The shell-rings and loom pages tag their
-// root and keep the default.
-const TAGGED_ROOT = /\/(shell-rings|loom-queue-owner-hover)\.html$/;
+// root and keep the default, as does the run that checks the default on a redirect.
+const TAGGED_ROOT = /\/(shell-rings|loom-queue-owner-hover)\.html$|\/session-bounce$/;
 const readyNone = (args: string[]): string[] =>
   args.includes("--check") || args.includes("--ready") || TAGGED_ROOT.test(args[args.indexOf("--url") + 1] ?? "") ? args : [...args, "--ready", "none"];
 const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, readyNone(behaviourOff(args)), 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
@@ -286,6 +293,15 @@ check("a page that keeps reloading after load → exit 4, nothing written", r5.s
 const b6 = path.join(tmp, "run6", "Staff");
 const r6 = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/missing.html`, "--out", b6, "--project", ROOT, "--ready", "#never", "--timeout", "1500"]);
 check("--ready never visible → exit 4, nothing written", r6.status === 4 && !fs.existsSync(b6 + ".measured.json"));
+
+// the default --ready (the frame's tag): a redirect after load is the page not being the screen — never "kept
+// navigating", never the dev-server advice
+const b6r = path.join(tmp, "run6r", "Staff");
+const r6r = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/session-bounce`, "--out", b6r, "--project", ROOT, "--timeout", "1500"]);
+check("[ready] a location.replace to a login page after load (default --ready) → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint; no 'kept navigating', no watch-tree advice; nothing written",
+  r6r.status === 4 && /never became visible \(the page shows 0 of the expectation's \d+ own tags — fewer than half\)/.test(r6r.stderr)
+  && r6r.stderr.includes("is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
+  && !/kept navigating|watch tree/.test(r6r.stderr) && !fs.existsSync(b6r + ".measured.json"));
 
 // ---- watchdog, --run status, build identity
 const b7 = path.join(tmp, "run7", "Staff");

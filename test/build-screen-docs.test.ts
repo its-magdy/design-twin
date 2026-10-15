@@ -74,7 +74,7 @@ check("the verifier: exit 3 asks the user, exit 4 reports the navigation log, un
 // --help say so, and what to do when it recurs (--check)
 check("exit 4 names a closed or crashed page or browser and --check when it recurs (verifier agent, verify skill, verify-probe --help)",
   /\*\*Exit 4\*\*[^]{0,400}the page or browser closed or crashed; nothing written\)[^]{0,600}closed or crashed page or browser prints no navigation log: if it recurs on the re-run, run `--check`/.test(flat(read("claude-plugin/agents/visual-verifier.md")))
-  && /the page or browser closed or crashed\) writes nothing[^.]{0,400}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(flat(read("claude-plugin/skills/verify/SKILL.md")))
+  && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(flat(read("claude-plugin/skills/verify/SKILL.md")))
   && /the page or browser closed or crashed \(re-run once; if it recurs, run --check\) \(nothing written; with --run the/.test(flat(read("design-to-code/verify-probe.ts"))));
 check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
 check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Screen>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
@@ -197,7 +197,14 @@ console.log("verify docs (run integrity + agent safety):");
     && /`blocked`/.test(verifyRef) && /dangerouslyDisableSandbox/.test(verifyRef));
   check("the probe is bounded by --max-time (exit 4); it counts its failed attempts under --run: one re-run after the first, the second ends the run failed (the probe writes it) — never a loop",
     [verifier, verifySkill].every((t) => /--max-time/.test(t) && /the first leaves the phase at `measuring`/.test(t) && /the second ends the run `failed` itself/.test(t) && /the verifier never writes that `failed`/.test(t))
-    && /One re-run, never a loop/.test(verifyRef) && !/Re-run it ONCE/.test(verifySkill + verifier + verifyRef));
+    && /One re-run, never a loop/.test(verifyRef) && !/[Rr]e-runs? it ONCE/.test(verifySkill + verifier + verifyRef));
+  check("exit 3 under --run is one counted attempt too: ask the user, then re-run once in this run after the renderer is fixed (verifier, verify skill, run protocol, --help); a success does not reset the count; an uncounted attempt prints how to end the run",
+    /\*\*Exit 3\*\* \(renderer unavailable\) → stop and ask the user;.{0,240}re-run it once in this run after the user fixes the renderer/.test(verifier)
+    && /after an exit 3 only once the user has fixed the renderer \(ask them first, never install it\)/.test(verifySkill)
+    && /after an exit 3 \(no renderer\) ask the user first, and re-run it once in this run after they fix the renderer/.test(verifyRef)
+    && /with --run, re-run once in the run after they/.test(flat(read("design-to-code/verify-probe.ts")))
+    && /A run id is one pass: a probe that succeeds in between does not reset the count/.test(verifyRef)
+    && /`status run <id> not counted — …` with the command that ends the run/.test(verifyRef) && /--phase failed --run <id>` command/.test(verifyRef));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
   check("each interaction records outcome (url-changed | dialog-opened | selector-appeared | state-changed | none) and navEvents; a pass needs exactly one match, an allowed outcome, no unexpected navigation; else not-probed; the example carries both fields",
     [verifier, verifySkill].every((t) => /`url-changed`.{0,20}`dialog-opened`.{0,20}`selector-appeared`.{0,20}`state-changed`.{0,20}`none`/.test(t) && /navEvents/.test(t) && /ONE (matched )?(element|match)/.test(t) && /not-probed/.test(t))
@@ -408,6 +415,10 @@ console.log("build-screen docs (same-URL documents + load wait):");
     && /waits for `--ready` — by default the screen root's tag `\[data-dt-node="<frame id>"\]`/.test(verifyRef) && /the default `--ready` on the screen root's tag is what tells it apart/.test(verifyRef)
     && /\[--steps design\/plan\/<screen>\.json\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
     && ![verifier, verifySkill, verifyRef, skill].some((t) => /always pass `--ready|--ready '\[data-dt-node/.test(t)));
+  check("the screen root carries its frame id (build-screen); an untagged root on a page that shows at least half of the screen's other tags is measured with a note (fewer: exit 4), and a tagging-off plan has no default — pass --ready <root selector> or --ready none (verifier, verify skill, build-screen)",
+    /\*\*The screen root carries its frame id\*\*/.test(skill) && /finds the root by size and\s+fill, and says so in a note/.test(skill) && /verify then passes `--ready <root selector>`, or `--ready none`/.test(skill)
+    && [verifier, verifySkill].every((t) => /the screen root is not tagged/.test(t) && /"tagging": \{"off": true, …\}/.test(t) && /`--ready <root selector>`/.test(t))
+    && /a page that shows fewer than half of the expectation's own tags, is exit 4 naming the default and the count — a redirect after load \(a login page, another origin\) included, never "kept navigating"/.test(verifySkill));
 }
 console.log("build-screen docs:");
 {

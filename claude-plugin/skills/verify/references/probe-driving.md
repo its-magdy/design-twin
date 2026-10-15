@@ -30,8 +30,15 @@ for a bad steps file); on a driving page it only makes that row `ok: null` ("not
 After every load and the steps the probe waits for the screen root's tag — `--ready` defaults to
 `[data-dt-node="<frame id>"]`, the expectation's frame: a click's navigation to another URL is the step's own even
 when the app sends it elsewhere (an expired session bouncing to a login page), and only the root check tells that
-page from the screen. A root that never shows is exit 4 naming the default; pass `--ready <selector>` only for a
-root tagged otherwise, and `--ready none` only to wait for nothing. The probe records
+page from the screen. A root that never shows, on a page that shows fewer than half of the expectation's own tags,
+is exit 4 naming the default and the count — a redirect after load (a login page, another origin) included, never
+"kept navigating", and so is another section whose shared shell carries a few of this frame's ids. A page that shows
+at least half of the expectation's other tags but not the root's (an untagged root, a shell that keeps another
+frame's ids) is measured as the screen once `--timeout` has passed, with the note "the screen root is not tagged" —
+report it for the builder to tag the root. Pass `--ready <selector>` only for a root tagged otherwise, and
+`--ready none` only to wait for nothing. A plan with `"tagging": {"off": true, …}` has no tag to wait for: the probe
+reads it from the plan passed as `--steps` and waits for no frame tag (a note says so) — pass `--ready <root
+selector>` there when the screen has a root to wait for. The probe records
 `measured.reach` (`steps`, `sha256`, `source`, `url`) and prints where the steps ended (`reach … → <url>`);
 `--compare` reports it under `inputs.reach` (`matchesPlan` when the plan has `navigate`), and a mismatch is an input
 note, never a verdict.

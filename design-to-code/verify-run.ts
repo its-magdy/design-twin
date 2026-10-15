@@ -85,9 +85,12 @@ export interface VerifyStatusV2 {
 /** The failed probe attempts (exit 3/4) a run named by --run takes: the last of them ends the run `failed` — the
  *  probe writes it, so a verifier re-runs a failed probe once and never writes that `failed` itself. */
 export const PROBE_ATTEMPTS = 2;
-/** What a failed probe attempt's status detail adds: which attempt it was in the run, and what follows it. */
-export function probeAttemptNote(n: number): string {
-  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : "re-run the probe once in this run"}`;
+/** What a failed probe attempt's status detail adds: which attempt it was in the run, and what follows it — after an
+ *  exit 3 (no renderer) the user fixes the renderer first; after an exit 4 the one re-run follows at once. */
+export function probeAttemptNote(n: number, exit: number): string {
+  const next = n >= PROBE_ATTEMPTS ? "the probe ended the run failed"
+    : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
 }
 /** Who started a probe's own run: the probe process (file-lock.ts thisProcess), the time it started the run, and the
  *  deadline past which no live probe still writes in it (its start + --max-time + a grace for closing the browser,
@@ -181,9 +184,10 @@ export interface StatusWrite {
   published?: string[];
   /** a probe's own run: who started it (carried forward by that probe's own writes, and by a write that ends the run) */
   ownRun?: OwnRunStamp;
-  /** the write records a failed probe attempt (exit 3/4) of the run: probeFailures + 1, counted under the status lock;
-   *  the PROBE_ATTEMPTS-th is written `failed` whatever `phase` says, and the detail names the attempt (probeAttemptNote) */
-  probeFailed?: boolean;
+  /** the write records a failed probe attempt of the run, with its exit code (3 or 4): probeFailures + 1, counted under
+   *  the status lock; the PROBE_ATTEMPTS-th is written `failed` whatever `phase` says, and the detail names the attempt
+   *  (probeAttemptNote) */
+  probeFailed?: 3 | 4;
 }
 /** A status write for a run that has already ended (done/failed/blocked): refused by writeStatus itself, so a writer
  *  that checked at its start (the probe, up to its time budget earlier) cannot reopen the run with a late write. */
@@ -344,9 +348,9 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     // may take it for abandoned while they work in it
     // the run's failed probe attempts carry forward; one more is counted here, under the lock, so two probes of the
     // run never count the same attempt — and the last one ends the run
-    const failures = w.probeFailed ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
-    const phase: StatusPhase = w.probeFailed && failures !== undefined && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
-    const detail = w.probeFailed && failures !== undefined ? `${w.detail ?? ""} (${probeAttemptNote(failures)})` : w.detail ?? "";
+    const failures = w.probeFailed !== undefined ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
+    const phase: StatusPhase = w.probeFailed !== undefined && failures !== undefined && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
+    const detail = w.probeFailed !== undefined && failures !== undefined ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
     const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : undefined);
     const doc: VerifyStatusV2 = {
       schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase, detail, at: new Date().toISOString(), by: w.by,

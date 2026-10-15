@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import type { SpawnSyncReturns } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import * as VSH from "../design-to-code/verify-shared.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
@@ -445,9 +446,126 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     return d.ready === "[data-dt-node=\"1:2\"]" && q.ready === "[data-dt-node=\"a\\\"b\"]" && x.ready === "#app" && x.note === "ready  #app" && n.ready === undefined && u.ready === undefined
       && u.note === "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)";
   });
-  t("[ready] the exit-4 hint of a default --ready that never showed names the redirect, the untagged root and both ways out", () =>
-    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]") === "[data-dt-node=\"1:2\"] is the default --ready (the frame's tag): the page the probe reached is not the screen (a redirect such as a login page, " +
-      "another section — reach it with --steps), or the screen root is not tagged data-dt-node=\"1:2\"; pass --ready <selector> for another root, or --ready none to wait for nothing");
+  const MISSED_HEAD = "[data-dt-node=\"1:2\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page the probe reached is not the screen — a redirect (a login page, another origin) or another section (";
+  const MISSED_TAIL = ") — or nothing on it is tagged (a tagging opt-out: pass --ready <root selector>, or --ready none to wait for nothing)";
+  t("[ready] the exit-4 hint of a default --ready that never showed (nor enough of the expectation's tags) names the redirect, another section and the tagging opt-out — without --steps: reach the section with --steps", () =>
+    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]", false) === `${MISSED_HEAD}a screen that is a section of the app is reached with --steps <plan.json>${MISSED_TAIL}`);
+  t("[ready] …with --steps passed it never says to reach it with --steps: the steps ended somewhere else", () =>
+    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]", true) === `${MISSED_HEAD}the --steps ended somewhere else: check the plan's navigate list${MISSED_TAIL}`);
+  t("[ready] readyOf with a --steps plan that opts out of tagging → no default, said so; an explicit --ready still wins", () => {
+    const off = VP.readyOf(undefined, "1:2", true), offX = VP.readyOf("#root", "1:2", true);
+    return off.ready === undefined && off.note === "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default — the page is measured once it is quiet (pass --ready <root selector>)"
+      && offX.ready === "#root";
+  });
+  t("[ready] planTaggingOff: only {\"off\": true, \"reason\": <non-empty>} opts out (no reason, no opt-out — as the Stop hook reads it)", () =>
+    VP.planTaggingOff({ tagging: { off: true, reason: "a third-party renderer" } }) && !VP.planTaggingOff({ tagging: { off: true } }) && !VP.planTaggingOff({ tagging: { off: true, reason: " " } })
+    && !VP.planTaggingOff({ tagging: { off: false, reason: "x" } }) && !VP.planTaggingOff({ navigate: [] }) && !VP.planTaggingOff([]) && !VP.planTaggingOff(null));
+  t("[ready] ownTagsOf: the expectation's own tags but the frame's — its nodes, instances and other frames, never a hidden one; none → null", () => {
+    const sel = VP.ownTagsOf({ frame: { nodeId: "1:1" }, frames: [{ nodeId: "1:1" }, { nodeId: "9:1" }],
+      nodes: [{ nodeId: "1:2", name: "Label", type: "TEXT" }, { nodeId: "1:3", name: "Gone", type: "FRAME" }, { nodeId: "1:1", name: "Orders", type: "FRAME" }],
+      instances: [{ nodeId: "1:4", name: "Button" }], hidden: { roots: [], ids: ["1:3"] } }, "1:1");
+    return sel !== null && sel.ids.join(" ") === "1:2 1:4 9:1" && sel.tags === "[data-dt-node=\"1:2\"], [data-dt-node=\"1:4\"], [data-dt-node=\"9:1\"]"
+      && VP.ownTagsOf({ frame: { nodeId: "1:1" }, nodes: [] }, "1:1") === null;
+  });
+  t("[ready] takesForScreen: a page without the frame's tag is the screen only when it shows at least half of the expectation's own tags (a shell's few never are)", () =>
+    VP.takesForScreen(5, 10) && VP.takesForScreen(10, 10) && !VP.takesForScreen(4, 10) && !VP.takesForScreen(3, 20) && !VP.takesForScreen(0, 0));
+  t("[ready] the untagged-root note names the frame's tag, the wait, the measurement as the screen and both fixes", () =>
+    VP.untaggedRootNote("[data-dt-node=\"1:1\"]", 30_000) === "the screen root is not tagged: [data-dt-node=\"1:1\"] (the default --ready) never showed within 30s, but the page shows at least " +
+      "half of the expectation's own tags, so it was measured as the screen and its root found as an untagged one (size and fill) — tag the root data-dt-node=\"1:1\", or pass --ready <root selector>");
+  // a plan that opts out of tagging, passed as --steps: no default --ready (the stubbed project ends at exit 4 after the note)
+  const planOff = path.join(goneProj, "plan-tagging-off.json");
+  fs.writeFileSync(planOff, JSON.stringify({ screen: "Orders", tagging: { off: true, reason: "the markup comes from a third-party renderer" } }));
+  const offRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planOff], { encoding: "utf8" });
+  t("[ready] --steps <plan with tagging.off> → the 'no --ready default' note, no frame-tag default line", () =>
+    offRun.status === 4 && offRun.stderr.includes("note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default") && !offRun.stderr.includes(DEFAULT_READY));
+  t("[ready] settleMiss: a --ready wait that ran out on a document that stayed is 'unreachable' — after a navigation too (a redirect), never 'kept navigating'", () =>
+    VP.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "unreachable"
+    && VP.settleMiss({ readyWait: true, navigated: false, sameDocument: true, moved: false, pastDocDeadline: true }) === "unreachable");
+  t("[ready] settleMiss: a navigation with no settled document is still 'retry' within its window and 'kept' past it; a load/fonts wait is never read as the --ready miss", () =>
+    VP.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: false }) === "retry"
+    && VP.settleMiss({ readyWait: true, navigated: true, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
+    && VP.settleMiss({ readyWait: true, navigated: false, sameDocument: false, moved: true, pastDocDeadline: true }) === "kept"
+    && VP.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: true, pastDocDeadline: true }) === "kept"
+    && VP.settleMiss({ readyWait: false, navigated: true, sameDocument: true, moved: false, pastDocDeadline: false }) === "retry"
+    && VP.settleMiss({ readyWait: false, navigated: false, sameDocument: true, moved: false, pastDocDeadline: false }) === "unreachable");
+  t("[ready] visibleOnly: a wait on any VISIBLE match (Playwright's visible=true engine), so a hidden first copy never hides a visible one", () =>
+    VP.visibleOnly("[data-dt-node=\"1:1\"]") === "[data-dt-node=\"1:1\"] >> visible=true");
+
+  // A stubbed Playwright whose page models only what the --ready wait sees (DT_STUB_SCENARIO): `redirect` — the page
+  // replaces itself with a login page 20 ms into the wait, and neither document shows a tag; `untagged` — the frame's tag
+  // never shows, all the expectation's other tags do; `shell` — the frame's tag never shows and only one other tag does
+  // (a shared shell on another section); `hidden-first` — the frame's tag has a hidden first copy and a visible later
+  // one (a locator without `visible=true` waits on the hidden one). The measurement itself finds nothing (no
+  // candidates), so a page that gets past the wait is written with every node not measured.
+  const READY_PW = `const S = process.env.DT_STUB_SCENARIO || "";
+const FRAME = '[data-dt-node="1:1"]', VIS = " >> visible=true";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+class TimeoutError extends Error { constructor(m) { super(m); this.name = "TimeoutError"; } }
+function newPage() {
+  let doc = 1;
+  const frame = {};
+  const visible = (sel) => {
+    const vis = sel.endsWith(VIS), base = vis ? sel.slice(0, -VIS.length) : sel;
+    if (base === FRAME) return S === "hidden-first" && vis;
+    return S === "untagged";
+  };
+  const shownOf = (ids) => (S === "untagged" ? ids.length : S === "shell" ? 1 : 0);
+  return {
+    setDefaultTimeout() {}, addInitScript: async () => {}, on() {}, off() {}, mainFrame: () => frame, isClosed: () => false,
+    url: () => (doc === 1 ? "http://127.0.0.1:1/screen" : "http://127.0.0.1:1/login"), goto: async () => null,
+    screenshot: async () => Buffer.from("not a png"),
+    evaluate: async (fn, arg) => {
+      if (fn === "window.__dtProbeDoc || ''") return "doc" + doc;
+      if (typeof fn === "function" && fn.name === "countVisibleTags") return shownOf(arg);
+      if (fn === "document.readyState") return "complete";
+      if (typeof fn === "string" && fn.startsWith("document.fonts")) return true;
+      if (typeof fn === "string" && fn.startsWith("[window.__dtProbeDoc")) return ["doc" + doc, "1:1"];
+      if (typeof fn === "function" && fn.name === "collectCandidates") return { viewport: { w: 1280, h: 800, scrollX: 0, scrollY: 0 }, tagged: [], frames: {}, text: {}, placeholders: {}, positions: {} };
+      if (typeof fn === "function" && fn.name === "measureElements") return [];
+      if (typeof fn === "function" && fn.name === "readPageOverflow") return { compatMode: "CSS1Compat", viewport: { w: 1280, h: 800 }, scrollWidth: 1280, clientWidth: 1280, overflowX: "visible", scrollable: false, offenders: [] };
+      throw new Error("stub: " + (typeof fn === "function" ? fn.name : fn) + " is not stubbed");
+    },
+    locator: (sel) => ({
+      first: () => ({ waitFor: async (o) => {
+        if (S === "redirect" && doc === 1) setTimeout(() => { doc = 2; }, 20);
+        for (const end = Date.now() + o.timeout; Date.now() < end; await sleep(10)) if (visible(sel)) return;
+        throw new TimeoutError("locator.waitFor: Timeout " + o.timeout + "ms exceeded.");
+      } }),
+    }),
+  };
+}
+module.exports = { chromium: { async launch() { return { version: () => "1.0", close: async () => {}, newBrowserCDPSession: async () => ({ send: async () => {} }),
+  newContext: async () => ({ close: async () => {}, newPage: async () => newPage() }) }; } } };
+`;
+  const readyProj = project("ready-stub", [["playwright", "1.63.0", READY_PW]]);
+  fs.mkdirSync(path.join(readyProj, "design", "verify"), { recursive: true });
+  const readyExp = path.join(readyProj, "design", "verify", "Orders.expected.json");
+  fs.writeFileSync(readyExp, JSON.stringify(exp()));
+  const stubRun = (scenario: string): SpawnSyncReturns<string> =>
+    spawnSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off"],
+      { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: scenario } });
+  const measuredFile = path.join(readyProj, "design", "verify", "Orders.measured.json");
+  const redirect = stubRun("redirect");
+  t("[ready] a redirect after load (location.replace to a login page) with the default --ready → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint — never 'kept navigating' or the dev-server watch advice; nothing written", () =>
+    redirect.status === 4 && /verify-probe: --ready '\[data-dt-node="1:1"\]' never became visible \(the page shows 0 of the expectation's \d+ own tags — fewer than half\): locator\.waitFor: Timeout/.test(redirect.stderr)
+    && redirect.stderr.includes("[data-dt-node=\"1:1\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
+    && !/kept navigating|watch tree/.test(redirect.stderr) && !fs.existsSync(measuredFile));
+  const shell = stubRun("shell");
+  t("[ready] another section that shows only a shell's few tags of this frame (1 of N) with the default --ready → exit 4 with the count and the hint, nothing written — never measured as the screen", () =>
+    shell.status === 4 && /never became visible \(the page shows 1 of the expectation's \d+ own tags — fewer than half\)/.test(shell.stderr)
+    && shell.stderr.includes("is the default --ready (the frame's tag), and the page shows too few") && !fs.existsSync(measuredFile));
+  const untagged = stubRun("untagged");
+  if (untagged.status !== 0) console.log(untagged.stderr);
+  const untaggedDoc = readJsonOrNull(measuredFile, isVerifyMeasured);
+  t("[ready] the frame's tag never shows but the expectation's own tags do (an untagged root, a shared shell) → measured (exit 0) with the untagged-root note in the measured file", () =>
+    untagged.status === 0 && untaggedDoc !== null && (untaggedDoc.notes || []).some((n) => n.startsWith("the screen root is not tagged: [data-dt-node=\"1:1\"] (the default --ready) never showed within 1s, but the page shows at least half of the expectation's own tags")));
+  t("[ready] …and the page still gets its quiet window after the frame's wait (no 'the DOM was still changing … measured anyway' note)", () =>
+    untaggedDoc !== null && !(untaggedDoc.notes || []).some((n) => n.startsWith("the DOM was still changing")));
+  fs.rmSync(measuredFile, { force: true });
+  const hiddenFirst = stubRun("hidden-first");
+  const hiddenDoc = readJsonOrNull(measuredFile, isVerifyMeasured);
+  t("[ready] the frame's tag with a hidden first copy and a visible later one → the wait is met by the visible one: measured (exit 0), no untagged-root note", () =>
+    hiddenFirst.status === 0 && hiddenDoc !== null && !(hiddenDoc.notes || []).some((n) => n.startsWith("the screen root is not tagged")));
 
   // --steps with a plan that has no navigate list: no steps, a note — never exit 2
   const planNoNav = path.join(goneProj, "plan-no-nav.json");
@@ -474,9 +592,17 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     helpText.status === 0 && helpText.stdout.includes("[--ready <selector> | none]") && helpText.stdout.includes("by default the frame's tag [data-dt-node=\"<frame id>\"]")
     && helpText.stdout.includes("a plan with none is no steps") && helpText.stdout.includes("the second ends the run `failed` — the probe writes it")
     && helpText.stdout.includes("it needs DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 in the environment, else exit 2"));
-  t("[run] probeAttemptLine: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
-    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
-    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+  t("[run] probeAttemptLine after an exit 4: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
+    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 4) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
+    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 4) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+  t("[run] probeAttemptLine after an exit 3: ask the user first, then re-run once in the run; the second still ends it", () =>
+    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 3) === "status run r1 measuring — failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
+    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 3) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+  t("[run] probeAttemptUncounted: an attempt the status lock or cache refused names why, the one re-run (exit 4: at once) and the command that ends the run", () => {
+    const l = VP.probeAttemptUncounted({ runId: "r1", exit: 4, by: "busy", screen: "Orders", verifyDir: "/p/design/verify" });
+    return l.startsWith("status run r1 not counted — this failed attempt (exit 4) is not in the run's status (another status write held the status lock for the whole wait). Re-run the probe once in this run (--run r1); if that attempt fails too, whatever its own line says, end the run: node ")
+      && l.endsWith(" --status Orders --phase failed --run r1 --detail \"probe exit 4 twice\" --dir /p/design/verify");
+  });
 
   // --browser-path is checked first — before the project's Playwright is resolved (`none` has none) or a browser
   // launched: a missing path, a directory (a macOS .app), a file that is not executable → exit 3, one line, no stack

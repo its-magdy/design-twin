@@ -22,6 +22,16 @@ a lookup table (`data-dt-node={IDS.row}`) — the id string just has to appear i
 measurement aid, never component identity — that is the plan's `components[]` (catalog match,
 `design/codeconnect.local.json`).
 
+**The screen root carries its frame id**: the element that is the frame gets `data-dt-node="<frame id>"`. Step 5's
+probe waits for that tag after every load (its default `--ready`), so a page that is not the screen — a login bounce,
+another section — is never measured. A root that cannot carry it (a shell shared by several screens keeps ONE
+frame's ids, a layout component the screen does not own) still measures: when the frame's tag never shows but at
+least half of the screen's other tags do, the probe measures the page as the screen after its `--timeout`, finds the
+root by size and fill, and says so in a note (fewer is another section that shares the shell: exit 4) — so tag a
+wrapper the screen owns with the frame id where you can. A project that
+cannot tag at all (the opt-out below) has no tag to wait for: verify then passes `--ready <root selector>`, or
+`--ready none`.
+
 ## Lists and shared shells
 
 A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where one exists; a shell shared by
@@ -36,6 +46,7 @@ Both follow the reuse rules; untagged sets are reported as tag coverage, never a
 On a web profile the Stop hook counts tags across every plan's `files[]`: it **blocks** when no file carries
 `data-dt-node` at all, warns below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that
 genuinely cannot tag says so in the plan: `"tagging": {"off": true, "reason": "<why>"}` (no reason, no opt-out).
+The probe reads it from the plan passed as `--steps` and then waits for no frame tag by default (a note says so).
 
 ## Keeping tags out of a deploy bundle
 

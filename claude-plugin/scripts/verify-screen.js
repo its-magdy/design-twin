@@ -1161,8 +1161,9 @@ var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var MEASURED_PHASES = ["measured", "done"];
 var PROBE_ATTEMPTS = 2;
-function probeAttemptNote(n) {
-  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : "re-run the probe once in this run"}`;
+function probeAttemptNote(n, exit) {
+  const next = n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
 }
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
@@ -1311,9 +1312,9 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
-    const failures = w.probeFailed ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
-    const phase = w.probeFailed && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
-    const detail = w.probeFailed && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures)})` : w.detail ?? "";
+    const failures = w.probeFailed !== void 0 ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
+    const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
+    const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
     const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,

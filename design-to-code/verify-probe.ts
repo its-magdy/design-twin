@@ -20,7 +20,9 @@
 // files). The probe writes the run's status itself — `measuring` before the browser starts, `measured` (its own run:
 // `done`) + the measured file's sha256 after it is closed, and nothing while a page is open; with --run it counts its
 // own failed attempts (exit 3/4) and ends the run `failed` at the second. Every load waits for --ready, by default
-// the frame's tag, so a redirect or another section is never measured as the screen. Files are
+// the frame's tag, so a redirect or another section is never measured as the screen (a page that shows at
+// least half of the expectation's own tags but not the frame's is the screen with an untagged root, measured with
+// a note). Files are
 // written atomically, the screenshot first and measured.json last (a reader that sees the measured file
 // sees its picture); measured.build records what was served (to expose a stale preview).
 //
@@ -51,7 +53,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response } from "playwright";
 import { spawnSync } from "node:child_process";
 import { PROC_HOST, killChildTree, parentPid, taskkillCapped, type ProcHost } from "./kill-tree.ts";
-import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements } from "./probe-page.ts";
+import { collectCandidates, countVisibleTags, focusablePath, focusInfo, freeHoverPoint, measureElements } from "./probe-page.ts";
 import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
 import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
@@ -342,6 +344,38 @@ async function docTokenOrNull(page: Page): Promise<string | null> {
  *  measurement compares against THIS token, so a document that replaced it after settling is never measured as settled). */
 interface Settled { note: string | null; token: string | null }
 
+/** A selector's visible matches only (Playwright's `visible=true` engine): a wait on it is met by ANY visible match,
+ *  so a hidden first copy (a responsive duplicate) never hides a visible one. */
+export const visibleOnly = (sel: string): string => `${sel} >> visible=true`;
+
+/** The default --ready's way out for a screen root that carries no tag: `ids` are the expectation's own node ids (its
+ *  nodes, instances and other frames), `tags` a selector of their tags. Once the frame's tag misses on a page that
+ *  shows at least half of them (takesForScreen — a shell that keeps this frame's ids shows a few on every section of
+ *  the app, so a few are not enough), `seen` is set: that page is measured as the screen (the root found as an
+ *  untagged one), and every later load (the re-run, the driven pages) waits for those tags instead of the frame's. */
+export interface UntaggedRoot { ids: string[]; tags: string; seen: boolean }
+/** Whether a page whose frame tag never showed is the screen: it shows at least half of the expectation's own tags. */
+export const takesForScreen = (shown: number, total: number): boolean => total > 0 && shown * 2 >= total;
+/** How many of `ids` tag a visible element now (no wait); a page mid-navigation shows none. */
+async function tagsShown(page: Page, ids: string[]): Promise<number> {
+  try { return await page.evaluate(countVisibleTags, ids); } catch (e) {
+    if (errorKind(e, page) === "gone") throw gone(e);
+    return 0;
+  }
+}
+
+/** What settle() does when its load / fonts / --ready wait threw on a document that is still the current one (a
+ *  replaced document is settled again first): "unreachable" — the --ready wait ran out on a document that stayed, so
+ *  the page is not the screen (a redirect to a login page or another origin, a section the steps did not reach),
+ *  whether or not a navigation came before; "retry" — a navigation is still within its document's window; "kept" — a
+ *  navigation left no settled document by then (the page kept navigating). */
+export function settleMiss(s: { readyWait: boolean; navigated: boolean; sameDocument: boolean; moved: boolean; pastDocDeadline: boolean }): "unreachable" | "retry" | "kept" {
+  if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
+  if (s.moved) return s.pastDocDeadline ? "kept" : "retry";
+  if (s.navigated && !s.pastDocDeadline) return "retry";
+  return "unreachable";
+}
+
 /**
  * Wait until the page is ready (its load, fonts, --ready) and its DOM has been quiet for QUIET_MS (≤ 10 s).
  * M-a: a document still loading (a step's navigation committed before settling began) is waited for — its load first —
@@ -351,8 +385,11 @@ interface Settled { note: string | null; token: string | null }
  * document can sit quiet, half-loaded, for longer than the quiet window before its load fires. when that load was a
  * reload replacing a document a click step had changed in place (NavLog.lost), the steps' state is gone →
  * StepStateLostError (the pass is re-run once and the steps replayed); a step's own navigation is settled on.
+ * A --ready wait that runs out on a document that stays — after a navigation too (a redirect to a login page or another
+ * origin) — is UnreachableError (settleMiss), never "kept navigating"; with `root` (the default --ready) a page that
+ * shows at least half of the expectation's own tags is the screen with an untagged root instead.
  */
-async function settle(page: Page, log: NavLog, ready: string | undefined, timeout: number): Promise<Settled> {
+async function settle(page: Page, log: NavLog, ready: string | undefined, timeout: number, root?: UntaggedRoot): Promise<Settled> {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   /** the settle-wide bound on navigation churn: a NEW document after it is "kept navigating" */
   const deadline = Date.now() + cap;
@@ -397,6 +434,8 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
     return null;
   };
   for (;;) {
+    /** the wait that threw was the --ready one (not the load or the fonts) */
+    let readyWait = false;
     try {
       // M-a: its load first (a document whose load is still pending can be quiet and half drawn)
       // a document whose load already timed out (in this settle or an earlier one) is not waited for again
@@ -426,18 +465,35 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
         stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      // the full --timeout for a page that has not navigated since load; what is left of the quiet cap otherwise
-      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
+      // the full --timeout for a page that has not navigated since load; what is left of the quiet cap otherwise —
+      // for any visible match (a hidden first copy does not count); an untagged root seen once: the expectation's tags
+      if (ready) {
+        readyWait = true;
+        await page.locator(visibleOnly(root?.seen ? root.tags : ready)).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
+      }
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
       const now = await docTokenOrNull(page);
       if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
+      // the document the wait ran on is still the current one (an empty token tells no documents apart)
+      const sameDocument = token !== null && token !== "" && now === token;
       if (token === null && now !== null) token = now;
-      if (moved() && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
-      if (moved()) throw kept();
-      if (errorKind(e) === "navigated" && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
-      throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
+      const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
+      if (next === "retry") { await sleep(POLL_MS); continue; }
+      if (next === "kept") throw kept();
+      // the frame's tag (the default --ready) missed on a page that shows at least half of the expectation's own tags:
+      // the screen, with an untagged root — measured (the root found by size and fill) and said in a note; else not the
+      // screen
+      const shown = readyWait && root !== undefined && !root.seen ? await tagsShown(page, root.ids) : null;
+      if (root === undefined || shown === null || !takesForScreen(shown, root.ids.length)) {
+        const why = !readyWait || root === undefined ? "" : shown === null ? " (nor any of the expectation's own tags)"
+          : ` (the page shows ${shown} of the expectation's ${root.ids.length} own tags — fewer than half)`;
+        throw new UnreachableError(ready ? `--ready '${ready}' never became visible${why}: ${firstLine(e)}` : firstLine(e));
+      }
+      root.seen = true;
+      // the frame's wait used up this document's window: its quiet window gets one of its own
+      docDeadline = Date.now() + cap;
     }
     let mark = log.docLoads;
     let last = "", since = Date.now();
@@ -480,6 +536,8 @@ export interface ProbeOptions {
   timeout: number;
   /** replayed after every load, before --ready is waited for */
   steps?: ProbeStep[];
+  /** with the default --ready (the frame's tag): the expectation's own tags, for a screen whose root is untagged */
+  untaggedRoot?: UntaggedRoot;
 }
 
 // ---------------------------------------------------------------- reaching the screen (goto, --steps, --ready)
@@ -679,12 +737,12 @@ async function reachPage(page: Page, log: NavLog, o: ProbeOptions): Promise<Sett
     throw new UnreachableError(`could not load ${o.url}: ${loadFailureWhy(errMsg(e))}`);
   }
   const steps = o.steps || [];
-  if (!steps.length) return settle(page, log, o.ready, o.timeout);
+  if (!steps.length) return settle(page, log, o.ready, o.timeout, o.untaggedRoot);
   try {
     await settle(page, log, undefined, o.timeout);
     await runSteps(page, log, o);
     // the last click still owns its late navigation while --ready is waited for
-    const last = await settle(page, log, o.ready, o.timeout);
+    const last = await settle(page, log, o.ready, o.timeout, o.untaggedRoot);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
     // LOW b: the last settle's note only — the first one's may be about a document the steps replaced, or one that has
     // finished loading since (the last settle re-checks that document's readyState)
@@ -1072,15 +1130,18 @@ const USAGE =
   "      error). The probe writes the run's LIVE status (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
   "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed. With --run an\n" +
-  "      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run,\n" +
-  "      the second ends the run `failed` — the probe writes it (a `status run <id> …` line on stderr says which). A --run that\n" +
+  "      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run\n" +
+  "      (after an exit 3, once the user has fixed the renderer), the second ends the run `failed` — the probe writes it (a\n" +
+  "      `status run <id> …` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that\n" +
   "      already ended (done/failed/blocked) is refused before anything starts, and a run that\n" +
   "      ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).\n" +
   "      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring —\n" +
   "      by default the frame's tag [data-dt-node=\"<frame id>\"] (expectation.frame.nodeId), so a page that is not the screen\n" +
-  "      (a login redirect, another section) is an exit 4, never measured; --ready none waits for nothing. With no frame id in\n" +
-  "      the expectation there is no default (a note says so). Not visible within --timeout → exit 4.\n" +
+  "      (a login redirect, another section) is an exit 4, never measured — unless it shows at least half of the expectation's own\n" +
+  "      tags: then the root is untagged and the page is measured, with a note; --ready none waits for nothing. With no frame\n" +
+  "      id in the expectation, or a --steps plan with tagging.off, there is no default (a note says so). Not visible within\n" +
+  "      --timeout → exit 4.\n" +
   "      --steps: a JSON list of steps (or a plan whose `navigate` holds them; a plan with none is no steps — a note says so)\n" +
   "      replayed after every page load, before --ready,\n" +
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
@@ -1107,7 +1168,8 @@ const USAGE =
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage, or (--run) the run already ended / ended while the probe ran, or (no --run) another run of the\n" +
   "      screen is open, or replaced its own — also instead of a 3 or 4 · 3\n" +
-  "      renderer unavailable (ask the user to install; never installed here) · 4 the page kept navigating / reloaded twice\n" +
+  "      renderer unavailable (ask the user to install; never installed here; with --run, re-run once in the run after they\n" +
+  "      do) · 4 the page kept navigating / reloaded twice\n" +
   "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /\n" +
   "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written; with --run the\n" +
   "      second failed attempt has ended the run `failed`).";
@@ -1178,11 +1240,22 @@ export function measuredRefusedWhy(by: StatusRefusal, runId: string, phase: "mea
   return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
 }
 
-/** The stderr line after a failed probe attempt (exit 3/4) of a --run run was counted in its status. */
-export function probeAttemptLine(doc: Pick<VerifyStatusV2, "runId" | "phase" | "probeFailures">): string {
-  const note = probeAttemptNote(doc.probeFailures ?? 0);
+/** The stderr line after a failed probe attempt (exit 3/4) of a --run run was counted in its status: after an exit 3
+ *  (no renderer) the user fixes the renderer before the one re-run; after an exit 4 the re-run follows at once. */
+export function probeAttemptLine(doc: Pick<VerifyStatusV2, "runId" | "phase" | "probeFailures">, exit: number): string {
+  const note = probeAttemptNote(doc.probeFailures ?? 0, exit);
   return doc.phase === "failed" ? `status run ${doc.runId} failed — ${note} (a retry is a new run: --new-run)`
     : `status run ${doc.runId} ${doc.phase} — ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
+}
+/** The stderr line when a failed probe attempt of a --run run could NOT be counted (the run cache refused the write, or
+ *  another writer held its lock): the run stays where it was, so the line says how the agent ends it. */
+export function probeAttemptUncounted(o: { runId: string; exit: number; by: StatusRefusal; screen: string; verifyDir: string }): string {
+  const why = o.by === "lost" ? "another writer took over the status lock while the probe held it"
+    : o.by === "busy" ? "another status write held the status lock for the whole wait" : "the run cache refused the write";
+  return `status run ${o.runId} not counted — this failed attempt (exit ${o.exit}) is not in the run's status (${why}). ` +
+    `${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId}); ` +
+    `if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed ` +
+    `--run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
 }
 
 /** --ready's value that waits for nothing. */
@@ -1190,18 +1263,46 @@ export const READY_NONE = "none";
 /** What the probe waits for after every load (and after the steps): --ready's selector; without --ready the frame's
  *  tag `[data-dt-node="<frame id>"]` — a page that shows something else (a login redirect, the app's default section)
  *  is then an exit 4, not a measurement of the wrong page; `--ready none` waits for nothing. With no frame id in the
- *  expectation there is no default (the note says so). */
-export function readyOf(flag: string | undefined, frameId: string | undefined): { ready?: string; note: string } {
+ *  expectation, or a --steps plan that opts out of tagging, there is no default (the note says so). */
+export function readyOf(flag: string | undefined, frameId: string | undefined, taggingOff = false): { ready?: string; note: string } {
   if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
   if (flag !== undefined) return { ready: flag, note: `ready  ${flag}` };
+  if (taggingOff) return { note: "note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default — the page is measured once it is quiet (pass --ready <root selector>)" };
   if (frameId === undefined || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)" };
   const ready = attrSelector(frameId);
   return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
 }
-/** The exit-4 hint when the default --ready (the frame's tag) never showed. */
-export function defaultReadyMissed(ready: string): string {
-  return `${ready} is the default --ready (the frame's tag): the page the probe reached is not the screen (a redirect such as a login page, ` +
-    `another section — reach it with --steps), or the screen root is not tagged ${ready.slice(1, -1)}; pass --ready <selector> for another root, or --ready none to wait for nothing`;
+/** Whether a --steps document is a plan that opts out of tagging — `"tagging": {"off": true, "reason": "…"}` (no
+ *  reason, no opt-out, as the Stop hook reads it). */
+export function planTaggingOff(doc: unknown): boolean {
+  if (!isJsonObject(doc) || !isJsonObject(doc.tagging)) return false;
+  const { off, reason } = doc.tagging;
+  return off === true && typeof reason === "string" && reason.trim() !== "";
+}
+/** The expectation's own node ids but the frame's — its visible nodes, its instances and its other frames — and a
+ *  selector of their tags; null when it names none. */
+export function ownTagsOf(exp: Expectation, frameId: string): { ids: string[]; tags: string } | null {
+  const hidden = new Set((exp.hidden && exp.hidden.ids) || []);
+  const ids = new Set<string>();
+  for (const s of exp.nodes || []) if (!hidden.has(s.nodeId)) ids.add(s.nodeId);
+  for (const i of exp.instances || []) if (!hidden.has(i.nodeId)) ids.add(i.nodeId);
+  for (const fr of exp.frames || []) if (typeof fr.nodeId === "string") ids.add(fr.nodeId);
+  ids.delete(frameId);
+  return ids.size ? { ids: [...ids], tags: [...ids].map(attrSelector).join(", ") } : null;
+}
+/** The measured file's note when the frame's tag never showed but at least half of the expectation's own tags did. */
+export function untaggedRootNote(ready: string, timeout: number): string {
+  return `the screen root is not tagged: ${ready} (the default --ready) never showed within ${Math.round(timeout / 1000)}s, but the page shows at least ` +
+    `half of the expectation's own tags, so it was measured as the screen and its root found as an untagged one (size and fill) — tag the root ` +
+    `${ready.slice(1, -1)}, or pass --ready <root selector>`;
+}
+/** The exit-4 hint when the default --ready (the frame's tag) never showed, and too few of the expectation's own tags did. */
+export function defaultReadyMissed(ready: string, withSteps: boolean): string {
+  return `${ready} is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen: the page ` +
+    `the probe reached is not the screen — a redirect (a login page, another origin) or another section (${withSteps
+      ? "the --steps ended somewhere else: check the plan's navigate list"
+      : "a screen that is a section of the app is reached with --steps <plan.json>"}) — or nothing on it is tagged (a tagging ` +
+    `opt-out: pass --ready <root selector>, or --ready none to wait for nothing)`;
 }
 
 /** The probe's own run (no --run) while it is open: armed once its `measuring` write is recorded (with how to end it),
@@ -1278,9 +1379,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   // the steps — a JSON list, or a plan's navigate[]; refused whole when any step is outside the vocabulary
   let steps: ProbeStep[] = [];
   let stepsSource: string | null = null;
+  /** the --steps plan opts out of tagging: there is no frame tag to wait for by default */
+  let taggingOff = false;
   if (f.steps !== undefined) {
     const r = readJson(f.steps, anyJson);
     if ("error" in r) { console.error(`verify-probe: --steps '${f.steps}' ${r.error}`); return 2; }
+    taggingOff = planTaggingOff(r.doc);
     const parsed = parseSteps(r.doc);
     if ("error" in parsed) { console.error(`verify-probe: --steps '${f.steps}' ${parsed.error}\n${USAGE}`); return 2; }
     // a plan with no navigate list: the screen is reached by --url alone — no steps, no reach recorded
@@ -1307,7 +1411,11 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     else notes.push("the expectation states no frame size — measured at 1280x800; pass --viewport");
   }
   // what every load waits for: --ready, else the frame's tag (--check measures nothing: no wait)
-  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId);
+  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId, taggingOff);
+  // the default's way out for an untagged screen root: the expectation's own tags
+  const frameNodeId = expectation?.frame?.nodeId;
+  const ownTags = f.ready === undefined && readyPick?.ready !== undefined && expectation && frameNodeId !== undefined ? ownTagsOf(expectation, frameNodeId) : null;
+  const untaggedRoot: UntaggedRoot | undefined = ownTags !== null ? { ...ownTags, seen: false } : undefined;
 
   const outBase = f.out ?? (f.expected ? path.join(path.dirname(f.expected), path.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   // the run's status is the one of the expectation's verify dir (design/verify/<S>), even when --out stages
@@ -1356,12 +1464,16 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   const ended = (code: number): number => {
     if (runId !== undefined && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
       const w: StatusWrite = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`,
-        ...(expSha ? { expectationSha256: expSha } : {}), ...(ownRun ? {} : { probeFailed: true }) };
+        ...(expSha ? { expectationSha256: expSha } : {}), ...(ownRun ? {} : { probeFailed: code }) };
       const rec: { doc?: VerifyStatusV2 } = {};
       const wrote = status(w, { after: (d) => { rec.doc = d; } });
       if (ownRun) own.disarm();
       if (wrote === "over") return 2;
-      if (rec.doc?.probeFailures !== undefined && !ownRun) console.error(probeAttemptLine(rec.doc));
+      if (!ownRun) {
+        if (rec.doc?.probeFailures !== undefined) console.error(probeAttemptLine(rec.doc, code));
+        // not counted: the run sits at its last phase — say how the agent ends it
+        else if (wrote === "refused") console.error(probeAttemptUncounted({ runId, exit: code, by: refusal.by, screen: path.basename(statusBase), verifyDir: path.resolve(path.dirname(statusBase)) }));
+      }
     }
     return code;
   };
@@ -1412,15 +1524,17 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
 
     let run: ProbeRun;
     const ready = readyPick?.ready;
-    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(ready !== undefined ? { ready } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}) };
+    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(ready !== undefined ? { ready } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}),
+      ...(untaggedRoot !== undefined ? { untaggedRoot } : {}) };
     try {
       run = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => undefined);
       if (e instanceof UnreachableError) {
-        // the default --ready that never showed: the page is not the screen (a redirect, another section), or its root is untagged
+        // the default --ready that never showed, nor any of the expectation's tags: the page is not the screen (a redirect,
+        // another section), or nothing on it is tagged
         const byDefault = f.ready === undefined && ready !== undefined && e.message.startsWith(`--ready '${ready}'`);
-        console.error(`verify-probe: ${e.message} — nothing written.` + (byDefault ? `\n  ${defaultReadyMissed(ready)}` : ""));
+        console.error(`verify-probe: ${e.message} — nothing written.` + (byDefault ? `\n  ${defaultReadyMissed(ready, steps.length > 0)}` : ""));
         return 4;
       }
       // runProbe answers a page gone during measurement with browser-gone itself; this is one gone outside it (the context
@@ -1432,6 +1546,8 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       if (pwErrorKind(e) === "timeout") { console.error(`verify-probe: timed out — ${firstLine(e)} — nothing written.`); return 4; }
       throw e;
     }
+    // the frame's tag never showed, but the page showed the expectation's own tags: measured as the screen
+    if (untaggedRoot?.seen === true && ready !== undefined) notes.push(untaggedRootNote(ready, timeout));
     // drive the overlay interactions, each on a fresh page, after the measurement pass and before the
     // browser closes — within min(60 s, what --max-time leaves less 15 s). Never blocks the measured file, never exit 4.
     let driven: InteractionEvidence[] | null = null, driveNote: string | null = null;
@@ -1546,7 +1662,8 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     const b = held.browser;
     if (b) await closeCapped(b);
     console.error(`verify-probe: timed out after ${maxTime / 1000}s (--max-time) — the browser was closed, nothing written.\n` +
-      "  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).");
+      "  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it —\n" +
+      "  the probe writes the run's `failed` status itself (with --run at the second failed attempt; its own run at once).");
     return ended(4);
   }
   if (typeof first === "number") return ended(first);

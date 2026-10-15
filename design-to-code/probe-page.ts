@@ -654,6 +654,18 @@ export function focusablePath(path: string): string | null {
   parts.unshift("html");
   return parts.join(" > ");
 }
+/** How many of `ids` tag at least one visible element — a box with a size and no visibility:hidden, as Playwright reads
+ *  visible. SELF-CONTAINED. */
+export function countVisibleTags(ids: string[]): number {
+  const want = new Set(ids), shown = new Set<string>();
+  for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
+    const id = el.getAttribute("data-dt-node");
+    if (id === null || !want.has(id) || shown.has(id)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0 && getComputedStyle(el).getPropertyValue("visibility") !== "hidden") shown.add(id);
+  }
+  return shown.size;
+}
 /** Whether the element at `path` has focus, and whether it matches :focus-visible. SELF-CONTAINED. */
 export function focusInfo(path: string): { focused: boolean; focusVisible: boolean } {
   const el = document.querySelector(path);
