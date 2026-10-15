@@ -57,7 +57,7 @@ declare function requestAnimationFrame(cb: () => void): number;
 
 // ---------------------------------------------------------------- pure helpers (unit-tested in test/verify-probe.test.ts)
 /** what the probe may still need after the behaviour budget ends — a cut unit's settle (CUT_SETTLE_MS), the capped close
- *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then a SIGKILL after a `ps` capped at PS_CAP_MS) and writing the files
+ *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then its kill: one pgrep, ps or taskkill capped at PS_CAP_MS) and writing the files
  *  (WRITE_MARGIN_MS) — all inside
  *  --max-time, so a measurement that finished is never lost to the watchdog. */
 export { CUT_SETTLE_MS };

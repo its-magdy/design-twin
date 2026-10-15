@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-probe.ts
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import os3 from "node:os";
 import path9 from "node:path";
 
@@ -14,8 +14,115 @@ var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex")
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep4 } from "node:timers/promises";
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { setTimeout as sleep5 } from "node:timers/promises";
+import { spawnSync as spawnSync3 } from "node:child_process";
+
+// design-to-code/kill-tree.ts
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
+var taskkillCapped = (capMs) => (args) => spawnSync("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: capMs });
+var KILL_HOST = {
+  platform: process.platform,
+  taskkill: taskkillCapped(1e4),
+  kill: (pid, s) => {
+    process.kill(pid, s);
+  }
+};
+var killPidTree = (pid, host = KILL_HOST) => {
+  if (!(pid > 1)) return false;
+  if (host.platform === "win32") {
+    const r = host.taskkill(["/T", "/F", "/PID", String(pid)]);
+    return r.error === void 0 && r.status === 0;
+  }
+  try {
+    host.kill(-pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+};
+var PROC_HOST = {
+  ...KILL_HOST,
+  self: process.pid,
+  readdir: (dir) => fs.readdirSync(dir),
+  readFile: (file) => fs.readFileSync(file, "utf8"),
+  run: (cmd, args, timeoutMs) => {
+    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    return { ...r.error !== void 0 ? { error: r.error } : {}, status: r.status, stdout: typeof r.stdout === "string" ? r.stdout : "" };
+  },
+  exists: (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+var pidsIn = (text) => text.split(/\s+/).filter((w) => /^\d+$/.test(w)).map(Number);
+var notFound = (e) => e !== void 0 && "code" in e && e.code === "ENOENT";
+function childPids(host = PROC_HOST, capMs = 3e3) {
+  if (host.platform === "win32") return null;
+  if (host.platform === "linux") {
+    let entries = null;
+    try {
+      entries = host.readdir("/proc");
+    } catch {
+    }
+    if (entries !== null) {
+      const kids2 = [];
+      for (const e of entries) {
+        if (!/^\d+$/.test(e)) continue;
+        let stat;
+        try {
+          stat = host.readFile(`/proc/${e}/stat`);
+        } catch {
+          continue;
+        }
+        const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+        if (ppid === host.self) kids2.push(Number(e));
+      }
+      return kids2;
+    }
+  }
+  const pg = host.run("pgrep", ["-P", String(host.self)], capMs);
+  if (pg.error === void 0 && (pg.status === 0 || pg.status === 1)) return pidsIn(pg.stdout);
+  if (!notFound(pg.error)) return null;
+  const ps = host.run("ps", ["-A", "-o", "pid=,ppid="], capMs);
+  if (ps.error !== void 0 || ps.status !== 0) return null;
+  const kids = [];
+  for (const line of ps.stdout.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (m && Number(m[2]) === host.self) kids.push(Number(m[1]));
+  }
+  return kids;
+}
+var POLL_MS = 50;
+async function killChildTree(pid, host = PROC_HOST, { capMs = 3e3, graceMs = 0 } = {}) {
+  const known = pid !== void 0 && pid > 1 ? pid : void 0;
+  if (host.platform === "win32" && known === void 0) return;
+  const targets = known !== void 0 ? [known] : childPids(host, capMs) ?? [];
+  const until = Date.now() + graceMs;
+  while (targets.some((t) => host.exists(t)) && Date.now() < until) await sleep(POLL_MS);
+  if (host.platform === "win32") {
+    if (known !== void 0 && host.exists(known)) killPidTree(known, host);
+    return;
+  }
+  const end = (t) => {
+    if (killPidTree(t, host) || !host.exists(t)) return;
+    try {
+      host.kill(t, "SIGKILL");
+    } catch {
+    }
+  };
+  if (known === void 0) {
+    for (const t of targets) end(t);
+    return;
+  }
+  if (killPidTree(known, host) || !host.exists(known)) return;
+  for (const t of childPids(host, capMs) ?? []) end(t);
+}
 
 // design-to-code/probe-page.ts
 function collectCandidates(input) {
@@ -1302,7 +1409,7 @@ function isStringRecord(x) {
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/read-json.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -1321,7 +1428,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs.readFileSync(file);
+    buf = fs2.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -1494,7 +1601,7 @@ function stepsSha256(steps) {
 }
 
 // design-to-code/probe-drive.ts
-import { setTimeout as sleep } from "node:timers/promises";
+import { setTimeout as sleep2 } from "node:timers/promises";
 
 // design-to-code/pw-errors.ts
 var pwFirstLine = (e) => firstLine(e).trimEnd();
@@ -2618,7 +2725,7 @@ async function raceBudget(work, ms, held, onCut) {
     if (ctx) await ctx.close().catch(() => void 0);
     await work;
   })();
-  const s = await Promise.race([wound, sleep(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
+  const s = await Promise.race([wound, sleep2(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
   return { cut: true, settled: s !== UNSETTLED };
 }
 var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
@@ -2831,7 +2938,7 @@ async function driveRow(browser, o, row, hooks, onContext) {
       if (read2.opened && destDone) break;
       if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
       if (Date.now() - t0 >= 2e3) break;
-      await sleep(100);
+      await sleep2(100);
     }
     if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
     let tokenAfter = "";
@@ -2894,7 +3001,7 @@ async function driveInteractions(browser, o, hooks) {
 }
 
 // design-to-code/probe-behaviour.ts
-import { setTimeout as sleep2 } from "node:timers/promises";
+import { setTimeout as sleep3 } from "node:timers/promises";
 var CLOSE_STEP_CAP_MS = 5e3;
 var PS_CAP_MS = 3e3;
 var WRITE_MARGIN_MS = 2e3;
@@ -4259,7 +4366,7 @@ async function runBehaviour(browser, o) {
   const t0 = Date.now();
   const opening = openWriteBlock(browser);
   const late = /* @__PURE__ */ Symbol("no answer");
-  const block = await Promise.race([opening, sleep2(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
+  const block = await Promise.race([opening, sleep3(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
   if (block === late) {
     opening.then((b) => {
       b.close();
@@ -4380,7 +4487,7 @@ async function runUnitInner(ctx, unit) {
     } finally {
       const last = trace.actions.at(-1);
       const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
-      if (wait > 0) await sleep2(wait, void 0, { ref: false });
+      if (wait > 0) await sleep3(wait, void 0, { ref: false });
       await reached.context.close().catch(() => void 0);
     }
   })().catch(unitEndWhy);
@@ -4431,7 +4538,7 @@ function a11yUnit(ctx) {
           const axeCap = Math.max(1e3, Math.min(AXE_CAP_MS, end - Date.now()));
           const res = await Promise.race([
             page.evaluate(`(async () => { const r = await axe.run(document, { resultTypes: ["violations"], iframes: false }); return { version: axe.version, violations: r.violations.map((v) => ({ id: v.id, impact: v.impact == null ? null : String(v.impact), nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => Array.isArray(n.target) ? n.target.map(String).join(" ") : String(n.target)) })) }; })()`),
-            sleep2(axeCap, AXE_TIMED_OUT, { ref: false })
+            sleep3(axeCap, AXE_TIMED_OUT, { ref: false })
           ]);
           if (res === AXE_TIMED_OUT) throw new AxeTimeout(`axe timed out after ${Math.round(axeCap / 1e3)} s`);
           const parsed = readAxeResult(res, o.axe.version);
@@ -4695,7 +4802,7 @@ function renderUnit(ctx) {
         const t = Date.now();
         let last = "", stable = 0;
         for (; ; ) {
-          await sleep2(100);
+          await sleep3(100);
           const s = await page.evaluate(docSize, null);
           const sig = `${s.sw}x${s.sh}`;
           stable = sig === last ? stable + 1 : 0;
@@ -4773,7 +4880,7 @@ function keyUnit(ctx, b) {
           if (r.lost) throw new UnitNavigated("the page loaded a new document");
           if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
           if (Date.now() - t >= 2e3) return r.opened;
-          await sleep2(100);
+          await sleep3(100);
         }
       };
       const keyOpen = async (key2) => {
@@ -4896,7 +5003,7 @@ function keyUnit(ctx, b) {
           await raf2(page);
           if (!await page.evaluate(dialogOpenNow, null)) return true;
           if (Date.now() - t >= 1e3) return false;
-          await sleep2(100);
+          await sleep3(100);
         }
       };
       const escClosed = await closedAfter();
@@ -4954,14 +5061,14 @@ function keyUnit(ctx, b) {
               expanded = true;
               break;
             }
-            await sleep2(100);
+            await sleep3(100);
           }
           if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
           else {
             u.act();
             await page.keyboard.press("Escape");
             await raf2(page);
-            await sleep2(150);
+            await sleep3(150);
             await raf2(page);
             const dlgOpen = await page.evaluate(dialogOpenNow, null);
             const ctl = await page.evaluate(expanderState, null);
@@ -5013,7 +5120,7 @@ function scrollUnit(ctx, b) {
           if (r.lost) throw new UnitNavigated("the page loaded a new document");
           if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
           if (Date.now() - t >= 2e3) return r.opened;
-          await sleep2(100);
+          await sleep3(100);
         }
       };
       const openStill = async () => {
@@ -5047,7 +5154,7 @@ function scrollUnit(ctx, b) {
           await raf2(page);
           if (!await page.evaluate(dialogOpenNow, null)) return true;
           if (Date.now() - t >= 1e3) return false;
-          await sleep2(100);
+          await sleep3(100);
         }
       };
       const closeAny = async () => (await safeCloseOn(page, closedAfter, u.act)).closed;
@@ -5168,9 +5275,9 @@ function readAxeResult(x, fallbackVersion) {
 }
 
 // design-to-code/probe-visual.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path4 from "node:path";
-import { setTimeout as sleep3 } from "node:timers/promises";
+import { setTimeout as sleep4 } from "node:timers/promises";
 
 // design-to-code/visual-diff.ts
 var rgb2y = (r, g, b) => r * 0.29889531 + g * 0.58662247 + b * 0.11448223;
@@ -5439,7 +5546,7 @@ function prepareVisual(exp, root) {
   if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export \u2014 re-run --expect` };
   let bytes;
   try {
-    bytes = fs2.readFileSync(file);
+    bytes = fs3.readFileSync(file);
   } catch {
     return { ok: false, why: `the reference PNG ${ri.path} is missing \u2014 re-pull the screen, then re-run --expect` };
   }
@@ -5493,7 +5600,7 @@ async function captureVisual(browser, o) {
     const { context, page, loads } = reached;
     try {
       const loads0 = loads();
-      await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep3(FONTS_CAP_MS, void 0, { ref: false })]);
+      await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep4(FONTS_CAP_MS, void 0, { ref: false })]);
       await raf2(page);
       const notes = [];
       const fr = o.frame;
@@ -5619,10 +5726,10 @@ function visualLine(v) {
 }
 
 // design-to-code/content-hash.ts
-import { spawnSync } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 function gitHead(cwd) {
   try {
-    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    const r = spawnSync2("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
     const h = r.status === 0 && String(r.stdout || "").trim();
     return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
   } catch {
@@ -5635,18 +5742,18 @@ import path8 from "node:path";
 import crypto4 from "node:crypto";
 
 // design-to-code/run-cache.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import os2 from "node:os";
 import path6 from "node:path";
 
 // bridge/src/file-lock.ts
 import crypto2 from "node:crypto";
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import os from "node:os";
 import path5 from "node:path";
 var STALE_MS = 3e4;
 var WAIT_MS = 1e4;
-var POLL_MS = 25;
+var POLL_MS2 = 25;
 var LIVE_STALE_MS = 2 * 6e4;
 var UNWRITTEN_STALE_MS = 2e3;
 var TRANSIENT_MS = 2e3;
@@ -5670,7 +5777,7 @@ var LockLost = class extends LockBusy {
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs3.readlinkSync("/proc/self/ns/pid");
+    return fs4.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -5702,7 +5809,7 @@ function processState(p) {
 }
 var read = (file) => {
   try {
-    return fs3.readFileSync(file, "utf8");
+    return fs4.readFileSync(file, "utf8");
   } catch {
     return null;
   }
@@ -5716,7 +5823,7 @@ function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs3.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs4.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -5727,16 +5834,16 @@ function isStale(file, text, staleMs) {
 }
 var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
-  const fd = fs3.openSync(file, "wx");
+  const fd = fs4.openSync(file, "wx");
   const mine = stampOf(token);
   try {
-    fs3.writeSync(fd, mine);
+    fs4.writeSync(fd, mine);
   } catch (e) {
-    fs3.closeSync(fd);
-    fs3.rmSync(file, { force: true });
+    fs4.closeSync(fd);
+    fs4.rmSync(file, { force: true });
     throw e;
   }
-  fs3.closeSync(fd);
+  fs4.closeSync(fd);
   return read(file) === mine ? mine : null;
 }
 function breakStale(lockFile, seen, staleMs = STALE_MS) {
@@ -5748,7 +5855,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (errCode(e) !== "EEXIST") throw e;
     const g = read(guard);
     if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
-      fs3.unlinkSync(guard);
+      fs4.unlinkSync(guard);
     } catch {
     }
     return false;
@@ -5758,7 +5865,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
     if (read(guard) !== mine) return false;
     try {
-      fs3.unlinkSync(lockFile);
+      fs4.unlinkSync(lockFile);
     } catch (e) {
       if (errCode(e) === "ENOENT") return false;
       throw e;
@@ -5766,7 +5873,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     return true;
   } finally {
     if (read(guard) === mine) try {
-      fs3.rmSync(guard, { force: true });
+      fs4.rmSync(guard, { force: true });
     } catch {
     }
   }
@@ -5779,7 +5886,7 @@ var sleepSync = (ms) => {
 function acquireFileLock(lockFile, opts = {}) {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
   const token = crypto2.randomBytes(8).toString("hex");
-  fs3.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  fs4.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
   let firstTransientAt = null;
   const transientYet = (e) => {
@@ -5815,7 +5922,7 @@ function acquireFileLock(lockFile, opts = {}) {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
           if (stillMine()) try {
-            fs3.rmSync(lockFile, { force: true });
+            fs4.rmSync(lockFile, { force: true });
           } catch {
           }
         },
@@ -5831,7 +5938,7 @@ function acquireFileLock(lockFile, opts = {}) {
       if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
       throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
     }
-    sleepSync(Math.min(POLL_MS, waitMs - waited));
+    sleepSync(Math.min(POLL_MS2, waitMs - waited));
   }
 }
 
@@ -5840,20 +5947,20 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs4.statSync(p).isDirectory();
+    return fs5.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs4.existsSync(p);
+var exists = (p) => fs5.existsSync(p);
 function realpath(p) {
-  if (typeof fs4.realpathSync.native === "function") {
+  if (typeof fs5.realpathSync.native === "function") {
     try {
-      return fs4.realpathSync.native(p);
+      return fs5.realpathSync.native(p);
     } catch {
     }
   }
-  return fs4.realpathSync(p);
+  return fs5.realpathSync(p);
 }
 function canonical2(p) {
   const abs = path6.resolve(p);
@@ -5921,19 +6028,19 @@ var RunCacheUnwritable = class extends Error {
 
 // bridge/src/atomic-write.ts
 import crypto3 from "node:crypto";
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import path7 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
 function writeFileAtomic(file, data, opts = {}) {
-  fs5.mkdirSync(path7.dirname(path7.resolve(file)), { recursive: true });
+  fs6.mkdirSync(path7.dirname(path7.resolve(file)), { recursive: true });
   const tmp = file + tmpSuffix();
   try {
-    fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
-    fs5.renameSync(tmp, file);
+    fs6.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.mode !== void 0) fs6.chmodSync(tmp, opts.mode);
+    fs6.renameSync(tmp, file);
   } catch (e) {
     try {
-      fs5.rmSync(tmp, { force: true });
+      fs6.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -6110,13 +6217,13 @@ function publishStatus(base, doc) {
 }
 
 // bridge/src/is-main.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs6.realpathSync(argv1) === fs6.realpathSync(fileURLToPath2(metaUrl));
+    return fs7.realpathSync(argv1) === fs7.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -6130,14 +6237,14 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs7.existsSync(path9.join(dir, f));
+  const has = (f) => fs8.existsSync(path9.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs7.existsSync(path9.join(dir, f));
+  const has = (f) => fs8.existsSync(path9.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
@@ -6177,7 +6284,7 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs7.existsSync(path9.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  const pnp = fs8.existsSync(path9.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
   return { ok: false, reason: `no playwright package resolvable from ${path9.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
@@ -6215,8 +6322,9 @@ function rendererUnavailable(reason, hint) {
 }
 var LAUNCH_ARGS = ["--disable-lcd-text"];
 async function launch(r, dir, executablePath) {
+  let browser;
   try {
-    return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} }) };
+    browser = await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} });
   } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return {
@@ -6224,12 +6332,29 @@ async function launch(r, dir, executablePath) {
       hint: browserHint(dir)
     };
   }
+  const pid = await launchPid(browser);
+  if (pid !== void 0) launchPids.set(browser, pid);
+  return { browser };
+}
+var launchPids = /* @__PURE__ */ new WeakMap();
+var LAUNCH_PID_CAP_MS = 2e3;
+async function launchPid(b, capMs = LAUNCH_PID_CAP_MS) {
+  const ask = (async () => {
+    const cdp = await b.newBrowserCDPSession();
+    try {
+      const id = (await cdp.send("SystemInfo.getProcessInfo")).processInfo.find((p) => p.type === "browser")?.id;
+      return id !== void 0 && Number.isInteger(id) && id > 1 ? id : void 0;
+    } finally {
+      cdp.detach().catch(() => void 0);
+    }
+  })().catch(() => void 0);
+  return Promise.race([ask, sleep5(capMs, void 0, { ref: false })]);
 }
 function browserPathError(p) {
   let ok = false;
   try {
-    ok = fs7.statSync(p).isFile();
-    if (ok) fs7.accessSync(p, fs7.constants.X_OK);
+    ok = fs8.statSync(p).isFile();
+    if (ok) fs8.accessSync(p, fs8.constants.X_OK);
   } catch {
     ok = false;
   }
@@ -6243,7 +6368,7 @@ function probeVersion() {
   }
   return null;
 }
-var selfSha256 = () => sha256Hex(fs7.readFileSync(SELF2));
+var selfSha256 = () => sha256Hex(fs8.readFileSync(SELF2));
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -6253,7 +6378,7 @@ function gitState(dir) {
   const head = gitHead(dir);
   if (!head) return { gitHead: null, gitDirty: null };
   try {
-    const r = spawnSync2("git", ["status", "--porcelain", "--", ".", ":(exclude)design"], { cwd: dir, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] });
+    const r = spawnSync3("git", ["status", "--porcelain", "--", ".", ":(exclude)design"], { cwd: dir, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] });
     return { gitHead: head, gitDirty: r.status === 0 ? String(r.stdout || "").trim() !== "" : null };
   } catch {
     return { gitHead: head, gitDirty: null };
@@ -6271,7 +6396,7 @@ var INIT_SCRIPT = `(() => {
 })();`;
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
-var POLL_MS2 = 100;
+var POLL_MS3 = 100;
 function errorKind(e, page) {
   const kind = pwErrorKind(e, page);
   return kind === "timeout" ? "other" : kind;
@@ -6376,12 +6501,12 @@ async function settle(page, log, ready, timeout) {
       }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) {
-        await sleep4(POLL_MS2);
+        await sleep5(POLL_MS3);
         continue;
       }
       if (moved()) throw kept();
       if (errorKind(e) === "navigated" && Date.now() < docDeadline) {
-        await sleep4(POLL_MS2);
+        await sleep5(POLL_MS3);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${firstLine(e)}` : firstLine(e));
@@ -6389,7 +6514,7 @@ async function settle(page, log, ready, timeout) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep4(POLL_MS2);
+      await sleep5(POLL_MS3);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -6442,7 +6567,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep4(POLL_MS2);
+    await sleep5(POLL_MS3);
   }
 }
 function linkHref(el) {
@@ -6820,7 +6945,7 @@ function hoverTarget(c, byTag) {
 }
 var BODY_WAIT_MS = 2e3;
 async function bodiesRead(reads, served) {
-  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep4(BODY_WAIT_MS, void 0, { ref: false })]);
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep5(BODY_WAIT_MS, void 0, { ref: false })]);
   const missed = /* @__PURE__ */ new Map();
   for (const r of reads) {
     if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
@@ -6974,26 +7099,17 @@ exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the p
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
-async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
-  const cap = () => sleep4(capMs, void 0, { ref: false });
+async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS, pid = launchPids.get(b), host = PROBE_HOST) {
+  const cap = () => sleep5(capMs, void 0, { ref: false });
   await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
   await Promise.race([b.close().catch(() => void 0), cap()]);
-  killBrowserChildren();
+  await killBrowser(pid, host);
 }
-function killBrowserChildren() {
-  if (process.platform === "win32") return;
-  try {
-    const r = spawnSync2("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", timeout: PS_CAP_MS });
-    for (const line of String(r.stdout || "").split("\n")) {
-      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-      if (!m || Number(m[2]) !== process.pid || !/chrom|headless/i.test(m[3] ?? "")) continue;
-      try {
-        process.kill(Number(m[1]), "SIGKILL");
-      } catch {
-      }
-    }
-  } catch {
-  }
+var KILL_GRACE_MS = 1e3;
+var KILL_CAP_MS = PS_CAP_MS - KILL_GRACE_MS;
+var PROBE_HOST = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CAP_MS) };
+async function killBrowser(pid, host = PROBE_HOST, graceMs = KILL_GRACE_MS) {
+  await killChildTree(pid, host, { capMs: KILL_CAP_MS, graceMs }).catch(() => void 0);
 }
 var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
 function measuredRefusedWhy(by, runId, phase = "measured") {
@@ -7128,7 +7244,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs7.readFileSync(f.expected);
+    expBytes = fs8.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -7344,8 +7460,8 @@ ${USAGE}`);
       }
     }
     if (wedged) {
-      killBrowserChildren();
-      await Promise.race([browser.close().catch(() => void 0), sleep4(1e3, void 0, { ref: false })]);
+      await killBrowser(launchPids.get(browser), PROBE_HOST, 0);
+      await Promise.race([browser.close().catch(() => void 0), sleep5(1e3, void 0, { ref: false })]);
     } else await closeCapped(browser);
     if (held.timedOut) return 4;
     if (run2.kind === "browser-gone") {
@@ -7431,7 +7547,7 @@ ${USAGE}`);
   const writeFiles = () => {
     try {
       if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-      else if (fs7.existsSync(diffPath)) fs7.rmSync(diffPath, { force: true });
+      else if (fs8.existsSync(diffPath)) fs8.rmSync(diffPath, { force: true });
     } catch (e) {
       console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
       if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
@@ -7442,7 +7558,7 @@ ${USAGE}`);
     const forcedPath = outBase + ".forced-colors.png";
     try {
       if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-      else if (fs7.existsSync(forcedPath)) fs7.rmSync(forcedPath, { force: true });
+      else if (fs8.existsSync(forcedPath)) fs8.rmSync(forcedPath, { force: true });
     } catch (e) {
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
@@ -7530,6 +7646,7 @@ export {
   installHint,
   isNavigationAway,
   isPlaywrightModule,
+  launchPid,
   linkHref,
   loadFailureWhy,
   main,

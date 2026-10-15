@@ -15,6 +15,7 @@ import { check, report } from "./assert.ts";
 import { killBrowsers } from "./drive-e2e-fixture.ts";
 import { killPidTree, killTree, limit, poolSize, runNode, type KillHost } from "./pool.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+import { childPids, killChildTree, type ProcHost } from "../design-to-code/kill-tree.ts";
 
 const RUNNER = path.join(import.meta.dirname, "run-suites.ts");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "run-suites-"));
@@ -435,6 +436,80 @@ console.log("CMD " + JSON.stringify({
     const posixAfter = browserCalls({ killed: true, treeKilled: true }, linux), posixNotKilled = browserCalls({ killed: false, treeKilled: false }, linux);
     check(`[pool] killBrowsers on POSIX, a killed run (its tree kill worked): SIGKILL to each browser's group, -101 and -202; nothing for a run not killed (saw ${JSON.stringify([posixAfter, posixNotKilled])})`,
       JSON.stringify(posixAfter) === JSON.stringify([["kill", "-101", "SIGKILL"], ["kill", "-202", "SIGKILL"]]) && posixNotKilled.length === 0);
+
+    // killChildTree / childPids (a probe's browser) on a stand-in host: every command, signal and taskkill recorded; a
+    // command answers as told (TIMEOUT: spawnSync's error for a run past its cap), the procfs reads come from `proc`
+    const SELF = 500;
+    const TIMEOUT = { error: Object.assign(new Error("spawnSync pgrep ETIMEDOUT"), { code: "ETIMEDOUT" }), status: null, stdout: "" };
+    const MISSING = { error: Object.assign(new Error("spawnSync pgrep ENOENT"), { code: "ENOENT" }), status: null, stdout: "" };
+    type Answer = { error?: Error; status: number | null; stdout: string };
+    const proc = (o: { platform: NodeJS.Platform; calls: string[][]; run?: Record<string, Answer>; stats?: Record<string, string> | null;
+      alive?: Set<number>; groups?: Set<number> }): ProcHost => ({
+      platform: o.platform, self: SELF,
+      taskkill: (args) => { o.calls.push(["taskkill", ...args]); return { status: 0 }; },
+      kill: (pid, s) => {
+        o.calls.push(["kill", String(pid), s]);
+        if (pid < 0 ? !(o.groups ?? new Set()).has(-pid) : !(o.alive ?? new Set()).has(pid)) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      },
+      readdir: (dir) => { if (dir !== "/proc" || !o.stats) throw new Error(`ENOENT ${dir}`); return ["self", "1", ...Object.keys(o.stats)]; },
+      readFile: (file) => { const s = /^\/proc\/(\d+)\/stat$/.exec(file)?.[1]; const v = s !== undefined ? o.stats?.[s] : undefined; if (v === undefined) throw new Error(`ENOENT ${file}`); return v; },
+      run: (cmd, args, cap) => { o.calls.push([cmd, ...args, `cap=${cap}`]); return o.run?.[cmd] ?? TIMEOUT; },
+      exists: (pid) => (o.alive ?? new Set()).has(pid),
+    });
+    const stat = (pid: number, comm: string, ppid: number): string => `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194560`;
+    // Linux: the children come from /proc/<pid>/stat (a command name holding ") (" and spaces still parses) — no command run,
+    // so a pgrep/ps past its cap changes nothing
+    const linuxCalls: string[][] = [];
+    const linuxStats = { "601": stat(601, "headless_shell", SELF), "602": stat(602, "a) (b c", SELF), "603": stat(603, "other", 1) };
+    check(`[kill-tree] childPids on Linux: this process's children from a /proc/<pid>/stat scan, no command run (saw ${JSON.stringify(linuxCalls)})`,
+      JSON.stringify(childPids(proc({ platform: "linux", calls: linuxCalls, stats: linuxStats }), 2_000)) === "[601,602]" && linuxCalls.length === 0);
+    const unknownCalls: string[][] = [];
+    await killChildTree(undefined, proc({ platform: "linux", calls: unknownCalls, stats: linuxStats, alive: new Set([601, 602]), groups: new Set([601, 602]) }), { capMs: 2_000 });
+    check(`[kill-tree] killChildTree, the browser's pid unknown, Linux with every pgrep/ps past its cap: each child found in /proc gets SIGKILL to its group (saw ${JSON.stringify(unknownCalls)})`,
+      JSON.stringify(unknownCalls) === JSON.stringify([["kill", "-601", "SIGKILL"], ["kill", "-602", "SIGKILL"]]));
+    // elsewhere: pgrep -P (a ps only when pgrep is missing; a pgrep past its cap is no list, not a slower ps)
+    const pgCalls: string[][] = [], psCalls: string[][] = [], capCalls: string[][] = [];
+    const viaPgrep = childPids(proc({ platform: "darwin", calls: pgCalls, run: { pgrep: { status: 0, stdout: "701\n702\n" } } }), 2_000);
+    const viaPs = childPids(proc({ platform: "darwin", calls: psCalls, run: { pgrep: MISSING, ps: { status: 0, stdout: `  701   ${SELF}\n  9 ${SELF}0\n 702 1\n` } } }), 2_000);
+    const capped = childPids(proc({ platform: "darwin", calls: capCalls }), 2_000);
+    check(`[kill-tree] childPids on macOS: pgrep -P <self> capped (no ps); ps -A -o pid=,ppid= only when pgrep is missing; a pgrep past its cap → null, no ps (saw ${JSON.stringify([pgCalls, psCalls, capCalls])})`,
+      JSON.stringify(viaPgrep) === "[701,702]" && JSON.stringify(pgCalls) === JSON.stringify([["pgrep", "-P", String(SELF), "cap=2000"]])
+      && JSON.stringify(viaPs) === "[701]" && JSON.stringify(psCalls[1]) === JSON.stringify(["ps", "-A", "-o", "pid=,ppid=", "cap=2000"])
+      && capped === null && capCalls.length === 1);
+    // the browser's pid known: its group gets SIGKILL with no command run, however slow ps/pgrep are
+    const knownCalls: string[][] = [];
+    await killChildTree(4242, proc({ platform: "darwin", calls: knownCalls, alive: new Set([4242]), groups: new Set([4242]) }), { capMs: 2_000 });
+    check(`[kill-tree] killChildTree, the browser's pid known, pgrep/ps past their cap: SIGKILL to its group, no command run (saw ${JSON.stringify(knownCalls)})`,
+      JSON.stringify(knownCalls) === JSON.stringify([["kill", "-4242", "SIGKILL"]]));
+    // known, already gone with no group left: nothing more (no listing, nothing killed alone); still running but leading no
+    // group (a wrapper's child): this process's children are ended instead
+    const goneCalls: string[][] = [], wrapCalls: string[][] = [];
+    await killChildTree(4242, proc({ platform: "darwin", calls: goneCalls }), { capMs: 2_000 });
+    await killChildTree(4242, proc({ platform: "darwin", calls: wrapCalls, alive: new Set([4242, 801]), groups: new Set([801]), run: { pgrep: { status: 0, stdout: "801\n" } } }), { capMs: 2_000 });
+    check(`[kill-tree] killChildTree, pid known: gone with no group → nothing more; running but no group leader → each child's group (saw ${JSON.stringify([goneCalls, wrapCalls])})`,
+      JSON.stringify(goneCalls) === JSON.stringify([["kill", "-4242", "SIGKILL"]])
+      && JSON.stringify(wrapCalls) === JSON.stringify([["kill", "-4242", "SIGKILL"], ["pgrep", "-P", String(SELF), "cap=2000"], ["kill", "-801", "SIGKILL"]]));
+    // Windows: taskkill /T /F /PID <pid> while it exists — nothing for a pid that has gone (it may be reused), an unknown one, or pid 1
+    const winCalls: string[][] = [], winGone: string[][] = [], winUnknown: string[][] = [];
+    await killChildTree(4242, proc({ platform: "win32", calls: winCalls, alive: new Set([4242]) }), { capMs: 2_000 });
+    await killChildTree(4242, proc({ platform: "win32", calls: winGone }), { capMs: 2_000 });
+    await killChildTree(undefined, proc({ platform: "win32", calls: winUnknown, alive: new Set([1]) }), { capMs: 2_000 });
+    await killChildTree(1, proc({ platform: "win32", calls: winUnknown, alive: new Set([1]) }), { capMs: 2_000 });
+    check(`[kill-tree] killChildTree on Windows: one taskkill /T /F /PID <pid> of a running browser; nothing for one gone, unknown, or pid 1 (saw ${JSON.stringify([winCalls, winGone, winUnknown])})`,
+      JSON.stringify(winCalls) === JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]) && winGone.length === 0 && winUnknown.length === 0);
+    // the grace: a browser that goes on its own within it is not killed (Windows: no taskkill); one that does not is, after it
+    const going = new Set([4242]);
+    const graceCalls: string[][] = [];
+    setTimeout(() => going.delete(4242), 120);
+    const g0 = Date.now();
+    await killChildTree(4242, proc({ platform: "win32", calls: graceCalls, alive: going }), { capMs: 2_000, graceMs: 2_000 });
+    const goneIn = Date.now() - g0;
+    const stuckCalls: string[][] = [];
+    const s0 = Date.now();
+    await killChildTree(4242, proc({ platform: "win32", calls: stuckCalls, alive: new Set([4242]) }), { capMs: 2_000, graceMs: 300 });
+    const stuckIn = Date.now() - s0;
+    check(`[kill-tree] killChildTree's grace: a browser gone within it → no taskkill (returned in ${goneIn} ms); one still running → taskkill after the grace (${stuckIn} ms, saw ${JSON.stringify([graceCalls, stuckCalls])})`,
+      graceCalls.length === 0 && goneIn < 1_500 && stuckCalls.length === 1 && stuckIn >= 250);
     const quick = await within(runNode(tmp, "-e", ["0"], 20_000), TIMED_OUT);
     check("[pool] runNode: a run that exits before killAfterMs is not killed", quick !== TIMED_OUT && !quick.killed && !quick.treeKilled && quick.status === 0);
     // a variable of this process's own (not PATH: libuv on Windows copies PATH, SYSTEMROOT and a few more into any env missing them)
