@@ -550,10 +550,10 @@ function verificationWarnings(plan: Plan): string[] {
   const out: string[] = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
-    out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal " +
-      "frame\")");
-  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — `verify-screen " +
-    "--compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
+    out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered " +
+      "(references/verify.md, \"Beyond the ideal frame\")");
+  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — " +
+      "`verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
   return out;
 }
 
@@ -1242,8 +1242,8 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   if (viaLegacy.length || staleLegacy.length) {
     const parts = [...viaLegacy, ...(staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
     out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently ` +
-      `cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant"
-      : "None of them covers a current blocker — if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+      `cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — " +
+        "if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
   }
   return out;
 }
@@ -1352,8 +1352,8 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     if (r.exportContentSha256 !== expSha) return { status: "unverified",
       reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ ` +
-      `lists this screen's files`] };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, ` +
+      `where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd, cached);
     // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));

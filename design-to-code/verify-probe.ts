@@ -548,8 +548,8 @@ export function loadFailureWhy(message: string): string {
   const first = message.split("\n")[0] ?? "";
   if (/Download is starting/i.test(first)) return "the URL started a file download, not a page — point it at the page that renders the screen";
   if (/net::ERR_ABORTED/.test(first)) {
-    return "the browser cancelled the navigation before any page arrived (net::ERR_ABORTED) — the URL answered with no document (e.g. 204 No Content) or the page stopped its own load; point it at the page that " +
-      "renders the screen";
+    return "the browser cancelled the navigation before any page arrived (net::ERR_ABORTED) — the URL answered with no document (e.g. 204 No Content) or the page stopped its own load; " +
+      "point it at the page that renders the screen";
   }
   return first;
 }
@@ -828,8 +828,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     const pageOverflow: PageOverflow = { ...overflow, compatMode };
     const tokenNow = await docToken(page);
     if (tokenNow !== token || (token === "" && log.docLoads !== navsAtReach)) throw new NavigatedError("the page loaded a new document during measurement");
-    if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) — its layout and page overflow measure differently from a standards-mode ` +
-      `build`);
+    if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) — ` +
+      `its layout and page overflow measure differently from a standards-mode build`);
 
     const components: MeasuredComponent[] = [];
     for (const i of exp.instances || []) {
@@ -1440,8 +1440,8 @@ export async function main(argv: string[]): Promise<number> {
   if (stepsSource !== null) console.error(`reach ${steps.length} step(s) from ${stepsSource} (sha ${stepsSha256(steps).slice(0, 12)}…) → ${r.url}`);
   const pg = r.page;
   console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})` +
-    `${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})`
-      : " — overflows but clipped") : ""}`);
+    `${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ` +
+      `${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " — overflows but clipped") : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} → ${ev.ok === true ? "ok" : "ok:null"} · ${ev.detail ?? ""}`);
   console.error(behaviourLine(behaviour));
   console.error(visualLine(visual));

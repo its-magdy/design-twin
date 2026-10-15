@@ -80,12 +80,12 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   const st = found.status, name = path.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) — not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
-  if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; this expectation is safe to ` +
-    `re-measure against`;
+  if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; ` +
+    `this expectation is safe to re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;
   const age = now - Date.parse(st.at);
-  if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished — still at phase ${st.phase}${detail}, ${Math.round(age / 1000)} s ago; its measured/report ` +
-    `files are partial`;
+  if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished — still at phase ${st.phase}${detail}, ${Math.round(age / 1000)} s ago; ` +
+    `its measured/report files are partial`;
   return `a run of ${name} (run ${st.runId}) is in progress — phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1000)} s ago` : ""}; it measures against the expectation it started with`;
 }
 
@@ -381,8 +381,8 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
   const runNote = runStatusNote(outBase);
   if (runNote) console.error(`note  ${runNote}`);
-  if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; this says nothing about the build: ` +
-    `re-measure to check the code`);
+  if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; ` +
+    `this says nothing about the build: re-measure to check the code`);
   else if (onlyExportedAt) {
     // a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
     // the measurements and report beside it still describe it.
@@ -561,8 +561,8 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   console.error(rep.behaviour.headline);
   console.error(rep.visual.headline);
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
-  if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older ` +
-    `expectation?`);
+  if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — ` +
+    `measured against another screen or an older expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
   if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — ` +
     `fixed? drop them`);

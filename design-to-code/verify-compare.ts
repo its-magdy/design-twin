@@ -280,23 +280,23 @@ const LEAF_FIELDS = new Set<string>(["width", "height", "x", "y", "backgroundCol
 const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase())) || (Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0)));
 
 const LIMITS = [
-  "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under " +
-    "the node's id.",
+  "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, " +
+    "so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
   "A <table> with border-spacing (border-collapse: separate) also puts that spacing between its edge and the outer rows — above the first and below the last (CSS 2.1 §17.6.1): a container-height delta of twice the " +
     "spacing is the table model, not a layout bug.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing.",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
-  "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative " +
-    "gap, padding or size).",
+  "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; " +
+    "so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
   "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A " +
     "fixed- or fill-width text is compared at its ink width within 3px — an empirical bound (field runs: −0.6…+2.4px); heavy italics or overhanging glyphs may exceed it.",
   "A transparent element's background is compared through the element that paints it (paintedBy): its only same-box child, else its nearest painting ancestor that holds it. A sibling or an absolutely positioned " +
     "overlay painting over it is not seen — when the ancestor's colour is the designed one the node may PASS although the overlay shows another; a transparent element whose own children paint all of it gets no " +
     "painter (compared as transparent).",
-  "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own " +
-    "width.",
+  "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, " +
+    "outline) is compared with the design's own width.",
   "Severity follows the match: a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets " +
     "one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). An open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a " +
     "waiver on 'match (size)' lifts only the size cap — a match-confidence cap stays.",
@@ -1175,8 +1175,8 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
         const why = wsR !== null && wsOnly ? `differs only in whitespace: ${gc !== null ? whitespaceWhy(designRender(rt.want), buildRender(rt.have)) : whitespaceWhy(nbspTrim(wsR.want), nbspTrim(wsR.have))}`
           : spaceKind ? spaceKindWhy(w, g)
           : nbspGap ? gapWidthWhy(rt.want, rt.have)
-          : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} — check for a text-transform, which Figma applies at render time while storing the original`}${caseWs
-            ? ` — the whitespace: ${whitespaceWhy(w, g)}` : ""}`
+          : caseOnly ? `${caseShown ? `${caseHead}, as rendered` : `${caseHead} — check for a text-transform, which Figma applies at render time while storing the original`}` +
+            `${caseWs ? ` — the whitespace: ${whitespaceWhy(w, g)}` : ""}`
           : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
           : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
           : undefined;
@@ -1197,8 +1197,8 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
           expected: show(spec.text), actual: show(got.text),
           note: builtNbsp
             ? "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution. Carrying it into the DOM verbatim is usually not what anyone meant; decide deliberately."
-            : "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution; the build uses an ordinary space there, which is fine unless the non-breaking space was meant to keep the words " +
-              "on one line.",
+            : "the designed string contains a non-breaking space (U+00A0) — a Figma auto-substitution; the build uses an ordinary space there, " +
+              "which is fine unless the non-breaking space was meant to keep the words on one line.",
         });
       }
     }
@@ -1241,8 +1241,8 @@ function checkPlacement(cx: CompareCtx, n: NodeCtx): void {
       const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
       deltas.push({ severity: belowFold ? "medium" : "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "),
         delta: r2(Math.max(...over)), // px past the frame (no `unit`: `actual` is prose, printed as-is)
-        note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge — reachable by scrolling; accept it (verify-screen --accept) if the longer page is " +
-          "intended"
+        note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge — reachable by scrolling; " +
+          "accept it (verify-screen --accept) if the longer page is intended"
           : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
     }
   }
@@ -1294,8 +1294,8 @@ function capSeverity(cx: CompareCtx, n: NodeCtx, own: VerifyDelta[], sizeRow: Ve
     // (recorded whenever the match cap is below the ORIGINAL severity — it still binds if the size cap is lifted)
     if (cap && SEVERITY_RANK[d.severity] < SEVERITY_RANK[cap]) by.push("match");
     if (cap && SEVERITY_RANK[sev] < SEVERITY_RANK[cap]) { sev = cap;
-      why.push(`capped at ${cap}: matched by ${rawMatch}${canon === rawMatch && !CANONICAL_MATCH.has(canon) ? " (not a canonical matchedBy)" : ""}, not by its data-dt-node tag — the element measured may not be the ` +
-      `one the design means`); }
+      why.push(`capped at ${cap}: matched by ${rawMatch}${canon === rawMatch && !CANONICAL_MATCH.has(canon) ? " (not a canonical matchedBy)" : ""}, not by its data-dt-node tag — ` +
+      `the element measured may not be the one the design means`); }
     if (sev !== d.severity) { d.cappedFrom = d.severity; d.cappedBy = by; d.severity = sev; d.note = d.note ? `${d.note}; ${why.join("; ")}` : why.join("; "); }
   }
 }
@@ -1317,8 +1317,8 @@ function pageOverflowOf(cx: CompareCtx): Pick<Graded, "pageNotes" | "rootF" | "p
     const over = page.scrollWidth - page.clientWidth;
     if (!num(rootF.w) || Math.abs(page.viewport.w - rootF.w) > 1) {
       pageOverflow = "not at design width";
-      pageNotes.push(`page overflow was measured at a ${page.viewport.w}px viewport${num(rootF.w) ? `, the design is ${rootF.w}px wide` : " and the expectation states no frame width"} — not judged (measure at the ` +
-        `design width)`);
+      pageNotes.push(`page overflow was measured at a ${page.viewport.w}px viewport${num(rootF.w) ? `, the design is ${rootF.w}px wide` : " and the expectation states no frame width"} — ` +
+        `not judged (measure at the design width)`);
     } else if (rootF.scroll === "horizontal" || rootF.scroll === "both") pageOverflow = "designed to scroll";
     else if (over <= 1) pageOverflow = "ok";
     else if (!page.scrollable) {
@@ -1494,8 +1494,8 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "unboun
   if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ` +
       `${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} ` +
-      `— ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)`
-      : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+      `— ${INTEGRITY_PHRASES.unrecorded}; ` +
+      `${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
   } else if (st && measuredRun === undefined && TERMINAL_PHASES.includes(st.phase) && Date.parse(String(measured.measuredAt)) > Date.parse(st.at)) {
     // a measured file that names no run (a probe without --run) and was measured AFTER the run ended is not
     // part of any run — that run's status says nothing about it; it is graded unbound (its interaction rows are
@@ -1624,8 +1624,8 @@ function gradeInteractions(
     if (insideMiss) {
       return Object.assign(row, { result: "not-probed" as const,
         detail: `probe pass without the destination tag inside the opened element — tag the root of what opens with ` +
-        `data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}`
-        : ""}`, ...ifDefined("selector", hit.selector), ...said });
+        `data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}` +
+        `${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
     // An agent can credit hidden popup rows with hovers on unrelated controls.
@@ -1671,8 +1671,8 @@ function unmatchedEvidence(
       ?? designed.find((i) => i.trigger === bare && (specAnc.get(nodeId) || []).includes(String(i.nodeId)));
     const hint = exact ? `use the expectation's trigger \`${exact.trigger}\` verbatim (not \`${trigger}\`)`
       : sameNode.length ? `this node's designed trigger is ${sameNode.map((i) => `\`${i.trigger}\``).join(" / ")}, not \`${trigger}\``
-      : kin ? `${(specAnc.get(String(kin.nodeId)) || []).includes(nodeId) ? "an ancestor" : "a descendant"} of the designed \`${kin.nodeId}\` ${kin.name
-        || ""} (${kin.trigger}) — report the result under the designed node's id`.replace("  (", " (")
+      : kin ? (`${(specAnc.get(String(kin.nodeId)) || []).includes(nodeId) ? "an ancestor" : "a descendant"} of the designed \`${kin.nodeId}\` ` +
+        `${kin.name || ""} (${kin.trigger}) — report the result under the designed node's id`).replace("  (", " (")
       : undefined;
     unmatchedInteractionEvidence.push({ nodeId, trigger, ...ifDefined("hint", hint) });
   }
@@ -1847,16 +1847,16 @@ function planInteractionsCheck(cx: CompareCtx): Pick<Graded, "planNow" | "planIn
     : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) — re-run --expect${rerunPlanArg}`
     // the rows --expect merged came from ANOTHER plan file — name both, never advise only the one used now
     : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}…; --expect merged ` +
-      `${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}…) — re-run --expect --plan ` +
-      `${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}`
+      `${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}…) — re-run --expect ` +
+      `--plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}`
     : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ` +
       `${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — if that plan moved, re-run --compare … --plan <its path now>; otherwise re-run --expect … --plan <the plan you intend> ` +
       `(--plan ${planNow.file} to adopt this one)`
     : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — re-run --expect${rerunPlanArg}`;
   if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged)
     inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
-  if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now — not checked; pass --compare … ` +
-    `--plan <plan.json> (or re-run --expect … --plan <plan.json>)`
+  if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now — not checked; ` +
+    `pass --compare … --plan <plan.json> (or re-run --expect … --plan <plan.json>)`
     : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now — not checked`);
   return { planNow, planInteractionsChanged };
 }
@@ -2118,8 +2118,8 @@ function visualOf(cx: CompareCtx, g: Pick<Graded, "rootF" | "planNow">): Pick<Gr
   if (illustrative.length && planNow) {
     visual.illustrative = illustrative;
     visual.headline += ` (the plan marks the reference illustrative for ${illustrative.length} node(s))`;
-    inputNotes.push(`${planNow.file} marks the reference PNG illustrative (deviations field "reference") for ${illustrative.map((r) => r.nodeId).join(", ")} — the visual diff there shows a stand-in; no delta is ` +
-      `waived or changed`);
+    inputNotes.push(`${planNow.file} marks the reference PNG illustrative (deviations field "reference") for ${illustrative.map((r) => r.nodeId).join(", ")} — ` +
+      `the visual diff there shows a stand-in; no delta is waived or changed`);
   }
   return { visual };
 }

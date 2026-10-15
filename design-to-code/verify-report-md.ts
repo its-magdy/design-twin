@@ -197,8 +197,8 @@ function sameMeasuredMarkdown(d: AgainstDeltas): string[] {
   const L: string[] = [];
   const rc = d.reclassified || [];
   L.push(`Previous deltas (node + field): **the same measured file as last round** — nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open` +
-    `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta`
-      : ""}.`, "");
+    `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ` +
+      `${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
   if (rc.length) {
     L.push(`## Reclassified (${rc.length})`, "", "*Same measured file — the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
     for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
@@ -294,8 +294,8 @@ function nodeListsMarkdown(r: VerifyReportV2): string[] {
   }
   if (r.untaggedInstanceSets.length) {
     L.push(`## Instance sets with no evidence in the probe (${r.untaggedInstanceSets.length})`, "",
-      "*Tag coverage, not presence: these carry no `data-dt-node` and no reported setName. They may well be built — a repeated row rendered by one `.map()` or a shared shell is expected to leave gaps here. Not a " +
-        "failure on its own.*", "");
+      "*Tag coverage, not presence: these carry no `data-dt-node` and no reported setName. They may well be built — " +
+        "a repeated row rendered by one `.map()` or a shared shell is expected to leave gaps here. Not a failure on its own.*", "");
     for (const m of r.untaggedInstanceSets.slice(0, 40)) L.push(`- ${m.setName} — ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
     if (r.untaggedInstanceSets.length > 40) L.push(`- …and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");

@@ -416,8 +416,8 @@ function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
   else if (rb && num(rb.w)) {
     spec.width = rb.w;
     spec.widthFrom = "renderBox";
-    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is ` +
-      `compared instead`);
+    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, ` +
+      `so the ink width (renderBox) is compared instead`);
   } else spec.width = box.w;
   // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
   // overflow the box; CSS has no such box, so the build picks one — say so instead of letting a later height or

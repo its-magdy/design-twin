@@ -327,8 +327,9 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   else if (f["new-run"]) runId = newRunId();
   else if (prevV2 && !TERMINAL_PHASES.includes(prevV2.phase)) runId = prevV2.runId;
   else {
-    console.error(`pass --run <id> or --new-run — ${prevV2 ? `the last run (${prevV2.runId}) ended at ${prevV2.phase}` : prev === "v1" ? "the status on disk is an older hand-written one"
-      : "there is no run in progress"}, so there is nothing to continue\n` + usage);
+    console.error(`pass --run <id> or --new-run — ` +
+      `${prevV2 ? `the last run (${prevV2.runId}) ended at ${prevV2.phase}` : prev === "v1" ? "the status on disk is an older hand-written one" : "there is no run in progress"}, ` +
+      `so there is nothing to continue\n` + usage);
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
