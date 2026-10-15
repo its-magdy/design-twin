@@ -266,7 +266,7 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
     artifacts: [REPORT, "design/verify/Crates.report.md", "design/verify/Crates.png"], deltas: [{ nodeId: "80:2", field: "background", severity: "high", expected: "#5b5fc7ff", actual: "#ff0000ff" }],
     a11y: { tool: "axe-core 4.13.0", violations: 1, warnings: 1, report: REPORT },
     recorded: { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
-      counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 } } };
+      behaviourHeadline: rep.behaviour.headline, counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 } } };
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: v1 }, null, 2) + "\n");
   runHook(root);
   const facts = verificationFacts(planOf(root).verification);
@@ -281,6 +281,41 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
     && (r.notes[0] ?? "").startsWith("verification.mode, verification.renderer, verification.artifacts, verification.deltas, verification.a11y: the record's keys are kept in verification.recorded now")
     && isVerificationRecord(v.recorded) && v.recorded.mode === "rendered" && v.recorded.renderer === "playwright-chromium" && v.recorded.a11y?.violations === 1);
   check("…and the plan stays closed (planHash leaves verification out; no re-stamp needed)", !openOf(root) && !r.notes.some((n) => /re-stamped/.test(n)));
+}
+{
+  // a first-format record compared with the report its sha256 names: an untouched one (as the first writer wrote it)
+  // passes; a @2 block stripped to the first-format keys with its verdict/headline/counts edited blocks, one message per
+  // key; with the report rewritten since (sha differs) there is nothing to compare with
+  const root = project();
+  const p = planOf(root);
+  const EDITED_V1 = (k: string): string => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`;
+  const v1 = { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
+    behaviourHeadline: rep.behaviour.headline, counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 } };
+  const put = (recorded: JsonObject): void => fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], recorded } }, null, 2) + "\n");
+  const v1Blocks = (): string[] => checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).blocking.filter((b) => /verification\.recorded/.test(b));
+  put(v1);
+  check(`an untouched first-format record of the report on disk → no block (got ${JSON.stringify(v1Blocks())})`, v1Blocks().length === 0);
+  // the block --record-plan writes now, stripped down to the first-format keys: the same values, so no block either
+  recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const full = must(planOf(root).verification?.recorded, "recorded");
+  const stripped: JsonObject = { by: full.by, at: full.at, report: full.report, reportSha256: full.reportSha256, verdict: full.verdict, headline: full.headline,
+    ...(full.behaviourHeadline !== undefined ? { behaviourHeadline: full.behaviourHeadline } : {}), counts: { ...full.counts } };
+  put(stripped);
+  check(`a current block stripped to the first-format keys, values untouched → no block (got ${JSON.stringify(v1Blocks())})`, v1Blocks().length === 0);
+  put({ ...stripped, verdict: "pass" });
+  check(`…its verdict then edited → BLOCKS on verdict (got ${JSON.stringify(v1Blocks())})`, JSON.stringify(v1Blocks()) === JSON.stringify([EDITED_V1("verdict")]));
+  put({ ...stripped, verdict: "pass", headline: "PASS", counts: { ...v1.counts, high: 0, medium: 0 } });
+  const many = v1Blocks();
+  check(`…verdict, headline and two counts edited → one block each (got ${JSON.stringify(many)})`,
+    JSON.stringify(many) === JSON.stringify([EDITED_V1("verdict"), EDITED_V1("headline"), EDITED_V1("counts.high"), EDITED_V1("counts.medium")]));
+  // the report rewritten since the record (sha mismatch): an older record, not an edited one — no compare, the older-run warning
+  put({ ...stripped, verdict: "pass" });
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify({ ...rep, headline: rep.headline + " (re-run)" }, null, 2) + "\n");
+  const older = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`the report rewritten since (sha differs) + an edited first-format verdict → no block, the older-run warning (got ${JSON.stringify(older.blocking)})`,
+    !older.blocking.some((b) => /verification\.recorded/.test(b)) && older.warnings.some((w) => w.startsWith(`plan.verification records an older run of ${REPORT}`)));
+  fs.rmSync(path.join(root, REPORT));
+  check("…and no report on disk at all → no block", v1Blocks().length === 0);
 }
 {
   // a recorded@1 block a person added keys to that no record writes: ONE block naming them (not one per @2 key it

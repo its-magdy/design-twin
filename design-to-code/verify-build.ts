@@ -60,7 +60,7 @@ import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeInputs, IndexRow, IrNode, IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
+  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanRecordCounts, PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
@@ -591,7 +591,8 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
 // verification check that BLOCKS: a hand edit there would pass for the tool's record, and re-recording repairs it. It
 // also reopens a plan the hook had closed (isOpen), and --status then reads "blocked" — or "failed" when a report says
 // fail, which comes first (computeStatus). A recorded block with only the first record's keys (recorded@1) is read the
-// older way and never blocks; one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
+// older way, and only what that record held is compared: verdict, headline, behaviourHeadline and counts (recordedV1Edits);
+// one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
 // isRecordV2Shaped). A recorded@1 a person added keys to that no record writes (doc-guards.ts recordV1HandKeys) blocks
 // with ONE message naming them — not one per @2 key it lacks (one holding nothing but such keys is not a record, and
 // says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks (plus one
@@ -599,6 +600,37 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
 // named in words.
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
+// The report a record's reportSha256 still names, parsed — null when there is none to compare with: no report on disk
+// (or not a regular file), its bytes rewritten since (the sha differs: an older record, recordedReportWarnings), or not a
+// verify report.
+function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string): VerifyReport | null {
+  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
+  const bytes = readRegularFile(path.resolve(cwd, report));
+  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
+  let parsed: unknown = null;
+  try { const x: unknown = JSON.parse(bytes.toString("utf8")); parsed = x; } catch { /* unparseable: not the report the sha names */ }
+  return isVerifyReport(parsed) ? parsed : null;
+}
+// A recorded@1 block (the first record's keys only) whose reportSha256 still names the report on disk: its verdict,
+// headline, behaviourHeadline and counts that are not what that report says were edited by hand. The first writer took
+// each of them from the report as recordFacts does now — verdict and headline copied as they are (the headline is the
+// report's own text, never rebuilt), behaviourHeadline only when the report has one, counts from summary with the same
+// fallbacks (accepted from the accepted deltas, notMeasured from coverage or notMeasured[], inferred from inferred[]) —
+// so an untouched old record of that report matches, and a difference is a hand edit: it BLOCKS like the @2 compare.
+// One old record can differ untouched: the first writer hashed the file on disk, so a --compare that rewrote the same
+// report meanwhile left that run's sha beside this run's facts. The message names both causes; re-recording, which
+// rewrites the block in the current format, settles either.
+function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
+  const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+  if (!report || typeof rec.report !== "string") return [];
+  const said = recordFacts(report, rec.report);
+  const edited: string[] = [];
+  for (const k of ["verdict", "headline", "behaviourHeadline"] as const) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+  const counts = rec.counts;
+  if (!isJsonObject(counts)) edited.push("counts");
+  else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
+  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+}
 function recordedEdits(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
   if (!isJsonObject(rec)) return [];
@@ -614,16 +646,14 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
       `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); ` +
       "residuals go in deviations[], anything else in notes"];
   }
-  if (!isRecordV2Shaped(rec)) return [];
+  if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
   const all = recordProblems(rec);
   // (no schema, yet a key only @2 writes: the keys @2 needs and the block lacks are missing, not edited — one message)
   const lacks = rec.schema === undefined ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === undefined) : [];
   const edited = all.filter((k) => !lacks.includes(k));
   if (!edited.length && isVerificationRecord(rec)) {
-    const bytes = readRegularFile(path.resolve(cwd, rec.report)); // (null: no report to compare with)
-    const parse = (b: Buffer): unknown => { try { const x: unknown = JSON.parse(b.toString("utf8")); return x; } catch { return null; } };
-    const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null; // (unparseable: not the report the sha names)
-    if (isVerifyReport(report)) {
+    const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+    if (report) {
       const said = recordFacts(report, rec.report);
       // (canonical JSON both sides — keys sorted at every depth, so an editor that reorders keys edits nothing; a key one
       // side lacks differs from any value the other holds, null included)
