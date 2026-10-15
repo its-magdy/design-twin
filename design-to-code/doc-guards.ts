@@ -344,39 +344,48 @@ export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
 }
 
 // plan.verification.recorded@2 (types.ts PlanVerificationRecord) — the one closed shape in a plan: plan-record.ts
-// writes it whole, so a key it does not write or a value of the wrong kind was written by hand.
-const isCount = (x: unknown): boolean => typeof x === "number" && Number.isFinite(x);
-const closed = (o: JsonObject, at: string, fields: Record<string, { need: boolean; ok: (v: unknown) => boolean }>): string[] => {
+// writes it whole, so a key it does not write or a value of the wrong kind was written by hand. (The rec- prefix keeps
+// these module-scope names from colliding with others in the bundles.)
+type RecField = { need: boolean; ok: (v: unknown) => boolean };
+const recIsCount = (x: unknown): boolean => typeof x === "number" && Number.isFinite(x);
+const recIsStr = (v: unknown): boolean => typeof v === "string";
+const recNeed = (ok: (v: unknown) => boolean): RecField => ({ need: true, ok });
+const recOpt = (ok: (v: unknown) => boolean): RecField => ({ need: false, ok });
+const recClosed = (o: JsonObject, at: string, fields: Record<string, RecField>): string[] => {
   const out = Object.keys(o).filter((k) => !Object.hasOwn(fields, k)).map((k) => `${at}${k}`);
   for (const [k, f] of Object.entries(fields)) if (o[k] === undefined ? f.need : !f.ok(o[k])) out.push(`${at}${k}`);
   return out;
 };
-const need = (ok: (v: unknown) => boolean) => ({ need: true, ok });
-const opt = (ok: (v: unknown) => boolean) => ({ need: false, ok });
-const str = (v: unknown): boolean => typeof v === "string";
-const RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
-const RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
-const RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+const RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+const RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+const RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
 const RECORD_FIELDS = {
-  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA), by: need(str), at: need(str), report: need(str), reportSha256: need(str),
-  verdict: need(str), headline: need(str), behaviourHeadline: opt(str), counts: need(isJsonObject),
-  mode: need((v) => v === "rendered" || v === "static-only"), reason: opt(str), renderer: opt(str), artifacts: need(isStringArray),
-  deltas: need(Array.isArray), a11y: opt(isJsonObject),
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA), by: recNeed(recIsStr), at: recNeed(recIsStr), report: recNeed(recIsStr), reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr), headline: recNeed(recIsStr), behaviourHeadline: recOpt(recIsStr), counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"), reason: recOpt(recIsStr), renderer: recOpt(recIsStr), artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray), a11y: recOpt(isJsonObject),
 };
 /** Every key a recorded@2 block may hold (plan-record.ts drops any other, with a note). */
 export const RECORD_KEYS: readonly string[] = Object.keys(RECORD_FIELDS);
+// What the first record (recorded@1, no `schema`) ever held — the report's facts only
+const RECORD_V1_KEYS: readonly string[] = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+/** A recorded block to read and check as @2: it has a `schema`, or a key the first record never wrote (mode, artifacts,
+ *  deltas, a11y, … — a @2 block whose schema was removed by hand is still a @2 block, and its edit still blocks). */
+export function isRecordV2Shaped(rec: JsonObject): boolean {
+  return rec.schema !== undefined || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k));
+}
 /** The keys (dotted: `counts.high`, `deltas[2].note`, `a11y.tool`) of a recorded@2 block that are outside its
  *  closed set or hold the wrong kind of value; [] = the block is the tool's shape. */
 export function recordProblems(rec: JsonObject): string[] {
-  const out = closed(rec, "", RECORD_FIELDS);
-  if (isJsonObject(rec.counts)) out.push(...closed(rec.counts, "counts.", RECORD_COUNTS));
-  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...(isJsonObject(d) ? closed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`])));
-  if (isJsonObject(rec.a11y)) out.push(...closed(rec.a11y, "a11y.", RECORD_A11Y));
+  const out = recClosed(rec, "", RECORD_FIELDS);
+  if (isJsonObject(rec.counts)) out.push(...recClosed(rec.counts, "counts.", RECORD_COUNTS));
+  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...(isJsonObject(d) ? recClosed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`])));
+  if (isJsonObject(rec.a11y)) out.push(...recClosed(rec.a11y, "a11y.", RECORD_A11Y));
   return out;
 }
-/** A recorded block in the @2 shape (`schema` set — a block without it is a recorded@1, read the older way) with no problem. */
+/** A recorded block in the @2 shape with no problem (a block with only the first record's keys is a recorded@1, read the older way). */
 export function isVerificationRecord(x: unknown): x is PlanVerificationRecord {
-  return isJsonObject(x) && x.schema !== undefined && recordProblems(x).length === 0;
+  return isJsonObject(x) && isRecordV2Shaped(x) && recordProblems(x).length === 0;
 }
 
 // plan.waivers[] / plan.descopes[] rows. The plan guard only asks for objects (a hand-edited row must

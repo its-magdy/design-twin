@@ -10,9 +10,11 @@
 // note. The rest of verification (coverage, notes, a hand headline) is the agent's and is left as it was, and so is the
 // rest of the plan — never deviations[] (a deviation needs a person's why; a residual goes there), waivers[], descopes[]
 // or status. One exception: mode/reason/renderer/artifacts/deltas/a11y at verification's top level — where the first
-// record (recorded@1, no schema) and hand-written plans keep them — are the record's now, so they are removed (one note):
-// the first record of such a plan migrates it. verify-build reads the record first and those keys only without one
-// (verificationFacts, below). The file keeps its indentation, key order and line endings (updatePlan, below — the
+// record (recorded@1, no schema) and hand-written plans keep them — are moved into the record when it holds them (one
+// note): the first record of such a plan migrates it. One the record lacks (a hand a11y when the behaviour checks did
+// not run, a hand reason the measured file did not give) stays, and is read from there; a renderer beside a static-only
+// record or a reason beside a rendered one no longer holds and is removed. verify-build reads each key from the record
+// first (verificationFacts, below). The file keeps its indentation, key order and line endings (updatePlan, below — the
 // one plan writer, also used by --accept, plan-skeleton --out and the verify-build hook); it is written only when its bytes
 // change, and a re-record of the same report keeps the old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
 // record still holding the older formula (which DID cover verification) is re-stamped with the current one in the
@@ -28,12 +30,12 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
-import { RECORD_KEYS, isVerificationRecord, parsePlan } from "./doc-guards.ts";
+import { RECORD_KEYS, isRecordV2Shaped, isVerificationRecord, parsePlan } from "./doc-guards.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
 import type {
-  JsonValue, Plan, PlanA11yRecord, PlanRecordCounts, PlanRecordedDelta, PlanVerification, PlanVerificationRecord, VerifyReport, VerifyReportV2,
+  JsonObject, JsonValue, Plan, PlanA11yRecord, PlanRecordCounts, PlanRecordedDelta, PlanVerification, PlanVerificationRecord, VerifyReport, VerifyReportV2,
 } from "./types.ts";
 
 export interface RecordPlanResult { written: boolean; notes: string[] }
@@ -59,41 +61,75 @@ function parsePlanText(raw: string, file: string): Plan {
 
 // The record's keys that the first record (and a hand-written plan) kept at verification's top level
 const TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"] as const;
+type ToolKey = typeof TOOL_KEYS[number];
 
-/** What a report says, as the record holds it. --record-plan writes these, and verify-build compares a record with
- *  the report its sha256 names through this same function. */
-function recordFacts(report: Omit<VerifyReport, "artifacts">): Pick<PlanVerificationRecord, "verdict" | "headline" | "behaviourHeadline" | "counts"> {
+/** What a record says that its report alone decides: every key but schema/by/at/report/reportSha256 and artifacts
+ *  (those depend on the disk). */
+export type RecordFacts = Pick<PlanVerificationRecord, "verdict" | "headline" | "behaviourHeadline" | "counts" | "mode" | "reason" | "renderer" | "deltas" | "a11y">;
+/** What a report says, as the record holds it (`reportAt`: the report's project-relative path, which a11y names).
+ *  --record-plan writes exactly these, and verify-build compares a record with the report its sha256 names through this
+ *  same function. Every value is the kind doc-guards.ts recordProblems accepts, whatever the report — or the measured
+ *  file behind it — holds: a value of the wrong kind is left out (reason, renderer, behaviourHeadline, a delta row) or
+ *  read as 0 / "", never written as it is, so a fresh record never blocks.
+ *  Changing a formula here changes what every existing @2 record should hold, and verify-build would block each one
+ *  recorded before the change: bump PLAN_VERIFICATION_RECORD_SCHEMA with it, and read the older schema the older way. */
+function recordFacts(report: Omit<VerifyReport, "artifacts"> & { mode?: unknown; reason?: unknown }, reportAt: string): RecordFacts {
+  const count = (x: unknown): number => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+  const text = (x: unknown): string | undefined => (typeof x === "string" && x ? x : undefined);
   const s = report.summary;
-  const deltas = report.deltas ?? [];
+  const all = Array.isArray(report.deltas) ? report.deltas : [];
   const b = report.behaviour;
-  const notMeasured = report.coverage && typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : (report.notMeasured ?? []).length;
-  const counts: PlanRecordCounts = { high: s ? s.high : 0, medium: s ? s.medium : 0, low: s ? s.low : 0,
-    accepted: (s && s.accepted) ?? deltas.filter((d) => d.accepted).length, notMeasured, inferred: (s && s.inferred) ?? (report.inferred ? report.inferred.length : 0) };
-  return { verdict: report.verdict ?? "", headline: report.headline ?? "", ...(b && b.headline ? { behaviourHeadline: b.headline } : {}), counts };
+  const notMeasured = report.coverage && typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : Array.isArray(report.notMeasured) ? report.notMeasured.length : 0;
+  const counts: PlanRecordCounts = { high: count(s && s.high), medium: count(s && s.medium), low: count(s && s.low),
+    accepted: s && typeof s.accepted === "number" ? count(s.accepted) : all.filter((d) => d.accepted).length, notMeasured: count(notMeasured),
+    inferred: s && typeof s.inferred === "number" ? count(s.inferred) : Array.isArray(report.inferred) ? report.inferred.length : 0 };
+  // the OPEN high + medium deltas, compact (lows and accepted ones are only counted)
+  const deltas: PlanRecordedDelta[] = [];
+  for (const d of all) {
+    if (d.accepted || typeof d.nodeId !== "string" || typeof d.field !== "string") continue;
+    const severity = d.severity === "high" ? "high" : d.severity === "medium" ? "medium" : null;
+    if (severity) deltas.push({ nodeId: d.nodeId, field: d.field, severity, ...ifDefined("expected", d.expected), ...ifDefined("actual", d.actual) });
+  }
+  // A static-only measured file is recorded as such — no render happened, so no renderer is claimed
+  const staticOnly = report.mode === "static-only";
+  const ran = !!b && b.ran === true;
+  const tool = b && b.axe && "version" in b.axe && typeof b.axe.version === "string" ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
+  return {
+    verdict: typeof report.verdict === "string" ? report.verdict : "", headline: typeof report.headline === "string" ? report.headline : "",
+    ...ifDefined("behaviourHeadline", text(b && b.headline)), counts, mode: staticOnly ? "static-only" : "rendered",
+    ...(staticOnly ? ifDefined("reason", text(report.reason)) : ifDefined("renderer", text(report.renderer))), deltas,
+    ...(ran && b ? { a11y: { tool, violations: count(b.summary && b.summary.fail), warnings: count(b.summary && b.summary.warn), report: reportAt } } : {}),
+  };
 }
 
-/** mode … a11y as every reader takes them: from a recorded@2 block (`at` "verification.recorded"; `record` is that
- *  block when it is the tool's shape), else — a hand-written or native plan, a recorded@1 one — from verification's
- *  top level (`at` "verification"). Beside a recorded@2 the top-level keys are never read. */
+/** mode … a11y as every reader takes them. A recorded@2 block (doc-guards.ts isRecordV2Shaped; `record` is that block
+ *  when it is the tool's shape) speaks for each key it holds — `at` "verification.recorded"; a key it lacks (a11y when
+ *  the report's behaviour checks did not run, reason when the measured file gave none) is read from verification's top
+ *  level, where the agent may have written it (`a11yAt` says where a11y came from). Without a recorded@2 — a
+ *  hand-written or native plan, a recorded@1 one — every key is the top level's (`at` "verification"). */
 export interface VerificationFacts {
   at: "verification.recorded" | "verification";
+  a11yAt: "verification.recorded" | "verification";
   record: PlanVerificationRecord | null;
   mode: PlanVerification["mode"]; reason: string | undefined; renderer: string | undefined;
   artifacts: PlanVerification["artifacts"]; deltas: PlanVerification["deltas"]; a11y: PlanA11yRecord | undefined;
 }
 function verificationFacts(v: PlanVerification | null | undefined): VerificationFacts {
-  const rec: unknown = v && typeof v === "object" ? v.recorded : undefined;
-  if (isJsonObject(rec) && rec.schema !== undefined) {
-    const str = (x: JsonValue | undefined): string | undefined => (typeof x === "string" ? x : undefined);
-    const num = (x: JsonValue | undefined): number | undefined => (typeof x === "number" ? x : undefined);
-    const a = rec.a11y;
-    const a11y: PlanA11yRecord | undefined = isJsonObject(a)
-      ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str(a.report)) } : undefined;
-    return { at: "verification.recorded", record: isVerificationRecord(rec) ? rec : null, mode: str(rec.mode), reason: str(rec.reason), renderer: str(rec.renderer),
-      artifacts: rec.artifacts, deltas: rec.deltas, a11y };
-  }
   const top: PlanVerification = v && typeof v === "object" ? v : {};
-  return { at: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
+  const rec: unknown = top.recorded;
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
+    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
+  }
+  const r: JsonObject = rec;
+  const has = (k: ToolKey): boolean => r[k] !== undefined;
+  const str = (x: JsonValue | undefined): string | undefined => (typeof x === "string" ? x : undefined);
+  const num = (x: JsonValue | undefined): number | undefined => (typeof x === "number" ? x : undefined);
+  const a = r.a11y;
+  const a11y: PlanA11yRecord | undefined = isJsonObject(a)
+    ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str(a.report)) } : undefined;
+  return { at: "verification.recorded", a11yAt: has("a11y") ? "verification.recorded" : "verification", record: isVerificationRecord(r) ? r : null,
+    mode: has("mode") ? str(r.mode) : top.mode, reason: has("reason") ? str(r.reason) : top.reason, renderer: has("renderer") ? str(r.renderer) : top.renderer,
+    artifacts: has("artifacts") ? r.artifacts : top.artifacts, deltas: has("deltas") ? r.deltas : top.deltas, a11y: has("a11y") ? a11y : top.a11y };
 }
 
 // `planFile` and `reportRel` are relative to `opts.cwd` (the project root, default process.cwd()) or absolute;
@@ -146,19 +182,12 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
       reportSha256 = sha256Hex(JSON.stringify(report, null, 2) + "\n");
       notes.push(`${reportAt} is not on disk — recorded the sha256 of the report as --compare writes it`);
     }
-    const deltas: PlanRecordedDelta[] = report.deltas.filter((d) => !d.accepted && (d.severity === "high" || d.severity === "medium"))
-      .map((d) => ({ nodeId: d.nodeId, field: d.field, severity: d.severity === "high" ? "high" : "medium", expected: d.expected, actual: d.actual }));
     const b = report.behaviour;
-    const facts = recordFacts(report);
-    // A static-only measured file is recorded as such — no render happened, so no renderer is claimed
-    const staticOnly = report.mode === "static-only";
+    const facts = recordFacts(report, reportAt);
     const recorded: PlanVerificationRecord = {
       schema: PLAN_VERIFICATION_RECORD_SCHEMA, by: "verify-screen --record-plan", at: opts.now ?? new Date().toISOString(), report: reportAt, reportSha256,
       verdict: facts.verdict, headline: facts.headline, ...ifDefined("behaviourHeadline", facts.behaviourHeadline), counts: facts.counts,
-      mode: staticOnly ? "static-only" : "rendered",
-      ...(staticOnly ? ifDefined("reason", report.reason || undefined) : ifDefined("renderer", (typeof report.renderer === "string" && report.renderer) || undefined)),
-      artifacts, deltas,
-      ...(b.ran ? { a11y: { tool: b.axe && "version" in b.axe ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks", violations: b.summary.fail, warnings: b.summary.warn, report: reportAt } } : {}),
+      mode: facts.mode, ...ifDefined("reason", facts.reason), ...ifDefined("renderer", facts.renderer), artifacts, deltas: facts.deltas, ...ifDefined("a11y", facts.a11y),
     };
 
     const v: PlanVerification = plan.verification ?? {}; // (parsePlan refuses a non-object verification)
@@ -177,10 +206,21 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
     const foreign = isJsonObject(prev) ? Object.keys(prev).filter((k) => !RECORD_KEYS.includes(k)) : [];
     if (foreign.length) notes.push(`verification.recorded held ${foreign.map((k) => `\`${k}\``).join(", ")}, which --record-plan does not write — dropped (the block is the tool's): put a residual in deviations[] (with the why), anything else in notes`);
     if (!b.ran && before.a11y !== undefined) notes.push(`behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — this record has no a11y`);
-    // The record's keys at the top level (a recorded@1 plan, a hand-written one) are the record's now: moved into it
-    const moved = TOOL_KEYS.filter((k) => v[k] !== undefined);
-    for (const k of moved) delete v[k];
-    if (moved.length) notes.push(`verification.${moved.join(", verification.")}: the record's ${moved.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) — the top-level ${moved.length > 1 ? "copies are" : "copy is"} removed; coverage and notes stay yours, and a residual goes in deviations[] (with the why)`);
+    // The record's keys at the top level (a recorded@1 plan, a hand-written one): one the record now holds is moved into
+    // it; a renderer beside a static-only record, or a reason beside a rendered one, no longer holds and is removed; one
+    // the record lacks (a hand a11y when the behaviour checks did not run, a hand reason the measured file did not give)
+    // stays — the readers fall back to it (verificationFacts)
+    const present = TOOL_KEYS.filter((k) => v[k] !== undefined);
+    const moved = present.filter((k) => recorded[k] !== undefined);
+    const stale = present.filter((k) => recorded[k] === undefined && k === (recorded.mode === "static-only" ? "renderer" : "reason"));
+    const kept = present.filter((k) => !moved.includes(k) && !stale.includes(k));
+    for (const k of [...moved, ...stale]) delete v[k];
+    const list = (ks: readonly ToolKey[]): string => ks.map((k) => `verification.${k}`).join(", ");
+    if (moved.length || stale.length) notes.push([
+      ...(moved.length ? [`${list(moved)}: the record's ${moved.length > 1 ? "keys are" : "key is"} kept in verification.recorded now (written from this report) — the top-level ${moved.length > 1 ? "copies are" : "copy is"} removed`] : []),
+      ...(stale.length ? [`${list(stale)} removed: ${recorded.mode === "static-only" ? "this report is static-only, so no renderer is claimed" : "this report was rendered, so the \"why no render\" no longer holds"}`] : []),
+      ...(kept.length ? [`${list(kept)} ${kept.length > 1 ? "stay" : "stays"} at the top level: this report gives none, so ${kept.length > 1 ? "they are" : "it is"} still read from there`] : []),
+    ].join("; ") + "; coverage and notes stay yours, and a residual goes in deviations[] (with the why)");
     v.recorded = recorded;
     plan.verification = v;
     return plan;

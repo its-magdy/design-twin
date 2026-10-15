@@ -840,29 +840,29 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-var isCount = (x) => typeof x === "number" && Number.isFinite(x);
-var need = (ok) => ({ need: true, ok });
-var opt = (ok) => ({ need: false, ok });
-var str = (v) => typeof v === "string";
-var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
-var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
-var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
 var RECORD_FIELDS = {
-  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
-  by: need(str),
-  at: need(str),
-  report: need(str),
-  reportSha256: need(str),
-  verdict: need(str),
-  headline: need(str),
-  behaviourHeadline: opt(str),
-  counts: need(isJsonObject),
-  mode: need((v) => v === "rendered" || v === "static-only"),
-  reason: opt(str),
-  renderer: opt(str),
-  artifacts: need(isStringArray),
-  deltas: need(Array.isArray),
-  a11y: opt(isJsonObject)
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
 };
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
@@ -2649,16 +2649,16 @@ function textChecks(ac, node, ancestors, here) {
   const size = typeof font.size === "number" ? font.size : null;
   const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
   const large = size != null && (size >= 24 || size >= 18.66 && bold);
-  const need2 = large ? 3 : 4.5;
+  const need = large ? 3 : 4.5;
   if (complex) {
-    add("info", "contrast-manual", `${cite(node)} sits on a gradient/image \u2014 check text contrast manually (needs ${need2}:1)`, node, here, textExtra(node));
+    add("info", "contrast-manual", `${cite(node)} sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here, textExtra(node));
     return;
   }
   const assumed = !bg;
   const base = bg || WHITE;
   const ratio = contrastRatio(over(fg, base), base);
-  if (ratio < need2) {
-    add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need2}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need2, ...textExtra(node) });
+  if (ratio < need) {
+    add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
   }
 }
 function boundaryCheck(ac, node, ancestors, here) {
@@ -2899,16 +2899,16 @@ function componentStates(ac, lookup) {
   for (const { use, found } of candidates) {
     const kind = controlKind(use.name) || found && controlKind(found.def.name);
     if (!kind) continue;
-    const need2 = requiredStates(kind, platform);
+    const need = requiredStates(kind, platform);
     if (!found) {
       components.push({ name: use.name ?? "", kind, known: false, present: [], missing: [], note: "in no component catalog \u2014 states unknown" });
-      if (need2.length) unchecked.push(use.name ?? "");
+      if (need.length) unchecked.push(use.name ?? "");
       continue;
     }
     const { def, values, label, matchedBy, sampled } = found;
     const norm = values.map((v) => String(v).trim().toLowerCase());
     const present = CONTROL_STATES.filter((s) => norm.some((v) => STATE_SYNONYMS[s].test(v)));
-    const missing = need2.filter((s) => !present.includes(s));
+    const missing = need.filter((s) => !present.includes(s));
     components.push({ name: def.name, kind, known: true, sampled, present, missing, catalog: label, matchedBy });
     if (missing.length) {
       const where = `${label}${matchedBy === "name" ? ", matched by NAME only" : ""}`;
@@ -3294,8 +3294,8 @@ function blockerIds(auditDoc) {
 }
 function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-  const str2 = (v) => typeof v === "string" && v ? v : void 0;
-  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str2(f.code)), ...ifDefined("nodeId", str2(f.nodeId)), ...ifDefined("severity", str2(f.severity)), ...ifDefined("id", str2(f.id)) }));
+  const str = (v) => typeof v === "string" && v ? v : void 0;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 function findExistingAuditFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs8.existsSync(dir)) return null;

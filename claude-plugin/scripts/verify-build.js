@@ -309,6 +309,26 @@ function readJson(file, guard) {
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
   return { doc: parsed };
 }
+function readRegularFile(file) {
+  try {
+    if (!fs.statSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null;
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
   return "doc" in r ? r.doc : null;
@@ -641,45 +661,49 @@ isPlan.expected = "a plan (started by the plan-skeleton script): an object whose
 function parsePlan(x) {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
 }
-var isCount = (x) => typeof x === "number" && Number.isFinite(x);
-var closed = (o, at, fields) => {
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var recClosed = (o, at, fields) => {
   const out = Object.keys(o).filter((k) => !Object.hasOwn(fields, k)).map((k) => `${at}${k}`);
   for (const [k, f] of Object.entries(fields)) if (o[k] === void 0 ? f.need : !f.ok(o[k])) out.push(`${at}${k}`);
   return out;
 };
-var need = (ok) => ({ need: true, ok });
-var opt = (ok) => ({ need: false, ok });
-var str = (v) => typeof v === "string";
-var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
-var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
-var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
 var RECORD_FIELDS = {
-  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
-  by: need(str),
-  at: need(str),
-  report: need(str),
-  reportSha256: need(str),
-  verdict: need(str),
-  headline: need(str),
-  behaviourHeadline: opt(str),
-  counts: need(isJsonObject),
-  mode: need((v) => v === "rendered" || v === "static-only"),
-  reason: opt(str),
-  renderer: opt(str),
-  artifacts: need(isStringArray),
-  deltas: need(Array.isArray),
-  a11y: opt(isJsonObject)
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
 };
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
+var RECORD_V1_KEYS = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
+function isRecordV2Shaped(rec) {
+  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k));
+}
 function recordProblems(rec) {
-  const out = closed(rec, "", RECORD_FIELDS);
-  if (isJsonObject(rec.counts)) out.push(...closed(rec.counts, "counts.", RECORD_COUNTS));
-  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...isJsonObject(d) ? closed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`]));
-  if (isJsonObject(rec.a11y)) out.push(...closed(rec.a11y, "a11y.", RECORD_A11Y));
+  const out = recClosed(rec, "", RECORD_FIELDS);
+  if (isJsonObject(rec.counts)) out.push(...recClosed(rec.counts, "counts.", RECORD_COUNTS));
+  if (Array.isArray(rec.deltas)) rec.deltas.forEach((d, i) => out.push(...isJsonObject(d) ? recClosed(d, `deltas[${i}].`, RECORD_DELTA) : [`deltas[${i}]`]));
+  if (isJsonObject(rec.a11y)) out.push(...recClosed(rec.a11y, "a11y.", RECORD_A11Y));
   return out;
 }
 function isVerificationRecord(x) {
-  return isJsonObject(x) && x.schema !== void 0 && recordProblems(x).length === 0;
+  return isJsonObject(x) && isRecordV2Shaped(x) && recordProblems(x).length === 0;
 }
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
 function isPlanWaiver(x) {
@@ -772,8 +796,8 @@ function blockerIds(auditDoc) {
 }
 function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-  const str2 = (v) => typeof v === "string" && v ? v : void 0;
-  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str2(f.code)), ...ifDefined("nodeId", str2(f.nodeId)), ...ifDefined("severity", str2(f.severity)), ...ifDefined("id", str2(f.id)) }));
+  const str = (v) => typeof v === "string" && v ? v : void 0;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 if (false) process.exitCode = main(process.argv.slice(2));
 
@@ -1278,41 +1302,64 @@ function parsePlanText(raw, file) {
   if (!("plan" in pp)) throw new Error(`${file} ${pp.error}`);
   return pp.plan;
 }
-function recordFacts(report) {
+function recordFacts(report, reportAt) {
+  const count = (x) => typeof x === "number" && Number.isFinite(x) ? x : 0;
+  const text = (x) => typeof x === "string" && x ? x : void 0;
   const s = report.summary;
-  const deltas = report.deltas ?? [];
+  const all = Array.isArray(report.deltas) ? report.deltas : [];
   const b = report.behaviour;
-  const notMeasured = report.coverage && typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : (report.notMeasured ?? []).length;
+  const notMeasured = report.coverage && typeof report.coverage.nodesNotMeasured === "number" ? report.coverage.nodesNotMeasured : Array.isArray(report.notMeasured) ? report.notMeasured.length : 0;
   const counts = {
-    high: s ? s.high : 0,
-    medium: s ? s.medium : 0,
-    low: s ? s.low : 0,
-    accepted: (s && s.accepted) ?? deltas.filter((d) => d.accepted).length,
-    notMeasured,
-    inferred: (s && s.inferred) ?? (report.inferred ? report.inferred.length : 0)
+    high: count(s && s.high),
+    medium: count(s && s.medium),
+    low: count(s && s.low),
+    accepted: s && typeof s.accepted === "number" ? count(s.accepted) : all.filter((d) => d.accepted).length,
+    notMeasured: count(notMeasured),
+    inferred: s && typeof s.inferred === "number" ? count(s.inferred) : Array.isArray(report.inferred) ? report.inferred.length : 0
   };
-  return { verdict: report.verdict ?? "", headline: report.headline ?? "", ...b && b.headline ? { behaviourHeadline: b.headline } : {}, counts };
+  const deltas = [];
+  for (const d of all) {
+    if (d.accepted || typeof d.nodeId !== "string" || typeof d.field !== "string") continue;
+    const severity = d.severity === "high" ? "high" : d.severity === "medium" ? "medium" : null;
+    if (severity) deltas.push({ nodeId: d.nodeId, field: d.field, severity, ...ifDefined("expected", d.expected), ...ifDefined("actual", d.actual) });
+  }
+  const staticOnly = report.mode === "static-only";
+  const ran = !!b && b.ran === true;
+  const tool = b && b.axe && "version" in b.axe && typeof b.axe.version === "string" ? `axe-core ${b.axe.version}` : "verify-probe behaviour checks";
+  return {
+    verdict: typeof report.verdict === "string" ? report.verdict : "",
+    headline: typeof report.headline === "string" ? report.headline : "",
+    ...ifDefined("behaviourHeadline", text(b && b.headline)),
+    counts,
+    mode: staticOnly ? "static-only" : "rendered",
+    ...staticOnly ? ifDefined("reason", text(report.reason)) : ifDefined("renderer", text(report.renderer)),
+    deltas,
+    ...ran && b ? { a11y: { tool, violations: count(b.summary && b.summary.fail), warnings: count(b.summary && b.summary.warn), report: reportAt } } : {}
+  };
 }
 function verificationFacts(v) {
-  const rec = v && typeof v === "object" ? v.recorded : void 0;
-  if (isJsonObject(rec) && rec.schema !== void 0) {
-    const str2 = (x) => typeof x === "string" ? x : void 0;
-    const num = (x) => typeof x === "number" ? x : void 0;
-    const a = rec.a11y;
-    const a11y = isJsonObject(a) ? { ...ifDefined("tool", str2(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str2(a.report)) } : void 0;
-    return {
-      at: "verification.recorded",
-      record: isVerificationRecord(rec) ? rec : null,
-      mode: str2(rec.mode),
-      reason: str2(rec.reason),
-      renderer: str2(rec.renderer),
-      artifacts: rec.artifacts,
-      deltas: rec.deltas,
-      a11y
-    };
-  }
   const top = v && typeof v === "object" ? v : {};
-  return { at: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
+  const rec = top.recorded;
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
+    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
+  }
+  const r = rec;
+  const has = (k) => r[k] !== void 0;
+  const str = (x) => typeof x === "string" ? x : void 0;
+  const num = (x) => typeof x === "number" ? x : void 0;
+  const a = r.a11y;
+  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str(a.report)) } : void 0;
+  return {
+    at: "verification.recorded",
+    a11yAt: has("a11y") ? "verification.recorded" : "verification",
+    record: isVerificationRecord(r) ? r : null,
+    mode: has("mode") ? str(r.mode) : top.mode,
+    reason: has("reason") ? str(r.reason) : top.reason,
+    renderer: has("renderer") ? str(r.renderer) : top.renderer,
+    artifacts: has("artifacts") ? r.artifacts : top.artifacts,
+    deltas: has("deltas") ? r.deltas : top.deltas,
+    a11y: has("a11y") ? a11y : top.a11y
+  };
 }
 
 // design-to-code/plan-skeleton.ts
@@ -1977,7 +2024,7 @@ function checkVerification(plan, cwd) {
   }
   if (f.mode === "static-only") {
     if (f.reason) return [];
-    return [at === "verification.recorded" ? 'verification.recorded.mode is "static-only" with no `reason` \u2014 the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator\u2026) in its `reason`, then re-run --compare --record-plan' : 'verification.mode is "static-only" with no `reason` \u2014 say what was checked for and not found (dev server, Playwright, simulator\u2026)'];
+    return [at === "verification.recorded" ? 'verification.recorded.mode is "static-only" with no `reason` \u2014 the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator\u2026) in the measured file\'s `reason`, then re-run --compare --record-plan' : 'verification.mode is "static-only" with no `reason` \u2014 say what was checked for and not found (dev server, Playwright, simulator\u2026)'];
   }
   return [`${at}.mode must be "rendered" or "static-only", got ${JSON.stringify(f.mode)}`];
 }
@@ -1995,26 +2042,19 @@ function verificationWarnings(plan) {
 function recordedReportWarnings(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  let bytes;
-  try {
-    bytes = fs11.readFileSync(path8.resolve(cwd, rec.report));
-  } catch {
-    return [];
-  }
+  const bytes = readRegularFile(path8.resolve(cwd, rec.report));
+  if (!bytes) return [];
   const now = sha256Hex(bytes);
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
+var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
 function recordedEdits(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
-  if (!isJsonObject(rec) || rec.schema === void 0) return [];
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) return [];
   const edited = recordProblems(rec);
   if (!edited.length && isVerificationRecord(rec)) {
-    let bytes = null;
-    try {
-      bytes = fs11.readFileSync(path8.resolve(cwd, rec.report));
-    } catch {
-    }
+    const bytes = readRegularFile(path8.resolve(cwd, rec.report));
     const parse = (b) => {
       try {
         const x = JSON.parse(b.toString("utf8"));
@@ -2025,12 +2065,12 @@ function recordedEdits(plan, cwd) {
     };
     const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null;
     if (isVerifyReport(report)) {
-      const said = recordFacts(report);
-      for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] !== said[k]) edited.push(k);
+      const said = recordFacts(report, rec.report);
+      for (const k of RECORD_FACT_KEYS) if (JSON.stringify(rec[k]) !== JSON.stringify(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan; residuals go in deviations[]`);
+  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
 }
 var SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
 var HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"];
@@ -2038,10 +2078,10 @@ function recordedShadowWarnings(plan) {
   const v = plan.verification;
   const rec = v && typeof v === "object" ? v.recorded : void 0;
   if (!v || !isJsonObject(rec)) return [];
-  const v2 = rec.schema !== void 0;
+  const v2 = isRecordV2Shaped(rec);
   if (v2 && !isVerificationRecord(rec)) return [];
   const top = Object.keys(v);
-  const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k)) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
+  const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove the top-level ` + (keys.length > 1 ? "copies" : "copy") + ": a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
 var newestOwn = (reports) => {
@@ -2073,7 +2113,7 @@ function behaviourWarnings(plan, reports, ctx = {}) {
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
   const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
   if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran))
-    out.push(`${f.at}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+    out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
   const r = target.ref ?? newestOwn(all);
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref, fail, failed) => {
@@ -2091,7 +2131,7 @@ function behaviourWarnings(plan, reports, ctx = {}) {
   }
   if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
   if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail)
-    out.push(`${f.at}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 ` + (f.at === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
+    out.push(`${f.a11yAt}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 ` + (f.a11yAt === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
   return [...out, ...otherFails];
 }
 var A11Y = /\b(a11y|axe|accessib)/i;
@@ -2105,7 +2145,7 @@ function verificationContradictions(plan, reports) {
   const rendered = v.coverage && Array.isArray(v.coverage.rendered) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
   if (f.a11y && typeof f.a11y === "object" && f.a11y.violations !== void 0) {
     const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`${f.at === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
+    if (nc) out.push(`verification contradicts itself: \`${f.a11yAt === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   const rec = v.recorded;
@@ -2767,7 +2807,11 @@ function computeStatus(plan, opts) {
   } else {
     const d = hookFileDiff(plan, cwd, o.cached);
     const ch = d ? d.changed : [];
-    if (ch.length) {
+    const edits = recordedEdits(plan, cwd);
+    if (edits.length) {
+      hookState = "blocked";
+      hookWhy = edits;
+    } else if (ch.length) {
       hookState = "stale";
       hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`];
     }
@@ -2901,9 +2945,10 @@ var USAGE2 = [
   "(itself or an ancestor) in anchors{}; on web profiles, no data-dt-node tag in any plan's files[]",
   '(opt out: "tagging": {"off": true, "reason": "\u2026"}); and a hand edit of verification.recorded, the block',
   "verify-screen --compare --record-plan writes whole (a key it does not write, a value of the wrong kind, or a",
-  "verdict/headline/count the report it names \u2014 same sha256 \u2014 does not say; re-run --compare --record-plan;",
-  "residuals go in deviations[]). Everything else is a warning (exit 0). Beside a recorded block, the record's",
-  "keys at verification's top level (mode, artifacts, deltas, a11y, \u2026) and a hand headline/verdict are ignored.",
+  "verdict, count, mode, delta, \u2026 the report it names \u2014 same sha256 \u2014 does not say; re-run --compare --record-plan",
+  "or restore the block; residuals go in deviations[]). Everything else is a warning (exit 0). Beside a recorded",
+  "block, the keys it holds at verification's top level (mode, artifacts, deltas, a11y, \u2026) and a hand",
+  "headline/verdict are ignored.",
   'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
   "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",

@@ -55,8 +55,8 @@ import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems } from "./doc-guards.ts";
+import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import type {
@@ -547,7 +547,7 @@ function checkVerification(plan: Plan, cwd: string): string[] {
   if (f.mode === "static-only") {
     if (f.reason) return [];
     return [at === "verification.recorded"
-      ? "verification.recorded.mode is \"static-only\" with no `reason` — the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator…) in its `reason`, then re-run --compare --record-plan"
+      ? "verification.recorded.mode is \"static-only\" with no `reason` — the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator…) in the measured file's `reason`, then re-run --compare --record-plan"
       : "verification.mode is \"static-only\" with no `reason` — say what was checked for and not found (dev server, Playwright, simulator…)"];
   }
   return [`${at}.mode must be "rendered" or "static-only", got ${JSON.stringify(f.mode)}`];
@@ -572,55 +572,61 @@ function verificationWarnings(plan: Plan): string[] {
 
 // plan.verification.recorded is what `--compare --record-plan` copied from ONE report. When that report
 // has since been rewritten (another --compare without --record-plan, a hand edit), the plan's copy is older than the
-// verdict it summarises. A warning — the report is the verdict either way; computeStatus reads only the record's
-// mode/reason, for a plan with no report (static-only).
+// verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
+// mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
+// (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  let bytes: Buffer;
-  try { bytes = fs.readFileSync(path.resolve(cwd, rec.report)); } catch { return []; }
+  const bytes = readRegularFile(path.resolve(cwd, rec.report));
+  if (!bytes) return [];
   const now = sha256Hex(bytes);
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 
 // verification.recorded@2 is the tool's, written whole by --compare --record-plan: a key outside its closed set or a
 // value of the wrong kind (doc-guards.ts recordProblems), or — while its reportSha256 still names the report on disk —
-// a verdict, headline or count that report does not say, was edited by hand. The one verification check that BLOCKS:
-// a hand edit there would pass for the tool's record, and re-recording repairs it. A recorded@1 block (no schema) is
-// read the older way and never blocks. These messages are saved in the plan (verification.hook.blocking): scripts are
-// named in words.
+// anything that report decides (plan-record.ts recordFacts: verdict, headline, counts, mode, reason, renderer, the open
+// deltas, a11y; not artifacts, which depend on the disk) that is not what the report says, was edited by hand. The one
+// verification check that BLOCKS: a hand edit there would pass for the tool's record, and re-recording repairs it. It
+// also reopens a closed plan (isOpen) and reads as "blocked" in --status (computeStatus). A recorded block with only the
+// first record's keys (recorded@1) is read the older way and never blocks; one with a key that record never wrote is a
+// @2 block, `schema` or not (doc-guards.ts isRecordV2Shaped). These messages are saved in the plan
+// (verification.hook.blocking): scripts are named in words.
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
+const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
 function recordedEdits(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec) || rec.schema === undefined) return [];
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) return [];
   const edited = recordProblems(rec);
   if (!edited.length && isVerificationRecord(rec)) {
-    let bytes: Buffer | null = null;
-    try { bytes = fs.readFileSync(path.resolve(cwd, rec.report)); } catch { /* no report: nothing to compare with */ }
+    const bytes = readRegularFile(path.resolve(cwd, rec.report)); // (null: no report to compare with)
     const parse = (b: Buffer): unknown => { try { const x: unknown = JSON.parse(b.toString("utf8")); return x; } catch { return null; } };
     const report = bytes && sha256Hex(bytes) === rec.reportSha256 ? parse(bytes) : null; // (unparseable: not the report the sha names)
     if (isVerifyReport(report)) {
-      const said = recordFacts(report);
-      for (const k of ["verdict", "headline", "behaviourHeadline"] as const) if (rec[k] !== said[k]) edited.push(k);
+      const said = recordFacts(report, rec.report);
+      // (JSON both sides: the plan was read from JSON, and `said` holds no undefined value a key could carry)
+      for (const k of RECORD_FACT_KEYS) if (JSON.stringify(rec[k]) !== JSON.stringify(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan; residuals go in deviations[]`);
+  return edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
 }
 
 // Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written
-// headline/verdict — are read by nothing: say so, once. The tool keys only beside a recorded@2 (beside a recorded@1
-// they are still the record's); the hand verdicts beside either.
+// headline/verdict — are read by nothing: say so, once. The tool keys only beside a recorded@2, and only the ones it
+// holds (one it lacks is read from the top level — verificationFacts; beside a recorded@1 they are all still the
+// record's); the hand verdicts beside either.
 const SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"] as const;
 const HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"] as const;
 function recordedShadowWarnings(plan: Plan): string[] {
   const v = plan.verification;
   const rec: unknown = v && typeof v === "object" ? v.recorded : undefined;
   if (!v || !isJsonObject(rec)) return [];
-  const v2 = rec.schema !== undefined;
+  const v2 = isRecordV2Shaped(rec);
   if (v2 && !isVerificationRecord(rec)) return []; // (an edited record blocks; its message comes first)
   const top = Object.keys(v);
-  const keys = [...(v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k)) : []), ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
+  const keys = [...(v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== undefined) : []), ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored — verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); ` +
     "remove the top-level " + (keys.length > 1 ? "copies" : "copy") + ": a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
@@ -682,7 +688,7 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
   const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
   if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran))
-    out.push(`${f.at}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
+    out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
   const r = target.ref ?? newestOwn(all);
   const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
@@ -706,8 +712,8 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   }
   if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
   if (recorded !== undefined && target.missing === undefined && recorded !== b.fail)
-    out.push(`${f.at}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — ` +
-      (f.at === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
+    out.push(`${f.a11yAt}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — ` +
+      (f.a11yAt === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
   return [...out, ...otherFails];
 }
 
@@ -725,7 +731,7 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
   const rendered = (v.coverage && Array.isArray(v.coverage.rendered)) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
   if (f.a11y && typeof f.a11y === "object" && f.a11y.violations !== undefined) {
     const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`${f.at === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says ` +
+    if (nc) out.push(`verification contradicts itself: \`${f.a11yAt === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says ` +
       `"${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
@@ -1467,7 +1473,11 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   else {
     const d = hookFileDiff(plan, cwd, o.cached);
     const ch = d ? d.changed : [];
-    if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
+    // the record edited by hand after the hook passed (planHash leaves verification out): the hook's next check blocks
+    // on it, so the status says so now
+    const edits = recordedEdits(plan, cwd);
+    if (edits.length) { hookState = "blocked"; hookWhy = edits; }
+    else if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
     if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ` +
       `${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan ` +
       `(\`verify-build <plan>\` re-checks now)`];
@@ -1644,9 +1654,10 @@ const USAGE = [
   "(itself or an ancestor) in anchors{}; on web profiles, no data-dt-node tag in any plan's files[]",
   "(opt out: \"tagging\": {\"off\": true, \"reason\": \"…\"}); and a hand edit of verification.recorded, the block",
   "verify-screen --compare --record-plan writes whole (a key it does not write, a value of the wrong kind, or a",
-  "verdict/headline/count the report it names — same sha256 — does not say; re-run --compare --record-plan;",
-  "residuals go in deviations[]). Everything else is a warning (exit 0). Beside a recorded block, the record's",
-  "keys at verification's top level (mode, artifacts, deltas, a11y, …) and a hand headline/verdict are ignored.",
+  "verdict, count, mode, delta, … the report it names — same sha256 — does not say; re-run --compare --record-plan",
+  "or restore the block; residuals go in deviations[]). Everything else is a warning (exit 0). Beside a recorded",
+  "block, the keys it holds at verification's top level (mode, artifacts, deltas, a11y, …) and a hand",
+  "headline/verdict are ignored.",
   "A Claude Code hook payload (it has hook_event_name) gets a block as {\"decision\":\"block\",\"reason\":…} on stdout",
   "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",

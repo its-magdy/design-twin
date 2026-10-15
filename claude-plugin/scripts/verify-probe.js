@@ -1262,29 +1262,29 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-var isCount = (x) => typeof x === "number" && Number.isFinite(x);
-var need = (ok) => ({ need: true, ok });
-var opt = (ok) => ({ need: false, ok });
-var str = (v) => typeof v === "string";
-var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
-var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
-var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
 var RECORD_FIELDS = {
-  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
-  by: need(str),
-  at: need(str),
-  report: need(str),
-  reportSha256: need(str),
-  verdict: need(str),
-  headline: need(str),
-  behaviourHeadline: opt(str),
-  counts: need(isJsonObject),
-  mode: need((v) => v === "rendered" || v === "static-only"),
-  reason: opt(str),
-  renderer: opt(str),
-  artifacts: need(isStringArray),
-  deltas: need(Array.isArray),
-  a11y: opt(isJsonObject)
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
 };
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
@@ -2336,8 +2336,8 @@ function clickPointControl(el, arg) {
       for (const ps of ["::before", "::after"]) {
         const c = css(e, "content", ps);
         if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str2 ? str2[1] ?? "" : null;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str ? str[1] ?? "" : null;
         const fill2 = !clear(css(e, "background-color", ps));
         const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
         if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
@@ -2449,8 +2449,8 @@ function clickPointControl(el, arg) {
         const c = css(f, "content", ps);
         const pos = css(f, "position", ps);
         if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str2 === null || /\S/.test(str2[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
         let q = fr;
         if (pos === "absolute") {
           let cb = f;
@@ -3571,8 +3571,8 @@ function markOpener(arg) {
       for (const ps of ["::before", "::after"]) {
         const c = css(e, "content", ps);
         if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str2 ? str2[1] ?? "" : null;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str ? str[1] ?? "" : null;
         const fill2 = !clear(css(e, "background-color", ps));
         const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
         if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
@@ -3684,8 +3684,8 @@ function markOpener(arg) {
         const c = css(f, "content", ps);
         const pos = css(f, "position", ps);
         if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str2 = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str2 === null || /\S/.test(str2[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
         let q = fr;
         if (pos === "absolute") {
           let cb = f;

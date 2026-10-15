@@ -304,7 +304,7 @@ check("static-only needs a reason", has(problems({}, { verification: { mode: "st
 
 console.log("verification.recorded — the tool's block:");
 {
-  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan; residuals go in deviations[]`;
+  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`;
   // a recorded@2 block as --record-plan writes it (its report is not on disk here, so only its shape is checked)
   const REC = { schema: "designtwin/plan-verification-record@2", by: "verify-screen --record-plan", at: "2026-10-07T12:00:00.000Z", report: "design/verify/login.report.json",
     reportSha256: "0".repeat(64), verdict: "pass", headline: "PASS", counts: { high: 0, medium: 0, low: 0, accepted: 0, notMeasured: 0, inferred: 0 },
@@ -326,9 +326,16 @@ console.log("verification.recorded — the tool's block:");
       === JSON.stringify([EDITED("mode"), EDITED("artifacts"), EDITED("deltas"), EDITED("counts.high")]));
   check("…and a wrong schema string is an edit too", JSON.stringify(recordBlocks({ recorded: { ...REC, schema: "designtwin/plan-verification-record@3" } })) === JSON.stringify([EDITED("schema")]));
   const v1 = { by: REC.by, at: REC.at, report: REC.report, reportSha256: REC.reportSha256, verdict: REC.verdict, headline: REC.headline, counts: REC.counts };
-  check("a recorded@1 block (no schema) is accepted as written, and its plan reads mode … a11y from the top level as before",
-    recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand" } }).length === 0
+  check("a recorded@1 block (only the keys the first record wrote) is accepted as written, and its plan reads mode … a11y from the top level as before",
+    recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: v1 }).length === 0 && recordBlocks({ recorded: { ...v1, behaviourHeadline: "B" } }).length === 0
     && has(problems(FILES, planWith({ mode: "static-only", recorded: v1 })), /^verification\.mode is "static-only" with no `reason`/));
+  check(`a schema-less block holding a key the first record never wrote is a @2 block with its schema removed → BLOCKS (got ${JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } }))})`,
+    JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([EDITED("schema"), EDITED("artifacts"), EDITED("deltas")])
+    && JSON.stringify(recordBlocks({ recorded: { ...v1, note: "hand" } })) === JSON.stringify([EDITED("note"), EDITED("schema"), EDITED("mode"), EDITED("artifacts"), EDITED("deltas")]));
+  const { a11y: _dropped, ...noA11y } = REC;
+  check("beside a recorded@2 with no a11y (its behaviour checks did not run) a top-level a11y is read, not ignored",
+    !has(problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "manual", violations: 0 }, recorded: noA11y })), /ignored — verification\.recorded|has no a11y/)
+    && has(problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, recorded: noA11y })), /^verification\.recorded has no a11y/));
   check("beside a recorded@1 the top-level mode/deltas are the record's (no 'ignored' warning); a hand headline is ignored, with one warning",
     !has(problems(FILES, planWith({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: v1 })), /ignored — verification\.recorded/)
     && has(problems(FILES, planWith({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], headline: "PASS", recorded: v1 })), /^verification\.headline is ignored — verification\.recorded is the record/));

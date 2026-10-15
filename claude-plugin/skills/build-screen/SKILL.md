@@ -439,7 +439,7 @@ Copy this checklist into your notes and keep it updated:
    Resolve whatever the `Stop` hook blocked on earlier in this turn before writing this report.
 
    **Report the status you expect, not a status** — the hook runs after you hand back, so you cannot have seen
-   one. Report the evidence (`verification.mode`, what you rendered, the `--compare` verdict and coverage line)
+   one. Report the evidence (`verification.recorded.mode` — or `verification.mode` where nothing records it —, what you rendered, the `--compare` verdict and coverage line)
    and the expected status:
 
    > Verification: rendered (`<renderer>`, `design/verify/<screen>.png`); `--compare` verdict `pass`,

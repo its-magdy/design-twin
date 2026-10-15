@@ -282,29 +282,29 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-var isCount = (x) => typeof x === "number" && Number.isFinite(x);
-var need = (ok) => ({ need: true, ok });
-var opt = (ok) => ({ need: false, ok });
-var str = (v) => typeof v === "string";
-var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, need(isCount)]));
-var RECORD_DELTA = { nodeId: need(str), field: need(str), severity: need((v) => v === "high" || v === "medium"), expected: opt(() => true), actual: opt(() => true) };
-var RECORD_A11Y = { tool: need(str), violations: need(isCount), warnings: need(isCount), report: need(str) };
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
 var RECORD_FIELDS = {
-  schema: need((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
-  by: need(str),
-  at: need(str),
-  report: need(str),
-  reportSha256: need(str),
-  verdict: need(str),
-  headline: need(str),
-  behaviourHeadline: opt(str),
-  counts: need(isJsonObject),
-  mode: need((v) => v === "rendered" || v === "static-only"),
-  reason: opt(str),
-  renderer: opt(str),
-  artifacts: need(isStringArray),
-  deltas: need(Array.isArray),
-  a11y: opt(isJsonObject)
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
 };
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var reqStr = (v) => typeof v === "string" && v.trim() !== "";
@@ -750,7 +750,7 @@ var num = (raw) => {
   const n = Number(raw);
   return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
 };
-var str2 = (raw) => JSON.stringify(String(raw));
+var str = (raw) => JSON.stringify(String(raw));
 var hex4 = (c) => c.toString(16).padStart(4, "0");
 var quoteWith = (raw, esc) => {
   const s = String(raw);
@@ -874,7 +874,7 @@ function swiftui(cols) {
 }
 function flutter(cols) {
   const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
-  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str2(r).replace(/\$/g, "\\$") : num(r);
+  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
   const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
   const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
   for (const c of cols) {
@@ -919,7 +919,7 @@ function flutter(cols) {
 }
 function reactNative(cols) {
   const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str2(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str2(r) : num(r);
+  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
@@ -933,8 +933,8 @@ function reactNative(cols) {
       ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${commentText(f.source)}`),
       "}",
       "",
-      `export type ${c.type}Mode = ${c.modes.map((m) => str2(m.id)).join(" | ")};`,
-      `export const ${v}DefaultMode: ${c.type}Mode = ${str2(c.defaultId)};`,
+      `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
+      `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`,
       "",
       `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
     );

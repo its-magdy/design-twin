@@ -145,16 +145,46 @@ console.log("recordPlan:");
   check("the plan text before the record was not the plan text after (sanity)", beforeText !== text);
 }
 {
-  // behaviour did not run: a11y is not invented — the record has none, and a hand a11y at the top level is the record's key: removed, with a note
+  // behaviour did not run: a11y is not invented — the record has none, and a hand a11y at the top level (which this report
+  // does not replace) stays there and is still read; the note says exactly what moved and what stayed
   const root = project();
   const p = planOf(root);
   fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, a11y: { tool: "manual", violations: 0 } } }, null, 2) + "\n");
   const r = recordPlan(REL, noBehaviour, REPORT, { cwd: root, now: NOW });
   const v = must(planOf(root).verification, "verification");
   const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
-  check(`behaviour did not run → the record has no a11y, the top-level one is removed, two notes say why (got ${JSON.stringify(rec.a11y)}; notes ${JSON.stringify(r.notes)})`,
-    !("a11y" in rec) && !("a11y" in v) && r.notes.length === 2 && /^behaviour\/a11y checks did not run \(.+\) — this record has no a11y$/.test(r.notes[0] ?? "")
-    && (r.notes[1] ?? "").startsWith("verification.mode, verification.deltas, verification.a11y: the record's keys are kept in verification.recorded now") && rec.counts.high === 1);
+  check(`behaviour did not run → the record has no a11y, the hand top-level one stays, two notes (got ${JSON.stringify(v.a11y)}; notes ${JSON.stringify(r.notes)})`,
+    !("a11y" in rec) && JSON.stringify(v.a11y) === JSON.stringify({ tool: "manual", violations: 0 }) && r.notes.length === 2
+    && /^behaviour\/a11y checks did not run \(.+\) — this record has no a11y$/.test(r.notes[0] ?? "")
+    && r.notes[1] === "verification.mode, verification.deltas: the record's keys are kept in verification.recorded now (written from this report) — the top-level copies are removed; "
+      + "verification.a11y stays at the top level: this report gives none, so it is still read from there; coverage and notes stay yours, and a residual goes in deviations[] (with the why)"
+    && rec.counts.high === 1);
+  const facts = verificationFacts(v);
+  const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
+  check(`…the readers take mode/deltas from the record and that a11y from the top level, with no 'ignored' warning for it (got at ${facts.at}, a11yAt ${facts.a11yAt})`,
+    facts.at === "verification.recorded" && facts.a11yAt === "verification" && facts.a11y?.tool === "manual" && facts.mode === "rendered"
+    && !w.some((x) => /ignored — verification\.recorded/.test(x)) && !w.some((x) => /has no a11y|a11y is missing/.test(x)));
+}
+{
+  // a static-only measured file that gives no reason: a hand reason at the top level stays and is read; one beside a
+  // rendered record no longer holds and is removed
+  const so: VerifyReportV2 = compare(exp, { mode: "static-only", nodes: [] }, {});
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, mode: "static-only", reason: "no simulator on this machine" } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(so, null, 2) + "\n");
+  const r = recordPlan(REL, so, REPORT, { cwd: root, now: NOW });
+  const v = must(planOf(root).verification, "verification");
+  const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
+  const res = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
+  check(`static-only with no reason in the report → the record has none, the hand reason stays and is read (no 'no reason' warning, no block) (got ${JSON.stringify({ rec: rec.reason, top: v.reason, notes: r.notes })})`,
+    rec.mode === "static-only" && !("reason" in rec) && v.reason === "no simulator on this machine" && verificationFacts(v).reason === "no simulator on this machine"
+    && /verification\.reason stays at the top level: this report gives none/.test(r.notes.join(" ")) && !res.warnings.some((x) => /with no `reason`|ignored — verification\.recorded/.test(x))
+    && !res.blocking.some((b) => /verification\.recorded/.test(b)));
+  fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
+  const r2 = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  check(`…a later rendered record removes that reason, and says why (got ${JSON.stringify(r2.notes)})`,
+    planOf(root).verification?.reason === undefined && r2.notes.some((n) => n.startsWith("verification.reason removed: this report was rendered, so the \"why no render\" no longer holds")));
 }
 {
   // a report of lows only: deltas [] is the record, not a "copy them" gap
@@ -355,7 +385,7 @@ console.log("recording a plan the old hook closed, project-relative paths only:"
 
 console.log("verify-build on the record: a hand edit of it blocks; its keys left at the top level are ignored:");
 {
-  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan; residuals go in deviations[]`;
+  const EDITED = (k: string): string => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`;
   const root = project();
   runHook(root);
   recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
@@ -377,6 +407,30 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
   write((_, rec) => { rec.headline = "PASS — all good"; if (isJsonObject(rec.counts)) rec.counts.high = 0; });
   check(`the headline and counts.high edited → one block each (got ${JSON.stringify(recordBlocks())})`,
     JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("headline"), EDITED("counts.high")]));
+  // everything else the report decides is checked the same way: the deltas, the mode, the reason, the renderer, a11y
+  const deltaEdits: Array<[string, (rec: JsonObject) => void, string[]]> = [
+    ["the deltas emptied", (rec) => { rec.deltas = []; }, ["deltas"]],
+    ["a delta's actual set to its expected", (rec) => { const d = Array.isArray(rec.deltas) ? rec.deltas[0] : undefined; if (isJsonObject(d)) d.actual = d.expected ?? null; }, ["deltas"]],
+    ["the mode switched to static-only (renderer dropped, a reason added)", (rec) => { rec.mode = "static-only"; delete rec.renderer; rec.reason = "no browser"; }, ["mode", "reason", "renderer"]],
+    ["the renderer changed", (rec) => { rec.renderer = "webkit"; }, ["renderer"]],
+    ["the a11y violations zeroed", (rec) => { if (isJsonObject(rec.a11y)) rec.a11y.violations = 0; }, ["a11y"]],
+    ["the a11y removed", (rec) => { delete rec.a11y; }, ["a11y"]],
+  ];
+  for (const [what, patch, keys] of deltaEdits) {
+    write((_, rec) => patch(rec));
+    check(`${what}, the sha still matching → BLOCKS on exactly ${keys.join(", ")} (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify(keys.map(EDITED)));
+  }
+  // a @2 block with its schema removed is not a recorded@1: it holds keys that record never wrote
+  write((_, rec) => { delete rec.schema; });
+  check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS (got ${JSON.stringify(recordBlocks())})`, JSON.stringify(recordBlocks()) === JSON.stringify([EDITED("schema")]));
+  // --status says blocked at once for a closed plan whose record was edited (the hook's next check would block)
+  write((_, rec) => { rec.verdict = "pass"; });
+  const edited = statusOf(root);
+  check(`--status of a closed plan with an edited record: the failing report first, then the hook named blocked by the edit (got ${edited.status}: ${edited.reasons.join(" | ").slice(0, 200)})`,
+    edited.status === "failed" && edited.reasons.includes(`hook: ${EDITED("verdict")}`));
+  const st2 = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL), reports: [] });
+  check(`…with no failing report in the way, the computed status is "blocked", the edit its first reason (got ${st2.status}: ${st2.reasons[0] ?? ""})`,
+    st2.status === "blocked" && st2.reasons[0] === EDITED("verdict"));
   // the Stop hook: the plan was closed, and planHash leaves verification out — the edit still reopens it, and it blocks
   write((_, rec) => { rec.verdict = "pass"; });
   const open = openOf(root);
@@ -406,6 +460,21 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
     !shadow.warnings.some((w) => /static-only" with no `reason`|says "pass" but/.test(w)) && verificationFacts(planOf(root).verification).mode === "rendered");
   write(() => undefined);
   check("control: the record alone → no 'ignored' warning", !checked().warnings.some((w) => /ignored — verification\.recorded/.test(w)));
+  // a record naming something that is not a regular file — a FIFO (whose open waits for a writer) or /dev/zero (which
+  // never ends) — is read as no report: the hook's fast path and the sha warning return at once
+  if (process.platform !== "win32") {
+    const fifo = path.join(root, "design/verify/pipe.report.json");
+    const made = spawnSync("mkfifo", [fifo]).status === 0;
+    for (const target of [...(made ? [fifo] : []), "/dev/zero"]) {
+      write((_, rec) => { rec.report = target; rec.verdict = "pass"; });
+      const t0 = Date.now();
+      const p = planOf(root);
+      const out = [verifyBuild.recordedEdits(p, root).length, verifyBuild.recordedReportWarnings(p, root).length, openOf(root) ? 1 : 0];
+      check(`a record naming ${target === fifo ? "a FIFO" : target} → no report read, no hang (no edit block, no sha warning, still closed) in ${Date.now() - t0} ms`,
+        JSON.stringify(out) === "[0,0,0]" && Date.now() - t0 < 5000);
+    }
+    if (!made) console.log("  (mkfifo unavailable: only /dev/zero checked)");
+  } else console.log("  (skipped: FIFO and /dev/zero are POSIX)");
 }
 {
   // a plan with no `recorded` (hand-written, native) keeps the top-level reading: a hand verdict "pass" against a failing report is the contradiction
@@ -438,6 +507,28 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
     const rec = planOf(root2).verification?.recorded;
     check(`--compare --record-plan --plan <plan>: the report is written and the plan records its sha256 (exit ${r2.status}, verdict ${String(written.verdict)})`,
       !!rec && rec.verdict === written.verdict && rec.headline === written.headline && rec.reportSha256 === sha256(fs.readFileSync(path.join(root2, REPORT))) && rec.report === REPORT);
+    // round trip: whatever the measured file holds, a fresh --compare --record-plan writes a record the hook accepts
+    // (a value of the wrong kind is left out of the record, never written as is — else the hook blocks and re-recording
+    // writes the same block again)
+    const cases: Array<[string, Record<string, unknown>, (r: JsonObject) => boolean]> = [
+      ["a rendered file", { measuredAt: measured.measuredAt, renderer: measured.renderer, nodes, behaviour }, (r) => r.mode === "rendered" && r.renderer === "playwright-chromium" && isJsonObject(r.a11y)],
+      ["a static-only file with a string reason", { mode: "static-only", reason: "no simulator", nodes: [] }, (r) => r.mode === "static-only" && r.reason === "no simulator" && !("renderer" in r)],
+      ["a static-only file with a non-string reason", { mode: "static-only", reason: { why: "no simulator" }, nodes: [] }, (r) => r.mode === "static-only" && !("reason" in r)],
+      ["a rendered file with an object renderer", { measuredAt: measured.measuredAt, renderer: { name: "chromium", version: "153" }, nodes }, (r) => r.mode === "rendered" && !("renderer" in r)],
+    ];
+    for (const [what, file, shape] of cases) {
+      const root3 = project();
+      fs.writeFileSync(path.join(root3, "design/verify/Crates.expected.json"), JSON.stringify(exp, null, 2));
+      fs.writeFileSync(path.join(root3, "design/verify/Crates.measured.json"), JSON.stringify(file));
+      const run = () => spawnSync(process.execPath, [VS, "--compare", "design/verify/Crates.expected.json", "design/verify/Crates.measured.json", "--plan", REL, "--record-plan"], { cwd: root3, encoding: "utf8" });
+      const c1 = run();
+      const rec3: unknown = planOf(root3).verification?.recorded;
+      const blocks1 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));
+      const c2 = run();
+      const blocks2 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));
+      check(`round trip, ${what}: --compare --record-plan → a valid @2 record, checkPlan blocks nothing on it, and a second run neither (exit ${c1.status}/${c2.status}; blocks ${JSON.stringify(blocks1)}; ${c1.stderr.split("\n").filter((l) => /error/.test(l)).join(" | ")})`,
+        isVerificationRecord(rec3) && isJsonObject(rec3) && shape(rec3) && blocks1.length === 0 && blocks2.length === 0 && !/error {2}--record-plan/.test(c1.stderr + c2.stderr));
+    }
   }
 }
 

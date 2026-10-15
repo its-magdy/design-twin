@@ -821,7 +821,8 @@ console.log("build-screen docs:");
   check("verify skill, build-screen, hook-and-status and references/verify.md: verification.recorded is the tool's, written whole; a hand edit blocks; residuals go in deviations[]; older top-level keys move in on the first record",
     /writes the plan's `verification\.recorded` block from this report/.test(verifySkill) && /The block is the tool's, written whole every run/.test(verifySkill)
     && /Never edit it: `verify-build` \*\*blocks\*\* on a key it does not write, a value of the wrong kind, or a verdict, headline or count that the report it names \(same sha256\) does not say/.test(verifySkill)
-    && /the first `--record-plan` moves them into `recorded`/.test(verifySkill) && /at the top level are ignored, with a warning/.test(verifySkill)
+    && /the first `--record-plan` moves the ones the new record holds into `recorded`/.test(verifySkill) && /a hand `a11y` or `reason` this report does not give stays at the top level and is still read from there/.test(verifySkill) && /at the top level is ignored, with a warning/.test(verifySkill)
+    && /the edit reopens a plan the hook had closed, and `--status` reads blocked/.test(verifySkill) && /the edit reopens a plan the hook had closed, and `--status` reads blocked/.test(skill) && /`--record-plan` moves the ones the new record holds into `recorded` \(with a note\)/.test(skill)
     && /tool-owned `verification\.recorded` block from the report \(never edit it\)/.test(skill) && /and a hand edit of `verification\.recorded`, and warns on the rest/.test(skill)
     && /writes ONE tool-owned block from the report, `verification\.recorded`, whole every run/.test(skill) && /a residual you chose to keep goes in `deviations\[\]`/.test(skill)
     && /and a hand edit of `verification\.recorded` \(above\)/.test(skill) && /write `verification\.recorded`, the tool's block/.test(verifyRef));
