@@ -33,6 +33,7 @@ import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { readStatus, type VerifyStatusV2 } from "../design-to-code/verify-run.ts";
+import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import { check, report } from "./assert.ts";
 import { killPidTree, runNode, type KillHost, type Run } from "./pool.ts";
 
@@ -200,11 +201,13 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   const run = (script: string, args: string[], o?: ProbeRunOptions): Promise<Run> =>
     runNode(proj, script, args, o?.killAfterMs ?? 0, o?.env !== undefined ? { ...process.env, ...o.env } : undefined);
   // These runs check reaching, measuring and driving — `--behaviour off` keeps them fast, except where a run says
-  // `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves)
+  // `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves); the probe takes
+  // `--behaviour off` only with the test-only env var
   const probe = (args: string[], o?: ProbeRunOptions): Promise<Run> => {
     const at = args.indexOf("--url"), u = at >= 0 ? args[at + 1] : undefined;
     if (u !== undefined) launched.add(searchOf(u));
-    return run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT], o);
+    return run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT],
+      { ...o, env: { [BEHAVIOUR_OFF_ENV]: "1", ...o?.env } });
   };
   const vs = (args: string[]): Promise<Run> => run(VS, args);
   const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };

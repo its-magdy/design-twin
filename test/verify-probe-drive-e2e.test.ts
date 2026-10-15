@@ -65,7 +65,8 @@ const P = {
     const c2 = await vs(["--compare", EXPECTED, out("Beds") + ".measured.json", "--out", out("Beds")]);
     return { runId, r2, done, c2 };
   }),
-  noToken: q(() => probe(["--expected", QUIET, "--url", edge("no-token"), "--out", out("NoToken"), "--steps", "steps-no-token.json", "--max-time", "60000"])),
+  // (--ready none here and on clickNavSlow: they check the load wait alone, with no --ready — the default is the frame tag)
+  noToken: q(() => probe(["--expected", QUIET, "--url", edge("no-token"), "--out", out("NoToken"), "--steps", "steps-no-token.json", "--ready", "none", "--max-time", "60000"])),
   churnDomGoto: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("ChurnDomGoto"), "--steps", "steps-goto-churn.json", "--max-time", "60000"])),
   gotoHang: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("GotoHang"), "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
   hangFirst: q(() => probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", out("HangFirst"), "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
@@ -99,8 +100,9 @@ const P = {
   wrapperOpener: q(() => probe(["--expected", EXPECTED, "--url", edge("wrapper-submit"), "--out", out("WrapperSubmitOpener"), "--max-time", "90000"])),
   reload: q(() => probe(["--expected", QUIET, "--url", url("reload-on-first-hover"), "--out", out("Reload"), "--steps", "design/plan/Beds__70_1.json", "--ready", READY, "--max-time", "60000"])),
   ambiguous: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Ambiguous"), "--steps", "steps-ambiguous.json"])),
-  clickNavSlow: q(() => probe(["--expected", QUIET, "--url", edge("clicknav-slow"), "--out", out("ClickNavSlow"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  clickNavSlow: q(() => probe(["--expected", QUIET, "--url", edge("clicknav-slow"), "--out", out("ClickNavSlow"), "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"])),
   noSteps: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoSteps"), "--ready", READY, "--timeout", "3000"])),
+  noStepsDefault: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoStepsDefault"), "--timeout", "3000"])),
   waitMany: q(() => probe(["--expected", QUIET, "--url", url(), "--out", out("WaitMany"), "--steps", "steps-waitfor-many.json"])),
   linkLateAway: q(() => probe(["--expected", QUIET, "--url", edge("link-inplace-late-away"), "--out", out("LinkLateAway"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
   linkStep: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("LinkStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"])),
@@ -120,6 +122,11 @@ const slowNav = SLOW_NAV.map((delay) => ({ delay, run: q(() => probe(["--expecte
 // ---- the screen behind a click
 const r1 = await P.noSteps;
 check("[ready-only] no --steps + --ready on the section's root (only there after a click) → exit 4, nothing written", r1.status === 4 && !written(out("NoSteps")));
+// the same with no --ready at all: the probe waits for the frame's tag by default, so the default section is never measured
+const r1d = await P.noStepsDefault;
+check("[ready-default] no --steps and no --ready → the default --ready (the frame's tag) never shows: exit 4 naming it as the default, nothing written",
+  r1d.status === 4 && r1d.stderr.includes("ready  [data-dt-node=\"70:1\"] (the frame's tag, the default;") && r1d.stderr.includes("--ready '[data-dt-node=\"70:1\"]' never became visible")
+  && r1d.stderr.includes("[data-dt-node=\"70:1\"] is the default --ready (the frame's tag): the page the probe reached is not the screen") && !written(out("NoStepsDefault")));
 
 // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare (one queued task: P.main)
 const { runId, r2, done, c2 } = await P.main;

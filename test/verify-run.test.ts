@@ -770,7 +770,43 @@ await block("verify-probe --run exit 3:", async () => {
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
   const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
   const st = VR.readStatus(base);
-  safe("probe exit 3 with --run → status rev bumped, phase measuring, detail 'probe exit 3 — nothing written'", () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.detail === "probe exit 3 — nothing written");
+  safe("probe exit 3 with --run → the first failed attempt: rev bumped, phase measuring, probeFailures 1, detail names the attempt and the one re-run",
+    () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.probeFailures === 1
+      && st.detail === "probe exit 3 — nothing written (failed probe attempt 1 of 2: re-run the probe once in this run)");
+  safe("…stderr: 'status run run-x measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run run-x); the next failed attempt ends it failed'",
+    () => p.stderr.includes("status run run-x measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run run-x); the next failed attempt ends it failed"));
+  // the agent's own write between the two attempts keeps the count (it carries forward within the run)
+  VR.writeStatus(base, { runId: "run-x", phase: "renderer-ready", by: "agent", detail: "re-running the probe" });
+  const kept = VR.readStatus(base);
+  safe("…a later write of the same run carries probeFailures forward", () => kept !== null && kept !== "v1" && kept.probeFailures === 1 && kept.phase === "renderer-ready");
+  const p2 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  const st2 = VR.readStatus(base);
+  safe("the second failed attempt (exit 3 again) → the probe ends the run itself: phase failed, probeFailures 2, rev 4, by verify-probe, exit 3",
+    () => p2.status === 3 && st2 !== null && st2 !== "v1" && st2.runId === "run-x" && st2.phase === "failed" && st2.probeFailures === 2 && st2.rev === 4 && st2.by === "verify-probe"
+      && st2.detail === "probe exit 3 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed)");
+  safe("…stderr: 'status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)'",
+    () => p2.stderr.includes("status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)"));
+  const before3 = JSON.stringify(VR.readStatus(base));
+  const p3 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  safe("a third probe in that run → refused before anything starts (exit 2, 'already ended at failed'); the ended run is never reopened",
+    () => p3.status === 2 && p3.stderr.includes("run run-x already ended at failed (probe exit 3 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed))") && JSON.stringify(VR.readStatus(base)) === before3);
+});
+
+console.log("writeStatus probeFailed — the run's failed probe attempts:");
+await block("probeFailed counting:", async () => {
+  const { base, live } = project();
+  VR.writeStatus(base, { runId: "run-c1", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: true });
+  VR.writeStatus(base, { runId: "run-c2", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: true });
+  const other = VR.readStatus(base);
+  safe("another run's failed attempt counts from 1 (the count is per run)", () => other !== null && other !== "v1" && other.runId === "run-c2" && other.probeFailures === 1 && other.phase === "measuring");
+  const plain = VR.writeStatus(base, { runId: "run-c3", phase: "measuring", by: "agent" });
+  safe("a run with no failed attempt has no probeFailures", () => plain.probeFailures === undefined);
+  const raw: unknown = JSON.parse(fs.readFileSync(live, "utf8"));
+  fs.writeFileSync(live, JSON.stringify({ ...(typeof raw === "object" && raw !== null ? raw : {}), probeFailures: "two" }));
+  const mal = VR.readStatus(base);
+  safe("a malformed probeFailures is read as none counted, never the whole status", () => mal !== null && mal !== "v1" && mal.runId === "run-c3" && mal.probeFailures === undefined);
+  const next = VR.writeStatus(base, { runId: "run-c3", phase: "measuring", by: "verify-probe", detail: "probe exit 4 — nothing written", probeFailed: true });
+  safe("…and the next failed attempt counts from 1", () => next.probeFailures === 1 && next.phase === "measuring");
 });
 
 // The probe, too, never reopens an ended run (it writes measuring/measured through writeStatus)

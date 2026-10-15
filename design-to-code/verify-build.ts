@@ -762,7 +762,7 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
     // block: no warning every Stop. "--behaviour off" is the probe's own switch, so it always warns.
     if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
     out.push(b.why === "--behaviour off"
-      ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) — the skills never pass that switch; re-run the probe without it before claiming accessibility`
+      ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) — a switch for the probe's own tests only; re-run the probe without it before claiming accessibility`
       : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — re-run the shipped probe, or say in the report that accessibility was not checked`);
     return [...out, ...otherFails];
   }

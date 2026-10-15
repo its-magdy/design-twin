@@ -1576,9 +1576,10 @@ function isSameOriginPath(v) {
   return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
 }
 function parseSteps(x) {
-  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (isJsonObject(x) && x.navigate === void 0) return { steps: [], noNavigate: true };
+  const list = Array.isArray(x) ? x : isJsonObject(x) ? x.navigate : void 0;
   if (!Array.isArray(list)) {
-    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+    return { error: isJsonObject(x) ? "holds a `navigate` that is not a list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
   }
   const steps = [];
   for (const [i, raw] of list.entries()) {
@@ -6054,12 +6055,17 @@ function writeFileAtomic(file, data, opts = {}) {
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var PROBE_ATTEMPTS = 2;
+function probeAttemptNote(n) {
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : "re-run the probe once in this run"}`;
+}
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -6085,9 +6091,10 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && r.doc.ownRun !== void 0) {
-    const { ownRun: _malformed, ...rest } = r.doc;
-    if (isVerifyStatusV2(rest)) return rest;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0)) {
+    const { ownRun, probeFailures, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
@@ -6191,21 +6198,25 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
-    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : void 0);
+    const failures = w.probeFailed ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
+    const phase = w.probeFailed && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
+    const detail = w.probeFailed && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures)})` : w.detail ?? "";
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
       runId: w.runId,
       rev: same ? same.rev + 1 : 1,
-      phase: w.phase,
-      detail: w.detail ?? "",
+      phase,
+      detail,
       at: (/* @__PURE__ */ new Date()).toISOString(),
       by: w.by,
       ...pick("expectationSha256"),
       ...pick("measuredSha256"),
       ...pick("evidenceSha256"),
       ...published !== void 0 ? { published } : {},
-      ...ownRun !== void 0 ? { ownRun } : {}
+      ...ownRun !== void 0 ? { ownRun } : {},
+      ...failures !== void 0 ? { probeFailures: failures } : {}
     };
     put(doc);
     hooks.after?.(doc);
@@ -7050,9 +7061,10 @@ function behaviourLine(b) {
   const n = (st) => b.checks.filter((c) => c.status === st).length;
   return `behaviour (not the fidelity verdict) ${n("fail")} fail \xB7 ${n("warn")} warn \xB7 ${n("pass")} pass \xB7 ${n("not-run")} not run${n("unsupported") ? ` \xB7 ${n("unsupported")} unsupported` : ""} \xB7 axe ${b.axe.ran ? `axe-core ${b.axe.version}` : `not run (${b.axe.why})`} \xB7 ${Math.round(b.elapsedMs / 1e3)}s of ${Math.round(b.budgetMs / 1e3)}s${b.cut ? " \u2014 CUT by the time budget" : ""}` + (b.artifacts.length ? ` \xB7 ${b.artifacts.join(", ")}` : "");
 }
+var BEHAVIOUR_OFF_ENV = "DESIGNTWIN_TEST_BEHAVIOUR_OFF";
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
-      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
+      [--ready <selector> | none] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
       [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
@@ -7069,11 +7081,18 @@ var USAGE = `usage:
       (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an
       error). The probe writes the run's LIVE status (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
-      before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed; with --run an
-      exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that
+      before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
+      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run,
+      the second ends the run \`failed\` \u2014 the probe writes it (a \`status run <id> \u2026\` line on stderr says which). A --run that
+      already ended (done/failed/blocked) is refused before anything starts, and a run that
       ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).
       --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
-      --steps: a JSON list of steps (or a plan whose \`navigate\` holds them) replayed after every page load, before --ready,
+      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
+      by default the frame's tag [data-dt-node="<frame id>"] (expectation.frame.nodeId), so a page that is not the screen
+      (a login redirect, another section) is an exit 4, never measured; --ready none waits for nothing. With no frame id in
+      the expectation there is no default (a note says so). Not visible within --timeout \u2192 exit 4.
+      --steps: a JSON list of steps (or a plan whose \`navigate\` holds them; a plan with none is no steps \u2014 a note says so)
+      replayed after every page load, before --ready,
       to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
       {"goto": "/same-origin/path"}. A click's selector must match exactly one visible element (a waitFor's at least one);
       a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a
@@ -7085,7 +7104,8 @@ var USAGE = `usage:
       Then the behaviour/accessibility checks run, each unit on a fresh page within min(90 s, what --max-time leaves less
       20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,
       1024/320 px widths, and the keyboard/scroll battery on modal overlays \u2014 measured.behaviour (+ <out>.forced-colors.png),
-      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).
+      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so) \u2014 for the
+      probe's own tests only: it needs ${BEHAVIOUR_OFF_ENV}=1 in the environment, else exit 2.
       Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the
       reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png
       (informational \u2014 never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/\u2026 PNG is read
@@ -7099,7 +7119,8 @@ exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the p
       screen is open, or replaced its own \u2014 also instead of a 3 or 4 \xB7 3
       renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept navigating / reloaded twice
       during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /
-      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
+      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written; with --run the
+      second failed attempt has ended the run \`failed\`).`;
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
@@ -7120,6 +7141,21 @@ function measuredRefusedWhy(by, runId, phase = "measured") {
   if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`${phase}\` status write held it, so that write was not made`;
   if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`${phase}\` status write was not made`;
   return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
+}
+function probeAttemptLine(doc) {
+  const note = probeAttemptNote(doc.probeFailures ?? 0);
+  return doc.phase === "failed" ? `status run ${doc.runId} failed \u2014 ${note} (a retry is a new run: --new-run)` : `status run ${doc.runId} ${doc.phase} \u2014 ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
+}
+var READY_NONE = "none";
+function readyOf(flag, frameId) {
+  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
+  if (flag !== void 0) return { ready: flag, note: `ready  ${flag}` };
+  if (frameId === void 0 || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default \u2014 the page is measured once it is quiet (pass --ready <selector>)" };
+  const ready = attrSelector(frameId);
+  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
+}
+function defaultReadyMissed(ready) {
+  return `${ready} is the default --ready (the frame's tag): the page the probe reached is not the screen (a redirect such as a login page, another section \u2014 reach it with --steps), or the screen root is not tagged ${ready.slice(1, -1)}; pass --ready <selector> for another root, or --ready none to wait for nothing`;
 }
 var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
@@ -7204,6 +7240,16 @@ ${USAGE}`);
 ${USAGE}`);
     return 2;
   }
+  if (f.behaviour === "off" && process.env[BEHAVIOUR_OFF_ENV] !== "1") {
+    console.error(`verify-probe: --behaviour off is for the probe's own tests (${BEHAVIOUR_OFF_ENV}=1) \u2014 a run without the behaviour checks is not a verification
+${USAGE}`);
+    return 2;
+  }
+  if (f.ready !== void 0 && f.ready.trim() === "") {
+    console.error(`verify-probe: --ready must be a selector or none, got '${f.ready}'
+${USAGE}`);
+    return 2;
+  }
   const behaviourOn = f.behaviour !== "off";
   if (f.run !== void 0 && (f.check || !/^[\w.:-]+$/.test(f.run))) {
     console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}
@@ -7235,8 +7281,11 @@ ${USAGE}`);
 ${USAGE}`);
       return 2;
     }
-    steps = parsed.steps;
-    stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
+    if (parsed.noNavigate) console.error(`note  --steps '${f.steps}' is a plan with no \`navigate\` list \u2014 no steps run: the screen is measured where --url lands`);
+    else {
+      steps = parsed.steps;
+      stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
+    }
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -7261,6 +7310,7 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
+  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId);
   const outBase = f.out ?? (f.expected ? path9.join(path9.dirname(f.expected), path9.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   const statusBase = f.expected ? path9.join(path9.dirname(f.expected), path9.basename(outBase)) : "";
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
@@ -7304,10 +7354,21 @@ ${USAGE}`);
   };
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
-      const w = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} };
-      const wrote2 = status(w);
+      const w = {
+        runId,
+        phase: ownRun ? "failed" : "measuring",
+        by: "verify-probe",
+        detail: `probe exit ${code} \u2014 nothing written`,
+        ...expSha ? { expectationSha256: expSha } : {},
+        ...ownRun ? {} : { probeFailed: true }
+      };
+      const rec = {};
+      const wrote2 = status(w, { after: (d) => {
+        rec.doc = d;
+      } });
       if (ownRun) own.disarm();
       if (wrote2 === "over") return 2;
+      if (rec.doc?.probeFailures !== void 0 && !ownRun) console.error(probeAttemptLine(rec.doc));
     }
     return code;
   };
@@ -7340,6 +7401,7 @@ ${USAGE}`);
     });
   }
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
+  if (readyPick) console.error(readyPick.note);
   const held = {};
   let timer;
   const runDeadline = Date.now() + maxTime;
@@ -7366,13 +7428,16 @@ ${USAGE}`);
       return 0;
     }
     let run2;
-    const probeOpts = { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout, ...steps.length ? { steps } : {} };
+    const ready = readyPick?.ready;
+    const probeOpts = { expectation, url: f.url, ...ready !== void 0 ? { ready } : {}, viewport, position: !!f.position, timeout, ...steps.length ? { steps } : {} };
     try {
       run2 = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
-        console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
+        const byDefault = f.ready === void 0 && ready !== void 0 && e.message.startsWith(`--ready '${ready}'`);
+        console.error(`verify-probe: ${e.message} \u2014 nothing written.` + (byDefault ? `
+  ${defaultReadyMissed(ready)}` : ""));
         return 4;
       }
       if (pwErrorKind(e) === "gone") {
@@ -7637,14 +7702,17 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
+  BEHAVIOUR_OFF_ENV,
   BODY_WAIT_MS,
   INIT_SCRIPT,
   LAUNCH_ARGS,
   PLAYWRIGHT_PACKAGES,
+  READY_NONE,
   behaviourLine,
   browserPathError,
   buildFrom,
   closeCapped,
+  defaultReadyMissed,
   driveOutcome,
   errorKind,
   foreignTags,
@@ -7656,7 +7724,9 @@ export {
   loadFailureWhy,
   main,
   measuredRefusedWhy,
+  probeAttemptLine,
   projectRequire,
+  readyOf,
   resolveAxe,
   resolvePlaywright,
   runProbe,

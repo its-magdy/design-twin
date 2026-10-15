@@ -79,6 +79,15 @@ export interface VerifyStatusV2 {
   /** a probe's own run (started without --run): the process that started it and when — so a run its probe left open
    *  (killed outright) can be told from a live one (file-lock.ts processState) */
   ownRun?: OwnRunStamp;
+  /** the probe's failed attempts (exit 3/4) in this run (--run): the PROBE_ATTEMPTS-th ends the run `failed` */
+  probeFailures?: number;
+}
+/** The failed probe attempts (exit 3/4) a run named by --run takes: the last of them ends the run `failed` — the
+ *  probe writes it, so a verifier re-runs a failed probe once and never writes that `failed` itself. */
+export const PROBE_ATTEMPTS = 2;
+/** What a failed probe attempt's status detail adds: which attempt it was in the run, and what follows it. */
+export function probeAttemptNote(n: number): string {
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : "re-run the probe once in this run"}`;
 }
 /** Who started a probe's own run: the probe process (file-lock.ts thisProcess), the time it started the run, and the
  *  deadline past which no live probe still writes in it (its start + --max-time + a grace for closing the browser,
@@ -89,6 +98,7 @@ const isPhase = (x: unknown): x is StatusPhase => typeof x === "string" && STATU
 const optStr = (x: unknown): boolean => x === undefined || typeof x === "string";
 const isOwnRunStamp = (x: unknown): x is OwnRunStamp => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string"
   && typeof x.deadline === "string";
+const isFailureCount = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0;
 /** Whether a probe's own run is past its deadline (an unreadable deadline is not). */
 const overdue = (o: OwnRunStamp): boolean => Date.parse(o.deadline) < Date.now();
 export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
@@ -96,7 +106,7 @@ export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
     && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator")
     && optStr(x.expectationSha256) && optStr(x.measuredSha256) && optStr(x.evidenceSha256)
     && (x.published === undefined || (Array.isArray(x.published) && x.published.every((p) => typeof p === "string")))
-    && (x.ownRun === undefined || isOwnRunStamp(x.ownRun));
+    && (x.ownRun === undefined || isOwnRunStamp(x.ownRun)) && (x.probeFailures === undefined || isFailureCount(x.probeFailures));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 
@@ -136,10 +146,12 @@ function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  // a malformed ownRun is ignored (read as a run nobody's probe owns), never the whole status
-  if (isJsonObject(r.doc) && r.doc.ownRun !== undefined) {
-    const { ownRun: _malformed, ...rest } = r.doc;
-    if (isVerifyStatusV2(rest)) return rest;
+  // a malformed ownRun is ignored (read as a run nobody's probe owns), a malformed probeFailures as none counted —
+  // never the whole status
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== undefined || r.doc.probeFailures !== undefined)) {
+    const { ownRun, probeFailures, ...rest } = r.doc;
+    const kept = { ...rest, ...(isOwnRunStamp(ownRun) ? { ownRun } : {}), ...(isFailureCount(probeFailures) ? { probeFailures } : {}) };
+    if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === undefined && typeof r.doc.phase === "string" ? "v1" : null;
 }
@@ -169,6 +181,9 @@ export interface StatusWrite {
   published?: string[];
   /** a probe's own run: who started it (carried forward by that probe's own writes, and by a write that ends the run) */
   ownRun?: OwnRunStamp;
+  /** the write records a failed probe attempt (exit 3/4) of the run: probeFailures + 1, counted under the status lock;
+   *  the PROBE_ATTEMPTS-th is written `failed` whatever `phase` says, and the detail names the attempt (probeAttemptNote) */
+  probeFailed?: boolean;
 }
 /** A status write for a run that has already ended (done/failed/blocked): refused by writeStatus itself, so a writer
  *  that checked at its start (the probe, up to its time budget earlier) cannot reopen the run with a late write. */
@@ -279,8 +294,9 @@ export interface StatusWriteHooks {
 const STATUS_LOCK = { waitMs: 15_000 };
 /**
  * Write the LIVE status of `<base>` atomically (never into the project's watched tree). rev = the previous rev + 1
- * when it is the same run, else 1. Within one run the shas and the published list carry forward (a `driving`
- * write after the probe's `measured` still names the measured file the probe wrote; published is the run's union).
+ * when it is the same run, else 1. Within one run the shas, the published list and the failed probe attempts carry
+ * forward (a `driving` write after the probe's `measured` still names the measured file the probe wrote; published is
+ * the run's union); a write with probeFailed counts one more attempt, and the PROBE_ATTEMPTS-th ends the run `failed`.
  * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run (and open-run) check → hooks.before → write → hooks.after
  * happen with no other status write of this screen in between, so two writers never write the same rev and a run
  * that ends is not reopened, published into or given files by a writer that checked it earlier. With hooks.alone, another
@@ -326,12 +342,18 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     // a probe's own run stays one only through that probe's own writes (`alone`), or a write that ends it: a writer that
     // continues the run (an orchestrator's --status without --run, a verifier's probe --run) adopts it — no later probe
     // may take it for abandoned while they work in it
-    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : undefined);
+    // the run's failed probe attempts carry forward; one more is counted here, under the lock, so two probes of the
+    // run never count the same attempt — and the last one ends the run
+    const failures = w.probeFailed ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
+    const phase: StatusPhase = w.probeFailed && failures !== undefined && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
+    const detail = w.probeFailed && failures !== undefined ? `${w.detail ?? ""} (${probeAttemptNote(failures)})` : w.detail ?? "";
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : undefined);
     const doc: VerifyStatusV2 = {
-      schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase: w.phase, detail: w.detail ?? "", at: new Date().toISOString(), by: w.by,
+      schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase, detail, at: new Date().toISOString(), by: w.by,
       ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
       ...(published !== undefined ? { published } : {}),
       ...(ownRun !== undefined ? { ownRun } : {}),
+      ...(failures !== undefined ? { probeFailures: failures } : {}),
     };
     put(doc);
     hooks.after?.(doc);

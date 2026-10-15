@@ -18,6 +18,7 @@ import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
+import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
@@ -103,9 +104,15 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 
 // async spawn (runNode in ./pool.ts): the server above lives in THIS process, so a spawnSync would block it from answering
 // These runs check measuring, not behaviour — `--behaviour off` keeps them fast (test/verify-probe-behaviour-e2e.test.ts
-// runs the behaviour checks)
+// runs the behaviour checks); the probe takes it only with the test-only env var
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
-const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, behaviourOff(args));
+// The staff-directory pages leave the frame root untagged (the probe finds it by size and fill), so the frame tag the
+// probe waits for by default never shows there: those runs pass --ready none. The shell-rings and loom pages tag their
+// root and keep the default.
+const TAGGED_ROOT = /\/(shell-rings|loom-queue-owner-hover)\.html$/;
+const readyNone = (args: string[]): string[] =>
+  args.includes("--check") || args.includes("--ready") || TAGGED_ROOT.test(args[args.indexOf("--url") + 1] ?? "") ? args : [...args, "--ready", "none"];
+const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, readyNone(behaviourOff(args)), 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
 // (a probe without --run keeps its run's status in the run cache of the expectation's dir — tmp has no package.json, so
 // that is <os tmpdir>/designtwin-verify/<key>/: removed with tmp)
 const finish = (): void => {

@@ -118,11 +118,13 @@ page and browser of the app you opened (§2): the probe writes into `design/veri
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
   --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> --run <id> \
-  [--ready '[data-dt-node="<frame id>"]'] [--steps design/plan/<screen>.json]
+  [--steps design/plan/<screen>.json]
 ```
 
-When the plan has a `navigate` list, pass the plan as `--steps`, with `--ready` on the screen root's tag
-(`probe-driving.md` has the step vocabulary and which page loads are a step's own). Rebuild a preview or static
+Pass the screen's plan as `--steps` (a plan with no `navigate` list runs no steps). After every load the probe waits
+for the screen root's tag `[data-dt-node="<frame id>"]` — its default `--ready` — so a login bounce or another
+section is an exit 4, never measured (`probe-driving.md` has the step vocabulary and which page loads are a step's
+own). Rebuild a preview or static
 build before measuring it. The probe writes `design/verify/<Screen>.measured.json` and `<Screen>.png`, including
 `expectationSha256`, the probe's identity, `matchedBy` per node, `notMeasured` and the hover/focus states of every
 spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured` status itself. Always pass your
@@ -133,8 +135,9 @@ spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured
 - **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
   **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
   out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes, or `--max-time`, or
-  the page or browser closed or crashed; nothing written) → re-run once, then report the navigation log it printed —
-  never a retry loop. Only the reload-during-measurement message points at the dev-server watch; the in-place-click one
+  the page or browser closed or crashed; nothing written) → the probe counts the failed attempt in your run's
+  status: after the first (`failed probe attempt 1 of 2`) re-run it once; the second ends the run `failed` itself —
+  do not write that status, report the navigation log it printed — never a retry loop. Only the reload-during-measurement message points at the dev-server watch; the in-place-click one
   names the step to change. A closed or crashed page or browser prints no navigation log: if it recurs on the re-run,
   run `--check` and report its output.
 - **Untagged nodes** come back in `notMeasured` with the reason "tag it". Report them for the builder to tag
@@ -154,7 +157,7 @@ spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured
   once the caller has compared, and do not re-drive the battery the probe ran. Never accept "the tool cannot
   emulate forced colours" — the probe emulates it; a `not-run` or `unsupported` row is the only reason
   to look by hand. By hand, and only when asked: delete-confirm focus, disabled-while-focused and route changes.
-  Never pass `--behaviour off`.
+  The probe refuses `--behaviour off` outside its own tests.
 
 **Native stacks: match and read the keys yourself**, as `native-measuring.md` says — the stack's tag first, then a
 structural match you name in `matchedBy`; every node you could not find goes in `notMeasured`.

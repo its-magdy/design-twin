@@ -18,7 +18,9 @@
 // Every measurement belongs to a run, named in the measured file: --run <id>'s, else one the probe starts itself and
 // ends (`done`, or `failed` on an exit 3/4) — never beside another open run of the screen (a verifier's writes the same
 // files). The probe writes the run's status itself — `measuring` before the browser starts, `measured` (its own run:
-// `done`) + the measured file's sha256 after it is closed, and nothing while a page is open. Files are
+// `done`) + the measured file's sha256 after it is closed, and nothing while a page is open; with --run it counts its
+// own failed attempts (exit 3/4) and ends the run `failed` at the second. Every load waits for --ready, by default
+// the frame's tag, so a redirect or another section is never measured as the screen. Files are
 // written atomically, the screenshot first and measured.json last (a reader that sees the measured file
 // sees its picture); measured.build records what was served (to expose a stale preview).
 //
@@ -27,7 +29,7 @@
 // (probe-drive.ts → measured.interactions); the built frame is captured once more at the reference's scale
 // (probe-visual.ts; a reference-less expectation skips it; `--behaviour off` does not) and diffed against the Figma
 // reference in Node after the browser is closed (visual-diff.ts → measured.visual, <out>.diff.png); and the
-// behaviour/accessibility checks run (probe-behaviour.ts → measured.behaviour; `--behaviour off` skips them; the
+// behaviour/accessibility checks run (probe-behaviour.ts → measured.behaviour; `--behaviour off`, test-only, skips them; the
 // browser is closed capped — CDP Browser.close, then close — because the units run arbitrary page code). The
 // reference PNG is read from the project that owns the expectation (the directory above design/verify/ of
 // --expected, else --project — a monorepo).
@@ -51,7 +53,7 @@ import { spawnSync } from "node:child_process";
 import { PROC_HOST, killChildTree, parentPid, taskkillCapped, type ProcHost } from "./kill-tree.ts";
 import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements } from "./probe-page.ts";
 import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
-import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
+import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-shared.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
@@ -67,7 +69,7 @@ import { CLOSE_STEP_CAP_MS, KILL_STEP_CAP_MS, behaviourBudget, runBehaviour } fr
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, openRun, publishStatus, readStatus, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, openRun, probeAttemptNote, publishStatus, readStatus, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
 import { LockBusy, LockLost, thisProcess } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run.ts";
@@ -1047,10 +1049,12 @@ export function behaviourLine(b: MeasuredBehaviour): string {
 }
 
 // ---------------------------------------------------------------- CLI
+/** The test-only switch that lets --behaviour off through: a run without the behaviour checks is no verification. */
+export const BEHAVIOUR_OFF_ENV = "DESIGNTWIN_TEST_BEHAVIOUR_OFF";
 const USAGE =
   "usage:\n" +
   `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
-  "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
+  "      [--ready <selector> | none] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
   "      [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]\n" +
   "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path → alias →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
@@ -1067,11 +1071,18 @@ const USAGE =
   "      (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an\n" +
   "      error). The probe writes the run's LIVE status (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
-  "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed; with --run an\n" +
-  "      exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that\n" +
+  "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed. With --run an\n" +
+  "      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run,\n" +
+  "      the second ends the run `failed` — the probe writes it (a `status run <id> …` line on stderr says which). A --run that\n" +
+  "      already ended (done/failed/blocked) is refused before anything starts, and a run that\n" +
   "      ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).\n" +
   "      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).\n" +
-  "      --steps: a JSON list of steps (or a plan whose `navigate` holds them) replayed after every page load, before --ready,\n" +
+  "      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring —\n" +
+  "      by default the frame's tag [data-dt-node=\"<frame id>\"] (expectation.frame.nodeId), so a page that is not the screen\n" +
+  "      (a login redirect, another section) is an exit 4, never measured; --ready none waits for nothing. With no frame id in\n" +
+  "      the expectation there is no default (a note says so). Not visible within --timeout → exit 4.\n" +
+  "      --steps: a JSON list of steps (or a plan whose `navigate` holds them; a plan with none is no steps — a note says so)\n" +
+  "      replayed after every page load, before --ready,\n" +
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
   "      {\"goto\": \"/same-origin/path\"}. A click's selector must match exactly one visible element (a waitFor's at least one);\n" +
   "      a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a\n" +
@@ -1083,7 +1094,8 @@ const USAGE =
   "      Then the behaviour/accessibility checks run, each unit on a fresh page within min(90 s, what --max-time leaves less\n" +
   "      20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,\n" +
   "      1024/320 px widths, and the keyboard/scroll battery on modal overlays — measured.behaviour (+ <out>.forced-colors.png),\n" +
-  "      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).\n" +
+  "      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so) — for the\n" +
+  `      probe's own tests only: it needs ${BEHAVIOUR_OFF_ENV}=1 in the environment, else exit 2.\n` +
   "      Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the\n" +
   "      reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png\n" +
   "      (informational — never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/… PNG is read\n" +
@@ -1097,7 +1109,8 @@ const USAGE =
   "      screen is open, or replaced its own — also instead of a 3 or 4 · 3\n" +
   "      renderer unavailable (ask the user to install; never installed here) · 4 the page kept navigating / reloaded twice\n" +
   "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /\n" +
-  "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
+  "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written; with --run the\n" +
+  "      second failed attempt has ended the run `failed`).";
 
 const MAX_TIME_DEFAULT = 180_000;
 /** The largest --max-time: setTimeout's own bound (a 32-bit signed delay; a longer one fires at once). */
@@ -1165,6 +1178,32 @@ export function measuredRefusedWhy(by: StatusRefusal, runId: string, phase: "mea
   return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
 }
 
+/** The stderr line after a failed probe attempt (exit 3/4) of a --run run was counted in its status. */
+export function probeAttemptLine(doc: Pick<VerifyStatusV2, "runId" | "phase" | "probeFailures">): string {
+  const note = probeAttemptNote(doc.probeFailures ?? 0);
+  return doc.phase === "failed" ? `status run ${doc.runId} failed — ${note} (a retry is a new run: --new-run)`
+    : `status run ${doc.runId} ${doc.phase} — ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
+}
+
+/** --ready's value that waits for nothing. */
+export const READY_NONE = "none";
+/** What the probe waits for after every load (and after the steps): --ready's selector; without --ready the frame's
+ *  tag `[data-dt-node="<frame id>"]` — a page that shows something else (a login redirect, the app's default section)
+ *  is then an exit 4, not a measurement of the wrong page; `--ready none` waits for nothing. With no frame id in the
+ *  expectation there is no default (the note says so). */
+export function readyOf(flag: string | undefined, frameId: string | undefined): { ready?: string; note: string } {
+  if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
+  if (flag !== undefined) return { ready: flag, note: `ready  ${flag}` };
+  if (frameId === undefined || frameId === "") return { note: "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)" };
+  const ready = attrSelector(frameId);
+  return { ready, note: `ready  ${ready} (the frame's tag, the default; --ready <selector> or --ready none to change it)` };
+}
+/** The exit-4 hint when the default --ready (the frame's tag) never showed. */
+export function defaultReadyMissed(ready: string): string {
+  return `${ready} is the default --ready (the frame's tag): the page the probe reached is not the screen (a redirect such as a login page, ` +
+    `another section — reach it with --steps), or the screen root is not tagged ${ready.slice(1, -1)}; pass --ready <selector> for another root, or --ready none to wait for nothing`;
+}
+
 /** The probe's own run (no --run) while it is open: armed once its `measuring` write is recorded (with how to end it),
  *  disarmed once a write ends it or says the run is over for this probe. */
 interface OwnRunGuard { arm(end: (detail: string) => void): void; disarm(): void }
@@ -1221,9 +1260,13 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   if (!Number.isFinite(maxTime) || maxTime <= 0 || maxTime > MAX_TIME_LIMIT) {
     console.error(`verify-probe: --max-time must be a positive number of milliseconds, at most ${MAX_TIME_LIMIT}\n${USAGE}`); return 2;
   }
-  // a visible switch (never used by the skills) — the measured file then says behaviour did not run and why
+  // a switch for the probe's own tests only (the env var) — the measured file then says behaviour did not run and why
   if (f.behaviour !== undefined && f.behaviour !== "on" && f.behaviour !== "off") { console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'\n${USAGE}`); return 2; }
   if (f.behaviour !== undefined && f.check) { console.error(`verify-probe: --behaviour does not apply to --check\n${USAGE}`); return 2; }
+  if (f.behaviour === "off" && process.env[BEHAVIOUR_OFF_ENV] !== "1") {
+    console.error(`verify-probe: --behaviour off is for the probe's own tests (${BEHAVIOUR_OFF_ENV}=1) — a run without the behaviour checks is not a verification\n${USAGE}`); return 2;
+  }
+  if (f.ready !== undefined && f.ready.trim() === "") { console.error(`verify-probe: --ready must be a selector or none, got '${f.ready}'\n${USAGE}`); return 2; }
   const behaviourOn = f.behaviour !== "off";
   if (f.run !== undefined && (f.check || !/^[\w.:-]+$/.test(f.run))) {
     console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}\n${USAGE}`); return 2;
@@ -1240,8 +1283,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     if ("error" in r) { console.error(`verify-probe: --steps '${f.steps}' ${r.error}`); return 2; }
     const parsed = parseSteps(r.doc);
     if ("error" in parsed) { console.error(`verify-probe: --steps '${f.steps}' ${parsed.error}\n${USAGE}`); return 2; }
-    steps = parsed.steps;
-    stepsSource = `--steps ${(path.relative(process.cwd(), path.resolve(f.steps)) || f.steps).split(path.sep).join("/")}`;
+    // a plan with no navigate list: the screen is reached by --url alone — no steps, no reach recorded
+    if (parsed.noNavigate) console.error(`note  --steps '${f.steps}' is a plan with no \`navigate\` list — no steps run: the screen is measured where --url lands`);
+    else {
+      steps = parsed.steps;
+      stepsSource = `--steps ${(path.relative(process.cwd(), path.resolve(f.steps)) || f.steps).split(path.sep).join("/")}`;
+    }
   }
   let expectation: Expectation | null = null, expBytes: Buffer | null = null;
   let viewport = { w: 1280, h: 800 };
@@ -1259,6 +1306,8 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size — measured at 1280x800; pass --viewport");
   }
+  // what every load waits for: --ready, else the frame's tag (--check measures nothing: no wait)
+  const readyPick = f.check ? null : readyOf(f.ready, expectation?.frame?.nodeId);
 
   const outBase = f.out ?? (f.expected ? path.join(path.dirname(f.expected), path.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
   // the run's status is the one of the expectation's verify dir (design/verify/<S>), even when --out stages
@@ -1300,15 +1349,19 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       return "refused";
     }
   };
-  // an exit 3/4: with --run the status says so (rev bumped, phase stays measuring — the one allowed re-run follows in
-  // that run); a run of its own that started ends `failed` (a re-run starts a new one). Any other non-zero exit, a throw
-  // or a stop signal ends its own run in main.
+  // an exit 3/4: with --run the status counts it as a failed probe attempt of that run (writeStatus, under the lock) —
+  // the first leaves the run at measuring for the one re-run, the PROBE_ATTEMPTS-th ends it `failed`; a run of its own
+  // that started ends `failed` at once (a re-run starts a new one). Any other non-zero exit, a throw or a stop signal
+  // ends its own run in main.
   const ended = (code: number): number => {
     if (runId !== undefined && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
-      const w: StatusWrite = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`, ...(expSha ? { expectationSha256: expSha } : {}) };
-      const wrote = status(w);
+      const w: StatusWrite = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`,
+        ...(expSha ? { expectationSha256: expSha } : {}), ...(ownRun ? {} : { probeFailed: true }) };
+      const rec: { doc?: VerifyStatusV2 } = {};
+      const wrote = status(w, { after: (d) => { rec.doc = d; } });
       if (ownRun) own.disarm();
       if (wrote === "over") return 2;
+      if (rec.doc?.probeFailures !== undefined && !ownRun) console.error(probeAttemptLine(rec.doc));
     }
     return code;
   };
@@ -1332,6 +1385,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     });
   }
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
+  if (readyPick) console.error(readyPick.note);
 
   // one bound over launch → measure → close. Past it the browser is closed (at most 10 s more) and nothing is written.
   const held: { browser?: Browser; timedOut?: boolean } = {};
@@ -1357,12 +1411,18 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     }
 
     let run: ProbeRun;
-    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(f.ready !== undefined ? { ready: f.ready } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}) };
+    const ready = readyPick?.ready;
+    const probeOpts: ProbeOptions = { expectation, url: f.url, ...(ready !== undefined ? { ready } : {}), viewport, position: !!f.position, timeout, ...(steps.length ? { steps } : {}) };
     try {
       run = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => undefined);
-      if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
+      if (e instanceof UnreachableError) {
+        // the default --ready that never showed: the page is not the screen (a redirect, another section), or its root is untagged
+        const byDefault = f.ready === undefined && ready !== undefined && e.message.startsWith(`--ready '${ready}'`);
+        console.error(`verify-probe: ${e.message} — nothing written.` + (byDefault ? `\n  ${defaultReadyMissed(ready)}` : ""));
+        return 4;
+      }
       // runProbe answers a page gone during measurement with browser-gone itself; this is one gone outside it (the context
       // or page could not be opened) — the same exit 4. After the watchdog's close it is that close, which said so itself.
       if (pwErrorKind(e) === "gone") {

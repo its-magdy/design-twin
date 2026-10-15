@@ -63,7 +63,8 @@ A screen picked by state, not URL, gets `plan.navigate`: a short list of `{"clic
 `{"waitFor": "<selector>"}` / `{"goto": "/same-origin/path"}` steps that take a fresh page to it (each `click`
 selector matches exactly one visible element, a `waitFor` at least one; no typing, no submitting — the probe
 replays them many times; a `click` changes the page in place or navigates to another URL, never reloads the one it
-is on). Step 5 passes the plan as `--steps` with `--ready` on the screen root's tag.
+is on). Step 5 passes the plan as `--steps`, and the probe waits for the screen root's tag (its default `--ready`) —
+so tag the root with the frame id.
 
 ## An interaction the export cannot express (`plan.interactions`)
 

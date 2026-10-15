@@ -431,6 +431,53 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] an unreadable --expected → exit 2 before any browser work", () => badVp.status === 2 && /does not exist/.test(badVp.stderr));
 
+  // --ready defaults to the frame's tag; --ready none opts out; a probe of that stubbed project ends at exit 4 after it
+  // printed what it waits for
+  const DEFAULT_READY = "ready  [data-dt-node=\"1:1\"] (the frame's tag, the default; --ready <selector> or --ready none to change it)";
+  t("[ready] without --ready the probe waits for the frame's tag — 'ready  [data-dt-node=\"1:1\"] (the frame's tag, the default; …)' on stderr", () => goneRun.stderr.includes(DEFAULT_READY));
+  const readyNone = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", "none"], { encoding: "utf8" });
+  t("[ready] --ready none → 'ready  none (--ready none): the page is measured once it is quiet', no default line; it goes on (exit 4 from the stub)", () =>
+    readyNone.status === 4 && readyNone.stderr.includes("ready  none (--ready none): the page is measured once it is quiet") && !readyNone.stderr.includes("the frame's tag, the default"));
+  const readyEmpty = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", " "], { encoding: "utf8" });
+  t("[ready] --ready ' ' → exit 2 \"--ready must be a selector or none, got ' '\"", () => readyEmpty.status === 2 && readyEmpty.stderr.startsWith("verify-probe: --ready must be a selector or none, got ' '"));
+  t("[ready] readyOf: the default is the frame's tag (quoted for CSS); an explicit selector is kept; none waits for nothing; no frame id → no default, said so", () => {
+    const d = VP.readyOf(undefined, "1:2"), q = VP.readyOf(undefined, "a\"b"), x = VP.readyOf("#app", "1:2"), n = VP.readyOf("none", "1:2"), u = VP.readyOf(undefined, undefined);
+    return d.ready === "[data-dt-node=\"1:2\"]" && q.ready === "[data-dt-node=\"a\\\"b\"]" && x.ready === "#app" && x.note === "ready  #app" && n.ready === undefined && u.ready === undefined
+      && u.note === "note  the expectation names no frame node id, so there is no --ready default — the page is measured once it is quiet (pass --ready <selector>)";
+  });
+  t("[ready] the exit-4 hint of a default --ready that never showed names the redirect, the untagged root and both ways out", () =>
+    VP.defaultReadyMissed("[data-dt-node=\"1:2\"]") === "[data-dt-node=\"1:2\"] is the default --ready (the frame's tag): the page the probe reached is not the screen (a redirect such as a login page, " +
+      "another section — reach it with --steps), or the screen root is not tagged data-dt-node=\"1:2\"; pass --ready <selector> for another root, or --ready none to wait for nothing");
+
+  // --steps with a plan that has no navigate list: no steps, a note — never exit 2
+  const planNoNav = path.join(goneProj, "plan-no-nav.json");
+  fs.writeFileSync(planNoNav, JSON.stringify({ screen: "Orders", route: "/orders" }));
+  const noNav = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNoNav], { encoding: "utf8" });
+  t("[steps] --steps <plan with no navigate> → not exit 2: the note \"--steps '<plan>' is a plan with no `navigate` list — no steps run: the screen is measured where --url lands\", the probe goes on (exit 4 from the stub)", () =>
+    noNav.status === 4 && noNav.stderr.includes(`note  --steps '${planNoNav}' is a plan with no \`navigate\` list — no steps run: the screen is measured where --url lands`) && !/holds no/.test(noNav.stderr));
+  const planNullNav = path.join(goneProj, "plan-null-nav.json");
+  fs.writeFileSync(planNullNav, JSON.stringify({ screen: "Orders", navigate: null }));
+  const nullNav = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNullNav], { encoding: "utf8" });
+  t("[steps] a plan whose navigate is not a list → still exit 2 'holds a `navigate` that is not a list'", () =>
+    nullNav.status === 2 && nullNav.stderr.includes(`verify-probe: --steps '${planNullNav}' holds a \`navigate\` that is not a list`));
+
+  // --behaviour off only with the test-only env var
+  const { [VP.BEHAVIOUR_OFF_ENV]: _off, ...envNoOff } = process.env;
+  const offRefused = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: envNoOff });
+  t("[behaviour] --behaviour off without DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 → exit 2 before any run or browser: \"--behaviour off is for the probe's own tests (DESIGNTWIN_TEST_BEHAVIOUR_OFF=1) — …\"", () =>
+    offRefused.status === 2 && offRefused.stderr.startsWith("verify-probe: --behaviour off is for the probe's own tests (DESIGNTWIN_TEST_BEHAVIOUR_OFF=1) — a run without the behaviour checks is not a verification\n")
+    && !/^run {4}/m.test(offRefused.stderr));
+  const offOk = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: { ...envNoOff, [VP.BEHAVIOUR_OFF_ENV]: "1" } });
+  t("[behaviour] …with DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 it is accepted (the probe goes on: exit 4 from the stub)", () => offOk.status === 4 && !/--behaviour off is for/.test(offOk.stderr));
+  const helpText = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
+  t("[help] --help names --ready <selector> | none and its default, the plan with no navigate, the counted --run failures, and the env var --behaviour off needs", () =>
+    helpText.status === 0 && helpText.stdout.includes("[--ready <selector> | none]") && helpText.stdout.includes("by default the frame's tag [data-dt-node=\"<frame id>\"]")
+    && helpText.stdout.includes("a plan with none is no steps") && helpText.stdout.includes("the second ends the run `failed` — the probe writes it")
+    && helpText.stdout.includes("it needs DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 in the environment, else exit 2"));
+  t("[run] probeAttemptLine: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
+    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
+    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+
   // --browser-path is checked first — before the project's Playwright is resolved (`none` has none) or a browser
   // launched: a missing path, a directory (a macOS .app), a file that is not executable → exit 3, one line, no stack
   const notExec = path.join(tmp, "not-executable");

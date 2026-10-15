@@ -387,14 +387,15 @@ Copy this checklist into your notes and keep it updated:
      ```
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify/<Screen>
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json \
-       --url <url> --out design/verify/<Screen> [--steps design/plan/<screen>.json --ready '[data-dt-node="<frame id>"]']   # web: renders, measures every node, writes <Screen>.measured.json + .png
+       --url <url> --out design/verify/<Screen> [--steps design/plan/<screen>.json]   # web: renders, measures every node, writes <Screen>.measured.json + .png
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
        design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json --out design/verify/<Screen>
      ```
 
      Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan as
-     `--steps` whenever it has `navigate`, with `--ready` on the screen root's tag (a step's click can land on another
-     page — a login bounce — and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
+     `--steps` (one with no `navigate` runs no steps); after every load the probe waits for the screen root's tag
+     (`--ready` defaults to `[data-dt-node="<frame id>"]`: a step's click can land on another page — a login bounce —
+     and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
      and the plan's `expect: "dialog"` rows itself (evidence only: `ok: true` or `ok: null`, never `ok: false`);
      the verifier does not re-drive those. A page that scrolls sideways at the design width is a high waivable
      delta (`overflowX`) on the root frame.
