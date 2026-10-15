@@ -47,8 +47,8 @@ const jrDoc = read(screen(JR), isScreenExport);
 const r = run([screen(JR), vars(JR), DS]);
 const plan = planOf(r.stdout);
 const hid = hiddenIds(jrDoc);
-check(`45 tokens — every variable the screen binds (PHASE2-TOKENS.md: 45 distinct) — got ${plan.tokens.length}`, r.status === 0 && plan.tokens.length === 45);
-check(`51 visible instances (scripts-test/out/components/mapping.md: 51) — got ${plan.components.length}`, plan.components.length === 51);
+check(`45 tokens — every variable the screen binds (45 distinct in its .vars.json) — got ${plan.tokens.length}`, r.status === 0 && plan.tokens.length === 45);
+check(`51 visible instances (the export's own count) — got ${plan.components.length}`, plan.components.length === 51);
 check(`0 hidden ids in anchors{} (of ${hid.size} hidden nodes in the export)`, hid.size === 129 && Object.keys(plan.anchors).filter((id) => hid.has(id)).length === 0);
 check("anchors{} holds EVERY visible node — 254 = 383 nodes − 129 hidden — each with mapModule empty",
   Object.keys(plan.anchors).length === 254 && Object.values(plan.anchors).every((a) => a.mapModule === "" && a.name !== undefined && a.type));
@@ -184,7 +184,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
 {
   const gp = planOf(run([screen(GP), vars(GP), DS]).stdout);
   const gh = hiddenIds(read(screen(GP), isScreenExport));
-  check(`Guided Policies (1359:21337): 50 tokens (PHASE2-TOKENS.md: 50), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
+  check(`Guided Policies (1359:21337): 50 tokens (50 distinct in its .vars.json), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
     gp.tokens.length === 50 && gp.components.length === 42 && Object.keys(gp.anchors).length === 207 && Object.keys(gp.anchors).every((id) => !gh.has(id)));
 }
 check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node", (() => {
@@ -207,13 +207,13 @@ check("an unknown flag is refused (exit 2), not swallowed", run([screen(JR), var
   check("[shape] a screen argument that is not a screen export -> 'cannot read the screen JSON …: is not a screen export', exit 1",
     r1.status === 1 && /plan-skeleton: cannot read the screen JSON .*notscreen\.json: is not a screen export/.test(r1.stderr) && r1.stdout === "");
   const r2 = run([screen(JR), vars(JR), DS, "--map", put("map.json", { version: 1, components: { K: { figma: { key: "K" } } } })]);
-  check("[shape] an invalid --map is refused, one line (was: read blindly, every instance silently unmapped)",
+  check("[shape] an invalid --map is refused, one line (not read blindly, with every instance silently unmapped)",
     r2.status === 1 && /plan-skeleton: cannot read the component map .*map\.json: is not a valid component map/.test(r2.stderr));
   const ds = path.join(dir, "ds");
   fs.mkdirSync(ds);
   fs.writeFileSync(path.join(ds, "tokens.json"), "{ not json");
   const r3 = run([screen(JR), vars(JR), ds]);
-  check("[shape] a design-system tokens.json that is there but broken is refused (was: silently no design system)",
+  check("[shape] a design-system tokens.json that is there but broken is refused (not silently no design system)",
     r3.status === 1 && /cannot read the design system's tokens .*tokens\.json: is not valid JSON/.test(r3.stderr));
   const planFile = put("plan.json", { tokens: "none" });
   const r4 = run([screen(JR), vars(JR), DS, "--out", planFile]);
@@ -262,8 +262,8 @@ console.log("auditGate is pre-filled from an existing Blocked audit:");
     merged.status === 0 && after.auditGate?.overridden.length === 5 && after.auditGate.reason === "provenance issues, not build issues" && after.auditGate.decidedBy === "owner");
 
   // the gate points at the cross-check report beside the audit, and a merge REFRESHES the skeleton-owned
-  // blockers (the audit's current ids) while keeping the person-owned decision. Before: `prev.auditGate ||
-  // fresh.auditGate` froze the first run's ids, and there was no crossCheckFile.
+  // blockers (the audit's current ids) while keeping the person-owned decision. Not `prev.auditGate ||
+  // fresh.auditGate`, which would freeze the first run's ids.
   check("no <audit>.cross.json beside the audit: auditGate.crossCheckFile is null", p.auditGate?.crossCheckFile === null);
   fs.writeFileSync(path.join(auditCwd, "design", "audit", "Studio_Configurations.cross.json"), JSON.stringify({ summary: {}, findings: [] }));
   const stale = Object.assign({}, p, { auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked",
@@ -482,7 +482,7 @@ console.log("anchorsSuggested names the anchors worth filling first:");
 // ---------------------------------------------------------------- one name rule (shared fixture with cross-check)
 // test/fixtures/g14/dt27/ (cross-check.test.ts asserts the same verdicts on its coverage entries): the plan's
 // components[].catalog must say what component-match's nameVerdict says — `by:"ambiguous"` (never a match,
-// with the candidates) for a different-signatures tie. Before: Badge was written as a name match.
+// with the candidates) for a different-signatures tie. Badge is not written as a name match.
 console.log("plan-skeleton's catalog follows the one name rule (nameVerdict):");
 {
   const DT27 = path.join(import.meta.dirname, "fixtures", "g14", "dt27");

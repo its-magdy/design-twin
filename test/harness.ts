@@ -373,8 +373,8 @@ const src = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin",
 const context: Record<string, unknown> = { figma, __html__: "<ui/>", Promise, JSON, Math, Array, Object, Symbol, Map, Set, Date, console, parseInt, Number, String, Boolean, isNaN, undefined };
 vm.createContext(context);
 vm.runInContext(src, context);
-// code.js is now an esbuild IIFE bundle (TypeScript source in figma-plugin/src/). It exposes the
-// read API on a namespaced global; lift those onto the sandbox so the assertions below read as before.
+// code.js is an esbuild IIFE bundle (TypeScript source in figma-plugin/src/). It exposes the
+// read API on a namespaced global; lift those onto the sandbox so the assertions below read plainly.
 Object.assign(context, context.__designExport || {});
 // The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi).
 // Narrowed by a runtime check — every API member present as a function, `figma` the fake passed in —
@@ -418,7 +418,7 @@ const sandbox: Sandbox = context;
     primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
   const aroundOut = await sandbox.serialize(aroundFrame, 0, false);
   ok("[SPACE_AROUND] -> justifyContent: space-around", aroundOut.layout?.justifyContent === "space-around");
-  // counterAxisAlignItems still maps as before (unaffected by the SPACE_EVENLY/SPACE_AROUND addition).
+  // counterAxisAlignItems maps independently of SPACE_EVENLY/SPACE_AROUND.
   const counterFrame = { type: "FRAME", name: "Counter", visible: true, id: "al:3", width: 100, height: 20,
     layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "MIN", counterAxisAlignItems: "CENTER", children: [] };
@@ -539,7 +539,7 @@ const sandbox: Sandbox = context;
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
-  ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
+  ok("COLUMNS grid keeps its sectionSize as `size` (not just GRID's cell size)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   const abs0 = flatPaint(must(abs.fills?.[0], "abs.fills[0]"));
@@ -560,7 +560,7 @@ const sandbox: Sandbox = context;
   ok("background_blur no offset", rectE1.type === "background_blur" && flatEffect(rectE1).offset === undefined);
   ok("per-corner radius (mixed fallback)", !!(rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined));
 
-  // Two things used to land in `radius` that a builder then copied verbatim into CSS.
+  // Two things never land in `radius`, which a builder copies verbatim into CSS.
   const pill = await sandbox.serialize(
     { type: "RECTANGLE", name: "Pill", visible: true, id: "r:full", width: 120, height: 32,
       absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 32 }, cornerRadius: 1000000000 }, 0, false);
@@ -621,7 +621,7 @@ const sandbox: Sandbox = context;
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
   // The one documented gap (see collect.ts) is a consuming file's: its library (remote) variables are only
   // the ones it references. This mock DEFINES its tokens (no remote variable), so the line would be false
-  // here and must be absent; the consuming case (one remote variable) is pinned in [RD-alias] below.
+  // here and must be absent; the consuming case (one remote variable) is pinned in [ALIAS] below.
   ok("a file with no remote variable gets no 'consumes libraries' hygiene line (its catalog is its own)",
     !dsOnly.designSystem.variables.some((v) => v.remote === true) &&
     !dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables|consumes libraries|--as-library/.test(h)));
@@ -696,8 +696,8 @@ const sandbox: Sandbox = context;
   ok("component description captured", !!(btnComp && btnComp.description === "Primary action button"));
   ok("INSTANCE_SWAP preferredValues captured", !!(btnComp && btnComp.props?.Icon && btnComp.props.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props.Icon.preferredValues) && btnComp.props.Icon.preferredValues.length === 2));
 
-  // --- READ additions (verified vs developers.figma.com 2026-07-23): bug fix + HIGH tier + MED ---
-  // BUG FIX: progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (were dropped).
+  // --- READ additions (verified vs developers.figma.com 2026-07-23): HIGH tier + MED ---
+  // progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (kept, not dropped).
   const absEffect0 = flatEffect(must(abs.effects?.[0], "abs.effects[0]"));
   ok("progressive blur endOffset Vector kept", !!(absEffect0.blurType === "progressive" && absEffect0.endOffset && absEffect0.endOffset.y === 1));
   const absEffect1 = must(abs.effects?.[1], "abs.effects[1]");
@@ -752,8 +752,8 @@ const sandbox: Sandbox = context;
   const tblCell00 = tbl.tableCells?.[0]?.[0];
   ok("table cells traversed via cellAt", Array.isArray(tbl.tableCells) && tbl.tableCells.length === 2 && tblCell00 !== undefined && tblCell00.text === "r0c0");
 
-  // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
-  // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
+  // --- READ additions (2026-07-23 fresh 3-agent doc audit): grid fidelity + prop/style bindings ---
+  // textDecorationThickness/Offset are { value:number, unit } — .value IS the number (not .value.value, which would always drop it).
   ok("text decoration thickness (value+unit)", !!(txt.runs?.[1]?.font.decorationThickness && txt.runs?.[1]?.font.decorationThickness.value === 2 && txt.runs?.[1]?.font.decorationThickness.unit === "px"));
   ok("text decoration offset (value+unit)", !!(txt.runs?.[1]?.font.decorationOffset && txt.runs?.[1]?.font.decorationOffset.value === 1));
   ok("text decoration skip-ink (only when false)", txt.runs?.[1]?.font.decorationSkipInk === false);
@@ -859,14 +859,14 @@ const sandbox: Sandbox = context;
   ok("text style variable binding (fontSize -> token)", !!(bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad"));
 
   // --- Tier-1 read additions ---
-  // inferredVariables USED to be emitted as `inferredTokens` for every unbound field. It
-  // measured 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
+  // inferredVariables is NOT emitted as `inferredTokens` for every unbound field: it
+  // would measure 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
   // value-coincidence. The mock still SUPPLIES inferredVariables on scrollFrame, so this pins that the
   // extractor ignores it rather than that the fixture stopped providing it.
-  ok("inferredTokens is no longer emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
+  ok("inferredTokens is not emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
   ok("and no inferred* key leaks under another name", !Object.keys(tree).some((k) => /^inferred/.test(k)));
   // css / measurements / pluginData are OPT-IN — off by default.
-  // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
+  // css AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
   // is tiny (4 nodes), so the CSS oracle comes back without an explicit opt-in.
   ok("css auto-on for small single selection", !!(tree.css && tree.css.display === "flex" && tree.css.padding === "16px"));
   ok("pluginData still off by default (not auto-enabled)", tree.pluginData === undefined);
@@ -892,11 +892,11 @@ const sandbox: Sandbox = context;
   ok("motion applied animation style props: VariableAlias value resolves to {aliasOf: <variable name>} (unified with variables.ts)",
     JSON.stringify(style0 && style0.props && style0.props.color) === '{"aliasOf":"easing/emphasized"}');
   const rotTrack = m3?.animations?.ROTATION;
-  ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
+  ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
     rotTrack.tracks?.[0]?.op === "offset" && rotTrack.tracks?.[0]?.keyframes?.[1]?.value === 90));
-  // Indexed collections (fills/strokes keyed by paint index, effects by effect index) used to come out
-  // empty — every value was read as one binding — and were dropped. Pin each shape.
+  // Indexed collections (fills/strokes keyed by paint index, effects by effect index) come out
+  // whole, not empty — each value is read as its own binding, not as one — and are not dropped. Pin each shape.
   const mt = must(m3?.manualTracks, "m3.manualTracks");
   ok("motion scalar track output unchanged (TRANSLATION_X, byte-identical)", JSON.stringify(mt.TRANSLATION_X) ===
     '{"base":0,"keyframes":[{"t":0,"value":0,"easing":{"type":"ease_out"}},{"t":0.5,"value":100,"easing":{"type":"custom_cubic_bezier","cubicBezier":{"x1":0.4,"y1":0,"x2":0.2,"y2":1}}}]}');
@@ -925,7 +925,7 @@ const sandbox: Sandbox = context;
     af0.tracks?.[0]?.op === "scale" && af0.tracks?.[0]?.keyframes?.[1]?.value === 0.5));
   const af2 = an.fills?.["2"];
   const af2Phase = af2 && "properties" in af2 ? af2.properties["shader:phase"] : undefined;
-  // must() only once duration matched — the old && chain never reached `tracks` otherwise
+  // must() only once duration matched — an && chain would never reach `tracks` otherwise
   const af2PhaseTrack0 = af2Phase && af2Phase.duration === 3 ? must(af2Phase.tracks, "af2 shader:phase tracks")[0] : undefined;
   ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2Phase && af2Phase.duration === 3 &&
     af2PhaseTrack0 && af2PhaseTrack0.op === undefined && af2PhaseTrack0.keyframes?.[0]?.value === 6));
@@ -957,7 +957,7 @@ const sandbox: Sandbox = context;
 
   // --- FIX: image-BACKED container (image fill + children) must NOT flatten to a PNG ---
   // A hero/cover-card/banner uses an image as its background but has real children (text, buttons).
-  // Flattening it to a single raster silently dropped all of that; the guard now recurses instead.
+  // Flattening it to a single raster would silently drop all of that; the guard recurses instead.
   const heroFrame = {
     type: "FRAME", name: "Hero", visible: true, id: "hero:0", layoutMode: "VERTICAL",
     width: 375, height: 200, itemSpacing: 8, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
@@ -970,7 +970,7 @@ const sandbox: Sandbox = context;
   ok("image-backed container NOT flattened (no asset)", hero.asset === undefined);
   ok("image-backed container keeps children (text survives)", Array.isArray(hero.children) && hero.children.length === 1 && hero.children[0]?.text === "Welcome");
   ok("image-backed container keeps image as background fill", Array.isArray(hero.fills) && hero.fills.some((f) => flatPaint(f).hash === "abc123"));
-  // A childless image node (a plain image rectangle) still rasterizes to a PNG asset as before.
+  // A childless image node (a plain image rectangle) still rasterizes to a PNG asset.
   const imageRect = { type: "RECTANGLE", name: "Photo", visible: true, id: "img:1",
     fills: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "abc123" }],
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
@@ -996,7 +996,7 @@ const sandbox: Sandbox = context;
   ok("--expect: that TEXT's spec.width === renderBox.w (32.14, the ink), widthFrom renderBox, no height",
     inkSpec?.width === inkText?.renderBox?.w && inkSpec?.width === 32.14 && inkSpec.widthFrom === "renderBox" && inkSpec.height === undefined);
 
-  // --- [RD-noassets] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
+  // --- [NOASSETS] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
   // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it
   // was the only O(nodes) read with no opt-out — getCSSAsync, its cheaper twin, has had one all along.
   // Skipping must be LOUD: a missing `asset` is otherwise indistinguishable from "no graphic here".
@@ -1012,21 +1012,21 @@ const sandbox: Sandbox = context;
   const skipRun = await sandbox.collectSelection({ skipAssets: true });
   const skipCalls = exportCalls;
   const skipNode = must(skipRun.screen.nodes[0], "skipRun.screen.nodes[0]");
-  ok("[RD-noassets] no asset is emitted when skipping", skipNode.asset === undefined);
+  ok("[NOASSETS] no asset is emitted when skipping", skipNode.asset === undefined);
   // The per-ROOT reference screenshot is deliberately still taken: it's one render per exported root
   // (the self-correction image), not the O(nodes) pass that caused the hang. So the contract is
   // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
-  ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
-  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipNode.reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
-  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
-  ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
+  ok("[NOASSETS] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
+  ok("[NOASSETS] the reference screenshot IS still produced", typeof skipNode.reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
+  ok("[NOASSETS] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
+  ok("[NOASSETS] and warned — a missing `asset` must not read as 'no graphic here'",
     skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
 
   const normalRun = await sandbox.collectSelection({});
-  ok("[RD-noassets] DEFAULT is unchanged — the asset still exports",
+  ok("[NOASSETS] DEFAULT is unchanged — the asset still exports",
     typeof must(normalRun.screen.nodes[0], "normalRun.screen.nodes[0]").asset === "string");
 
-  // --- [RD-noassets-shape] a FLATTENED CONTAINER must stay flattened when skipping ---
+  // --- [NOASSETS-SHAPE] a FLATTENED CONTAINER must stay flattened when skipping ---
   // The case above is a childless RECTANGLE — a leaf either way, so it cannot catch the real bug:
   // an `iconLike` CONTAINER (icon-named, <=96px, no TEXT descendant) is normally flattened to ONE
   // svg and serialized as a leaf. When --no-assets returned `undefined` for it, serialize recursed
@@ -1048,21 +1048,21 @@ const sandbox: Sandbox = context;
   const nNode = must(must(must(iconNormal.screen.nodes[0], "iconNormal.screen.nodes[0]").children, "iconNormal tree children")[0], "iconNormal tree children[0]");
   const sNode = must(must(must(iconSkipped.screen.nodes[0], "iconSkipped.screen.nodes[0]").children, "iconSkipped tree children")[0], "iconSkipped tree children[0]");
 
-  ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
+  ok("[NOASSETS-SHAPE] normally the icon container flattens to one asset leaf",
     typeof nNode.asset === "string" && !nNode.children);
-  ok("[RD-noassets-shape] --no-assets keeps it a LEAF — no descent into the icon's vectors",
+  ok("[NOASSETS-SHAPE] --no-assets keeps it a LEAF — no descent into the icon's vectors",
     sNode.asset === undefined && !sNode.children);
-  ok("[RD-noassets-shape] the node count is IDENTICAL to the full export (structure unaffected)",
+  ok("[NOASSETS-SHAPE] the node count is IDENTICAL to the full export (structure unaffected)",
     iconSkipped.screen.manifest.nodes === iconNormal.screen.manifest.nodes);
-  ok("[RD-noassets-shape] and the tree is no larger than the full export's",
+  ok("[NOASSETS-SHAPE] and the tree is no larger than the full export's",
     JSON.stringify(iconSkipped.screen.nodes).length <= JSON.stringify(iconNormal.screen.nodes).length);
   // Per-node, not just a manifest total: a consumer must be able to tell "graphic omitted here" from
   // "this node has no graphic" at the node it cares about.
-  ok("[RD-noassets-shape] the omission is marked ON the node, not only counted",
+  ok("[NOASSETS-SHAPE] the omission is marked ON the node, not only counted",
     sNode.assetSkipped === true);
-  ok("[RD-noassets-shape] the counter matches the exports that would REALLY have happened (1, not 2)",
+  ok("[NOASSETS-SHAPE] the counter matches the exports that would REALLY have happened (1, not 2)",
     iconSkipped.screen.manifest.assetsSkipped === 1);
-  ok("[RD-noassets-shape] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
+  ok("[NOASSETS-SHAPE] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
 
   // ---- asset NAMING and DEDUPE
   // Names came from the node-id PATH, which included the whole instance chain: an app importing 41
@@ -1099,16 +1099,16 @@ const sandbox: Sandbox = context;
     named.assets.every((a) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
   sandbox.figma.currentPage.selection = [iconSheet];
 
-  ok("[RD-noassets] and exportAsync did run when not skipping", exportCalls > skipCalls);
-  ok("[RD-noassets] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
+  ok("[NOASSETS] and exportAsync did run when not skipping", exportCalls > skipCalls);
+  ok("[NOASSETS] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
   // Which OPT-IN reads ran. An absent `codeSyntax`/`annotations`/`measurements` would be
   // indistinguishable from "the read was never asked for", which silently kills two of
   // build-screen's six hint tiers with nothing to say so.
-  ok("[RD-manifest] the manifest names the opt-in reads that actually ran",
+  ok("[MANIFEST] the manifest names the opt-in reads that actually ran",
     Array.isArray(normalRun.screen.manifest.reads));
-  ok("[RD-manifest] an opt-in read that was requested appears in it",
+  ok("[MANIFEST] an opt-in read that was requested appears in it",
     must((await sandbox.collectSelection({ measurements: true })).screen.manifest.reads, "manifest.reads").includes("measurements"));
-  ok("[RD-manifest] one that was not, does not",
+  ok("[MANIFEST] one that was not, does not",
     !must((await sandbox.collectSelection({})).screen.manifest.reads, "manifest.reads").includes("measurements"));
   sandbox.figma.currentPage.selection = prevSelection;
 
@@ -1172,7 +1172,7 @@ const sandbox: Sandbox = context;
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
   ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
 
-  // ---- [RD-alias] library variable reached ONLY through another variable's ALIAS ----
+  // ---- [ALIAS] library variable reached ONLY through another variable's ALIAS ----
   // Regression from the first real export (2026-07-28). varName.ids() is a SNAPSHOT of ids referenced
   // by NODES; a library primitive reached only via another variable's alias entered the memo cache
   // LATER (when values were resolved), so its NAME resolved — `aliasOf` showed a friendly name —
@@ -1201,19 +1201,19 @@ const sandbox: Sandbox = context;
   const chainSel = await sandbox.collectSelection({ css: false });
   const cv = (n: string) => chainSel.variables.variables.find((v) => v.name === n);
 
-  ok("[RD-alias] hop 1 (aliased library var) is included", !!cv("brand/mid"));
-  ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
+  ok("[ALIAS] hop 1 (aliased library var) is included", !!cv("brand/mid"));
+  ok("[ALIAS] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
   const grayVar = cv("brand/gray-100");
-  ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
+  ok("[ALIAS] the pulled-in primitive carries its real VALUE, not just a name",
     !!grayVar && grayVar.values.Light === "#e6e6e6");
   const midVar = cv("brand/mid");
-  ok("[RD-alias] the intermediate still reads as an alias", !!(!!midVar && midVar.values.Light &&
+  ok("[ALIAS] the intermediate still reads as an alias", !!(!!midVar && midVar.values.Light &&
     aliasOf(midVar.values.Light) === "brand/gray-100"));
   // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
-  ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
+  ok("[ALIAS] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
     !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
   // And the whole point: no emitted alias may point at a name that isn't in the dump.
-  ok("[RD-alias] no alias dangles — every aliasOf target exists in variables[]", (() => {
+  ok("[ALIAS] no alias dangles — every aliasOf target exists in variables[]", (() => {
     const names = new Set(chainSel.variables.variables.map((v) => v.name));
     for (const v of chainSel.variables.variables) {
       for (const val of Object.values(v.values || {})) {
@@ -1231,7 +1231,7 @@ const sandbox: Sandbox = context;
   // the line names the real remedy (--as-library) and no longer promises a page pull completes it.
   ok("design-system hygiene names --as-library and says it is not the library's catalog",
     dsConsumer.designSystem.hygiene.some((h) => /--as-library/.test(h) && /not the library's catalog/.test(h)));
-  ok("and no longer says a page pull gives the full set",
+  ok("and does not say a page pull gives the full set",
     !dsConsumer.designSystem.hygiene.some((h) => /pull a page for the full set|prior\/no page walk/.test(h)));
   // Drop only the local seed. The id resolver STAYS on the EXTRA-aware handler — it is a superset of
   // the v_lib override above, and later alias-hygiene tests still need v_lib to resolve.
@@ -1248,8 +1248,8 @@ const sandbox: Sandbox = context;
   sandbox.figma.currentPage.selection = [libNode];
   const aliasSel = await sandbox.collectSelection({ css: false });
   const aliasHyg = aliasSel.variables.hygiene;
-  // Matched loosely on purpose: the old wording was "broken/remote alias in '…'", so a regex tied to
-  // the new phrasing would pass against the old behaviour too and prove nothing.
+  // Matched loosely on purpose: a regex tied to one exact phrasing would pass against a different,
+  // broken behaviour too and prove nothing.
   ok("alias to a RESOLVED library variable is not called broken", !aliasHyg.some((h) => /broken.*'color\/brand'/.test(h)));
   ok("alias to a resolved library var still resolves to its name", aliasSel.variables.variables.some((v) => v.name === "color/brand" && v.values.Light && aliasOf(v.values.Light) === "brand/accent"));
   ok("a genuinely dangling alias IS still reported", aliasHyg.some((h) => /broken alias in 'color\/ghost'/.test(h)));
@@ -1385,7 +1385,7 @@ const sandbox: Sandbox = context;
 
   // ---- an unreadable page degrades, it does not abort ----
   // PageNode.children THROWS on a page that isn't current and wasn't loaded (dynamic-page access).
-  // A failed loadAllPagesAsync used to warn "may miss pages" and then abort the whole export here.
+  // A failed loadAllPagesAsync must not abort the whole export here.
   const goodPage = must(sandbox.figma.root.children[0], "sandbox.figma.root.children[0]");
   const badPage = { name: "Locked Page", get children(): FakeNode[] { throw new Error("page not loaded"); },
     findAllWithCriteria: () => { throw new Error("page not loaded"); } };
@@ -1602,7 +1602,7 @@ const sandbox: Sandbox = context;
   const byCase = await sandbox.collectFull({ page: "  aRcHiVe ", css: false });
   ok("[PAGE] falls back to a UNIQUE case-insensitive name", byCase.layersDoc.page === "Archive");
 
-  // Figma ALLOWS duplicate page names. Exact-name matching used to pick-first with no guard, which is
+  // Figma ALLOWS duplicate page names. Exact-name matching must not pick-first with no guard, which is
   // the likeliest real collision. Nothing here is interactive, so a wrong silent pick is unrecoverable.
   let dupErr: Thrown | null = null;
   try { await sandbox.collectFull({ page: "Screens", css: false }); } catch (e) { dupErr = thrown(e); }
@@ -1623,8 +1623,8 @@ const sandbox: Sandbox = context;
   ok("[PAGE] the same page twice is exported once", dedup.layersDoc.pages === undefined && dedup.layersDoc.page === "Screens");
 
   // ---- [MEAS] measurements are read from the EXPORTED pages, not from whatever page is open ----
-  // This used to hardcode figma.currentPage, so a --page export of a non-current page attached the
-  // OPEN page's redlines to a doc about a different page. Each entry now carries its own page tag.
+  // This does not hardcode figma.currentPage, so a --page export of a non-current page does not attach the
+  // OPEN page's redlines to a doc about a different page. Each entry carries its own page tag.
   const redline = (id: string) => [{ start: { node: { id } , side: "LEFT" }, end: { node: { id }, side: "RIGHT" }, offset: 8, freeText: id }];
   pgA.getMeasurements = () => redline("a");
   pgC.getMeasurements = () => redline("c");
@@ -1648,10 +1648,10 @@ const sandbox: Sandbox = context;
   ok("[PAGE] an empty selector warns rather than silently falling back",
     blank.layersDoc.manifest.warnings.some((w) => /page selector was empty/.test(w)));
 
-  // allPages + page are MUTUALLY EXCLUSIVE. The branch below used to be `if (allPages) … else if
-  // (page)`, so allPages silently won: a caller asking for one page got all of them — a plausible
-  // export of the WRONG scope. figma-pull's arg parser refused this, but the MCP path did not, and
-  // the guard belongs at the collector where EVERY caller passes through it.
+  // allPages + page are MUTUALLY EXCLUSIVE. A plain `if (allPages) … else if
+  // (page)` would let allPages silently win: a caller asking for one page would get all of them — a plausible
+  // export of the WRONG scope. figma-pull's arg parser refuses this, but the MCP path does not go
+  // through it, so the guard belongs at the collector where EVERY caller passes through it.
   let bothErr: Thrown | null = null;
   try { await sandbox.collectFull({ allPages: true, page: "p:A", css: false }); } catch (e) { bothErr = thrown(e); }
   ok("[PAGE] allPages + page is REFUSED, not silently resolved", !!bothErr && /different scopes/.test(bothErr.message));
@@ -1666,7 +1666,7 @@ const sandbox: Sandbox = context;
   sandbox.figma.root.children = prevKids;
 
   // ---- WRITE plane (writes.ts) ----
-  // Previously untested entirely. The two contracts that matter to an agent driving figma_write:
+  // The two contracts that matter to an agent driving figma_write:
   // a write that didn't happen must NOT report success, and a failed batch must still surface what
   // it already applied (Figma gives no transaction, so the earlier ops are committed for good).
   const created: FakeNode[] = [];
@@ -1686,7 +1686,7 @@ const sandbox: Sandbox = context;
   ok("write: setText actually mutated the node", textTarget.characters === "new");
   ok("write: setFill applies a parsed hex", (await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00ff00" }])).ok === true && Math.round(rectTarget.fills[0]?.color.g ?? NaN) === 1);
 
-  // A missing node must FAIL, not silently report {id} — the old behaviour told the agent it worked.
+  // A missing node must FAIL, not silently report {id} (which would tell the agent it worked).
   const wMissing = await sandbox.applyWrites([{ op: "setFill", nodeId: "nope:1", color: "#fff" }]);
   ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(must(wMissing.error, "wMissing.error")));
   const wWrongType = await sandbox.applyWrites([{ op: "setText", nodeId: "r:1", text: "x" }]);
@@ -1694,8 +1694,8 @@ const sandbox: Sandbox = context;
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
   ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(must(wNoFills.error, "wNoFills.error")));
 
-  // A colour that is not hex fails the op (the schema in front of the MCP tool is not the only way in): "red" used to
-  // paint #rreedd, an unparseable channel 0, and a missing setFill color black.
+  // A colour that is not hex fails the op (the schema in front of the MCP tool is not the only way in): "red" does not
+  // paint #rreedd, an unparseable channel is not 0, and a missing setFill color is not black.
   const fillBefore = created.length;
   const rectFillBefore = rectTarget.fills;
   const wRedFrame = await sandbox.applyWrites([{ op: "createFrame", name: "Red", fill: "red" }]);
@@ -1738,10 +1738,10 @@ const sandbox: Sandbox = context;
   ok("write: unknown op is rejected", must((await sandbox.applyWrites([{ op: "nope" }])).error, "write nope error").indexOf("unknown write op") !== -1);
   ok("write: empty/omitted batch is a no-op success", (await sandbox.applyWrites(undefined)).ok === true);
 
-  // ---- parentId (was entirely uncovered, which is how the silent-reparent bug survived) ----
+  // ---- parentId (a silent reparent must not slip through) ----
   // The contract mirrors setFill/setText: if the node did NOT land where it was asked to go, the op
-  // must fail. The old code fell back to currentPage and still returned {id}, so an agent composing a
-  // tree got ok:true and a flat pile of nodes on the canvas.
+  // must fail. Falling back to currentPage and still returning {id} would leave an agent composing a
+  // tree with ok:true and a flat pile of nodes on the canvas.
   const parentKids: FakeNode[] = [];
   const containerTarget = { id: "c:1", type: "FRAME", name: "Root", appendChild: (n: FakeNode) => parentKids.push(n) };
   const pageLoads = [];
@@ -2022,7 +2022,7 @@ const sandbox: Sandbox = context;
   ok("the SCALE-1 default carries no intent and is omitted", must(es[0], "es[0]").constraint === undefined);
   ok("a node with no presets emits nothing", plainFrame.exportSettings === undefined);
 
-  // ---- skew: the sheared transform the decomposition used to throw away ----
+  // ---- skew: the sheared transform the decomposition keeps ----
   const xf = (m: number[][]) => ({ type: "FRAME", name: "T", visible: true, id: "sk:1", width: 10, height: 10,
     layoutMode: "NONE", relativeTransform: m, children: [] });
   const skewed = await sandbox.serialize(xf([[1, 0.5, 0], [0, 1, 0]]), 0, false);
@@ -2169,8 +2169,8 @@ const sandbox: Sandbox = context;
   const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
   const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
   ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", !!(tagOff && tagOff.visuals && flatPaint(must(tagOff.visuals.fills?.[0], "tagOff.visuals.fills[0]")).color === "#9947ff"));
-  ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", !!(tagOff && tagOff.variants === undefined));
-  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", !!(soloOff && soloOff.node === undefined));
+  ok("[VARIANTVIS] off by default: no per-variant data attached", !!(tagOff && tagOff.variants === undefined));
+  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either", !!(soloOff && soloOff.node === undefined));
 
   const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
   const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
@@ -2417,24 +2417,24 @@ const sandbox: Sandbox = context;
       return { ok: r && r.ok, result: r && r.result, error: r && r.error, queued: posted.some((m) => m.type === "run-begin") };
     };
 
-    // Today's text for a missing node id, captured from the pre-guard plugin: "No node id provided."
-    // It must stay byte-identical, AND the request must now be refused before it is queued (pre-guard,
-    // exportNode/screenshot went through serializeRun and posted run-begin before the collector threw).
+    // The text for a missing node id is "No node id provided." It must stay byte-identical, AND the request
+    // must be refused before it is queued (exportNode/screenshot must not go through serializeRun and post
+    // run-begin before the collector throws).
     for (const [cmd, args] of [["exportNode", {}], ["exportNode", { nodeId: null }], ["exportNode", null], ["screenshot", {}]] as const) {
       const r = await wire(cmd, args);
       ok(`[WIRE-ARGS] ${cmd} ${JSON.stringify(args)} -> "No node id provided." (unchanged), refused before queueing`,
         r.ok === false && r.error === "No node id provided." && !r.queued);
     }
     // listChildren is unqueued, so "refused before queueing" is not observable; paired with its
-    // wrong-typed twin instead (pre-guard: "Node 5 is not in the open file…").
+    // wrong-typed twin instead (without the guard: "Node 5 is not in the open file…").
     const listNoId = await wire("listChildren", {});
     const listBadId = await wire("listChildren", { nodeId: 5 });
     ok("[WIRE-ARGS] listChildren {} -> \"No node id provided.\" (unchanged); nodeId:5 -> named type error",
       listNoId.ok === false && listNoId.error === "No node id provided." &&
       listBadId.ok === false && listBadId.error === "bad listChildren args: `nodeId` is not a string");
 
-    // Wrong-typed args. Pre-guard: nodeId 5 was looked up as "5" ("Node 5 is not in the open file…"),
-    // depth "2" silently meant depth 2, scale "x" silently meant the default, a bogus write op came back
+    // Wrong-typed args. Without the guard, nodeId 5 would be looked up as "5" ("Node 5 is not in the open file…"),
+    // depth "2" would silently mean depth 2, scale "x" the default, and a bogus write op would come back
     // as an ok:false reply after the batch started.
     const badNode = await wire("exportNode", { nodeId: 5 });
     ok("[WIRE-ARGS] exportNode nodeId:5 -> named type error, not queued",
@@ -2493,9 +2493,9 @@ const sandbox: Sandbox = context;
     }
   }
 
-  // ---------- [UNREAD] typed-but-previously-unread Figma fields: shader properties, complex strokes,
+  // ---------- [UNREAD] typed Figma fields: shader properties, complex strokes,
   // SLOT slotSettings, per-run textWrapStyle. Each: a node WITH the field -> exact IR; WITHOUT / at the
-  // default -> the key is absent and the rest of the record is byte-identical to before. ----------
+  // default -> the key is absent and the rest of the record is unaffected. ----------
   {
     const alias = (id: string) => ({ type: "VARIABLE_ALIAS", id });
     const shape = (id: string, extra: Record<string, unknown>): FakeNode =>
@@ -2967,9 +2967,9 @@ const sandbox: Sandbox = context;
   }
 
   // ---------- hidden graphics, icon containers, asset-leaf layout/transform, same-name children ----------
-  // Every hidden graphic used to be sent to
-  // exportAsync, come back with no `<svg`, and land as `geometry` — for an icon CONTAINER that was its
-  // own background square. Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
+  // A hidden graphic is not sent to
+  // exportAsync (it would come back with no `<svg` and land as `geometry` — for an icon CONTAINER, its
+  // own background square). Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
   {
     const solid = [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
     const square = [{ data: "M0 0L16 0L16 16L0 16L0 0Z", windingRule: "NONZERO" }];
@@ -3047,7 +3047,6 @@ const sandbox: Sandbox = context;
     ok("[hidden-root] …and under a visible parent the same vector exports (asset path, hiddenNodes 0)",
       typeof visRun.screen.nodes[0]?.children?.[0]?.asset === "string" && visRun.screen.manifest.hiddenNodes === 0 && g13Exports === 1);
     // a root hidden by an ancestor, or hidden itself, is exported WITH a warning.
-    // pre-fix: no warning in either case.
     const hiddenRootNote = (w: string[]) => w.filter((m) => /^'Card' \(g13p:2\) is hidden /.test(m));
     hiddenParent.visible = false;
     const ancRun = await sandbox.collectNode("g13p:2", { css: false });
@@ -3065,7 +3064,7 @@ const sandbox: Sandbox = context;
 
     // a hidden layer that paints nothing (no visible paint, or no area) stays what it was
     // without the hidden-graphics handling: assetsSkippedInvisible, no marker — and a zero-area icon container still recurses.
-    // pre-fix: both became assetSkipped:"hidden" leaves and were counted assetsHidden (3).
+    // neither becomes an assetSkipped:"hidden" leaf or counts toward assetsHidden (3).
     const ghost = { type: "VECTOR", name: "Ghost", visible: false, id: "g13i:1", width: 12, height: 12, fills: [{ type: "SOLID", visible: false, color: { r: 0, g: 0, b: 0 } }], strokes: [], exportAsync: spySvg };
     const flat = { type: "INSTANCE", name: "icon/flat", visible: false, id: "g13i:2", width: 0, height: 16, findOne: () => null,
       getMainComponentAsync: async () => null, exportAsync: spySvg,
@@ -3161,7 +3160,7 @@ const sandbox: Sandbox = context;
     const lc = await sandbox.listChildren("g13s:0");
     // the "Page Title" search uses up its budget on a wide frame, and the first-text
     // fallback still gets one of its own: a heading that is node #2 is found. a hidden colliding row
-    // is titled from its own (visible) text. pre-fix: no title for either.
+    // is titled from its own (visible) text.
     const wide = (id: string, heading: string, visible = true) => ({ type: "FRAME", name: "Grid", id, width: 900, height: 600, visible,
       children: [txt(id + ":h", heading), ...Array.from({ length: 6000 }, (_, i) => ({ type: "FRAME", name: "cell", id: id + ":" + i, width: 1, height: 1, children: [] }))] });
     const hiddenTwin = (id: string, label: string, visible: boolean) => ({ type: "FRAME", name: "Sheet", id, width: 300, height: 200, visible, children: [txt(id + ":t", label)] });

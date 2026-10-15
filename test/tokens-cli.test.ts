@@ -125,7 +125,7 @@ if (process.platform !== "win32") {
   ok("control: the same file after a change is still stale (exit 1)", stale.status === 1 && /^stale/m.test(stale.err));
   // A line written before the parent dir was recorded (basename only) keeps the basename rule.
   fs.writeFileSync(theme, readOr(theme).replace("acme-kit/tokens.json", "tokens.json"));
-  ok("a basename-only line from an earlier run: same basename is compared as before (stale, exit 1)", run(dir, lib, "--check", theme).status === 1);
+  ok("a basename-only line from an earlier run: same basename is compared (stale, exit 1)", run(dir, lib, "--check", theme).status === 1);
   ok("…and a different basename is still 'other source' (exit 2)", run(dir, path.join(dir, "variables.json"), "--check", theme).status === 2);
 }
 {

@@ -90,7 +90,7 @@ const coverCards: Array<[string, string, (r: { dom: string | null; why: string |
   ["an inset:0 fill painted only in a 4-px content box (background-clip: not kept)", "<span style=\"position:absolute;inset:0;box-sizing:border-box;padding-left:calc(100% - 4px);background:#dd3333;background-clip:content-box\"></span>", (r) => /paints something of its own/.test(r.why ?? "")],
 ];
 for (const [what, fill, how] of coverCards) {
-  check(`a card's sole centred Delete over ${what} → refused (was: pressed)`, await one(cover(fill), async (p) => how(await drive(p))));
+  check(`a card's sole centred Delete over ${what} → refused`, await one(cover(fill), async (p) => how(await drive(p))));
 }
 const hug = (wrap: string): string => `${BASE}</style><div class="row"><div class="cell" id="c"><span style="display:inline-block;margin-top:6px;${wrap}">${DEL.replace("id=\"d\"", "id=\"d\" style=\"margin:0\"")}</span></div></div>`;
 for (const [what, wrap] of [["a 14-px box-shadow ring", "padding:2px;box-shadow:0 0 0 14px #22aa77"], ["an outline 6 px out", "padding:2px;outline:3px solid #22aa77;outline-offset:3px"],
@@ -110,7 +110,7 @@ for (const [what, shadow] of [["a <progress>", "<progress value=\"60\" max=\"100
   ["a status dot drawn by a border", "<span style=\"display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%\"></span><slot></slot><span></span>"],
   ["a band over the centre", "<span style=\"position:absolute;left:0;top:12px;height:10px;width:60%;background:#22aa77\"></span><span></span><slot></slot><span></span>"],
   ["a status dot forcing visibility:visible in its own sheet", "<style>i { visibility: visible; }</style><i style=\"display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%\"></i><slot></slot><span></span>"]] as const) {
-  check(`a web-component card whose shadow root holds ${what} beside its slotted sole Delete → refused (was: pressed)`, await one(host(shadow), async (p) => refused(await drive(p))));
+  check(`a web-component card whose shadow root holds ${what} beside its slotted sole Delete → refused`, await one(host(shadow), async (p) => refused(await drive(p))));
 }
 check("the pixels alone: a host's shadow dot (DOM rules aside) → content", await one(host("<span style=\"display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%\"></span><slot></slot><span></span>"),
   async (p) => /paints something of its own/.test(await pixels(p) ?? "")));
@@ -121,7 +121,7 @@ check("a web-component cell whose shadow root holds only the <slot> for its sole
 const jsHover = (extra: string): string => `${BASE}</style><div class="row"><div class="card" id="c">${extra}<span id="slot"></span><span></span></div></div>
   <script>const c = document.getElementById("c"), s = document.getElementById("slot");
   c.addEventListener("mouseenter", () => { s.innerHTML = ${JSON.stringify(DEL)}; }); c.addEventListener("mouseleave", () => { s.innerHTML = ""; });</script>`;
-check("a cell whose sole button is mounted by JS on hover and unmounted when the pointer is parked → driven (was: refused 'could not hide its control')",
+check("a cell whose sole button is mounted by JS on hover and unmounted when the pointer is parked → driven (not refused 'could not hide its control')",
   await one(jsHover("<span></span>"), async (p) => driven(await drive(p))));
 check("the same with a <progress> beside the mounted Delete → refused", await one(jsHover("<progress value=\"60\" max=\"100\" style=\"width:70px\"></progress>"), async (p) => refused(await drive(p))));
 
@@ -153,7 +153,7 @@ check("under the CSP a cell whose button has transition:all → driven, with the
 // ---- an !important inside a cascade layer beats any unlayered one (and an inline one any sheet) — every element a
 // shot hides is checked, so it refuses instead of showing in both shots
 const dotCard = (css: string, dotStyle: string): string => `${BASE} ${css}</style><div class="row"><div class="card" id="c"><span class="dot" style="display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%;${dotStyle}"></span>${DEL}<span></span></div></div>`;
-check("a status dot forced visible by `@layer base { .dot { visibility: visible !important } }`, or inline with !important → refused, naming the rule that did not take (was: pressed)",
+check("a status dot forced visible by `@layer base { .dot { visibility: visible !important } }`, or inline with !important → refused, naming the rule that did not take",
   await one(dotCard("@layer base { .dot { visibility: visible !important; } }", ""), async (p) => { const r = await drive(p); return r.dom === null && /kept <span> inside the opener showing/.test(r.why ?? ""); })
   && await one(dotCard("", "visibility:visible !important"), async (p) => { const r = await drive(p); return r.dom === null && /kept <span> inside the opener showing/.test(r.why ?? ""); }));
 
@@ -201,7 +201,7 @@ check("[plainKept] one colour over the box, the backdrop outside → plain; a ha
 // ---- a kept box's REAL rounded outline (its own elliptical radii, the clipping boxes up to the container) —
 // a hug wrapper drawn as a progress ring (border-radius 50%, border sides in two colours) has a core
 const ringCell = (borders: string): string => `${BASE}</style><div class="row"><div class="cell" id="c"><span style="display:inline-block;margin-top:4px;padding:2px;border-radius:50%;${borders};background:#16a34a;background-clip:padding-box;line-height:0"><button id="d" aria-label="Cancel upload" style="margin:0;width:28px;height:28px;border-radius:50%;border:0;background:#16a34a;color:#ffffff">x</button></span></div></div>`;
-check("a round Cancel in a 75 % / 50 % progress RING (a 50 %-radius hug wrapper, border sides in two colours) → refused by the plain-paint test (was: pressed — the corner squares covered the whole box)",
+check("a round Cancel in a 75 % / 50 % progress RING (a 50 %-radius hug wrapper, border sides in two colours) → refused by the plain-paint test (not pressed: the corner squares do not cover the whole box)",
   await one(ringCell("border:4px solid #16a34a;border-left-color:rgba(22,163,74,.25)"), async (p) => { const r = await drive(p); return r.dom === null && /alone it must paint one uniform colour/.test(r.why ?? ""); })
   && await one(ringCell("border:4px solid rgba(22,163,74,.25);border-top-color:#16a34a;border-right-color:#16a34a"), async (p) => { const r = await drive(p); return r.dom === null && /alone it must paint one uniform colour/.test(r.why ?? ""); }));
 check("the same ring in ONE colour (its background under the border too), a pill wrapper (9999px), an ELLIPTICAL wrapper (50 % on a 48 × 34 box) and a rounded cover inside a bordered rounded clipping cell → driven",
@@ -213,7 +213,7 @@ check("the same ring in ONE colour (its background under the border too), a pill
 // ---- an ancestor's or the container's own filter / clip-path / mask never makes a plain wrapper
 // "paint outside itself" — they are off in shots K and N
 const HUGW = `<span style="display:inline-block;margin-top:6px;padding:4px;background:#eeeeff;border-radius:6px">${DEL.replace("id=\"d\"", "id=\"d\" style=\"margin:0\"")}</span>`;
-check("a cell with a plain filled wrapper under a drop-shadow list (ancestor filter), with its own drop-shadow, under its own clip-path inset(0 round 12px) over a cover, under its own mask → driven (was: refused 'paints outside itself' / 'not one plain colour')",
+check("a cell with a plain filled wrapper under a drop-shadow list (ancestor filter), with its own drop-shadow, under its own clip-path inset(0 round 12px) over a cover, under its own mask → driven (not refused 'paints outside itself' / 'not one plain colour')",
   await one(`${BASE} #row { display: inline-block; filter: drop-shadow(0 2px 4px rgba(0,0,0,.25)); }</style><div class="row" id="row"><div class="cell" id="c">${HUGW}</div></div>`, async (p) => driven(await drive(p)))
   && await one(`${BASE}</style><div class="row"><div class="cell" id="c" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,.25)); background:#ffffff">${HUGW}</div></div>`, async (p) => driven(await drive(p)))
   && await one(`${BASE}</style><div class="row"><div class="cell" id="c" style="clip-path: inset(0 round 12px)"><span style="position:absolute;inset:0;background:#e8f0ff"></span><span style="position:relative">${DEL}</span></div></div>`, async (p) => driven(await drive(p)))
@@ -251,7 +251,7 @@ for (const [ps, css, inner] of PS) {
   const want = ps === "::first-letter" ? /kept a ::first-letter inside the opener showing/ : /paints something of its own/;
   if (!want.test(why ?? "")) { psOk = false; console.log(`    ${ps}: ${String(why)}`); }
 }
-check("the pixels alone: a page-visible ::placeholder / ::file-selector-button / ::details-content / ::scroll-button inside the cell → hidden in shot B by the probe's own rule: content by the pixels; a page-visible ::first-letter → refused by the rules-took check (was: still showing in shot B → nothing)", psOk);
+check("the pixels alone: a page-visible ::placeholder / ::file-selector-button / ::details-content / ::scroll-button inside the cell → hidden in shot B by the probe's own rule: content by the pixels; a page-visible ::first-letter → refused by the rules-took check (a ::first-letter still showing in shot B is not read as nothing)", psOk);
 check("the shots fire no pointer event on the element under the parked pointer (no ::first-letter rule: it would rebuild the text boxes → mouseout / mouseleave)",
   await one(`${BASE} #logo { position: fixed; left: 0; top: 0; width: 60px; height: 30px; background: #eeeeee; }</style><a id="logo" href="#">Logo</a><div class="row" style="margin-top:60px"><div class="cell" id="c">${DEL}</div></div>
     <script>window.ev = []; for (const t of ["mouseover", "mouseout", "mouseenter", "mouseleave"]) document.getElementById("logo").addEventListener(t, () => window.ev.push(t));</script>`, async (p) => {
@@ -371,10 +371,10 @@ check("plainKept + shapeDistance: a 50 %-radius box (a disc) — one colour insi
 const DOTSPAN = "<span style=\\\"display:inline-block;width:0;height:0;border:6px solid #22aa77;border-radius:50%\\\"></span>";
 const remount = (how: string): string => `${BASE}</style><div class="row"><div class="cell" id="c"><span id="slot"></span>${DEL}</div></div><script>const s = document.getElementById("slot"); const put = () => { s.innerHTML = "${DOTSPAN}"; }; put(); ${how}</script>`;
 const changed = (r: { dom: string | null; why: string | null }): boolean => r.dom === null && /the opener's content changed while it was compared/.test(r.why ?? "");
-check("a status dot (drawn by a border) re-mounted beside the sole Delete by requestAnimationFrame, or by a 16-ms timer → refused 'the opener's content changed while it was compared' (was: driven — the re-mounted dot hidden as outside in shot A)",
+check("a status dot (drawn by a border) re-mounted beside the sole Delete by requestAnimationFrame, or by a 16-ms timer → refused 'the opener's content changed while it was compared' (not driven with the re-mounted dot hidden as outside in shot A)",
   await one(remount("const f = () => { put(); requestAnimationFrame(f); }; requestAnimationFrame(f);"), async (p) => changed(await drive(p)))
   && await one(remount("setInterval(put, 16);"), async (p) => changed(await drive(p))));
-check("the same dot mounted once (never re-mounted) → refused by the pixels as before ('paints something of its own'); a cell holding only its sole Delete → driven",
+check("the same dot mounted once (never re-mounted) → refused by the pixels ('paints something of its own'); a cell holding only its sole Delete → driven",
   await one(remount(""), async (p) => /paints something of its own/.test((await drive(p)).why ?? ""))
   && await one(`${BASE}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => driven(await drive(p))));
 check("a cell whose sole Delete re-mounts its OWN icon every frame (a hover icon swap: inside the control, hidden in every shot) → still driven",
@@ -403,7 +403,7 @@ check("the probe's sheet in a shot: no ::placeholder / ::file-selector-button / 
 
 // ---- the walk for a label laid over the opener is bounded at 500,000 elements — a 6000-row table
 // (about 150,000 elements: past a 100,000 cap) drives its actions cell
-check("an actions cell in a 6000-row × 8-cell table (about 150,000 elements) → driven (was: refused 'more than 100000 boxes on the page')",
+check("an actions cell in a 6000-row × 8-cell table (about 150,000 elements) → driven (not refused 'more than 100000 boxes on the page')",
   await one(`<style>body{margin:0;font:13px sans-serif} td{padding:4px 8px;height:36px} td.act{text-align:center;width:60px} button{width:28px;height:24px}</style><table id="t"></table>`, async (p) => {
     await p.evaluate("{ const t = document.getElementById('t'); let h = ''; for (let i = 0; i < 6000; i++) { h += '<tr>'; for (let j = 0; j < 7; j++) h += '<td><span><b>r' + i + '</b> c' + j + '</span></td>'; h += i === 4 ? '<td class=\"act\" id=\"c\"><button id=\"d\" aria-label=\"Delete\">x</button></td>' : '<td class=\"act\"><span><button aria-label=\"Delete\">x</button></span></td>'; h += '</tr>'; } t.innerHTML = h; }");
     return driven(await drive(p));
@@ -411,7 +411,7 @@ check("an actions cell in a 6000-row × 8-cell table (about 150,000 elements) �
 
 // ---- a container inside a shadow root cannot be judged by the document sheet (it would inherit the
 // hidden host in every shot, A = B whatever it shows) — refused
-check("a pair whose container lies inside an open shadow root (a status dot beside its Delete) → refused 'inside a shadow root' (was: driven — A equal to B)",
+check("a pair whose container lies inside an open shadow root (a status dot beside its Delete) → refused 'inside a shadow root' (not driven with A equal to B)",
   await one(`${BASE}</style><div id="app"></div><script>document.getElementById("app").attachShadow({ mode: "open" }).innerHTML = '<style>.cell{display:inline-block;position:relative;width:160px;height:44px;text-align:center;margin:20px} button{width:32px;height:26px;margin-top:8px}</style><div class="cell" id="c"><span style="position:absolute;left:10px;top:16px;width:0;height:0;border:6px solid #22aa77;border-radius:50%"></span><button id="d" aria-label="Delete row">x</button></div>';</script>`, async (p) => {
     await p.evaluate("{ const r = document.getElementById('app').shadowRoot; window.__dtOwn = { box: r.getElementById('c'), ctl: r.getElementById('d') }; }");
     const px = await PD.ownPixels(p, { park: true });
@@ -445,10 +445,10 @@ check("plainKept: a box rounded only at its top-left corner (16 px), painted squ
 // (tipPreMark remembers it), a visibility:hidden [role=tooltip] wrapper around a visible label counts as shown; a tooltip mounted
 // on mouseenter, or a persistent one hidden (visibility / an opacity-0 wrapper) until :hover, stays exempt
 const over = (attrs: string, inner = "Oak crate", css = ""): string => `${BASE} .cell{background:#fff} ${css}</style><div class="row" style="position:relative;display:inline-block"><div class="cell" id="c"><button id="d" aria-label="Delete crate"${attrs.includes("crate-name") ? " aria-describedby=\"crate-name\"" : ""}>x</button></div><span ${attrs} style="position:absolute;left:12px;top:14px;pointer-events:none">${inner}</span></div>`;
-check("a sibling label laid over the card with role=\"tooltip\" (named by nothing), and the Delete's aria-describedby target laid over it — both on screen before the hover → refused (was: driven — the Delete pressed)",
+check("a sibling label laid over the card with role=\"tooltip\" (named by nothing), and the Delete's aria-describedby target laid over it — both on screen before the hover → refused (the Delete is not pressed)",
   await one(over("role=\"tooltip\""), async (p) => refused(await drive(p)))
   && await one(over("id=\"crate-name\""), async (p) => refused(await drive(p))));
-check("a visibility:hidden [role=tooltip] wrapper around a visibility:visible label laid over the card → shown before the hover → refused (was: driven)",
+check("a visibility:hidden [role=tooltip] wrapper around a visibility:visible label laid over the card → shown before the hover → refused (not driven)",
   await one(over("role=\"tooltip\"", "<span style=\"visibility:visible\">Oak crate</span>", ".row > span[role] { visibility: hidden; }"), async (p) => refused(await drive(p))));
 check("the Delete's own tooltip revealed by the hover — [role=tooltip] mounted on mouseenter over the cell, a persistent [role=tooltip] hidden until :hover (visibility), an aria-describedby target in an opacity-0 wrapper until :hover → driven",
   await one(`${BASE} .cell{background:#fff}</style><div class="row"><div class="cell" id="c">${DEL}</div></div><script>const d = document.getElementById("d"); let t = null; d.addEventListener("mouseenter", () => { t = document.createElement("div"); t.setAttribute("role", "tooltip"); t.textContent = "Delete row"; const r = d.getBoundingClientRect(); t.style.cssText = "position:absolute;pointer-events:none;background:#111;color:#fff;font-size:11px;left:" + (r.x - 20) + "px;top:" + (r.y - 6) + "px"; document.body.appendChild(t); }); d.addEventListener("mouseleave", () => { if (t) t.remove(); t = null; });</script>`, async (p) => driven(await drive(p)))
@@ -458,7 +458,7 @@ check("the Delete's own tooltip revealed by the hover — [role=tooltip] mounted
 // ---- the ring rule counts the container's sharp ring LAYERS' colours only — not its border,
 // not a layer in its own background colour (Tailwind ring-offset) — a focus ring beside a border and ring-2 ring-offset-2 are
 // decoration; two ring colours stay content
-check("a cell with a 1-px border and a 2-px ring in another colour, a cell with a hover ring-offset (white = its background) + ring → driven (was: refused 'box-shadow ring in more than one colour'); a two-colour ring → still refused",
+check("a cell with a 1-px border and a 2-px ring in another colour, a cell with a hover ring-offset (white = its background) + ring → driven (not refused 'box-shadow ring in more than one colour'); a two-colour ring → still refused",
   await one(`${BASE} .cell{background:#fff;border:1px solid #c8c4b8;box-shadow:0 0 0 2px #93c5fd}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => driven(await drive(p)))
   && await one(`${BASE} .cell{background:#fff;border:1px solid #c8c4b8} #c:hover{box-shadow:0 0 0 2px #fff,0 0 0 4px #3b82f6}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => driven(await drive(p)))
   && await one(`${BASE} .cell{background:#fff;box-shadow:0 0 0 3px #16a34a,0 0 0 6px #bbf7d0}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => { const r = await drive(p); return r.dom !== null && /ring in more than one colour/.test(String(await p.evaluate("window.__dtOwnWhy ?? ''"))); }));
@@ -466,7 +466,7 @@ check("a cell with a 1-px border and a 2-px ring in another colour, a cell with 
 // ---- a ring layer in the container's own background colour is ignored only where it cannot
 // show — over a semi-transparent background an inset band in that colour stacks alpha (a two-tone own frame, the pixel check
 // sees it in both shots), so it counts; over an opaque border-box background it is invisible and does not
-check("a cell with a semi-transparent background, an inset ring and an inset layer in its background colour → refused 'ring in more than one colour' (was: driven — the Delete pressed); the same over an opaque white background → driven",
+check("a cell with a semi-transparent background, an inset ring and an inset layer in its background colour → refused 'ring in more than one colour' (the Delete is not pressed); the same over an opaque white background → driven",
   await one(`${BASE} .cell{background:rgba(22,163,74,.3);box-shadow:inset 0 0 0 3px #16a34a,inset 0 0 0 7px rgba(22,163,74,.3)}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => { const r = await drive(p); return r.dom !== null && /ring in more than one colour/.test(String(await p.evaluate("window.__dtOwnWhy ?? ''"))); })
   && await one(`${BASE} .cell{background:#fff;box-shadow:inset 0 0 0 3px #16a34a,inset 0 0 0 7px #fff}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => driven(await drive(p))));
 

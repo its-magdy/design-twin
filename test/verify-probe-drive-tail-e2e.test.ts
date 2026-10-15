@@ -185,12 +185,12 @@ const stepLost = (r: Run): boolean => r.status === 4 && /after step 1 \{click: "
 const bS = out("ClickReloadsSync");
 const rS = await T.clickReloadsSync();
 if (!stepLost(rS)) console.log(rS.stderr);
-check("`draw(); location.reload()` in the click handler, every time (no --ready) → the reload is not the click's: one re-run, then exit 4 naming the step, nothing written (was: exit 0 measuring the default section)",
+check("`draw(); location.reload()` in the click handler, every time (no --ready) → the reload is not the click's: one re-run, then exit 4 naming the step, nothing written (not exit 0 measuring the default section)",
   stepLost(rS) && !written(bS));
 const bH = out("ClickReloads100");
 const rH = await T.clickReloads100();
 if (!stepLost(rH)) console.log(rH.stderr);
-check("a reload 100 ms after the click's in-place change, every time (--ready) → exit 4 naming the step (was: the generic '--ready never visible')",
+check("a reload 100 ms after the click's in-place change, every time (--ready) → exit 4 naming the step (not the generic '--ready never visible')",
   stepLost(rH) && !written(bH) && !/never became visible/.test(rH.stderr));
 const bO = out("ClickReloadsOnce");
 const rO = await T.clickReloadsOnce();
@@ -221,7 +221,7 @@ check("a click navigating 7 s later into a document that loads 5 s after (--read
 const bRH = out("ReloadHang");
 const rRH = await T.reloadHang();
 if (!stepLost(rRH)) console.log(rRH.stderr);
-check("a reload after the click's in-place change into a document that never finishes loading, every time → exit 4 naming the step, nothing written (was: 'kept navigating' + the dev-server hint)",
+check("a reload after the click's in-place change into a document that never finishes loading, every time → exit 4 naming the step, nothing written (not 'kept navigating' + the dev-server hint)",
   stepLost(rRH) && !written(bRH));
 // a document whose load timed out in one settle and completed before a later one carries no stale note
 const bLL = out("LateLoad");
@@ -236,7 +236,7 @@ const bSS = out("SlowStay");
 const rSS = await T.slowStay();
 const mSS = read(bSS);
 if (rSS.status !== 0) console.log(rSS.stderr);
-check("the --url document taken after --timeout 5 s (its load given up) loads at 7 s, after the click changed it in place (while a waitFor step waits) → its own late load: exit 0, re-runs 0, the root by tag (was: 'the page reloaded … after step 1', exit 4)",
+check("the --url document taken after --timeout 5 s (its load given up) loads at 7 s, after the click changed it in place (while a waitFor step waits) → its own late load: exit 0, re-runs 0, the root by tag (not 'the page reloaded … after step 1', exit 4)",
   rSS.status === 0 && mSS?.navigation?.reruns === 0 && mSS.frame?.via === "tag" && mSS.frame.nodeId === "70:1");
 // a link to the current URL that the app handles in place, then a reload 300 ms later — a genuine reload (a re-run)
 for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["link-empty-reload", "an <a href=\"\">"]] as const) {
@@ -244,7 +244,7 @@ for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["lin
   const r = await (mode === "link-inplace-reload" ? T.linkInplaceReload() : T.linkEmptyReload());
   const m = read(b);
   if (r.status !== 0) console.log(r.stderr);
-  check(`${label} handled in place, the page reloading 300 ms later (once) → not the link's load: afterInitialLoad 1, re-runs 1, the root by tag (was: swallowed, the other section measured)`,
+  check(`${label} handled in place, the page reloading 300 ms later (once) → not the link's load: afterInitialLoad 1, re-runs 1, the root by tag (not swallowed, the other section measured)`,
     r.status === 0 && m?.navigation?.afterInitialLoad === 1 && m.navigation.reruns === 1 && m.frame?.via === "tag" && m.frame.nodeId === "70:1");
 }
 // "kept navigating for Ns" states the real duration (a first new document at 8 s has its own window; the next one ends it)
@@ -261,14 +261,14 @@ const bBH = out("BounceHang");
 const rBH = await T.bounceHang();
 const sBH = rBH.ms;
 if (!/could not load/.test(rBH.stderr)) console.log(rBH.stderr);
-check(`the --url page goes on, before its load, to a server that never answers → exit 4 'could not load' at --timeout (${Math.round(sBH / 1000)} s < 30 s), nothing written (was: a hang until --max-time)`,
+check(`the --url page goes on, before its load, to a server that never answers → exit 4 'could not load' at --timeout (${Math.round(sBH / 1000)} s < 30 s), nothing written (not a hang until --max-time)`,
   rBH.status === 4 && /could not load/.test(rBH.stderr) && sBH < 30_000 && !written(bBH));
 // a document the page redirected to itself, measured "anyway" at 10 s, whose load comes after an in-place click
 const bRS = out("RedirSlow");
 const rRS = await T.redirSlow();
 const mRS = read(bRS);
 if (rRS.status !== 0) console.log(rRS.stderr);
-check("a client redirect to a document whose load comes at 11 s (past the 10 s cap), after a click changed it in place → its own late load: exit 0, re-runs 0, the root by tag (was: 'the page reloaded … after step 2', exit 4)",
+check("a client redirect to a document whose load comes at 11 s (past the 10 s cap), after a click changed it in place → its own late load: exit 0, re-runs 0, the root by tag (not 'the page reloaded … after step 2', exit 4)",
   rRS.status === 0 && mRS?.navigation?.reruns === 0 && mRS.frame?.via === "tag" && mRS.frame.nodeId === "70:1");
 
 // ---- a page whose main thread stops answering while the drive runs (plot-ledger-edge.html?mode=freeze-drive).

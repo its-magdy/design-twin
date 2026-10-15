@@ -10,7 +10,7 @@
 // non-boolean callers are converted (see below).
 //
 // Results print as they are asserted rather than being held to the end: a suite that throws
-// mid-run then still shows how far it got, which two of the three suites previously lost.
+// mid-run then still shows how far it got.
 //
 // `cond` is a boolean, not "anything truthy": `ok("x", obj.list)` passes on an EMPTY array and on a
 // "0"-ish string alike, so a condition says what it checks (`.length > 0`, `!== undefined`, `===`).

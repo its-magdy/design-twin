@@ -1,5 +1,5 @@
 // Two MCP servers on one port — i.e. two Claude Code sessions in projects that both registered
-// `designtwin`. The second used to die on EADDRINUSE; it must share the first one's bridge, and take
+// `designtwin`. The second must not die on EADDRINUSE; it must share the first one's bridge, and take
 // the bridge over when that session ends.
 //   node test/mcp-share.test.ts
 import fs from "node:fs";
@@ -131,9 +131,9 @@ void (async () => {
   await until(() => b.code !== undefined);
   await sleep(300);
 
-  // Concurrent first calls. holder() used to resolve per call: main()'s startup resolution and two
-  // tool calls sent in the same stdin write each saw no daemon and each called createBridge(), and the
-  // second bind hit EADDRINUSE. To hold that window open deterministically, a MUTE listener sits on
+  // Concurrent first calls. holder() resolves once, not per call: otherwise main()'s startup resolution and two
+  // tool calls sent in the same stdin write would each see no daemon and each call createBridge(), and the
+  // second bind would hit EADDRINUSE. To hold that window open deterministically, a MUTE listener sits on
   // the daemon socket path: it accepts and never answers, so every daemon probe waits out its 1.5s
   // timeout — long enough for all three resolutions to be in flight at once. createBridge prints its
   // "auth: using FIGMA_BRIDGE_TOKEN" line once per call — that line is the count of bridges opened.
@@ -185,7 +185,7 @@ void (async () => {
   }
 
   // A port held by something that is NOT a dtwin daemon (no socket to share through): the MCP server
-  // used to process.exit(1) inside createBridge. It must stay up and report the held port per call.
+  // must not process.exit(1) inside createBridge. It must stay up and report the held port per call.
   const squatter = net.createServer();
   await new Promise<void>((r) => squatter.listen(8789, "127.0.0.1", () => r()));
   const d = start();

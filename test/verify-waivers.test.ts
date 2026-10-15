@@ -158,7 +158,7 @@ console.log("an interaction whose destination was never exported:");
   safe("--expect: 9:9 is only in ANOTHER file's index rows → destinationExported:false", () => i4?.destinationExported === false);
   safe("--expect: 1:50 is in this file's index → not marked", () => !!i5 && i5.destinationExported === undefined);
   const noIndex = buildExpectation([doc()]);
-  safe("--expect without an index: nothing is marked (unknown, graded as before)", () => noIndex.interactions.every((i) => i.destinationExported === undefined));
+  safe("--expect without an index: nothing is marked (unknown, graded normally)", () => noIndex.interactions.every((i) => i.destinationExported === undefined));
   const noFile = buildExpectation([doc("")], INDEX);
   // the screen names no file, but its own index row (id AND name) names Sample Kit → it is that file's screen
   safe("--expect when the screen names no source file: its own index row names the file → 9:9 (only another file's) marked, 1:50 not", () =>

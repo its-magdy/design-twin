@@ -355,12 +355,12 @@ void (async () => {
     plugin.close();
     await sleep(200); // both sockets gone: the bridge has NO client now
 
-    // LIVE 2026-09-25: with NOTHING connected — every window mid-redial right after a bridge
-    // restart — `figma_status {client:"<name>"}` answered `connected:false` in 10 ms: its zero-clients
-    // early return skipped the named wait that bridge.request() gives every other tool. Now the ping
-    // (and its wait) comes first. The old code fails the first check (no pong, connected:false) and the
-    // second (a bare connId with nothing connected was `connected:false`, not the refusal every other
-    // tool gives).
+    // With NOTHING connected — every window mid-redial right after a bridge
+    // restart — `figma_status {client:"<name>"}` must not answer `connected:false` in 10 ms: a zero-clients
+    // early return would skip the named wait that bridge.request() gives every other tool. The ping
+    // (and its wait) comes first. An early return fails the first check (no pong, connected:false) and the
+    // second (a bare connId with nothing connected must give the refusal every other
+    // tool gives, not `connected:false`).
     const t2 = Date.now();
     const pending0 = client.callTool({ name: "figma_status", arguments: { client: "Late File 2" } });
     const late2 = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });

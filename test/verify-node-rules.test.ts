@@ -64,11 +64,11 @@ console.log("A — TEXT width is the ink width, x/width only from textBox:");
     textNode("2:3", "Showing 1 to 20", { x: 0, w: 214 }),
     textNode("2:5", "12", { x: 0, w: 10.75 }),
   ]));
-  safe("Range 33.9 vs ink 32.14 (within textInk 3): no width delta — before: 121 → 33.9 medium", () => !deltaOn(r, "2:1", /width/));
+  safe("Range 33.9 vs ink 32.14 (within textInk 3): no width delta (not 121 → 33.9 medium)", () => !deltaOn(r, "2:1", /width/));
   safe("tolerance textInk is 3", () => TOLERANCE.textInk === 3);
   safe("fill text whose Range is 214 vs ink 207.4 (6.6 off): delta 'width (text ink)' medium, expected 207.4", () => { const d = deltaOn(r, "2:3", /width/); return d?.field === "width (text ink)" && d.severity === "medium" && d.expected === 207.4 && d.actual === 214; });
   safe("hug text 34 vs Range 33.2 (tol 1): no delta", () => !deltaOn(r, "2:2", /width/));
-  safe("'12' 10.75 vs ink 9.77: no delta (before: 121 → 10.75)", () => !deltaOn(r, "2:5", /width/));
+  safe("'12' 10.75 vs ink 9.77: no delta (not 121 → 10.75)", () => !deltaOn(r, "2:5", /width/));
   const hugOff = compare(e, measured([textNode("2:2", "Total", { x: 200.6, w: 36.5 })]));
   safe("hug text 34 vs 36.5: delta field 'width' (tolerance 1, not the ink's 3)", () => deltaOn(hugOff, "2:2", /^width$/)?.delta === 2.5);
 
@@ -94,7 +94,7 @@ console.log("B — stroke tolerance with CSS snapping, rings, opacity:");
     box("3:1", { borderWidth: 0 }), box("3:2", { borderWidth: 1 }), box("3:3", { borderWidth: 1 }),
     box("3:4", { borderWidth: 1, strokeFrom: "box-shadow", strokeAlign: "outside" }), box("3:5", { borderWidth: 1, strokeFrom: "box-shadow", strokeAlign: "inside" }),
   ]));
-  safe("a lost 1px stroke (1 → 0) is a medium border-width delta — before: inside the padding tolerance 1", () => deltaOn(r, "3:1", /border-width/)?.severity === "medium");
+  safe("a lost 1px stroke (1 → 0) is a medium border-width delta (not inside the padding tolerance 1)", () => deltaOn(r, "3:1", /border-width/)?.severity === "medium");
   safe("tolerance stroke is 0.5", () => TOLERANCE.stroke === 0.5);
   safe("design 1.5 vs a computed '1px' border: no delta (Chromium floors border widths)", () => !deltaOn(r, "3:2", /border-width/));
   safe("design 0.5 vs '1px': no delta (1px minimum)", () => !deltaOn(r, "3:3", /border-width/));
@@ -138,7 +138,7 @@ console.log("C — radius on a table row, radius on a layer that draws nothing:"
     node("5:1", { backgroundColor: "rgb(18, 19, 25)", borderRadius: 0, width: 1112, height: 48, tag: "tr" }),
     node("5:2", { backgroundColor: "rgb(18, 19, 25)", borderRadius: 0, width: 1112, height: 48, tag: "thead" }),
   ]));
-  safe("radius 12 measured 0 on a <tr>: gap 'table row … corner cells', no delta (before: 12 → 0 medium)", () => !deltaOn(r, "5:1", /radius/) && /table row\/row-group/.test(gapOn(r, "5:1", /radius/)?.why ?? ""));
+  safe("radius 12 measured 0 on a <tr>: gap 'table row … corner cells', no delta (not 12 → 0 medium)", () => !deltaOn(r, "5:1", /radius/) && /table row\/row-group/.test(gapOn(r, "5:1", /radius/)?.why ?? ""));
   safe("per-corner radius on a <thead>: gap too, no corner delta", () => !deltaOn(r, "5:2", /radius/) && !!gapOn(r, "5:2", /radius/));
   safe("radius 8 on an instance that paints nothing: no borderRadius spec, notComparable 'draws nothing' value 8", () => spec(e, "5:3")?.borderRadius === undefined && ncOn(e, "5:3", /border-radius/)?.value === 8);
   safe("a clipping frame keeps its radius (the clip shows the corners)", () => spec(e, "5:4")?.borderRadius === 8 && !ncOn(e, "5:4", /radius/));
@@ -216,7 +216,7 @@ console.log("F — the match's size and how it was found cap severity:");
   // the cap by matchedBy
   const nav = (matchedBy: string): MeasuredNode => node("8:2", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "OKR Management", textBox: { x: 0, w: 110 }, opacity: 1 }, matchedBy);
   const sevOf = (matchedBy: string): VerifyDelta | undefined => deltaOn(compare(e, measured([nav(matchedBy)])), "8:2", /^text$/);
-  safe("an off-by-one POSITION match: the text delta is low (cappedFrom high) — before: high", () => { const d = sevOf("position"); return d?.severity === "low" && d.cappedFrom === "high" && /capped at low: matched by position/.test(d.note ?? ""); });
+  safe("an off-by-one POSITION match: the text delta is low (cappedFrom high), not high", () => { const d = sevOf("position"); return d?.severity === "low" && d.cappedFrom === "high" && /capped at low: matched by position/.test(d.note ?? ""); });
   safe("a hand-written 'position-partial-size' (not canonical): low", () => sevOf("position-partial-size")?.severity === "low");
   safe("text-ordinal: capped at medium", () => { const d = sevOf("text-ordinal"); return d?.severity === "medium" && d.cappedFrom === "high"; });
   safe("tag-alias: capped at medium", () => sevOf("tag-alias")?.severity === "medium");
@@ -353,7 +353,7 @@ console.log("overfull padding sides, per-side strokes, dropped specs, mutation g
   safe("a wrong background on a 'structural' match (capped low): verdict incomplete with 'low-confidence matches — tag these elements', not pass", () =>
     structural.verdict === "incomplete" && structural.why.some((w) => /1 delta\(s\) on low-confidence matches — tag these elements/.test(w)) && structural.summary.lowConfidence === 1);
   safe("…the same on a position match: incomplete (never pass, never fail)", () => byPos.verdict === "incomplete" && deltaOn(byPos, "9:1", /background/)?.severity === "low");
-  safe("…a tag match fails as before", () => byTag.verdict === "fail");
+  safe("…a tag match fails", () => byTag.verdict === "fail");
   safe("the headline counts the capped deltas", () => /\(\+1 capped on low-confidence matches\)/.test(structural.headline));
   const w: PlanWaiver = { nodeId: "9:1", field: "match (size)", designed: [300, 120], built: [640, 120], exportContentSha256: e.exportContentSha256, reason: "the card is full-width here", decidedBy: "Sam Doe", decidedAt: "2026-10-01T02:00:00Z" };
   const waived = compare(e, measured([frameNode, red("tag", 640)]), { waivers: [w] });

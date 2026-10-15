@@ -309,7 +309,7 @@ top-to-bottom; each box is a concrete pass/fail.
 components) the one defect the mocks missed was a FLOAT variable scoped to `FONT_WEIGHT` *and* length scopes
 at once (a type-scale token also scoped to `FONT_SIZE`/`LINE_HEIGHT`/`LETTER_SPACING`): it must not be emitted
 unitless (`--Body-2: 18;` is invalid as a font-size). `numberUnit()` is unitless only when *no* scope
-contradicts it (`.every()`, not `.some()`); `[RD2-mixed]`/`[RD2-pure]` in `test/design-to-code.test.ts` pin it.
+contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `test/design-to-code.test.ts` pin it.
 
 ### Prereq
 - [ ] You have a real export from **"Export design system + all page frames"** (Layer B): a

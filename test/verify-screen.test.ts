@@ -543,8 +543,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // ================================================================= regressions from a recorded run
 // Every fixture below is the REAL export / probe output of a recorded run, pruned from a
 // live-test export, names replaced (the pruned exports gave byte-identical expectations and
-// audits to the full ones). The "before" numbers in the comments are what the
-// pre-fix verify-screen.js printed on these exact files.
+// audits to the full ones). The "not N" numbers in the comments are the counts
+// a verify-screen.js that kept hidden layers would show on these exact files.
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
   const load = <T,>(f: string, guard: DocGuard<T>): T => readFixture(path.join(FX, f), guard);
@@ -564,11 +564,11 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const hiddenIn = (arr: Array<{ nodeId: string }>, H: Set<string | undefined>) => arr.filter((x) => H.has(x.nodeId)).length;
 
   console.log("verify-screen — hidden layers are never specified:");
-  // before: specs 272 hidden 83 · instances 112 hidden 61 · interactions 28 hidden 22
-  ok("[hidden] Jet Roles: 0 specs, 0 instances, 0 interactions on hidden layers (were 83/272, 61/112, 22/28)",
+  // to rule out: hidden specs 83 of 272 · instances 61 of 112 · interactions 22 of 28
+  ok("[hidden] Jet Roles: 0 specs, 0 instances, 0 interactions on hidden layers (not 83/272, 61/112, 22/28)",
     () => hiddenIn(jrExp.nodes, jrHidden) === 0 && hiddenIn(jrExp.instances, jrHidden) === 0 && hiddenIn(jrExp.interactions, jrHidden) === 0);
-  // before: 75 of 233, 45 of 87, 11 of 12
-  ok("[hidden] Guided Policies: 0 / 0 / 0 on hidden layers (were 75/233, 45/87, 11/12)",
+  // to rule out: 75 of 233, 45 of 87, 11 of 12
+  ok("[hidden] Guided Policies: 0 / 0 / 0 on hidden layers (not 75/233, 45/87, 11/12)",
     () => hiddenIn(gpExp.nodes, gpHidden) === 0 && hiddenIn(gpExp.instances, gpHidden) === 0 && hiddenIn(gpExp.interactions, gpHidden) === 0);
   ok("[hidden] what was skipped is counted: 61+45 instances and 22+11 interactions — the numbers originally reported",
     () => jrExp.counts.hidden.instancesSkipped === 61 && jrExp.counts.hidden.interactionsSkipped === 22 &&
@@ -590,7 +590,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — a field the probe names differently is LOUD:");
   const jrRep = compare(jrExp, jrMeasured);
-  // before: the JR report had 0 border-radius deltas and nothing said radius was never checked.
+  // to rule out: a JR report with 0 border-radius deltas and nothing saying radius was never checked.
   ok("[radius] the real Jet Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
     /'borderRadius' present on 0 of \d+ nodes that state it \(probe sent 'radius'\)/.test(jrRep.headline) && jrRep.coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius" && f.measuredOn === 0));
   ok("[radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
@@ -603,7 +603,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[radius] with the canonical key, the four dropped Jet Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
     () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c)?.expected === 12 && rd("20173:142077", c)?.actual === 0) &&
     ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c)?.expected === 12 && rd("20173:142137", c)?.actual === 0));
-  ok("[radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
+  ok("[radius] a bottom-only radius ({bl,br}) is specified at all — not only radius.tl is read",
     () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")?.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
   ok("[radius] the Guided Policies card that ships 16 where the design says 12 is caught",
     () => gpRep.deltas.some((d) => d.nodeId === "18580:60755" && d.field === "border-radius" && d.expected === 12 && d.actual === 16));
@@ -622,7 +622,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     Object.assign(must(pg, "pg node 20173:142142"), { y: posPg.y, height: posPg.height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
-    ok("[xy] Jet Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
+    ok("[xy] Jet Roles on the recorded broken build: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
       () => !!place && place.severity === "high" && /y=1366 in a 1236-high frame/.test(String(place.actual)));
     ok("[xy] …and its y is a delta against the design's own position (864)", () => r.deltas.some((d) => d.nodeId === "20173:142142" && d.field === "y (frame-relative)" && d.expected === 864 && d.actual === 1342));
   }
@@ -634,7 +634,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
     // (a hug TEXT's x is its box's left edge — 1296, what a Range reports — not the ink start 1296.81)
-    ok("[xy] Guided Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
+    ok("[xy] Guided Policies on the recorded broken build: the Status header is +19.75px right of the design (1296 → 1315.75)",
       () => !!d && d.expected === 1296 && d.actual === 1315.75 && d.delta === 19.75);
   }
 
@@ -643,7 +643,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     const ids = new Set(m.nodes?.map((n) => String(n.nodeId)));
     ok(`[cover] ${name}: nodesExpected − nodesMeasured == notMeasured.length, one row per node`,
       () => rep.coverage.nodesExpected - rep.coverage.nodesMeasured === rep.notMeasured.length && new Set(rep.notMeasured.map((n) => n.nodeId)).size === rep.notMeasured.length);
-    ok(`[cover] ${name}: no id is both 'never measured' and in measured.nodes (6 were on GP before)`, () => rep.notMeasured.every((n) => !ids.has(String(n.nodeId))));
+    ok(`[cover] ${name}: no id is both 'never measured' and in measured.nodes`, () => rep.notMeasured.every((n) => !ids.has(String(n.nodeId))));
     ok(`[cover] ${name}: the headline leads with nodes measured N/M`, () => rep.headline.includes(`nodes measured ${rep.coverage.nodesMeasured}/${rep.coverage.nodesExpected}`));
     ok(`[cover] ${name}: unmeasured nodes still block the pass`, () => rep.verdict !== "pass" && rep.why.some((w) => /never measured/.test(w)));
   }
@@ -654,7 +654,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     () => tokenFor(hoverRow, "backgroundColor") === "Backgrounds/Row Hover" && tokenFor(hoverRow, "padding") === "Space 3 / Space 4");
   {
     // The row measured hovered but NOT repainting (#121319 still): a real background delta, and its
-    // token must be the fill's — the old code said "Space 4".
+    // token must be the fill's, not "Space 4".
     const m = clone(jrMeasured);
     must(must(m.nodes, "m.nodes").find((n) => n.nodeId === "20173:142096"), "m.nodes '20173:142096'").states = { hover: { backgroundColor: "#121319ff" } };
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142096" && x.field === "background");
@@ -679,9 +679,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="1359:21364"]', selectorCount: 0 }] }); return must(r.interactions[0], "r.interactions[0]").result === "not-probed"; })());
 
   console.log("verify-screen — none of the eight false-positive families is a high delta:");
-  // Before: 4 of 4 highs on the real GP probe were wrong, and 2 of 2 on JR.
-  ok("[fp] the real Guided Policies probe output now yields 0 high deltas (was 4)", () => gpRep.summary.high === 0);
-  ok("[fp] the real Jet Roles probe output now yields 0 high deltas (was 2)", () => jrRep.summary.high === 0);
+  // The real GP probe's 4 highs and JR's 2 were all false positives; none is left.
+  ok("[fp] the real Guided Policies probe output yields 0 high deltas (not 4)", () => gpRep.summary.high === 0);
+  ok("[fp] the real Jet Roles probe output yields 0 high deltas (not 2)", () => jrRep.summary.high === 0);
   // The same probe fed the REAL DOM evidence from the independent Playwright pass.
   // GuidedPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
   interface DomBox { tag: string; width: number; height: number; x: number; y: number; backgroundColor: string; color: string; radius: number[]; padding: number[]; svgFill?: string }
@@ -726,7 +726,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[tolerance] the Jet Roles filter button's Rows Spacing gap 8 → 12 and width 110 → 115.83 are still reported",
     () => jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "gap" && d.expected === 8 && d.actual === 12) &&
     jrRep.deltas.some((d) => d.nodeId === "I20173:142047;885:2723" && d.field === "width" && d.actual === 115.83));
-  ok("[tolerance] 111.83×38 against 110×36 is reported now (size tolerance 1, was an inclusive 2)",
+  ok("[tolerance] 111.83×38 against 110×36 is reported (size tolerance 1, not an inclusive 2)",
     () => gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "height" && d.expected === 36 && d.actual === 38) &&
     gpRep.deltas.some((d) => d.nodeId === "I20024:134073;885:2723" && d.field === "width" && d.actual === 111.83));
   ok("[tolerance] the content column's extra 24px bottom padding is reported (padding was never read from layout.padding)",
@@ -745,7 +745,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — 'components never built' is gone; tag coverage is named as such:");
   for (const [name, rep] of [["Jet Roles", jrRep], ["Guided Policies", gpRep]] as const) {
-    ok(`[components] ${name}: 0 components reported absent (was ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
+    ok(`[components] ${name}: 0 components reported absent (not ${name === "Jet Roles" ? 31 : 52} 'never built'), and no 'never built' reason`,
       rep.summary.componentsAbsent === 0 && rep.missingComponents === undefined && !rep.why.some((w) => /never built/.test(w)));
     ok(`[components] ${name}: the metric is named tag coverage, not presence, and counts visible sets only`,
       () => /tag coverage, not presence/.test(rep.headline) && rep.untaggedInstanceSets.every((s) => s.nodeIds.every((id) => !(name === "Jet Roles" ? jrHidden : gpHidden).has(id))));
@@ -822,8 +822,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 
 // ---------- wrong-kind inputs are one line + exit 2 (doc-guards.ts) — never compared as `{}` ----------
-// A non-object expectation or measurement used to be read as an EMPTY document, so --compare graded
-// nothing and printed a verdict about it.
+// A non-object expectation or measurement is not read as an EMPTY document (--compare would grade
+// nothing and print a verdict about it).
 (() => {
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-shape-"));
@@ -840,7 +840,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     run("--compare", exp, meas, "--interactions", put("ints.json", [{ trigger: "on_click", ok: true }])).status === 2);
   okOuter("[shape] --expect: a screen argument that is not a screen export -> exit 2, one line",
     oneLine(run("--expect", put("notscreen.json", { nodes: "none" })), /screen export: 'notscreen\.json' is not a screen export/));
-  okOuter("[args] `--out --force` is '--out needs a value' (was: an artefact set named --force)",
+  okOuter("[args] `--out --force` is '--out needs a value' (not an artefact set named --force)",
     (() => { const r = run("--expect", put("s.json", { nodes: [{ id: "1:1", type: "FRAME", name: "S" }] }), "--out", "--force"); return r.status === 2 && /verify-screen: --out needs a value/.test(r.stderr); })());
 })();
 

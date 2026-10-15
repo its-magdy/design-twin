@@ -50,7 +50,7 @@ check("web-tailwind: `--font-figma-*` and STRING tokens left out of theme.css", 
 const statuses = /const STATUSES = \[([^\]]*)\]/.exec(validate)?.[1]?.match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
 check("the map `status` enum in SKILL.md equals map-validate.ts STATUSES", statuses.length > 0 && skill.includes("`" + statuses.join("` | `") + "`"));
 check("SKILL.md mentions the optional `note` and that other keys are rejected", /`note`/.test(skill) && /any other key.{0,200}rejected/i.test(skill));
-check("drift-lint no longer 'exits non-zero at 0%'; 0% is a warning with a confirm", !/exits non-zero at 0%/.test(skill) && /0% \(and `catalog-rekeyed`\) is a warning/.test(skill));
+check("drift-lint does not say 'exits non-zero at 0%'; 0% is a warning with a confirm", !/exits non-zero at 0%/.test(skill) && /0% \(and `catalog-rekeyed`\) is a warning/.test(skill));
 check("drift-lint/map-bootstrap read the library catalogs (`components.library.json`, `libraries/`)", /components\.library\.json/.test(skill) && /libraries\/\*\/components\.json.{0,80}libraries\/index\.json/.test(skill) && /design_drift_lint/.test(skill) && /map-bootstrap does the same only with `--screen`/.test(skill));
 check("a subagent records the short list, sets awaiting-user and does not confirm for the user (skill and agent)", /subagent.{0,200}awaiting-user.{0,200}(not|never) confirm/i.test(skill) && /awaiting-user.{0,200}(not|never) confirm|(not|never) confirm.{0,200}(list|map)/i.test(builder));
 
@@ -173,7 +173,7 @@ console.log("verify docs (run integrity + agent safety):");
     && /First close every page and browser of the app you opened \(§2\)/.test(verifier) && /first closes every page and browser of the app it opened, then runs the shipped probe/.test(verifySkill));
   check("the probe writes only after closing its own browser (verifier, verify skill, references/verify.md)",
     [verifier, verifySkill, verifyRef].every((t) => /opens and closes its own browser,? and writes only after closing it/.test(t)));
-  check("the verifier no longer says only `done` writes into the project; it names the probe's and --compare's own writes, each with no page open",
+  check("the verifier does not say only `done` writes into the project; it names the probe's and --compare's own writes, each with no page open",
     !/Only `done` writes into the project/.test(verifier) && /Three things write into the project, each with no page of the app open: the probe .{0,200}`--compare` .{0,120}`done`/.test(verifier));
   // The run cache is the project's own node_modules (nearest package.json, or the hoisted workspace root,
   // never past .git); the tmpdir fallback (no package.json, PnP) is not shared across the sandbox
@@ -272,7 +272,7 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
       && /never `ok: false`|NEVER `ok: false`/.test(t) && /`data-dt-node` tag (on or )?INSIDE|tag INSIDE|on or inside/i.test(t)));
   check("the dialog contract selectors, in order (verifier, verify skill, references)",
     [verifier, verifySkill, verifyRef].every((t) => /`:modal`, `dialog\[open\]`, `\[role=dialog\]`, `\[role=alertdialog\]`,\s*`\[aria-modal="true"\]`, `:popover-open`/.test(t)));
-  check("the agent does not re-drive rows the probe drove, drives the rest as before, and its own detector uses the same contract — never `[role=dialog]` alone",
+  check("the agent does not re-drive rows the probe drove, drives the rest, and its own detector uses the same contract — never `[role=dialog]` alone",
     /Do not re-drive a row the probe drove with `ok: true`/.test(verifier) && /SAME contract the probe does — never a `\[role=dialog\]`-only\s+detector/.test(verifier)
     && /does NOT re-drive rows the probe drove with `ok: true`/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifyRef));
   check("builders tag a dialog/overlay's ROOT with its destination frame id (data-dt-node); an untagged dialog is not-probed",

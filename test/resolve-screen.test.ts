@@ -270,7 +270,7 @@ ok("'positions' (exact layer name only, no title collision on THIS query string)
 
 
 // ---------- an index that is not an index is treated as no index (doc-guards.ts) — not iterated as one ----------
-ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (was: each CHARACTER walked as a page dir)", (() => {
+ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (no CHARACTER is walked as a page dir)", (() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-shape-"));
   fs.mkdirSync(path.join(tmp, "pages"), { recursive: true });
   fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify({ pageDirs: "__Optimization_management_" }));
@@ -427,7 +427,7 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
   fs.writeFileSync(path.join(dir, "plan", "RotaSettings.json"), JSON.stringify({ file: "RotaSettings.json", screenName: "Rota Prefs", nodeId: "4:1" }));
   const pub = resolveScreen(dir, "SeedSwaps");
   ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" (got ${pub.status})`, pub.status === "resolved" && pub.row.id === "1:1");
-  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds as before", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
+  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
   const staff = resolveScreen(dir, "StaffRoles");
   ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows is AMBIGUOUS, listing both node ids (got ${staff.status})`,
     staff.status === "ambiguous" && staff.candidates.map((c) => c.id).sort().join() === "2:1,2:2");

@@ -132,25 +132,25 @@ check("CLI --json emits the audit for the chosen platform", parsed.platform === 
 const badExit = spawnSync(process.execPath, [cli, "x.json", "--platform", "tvos"], { stdio: "ignore" }).status;
 check("CLI rejects an unknown --platform with exit 2", badExit === 2);
 {
-  // Wrong-kind inputs are one line + exit 2 (doc-guards.ts), where they used to audit nothing silently
-  // (a non-screen JSON) or die with a stack (a malformed design-system file, a bad --grid).
+  // Wrong-kind inputs are one line + exit 2 (doc-guards.ts), never a silent audit of nothing
+  // (a non-screen JSON) or a stack (a malformed design-system file, a bad --grid).
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "audit-shape-"));
   const put = (name: string, doc: unknown): string => { const f = path.join(tmp, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
   const login = path.join(import.meta.dirname, "fixtures/audit/flawed-login.json");
   const run = (args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: tmp });
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
-  check("[shape] a screen argument that is not a screen export -> exit 2, one line (was: an empty audit)",
+  check("[shape] a screen argument that is not a screen export -> exit 2, one line, not an empty audit",
     oneLine(run([put("not-a-screen.json", { hello: "world" }), "--json"]), /screen export: '.*not-a-screen\.json' is not a screen export/));
   check("[shape] --catalog that is not a component catalog -> exit 2, one line",
     oneLine(run([login, "--catalog", put("cat.json", { components: [{ type: "COMPONENT" }] }), "--json"]), /component catalog: '.*cat\.json' is not a component catalog/));
   const ds = path.join(tmp, "ds");
   fs.mkdirSync(ds);
   fs.writeFileSync(path.join(ds, "tokens.json"), JSON.stringify({ variables: "none" }));
-  check("[shape] a --design-system tokens.json that is not a token catalog -> exit 2 (was: a TypeError stack)",
+  check("[shape] a --design-system tokens.json that is not a token catalog -> exit 2, not a TypeError stack",
     oneLine(run([login, "--design-system", ds, "--json"]), /design-system tokens: '.*tokens\.json' is not a token catalog/));
   check("[shape] a --variables file that is not a token catalog -> exit 2, one line",
     oneLine(run([login, "--variables", put("vars.json", { collections: {} }), "--json"]), /variables: '.*vars\.json' is not a token catalog/));
-  check("[grid] `--grid abc` is refused (was: silently the 4px default)", oneLine(run([login, "--grid", "abc", "--json"]), /--grid must be a positive number of px, got "abc"/));
+  check("[grid] `--grid abc` is refused, not silently the 4px default", oneLine(run([login, "--grid", "abc", "--json"]), /--grid must be a positive number of px, got "abc"/));
   check("[grid] `--grid -1` (space form) reaches the same message, not '--grid needs a value'", oneLine(run([login, "--grid", "-1", "--json"]), /--grid must be a positive number of px, got "-1"/));
   check("[args] `--out --json` is '--out needs a value', never a report written to a file named --json", (() => {
     const r = run([login, "--out", "--json"]);
@@ -161,7 +161,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
 // ---------- the platform is a GUESS unless it was given -------------------------
 // Touch-target minimums, shadow spread, blur and blend-mode support are all platform-dependent, so
 // a wrong guess silently mis-audits the whole screen. The guess still happens — refusing to run is
-// worse — but it must be visible, and it used to surface only as one designer question among 13.
+// worse — but it must be visible, not buried as one designer question among 13.
 (() => {
   const doc = screen;
   const guessed = audit([{ doc, label: "login" }]);
@@ -238,8 +238,8 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- no finding may cite a layer the designer switched off ----------
 // Real exports (test/fixtures/livetest3/verify/, built from a field run and proven to audit
-// byte-identically to the full files). Before: 44 of Jet Roles' 119 findings (and 40 of Guided
-// Policies' 105) cited hidden nodes, including I7314:87216;6:87 "_selected icon" with the instruction
+// byte-identically to the full files). No finding cites a hidden node (they made up 44 of Jet Roles' 119 findings and 40 of Guided
+// Policies' 105), such as I7314:87216;6:87 "_selected icon" with the instruction
 // "the build uses these values EXACTLY".
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
@@ -327,7 +327,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 // ---------- --grid default is echoed, and flagged when the design system's own scale disagrees ----------
 {
   // The REAL tokens.json shape: a flat variables[] naming its collection. The legacy
-  // {collections[].variables[].valuesByMode} shape this test used to feed exists in no export.
+  // {collections[].variables[].valuesByMode} shape exists in no export.
   const step = (name: string, v: number) => ({ name, type: "FLOAT" as const, collection: "Spacing", tier: "primitive" as const, values: { "Mode 1": v } });
   const dsTokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], theming: false }], variables: [step("Space 1", 8), step("Space 2", 16), step("Space 3", 24)] };
   const withDefault = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens } });
@@ -368,7 +368,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     pos.json.findings.length > 0 && collision(pos.json, "Space 4").length === 0);
   check("Jet Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
     blockerSet(pos.json.findings.filter((f) => f.crossFile)).join() === blockerSet(posCross.findings).join() && blockerSet(posCross.findings).length > 0);
-  check("and it no longer claims the screen's .vars.json 'was not available' while it sits beside the screen",
+  check("and it does not claim the screen's .vars.json 'was not available' while it sits beside the screen",
     !pos.json.findings.some((f) => /was not available/.test(f.message)));
   check("the union's Space 4 ambiguity stays visible as the -elsewhere NOTE, naming the screen it belongs to",
     /token-name-collision-elsewhere/.test(pos.md) && (pos.json.crossFile.findings || []).some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Assembly_Type__18411_84111/.test(f.message)));
@@ -412,7 +412,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
   fs.writeFileSync(path.join(cwd, "design", "audit", "Home__1_1.json"), JSON.stringify({ findings: "none" }));
   const g = auditGateStatus(cwd, null, "Home");
-  check("[gate-shape] an audit file that is not an audit report is reported unreadable (was: read blindly as 0 blockers)",
+  check("[gate-shape] an audit file that is not an audit report is reported unreadable, not read blindly as 0 blockers",
     g.auditFile === "design/audit/Home__1_1.json" && g.unreadable === true && g.blockers.length === 0);
 })();
 
@@ -441,8 +441,8 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
       { id: "1:10", type: "TEXT", name: "Label", text: "Label", autoResize: "width_and_height", box: { w: 100, h: 24 } },
     ] },
   ] }]), { platform: "web" });
-  check("a hidden child does not count toward a hug row's height (was: 56 ≠ 48)", !onNode(res, "self-inconsistent-geometry", "1:2"));
-  check("an absolute child and its gap do not count toward a column's height (was: 318 ≠ 270)", !onNode(res, "self-inconsistent-geometry", "1:5"));
+  check("a hidden child does not count toward a hug row's height (not 56 ≠ 48)", !onNode(res, "self-inconsistent-geometry", "1:2"));
+  check("an absolute child and its gap do not count toward a column's height (not 318 ≠ 270)", !onNode(res, "self-inconsistent-geometry", "1:5"));
   check("a real hug mismatch is still reported (16+24+16 = 56 ≠ 40)", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && f.expectedH === 56));
   check("the hug row's message says a hug box's height IS the content height", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
 }
@@ -464,7 +464,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
       { id: "2:10", type: "TEXT", name: "Caption", text: "Caption", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 80, h: 20, x: 150, y: 150 } },
     ] },
   ] }]), { platform: "web" });
-  check("white absolute header labels after a white TEXT sibling are not 1:1 (was: low-contrast on both)", !onNode(res, "low-contrast", "2:4") && !onNode(res, "low-contrast", "2:5"));
+  check("white absolute header labels after a white TEXT sibling are not 1:1 (not low-contrast on both)", !onNode(res, "low-contrast", "2:4") && !onNode(res, "low-contrast", "2:5"));
   check("white text over an overlapping pale chip IS low contrast", onNode(res, "low-contrast", "2:8"));
   check("a sibling that does not overlap the text is not its backdrop", !onNode(res, "low-contrast", "2:10"));
   const lc = codes(res, "low-contrast").find((f) => f.nodeId === "2:8");
@@ -539,7 +539,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     raster.length === 1 && /1\.89 MB — a raster image embedded in an SVG shell; use it as an image/.test(raster[0]?.message ?? "") && /PNG\/JPG export/.test(raster[0]?.message ?? "") && !/<path>|too heavy/.test(raster[0]?.message ?? "") && raster[0]?.embeddedRaster === 1);
   const paths = codes(mk({ file: "assets/big.svg", bytes: 2465864, paths: 1523 }), "heavy-asset");
   // the pull's rule — an <image> in an illustration of 2000 paths is still "too many paths", not a shell.
-  // pre-fix: the raster wording (the audit read embeddedRaster alone).
+  // the audit reads the path count too, not embeddedRaster alone (which would give the raster wording).
   const busy = codes(mk({ file: "assets/illustration.svg", bytes: 2400000, paths: 2000, embeddedRaster: 1 }), "heavy-asset");
   check("embeddedRaster with 2000 paths keeps the paths wording (the bridge's raster-shell rule: under 50 paths)",
     busy.length === 1 && /2\.29 MB \/ 2000 <path> elements — too heavy to inline/.test(busy[0]?.message ?? "") && !/SVG shell/.test(busy[0]?.message ?? "") && busy[0]?.embeddedRaster === 1);
@@ -558,7 +558,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   const screen5 = g4([{ id: "5:1", type: "FRAME", name: "Items", children: [button("k-set"), { id: "5:9", type: "INSTANCE", name: "icons/line/magnifier-search", component: "icons/line/magnifier-search", asset: "assets/magnifier-search.svg", mainComponent: { name: "icons/line/magnifier-search", id: "18:31", key: "k-icon", remote: true } }] }]);
   const dsOnly = audit(screen5, { platform: "web", designSystem: { components: cat([buttonSet("k-set")]) } });
   const b = codes(dsOnly, "missing-component-states")[0];
-  check("--design-system alone checks states (was: nothing, no finding)", !!b && b.severity === "warning" && JSON.stringify(b.missing) === JSON.stringify(["pressed", "focus"]));
+  check("--design-system alone checks states (it is not skipped with no finding)", !!b && b.severity === "warning" && JSON.stringify(b.missing) === JSON.stringify(["pressed", "focus"]));
   check("the row says which catalog and how it matched", dsOnly.components.some((c) => c.name === "Button" && c.known && c.matchedBy === "key" && c.catalog === "the design system"));
   check("an icon instance (exported as an asset) is not a control to check", !dsOnly.components.some((c) => /search/.test(c.name)) && !codes(dsOnly, "component-states-unchecked").length);
   const none = audit(screen5, { platform: "web" });
@@ -587,7 +587,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   ] };
   const s6 = g4([{ id: "6:1", type: "FRAME", name: "Items" }]);
   const given8 = audit(s6, { platform: "web", grid: 8, designSystem: { tokens } });
-  check("--grid 8 on a 4-step spacing scale → gridMismatch 4 (was: never, the reader looked for collections[].variables)", given8.gridMismatch === 4 && /as given; this system's own spacing tokens step by 4px, not 8px/.test(toMarkdown(given8)));
+  check("--grid 8 on a 4-step spacing scale → gridMismatch 4 (the reader finds the flat variables[], not collections[].variables)", given8.gridMismatch === 4 && /as given; this system's own spacing tokens step by 4px, not 8px/.test(toMarkdown(given8)));
   check("the default 4 on a 4-step scale → no mismatch", audit(s6, { platform: "web", designSystem: { tokens } }).gridMismatch === null);
   const eight: TokensDoc = { variables: [space("S1", 8), space("S2", 16), space("S3", 24)] };
   check("an 8-step scale with the default grid → gridMismatch 8", audit(s6, { platform: "web", designSystem: { tokens: eight } }).gridMismatch === 8);
@@ -610,7 +610,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   check("[CLI] with design-system/, the library beside it still defines the Button's states", viaDs.components.some((c) => c.name === "Button" && c.known && c.catalog === libDir));
   check("[CLI] …and the report names it, with its by-key share of the screen's collections", viaDs.crossFile?.notChecked.some((n) => n.includes(`--design-system ${libDir}`) && /binds 1 of its 2 variable collection/.test(n)) === true);
   const viaLib = runAudit(libDir);
-  check("[CLI] --design-system <library dir> reads its components.json (was: silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
+  check("[CLI] --design-system <library dir> reads its components.json (not silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
   const cc = parseAs(execFileSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.relative(root, screenFile), "--design-system", libDir, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isCrossCheckOut, "cross-check --json");
   check("[CLI] cross-check reads a library dir's components.json too", !cc.findings.some((f) => /no components\.local\.json/.test(f.message)) && (cc as { inputs?: { components?: boolean } }).inputs?.components === true);
 }
@@ -671,7 +671,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     { name: "Toggle", id: "2:2", type: "COMPONENT_SET" as const, key: "k-set-a", props: { Status: { key: "Status", type: "VARIANT" as const, options: ["Checked", "Unchecked", "Disabled"] } } },
   ] };
   const t = audit(g4([{ id: "8:3", type: "FRAME", name: "Items", children: [toggleUse] }]), { platform: "web", libraries: [{ rel: "design/export/libraries/kit-copy-11111111", name: "Kit Copy", collectionKeys: [], components: toggleLib }] });
-  check("a bare COMPONENT sharing the name does not hide the set's states (was: toggle has no selected/disabled)", !codes(t, "missing-component-states").length && t.components.some((c) => c.name === "Toggle" && c.present.includes("selected") && c.present.includes("disabled")));
+  check("a bare COMPONENT sharing the name does not hide the set's states (the toggle keeps its selected/disabled)", !codes(t, "missing-component-states").length && t.components.some((c) => c.name === "Toggle" && c.present.includes("selected") && c.present.includes("disabled")));
 }
 {
   const inst = (id: string, name: string, extra: Partial<IrNode> = {}): Parameters<typeof node>[0] => ({ id, type: "INSTANCE", name, mainComponent: { name: "Status=Default", setName: name, key: `v-${id}`, setKey: `s-${id}`, remote: true }, box: { w: 200, h: 40 }, ...extra });
@@ -911,7 +911,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
 
 {
   // finding ids are `code` / `code@nodeId` (+ `~n`), on every finding — so a blocker added EARLIER in
-  // the report leaves the others' ids alone. Before: `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
+  // the report leaves the others' ids alone. Not `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
   const text = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name, missingFont: true, font: { family: "Acme Sans", size: 14 } });
   const run = (nodes: NodeInput[]) => audit({ doc: screenExport([{ id: "1:0", type: "FRAME", name: "Sample App", children: nodes }], { screen: "Sample App" }), label: "Sample App" }, { platform: "web" });
   const two = run([text("1:1", "A"), text("1:2", "B")]);
@@ -1040,7 +1040,7 @@ console.log("audit design-data checks:");
   check("nothing painted behind → measured on an assumed white page, info", assumed.length === 1 && assumed[0]?.severity === "info" && /assumed white page/.test(assumed[0].message));
   check("a stroked layer that is no control (a card) is not judged",
     codes(page([{ id: "41:9", type: "FRAME", name: "Summary Card", strokes: { colors: ["#46464f"], weight: 1 }, fills: [{ type: "solid", color: "#292931" }] }]), "non-text-contrast").length === 0);
-  // The backdrop refactor keeps text contrast as it was: the placeholder's low-contrast is still measured on the composited fill.
+  // The backdrop refactor keeps text contrast unchanged: the placeholder's low-contrast is still measured on the composited fill.
   const lc = codes(page([field("41:2", { text: "Enter a name" })], "#121319"), "low-contrast");
   check("text contrast still composites the same backdrop (#d4d4d4 on #292931 passes — no low-contrast)", lc.length === 0);
 }

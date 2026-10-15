@@ -444,7 +444,7 @@ const g17Nodes: VerifySpec[] = [
   { nodeId: "70:4", name: "Spool Cell", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover", ancestorIds: ["70:3", "70:2"] },
   { nodeId: "70:5", name: "Action Cell", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover", drawnStateFrom: "70:3", ancestorIds: ["70:3", "70:2"] },
   { nodeId: "70:6", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:3", ancestorIds: ["70:5", "70:3", "70:2"] },
-  // an expectation written before drawnStateFrom: the control is hovered itself, as before
+  // an expectation written before drawnStateFrom: the control is hovered itself
   { nodeId: "70:21", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", ancestorIds: ["70:20", "70:2"] },
   { nodeId: "70:8", name: "Swatch", type: "FRAME", backgroundColor: "#2c2c34ff" },
   { nodeId: "70:11", name: "Queue Button", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:10", ancestorIds: ["70:10"] },
@@ -500,7 +500,7 @@ check("a control inside the row drawn hovered (drawnStateFrom = the row) → the
   ROW1.test(hoverVia(remove)) && stateStyles(remove, "hover")?.backgroundColor === "rgb(41, 41, 49)" && remove?.note === undefined);
 check("…a cell inherited from the row: hovered through the row (hoverVia), painted by it in the state",
   ROW1.test(hoverVia(cell5)) && isJsonObject(stateStyles(cell5, "hover")?.paintedBy) && JSON.stringify(stateStyles(cell5, "hover")?.paintedBy) === JSON.stringify({ backgroundColor: "rgb(70, 70, 79)", via: "ancestor", tag: "tr", depth: 1, dt: "70:3" }));
-check("an old expectation (no drawnStateFrom) hovers the control itself, as before (its own :hover, red; no hoverVia)",
+check("an old expectation (no drawnStateFrom) hovers the control itself (its own :hover, red; no hoverVia)",
   stateStyles(oldRemove, "hover")?.backgroundColor === "rgb(255, 0, 0)" && oldRemove?.hoverVia === undefined);
 const queue = node(m17, "70:11");
 check("a control covering its whole drawn-hovered container → no free point: the element itself is hovered, with the note",

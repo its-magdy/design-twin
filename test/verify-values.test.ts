@@ -53,10 +53,10 @@ console.log("a probe's px strings are the numbers they spell:");
   safe("radiusCorners(['8px','8px','8px','8px']) → [8,8,8,8]; '8px 4px' → [8,4,8,4]", () =>
     JSON.stringify(radiusCorners(["8px", "8px", "8px", "8px"])) === "[8,8,8,8]" && JSON.stringify(radiusCorners("8px 4px")) === "[8,4,8,4]");
   safe("a pill's '3.35544e+07px' radius is a circle on a 64×24 box, like the design's 12", () => !gapOn(r, "2:4", /radius/) && !deltaOn(r, "2:4", /radius/));
-  safe("a percentage radius is not read as px (a hand-written '50%' used to become 50)", () => radiusCorners("50%") === null && radiusCorners(["50%", "8px", "8px", "8px"]) === null);
-  // padding: "16px" strings used to be NaN → comparePadding returned "no mismatch" — a silent pass
+  safe("a percentage radius is not read as px (a hand-written '50%' is not read as 50)", () => radiusCorners("50%") === null && radiusCorners(["50%", "8px", "8px", "8px"]) === null);
+  // padding: "16px" strings are not NaN → comparePadding does not return "no mismatch" (a silent pass)
   const p = compare(exp, measured([{ nodeId: "2:2", styles: loose({ padding: ["8px", "24px", "8px", "24px"] }) }]));
-  safe("padding ['8px','24px',…] against [8,16,8,16] is a mismatch (was a silent pass on NaN)", () => {
+  safe("padding ['8px','24px',…] against [8,16,8,16] is a mismatch (not a silent pass on NaN)", () => {
     const d = deltaOn(p, "2:2", /^padding$/); return !!d && JSON.stringify(d.actual) === "[8,24,8,24]";
   });
 
@@ -88,13 +88,13 @@ console.log("a probe's px strings are the numbers they spell:");
   safe("fontWeight 'bolder' → not measured (quoted), not a silent pass", () => /bolder/.test(gapOn(fw, "2:1", /font-weight/)?.why ?? "") && !deltaOn(fw, "2:1", /font-weight/) && fw.coverage.fieldsChecked === 1);
   // a null inside a list is the probe saying it could not read one side — reported null
   const nl = compare(exp, measured([{ nodeId: "2:2", styles: loose({ borderRadius: [8, null, 8, 8], padding: [8, null, 8, 16] }), unmeasured: { borderRadius: "one corner unreadable", padding: "one side unreadable" } }]));
-  safe("[8,null,8,8] radius / padding → reported null with the probe's reason", () => gapOn(nl, "2:2", /radius/)?.why === "one corner unreadable" && gapOn(nl, "2:2", /^padding$/)?.why === "one side unreadable");
+  safe("[null-reason] radius / padding → reported null with the probe's reason", () => gapOn(nl, "2:2", /radius/)?.why === "one corner unreadable" && gapOn(nl, "2:2", /^padding$/)?.why === "one side unreadable");
   // an object where a colour belongs is not measured (it is never read as "[object object]" → a high)
   const oc = compare(exp, measured([{ nodeId: "2:1", styles: loose({ color: {}, fontFamily: { family: "Inter" } }) }]));
   safe("color {} / fontFamily {} → not measured, no delta", () => !!gapOn(oc, "2:1", /^color$/) && !!gapOn(oc, "2:1", /font-family/) && oc.deltas.length === 0);
   // the producer writes letter-spacing unit "percent" (lower case) — a share of the font size
   const pe = buildExpectation([doc([{ ...title, font: { family: "Inter", size: 20, letterSpacing: { value: -2, unit: "percent" } } }])]);
-  safe("-2 percent on 20px text expects -0.4px (was -2)", () => pe.nodes.find((n) => n.nodeId === "2:1")?.letterSpacing === -0.4);
+  safe("-2 percent on 20px text expects -0.4px (not -2)", () => pe.nodes.find((n) => n.nodeId === "2:1")?.letterSpacing === -0.4);
   safe("…so a build measuring '-0.4px' has no letter-spacing delta", () => !deltaOn(compare(pe, measured([{ nodeId: "2:1", styles: loose({ letterSpacing: "-0.4px" }) }])), "2:1", /letter-spacing/));
   // negative x/y and letter-spacing are legitimate values and are still compared
   const neg = compare(buildExpectation([doc([{ ...title, font: { family: "Inter", size: 20, letterSpacing: { value: -0.5, unit: "px" } } }])]), measured([{ nodeId: "2:1", styles: loose({ letterSpacing: "-1.5px" }) }]));
@@ -155,7 +155,7 @@ console.log("an icon drawn by an <img> has no readable fill:");
 // ---------------------------------------------------------------- the NEVER MEASURED denominator
 console.log("NEVER MEASURED counts the nodes that state the field:");
 {
-  // Only the Status Pill states `borderWidth`; 40 other measured nodes carry none of it. Before: "present in 0 of 41 measurements".
+  // Only the Status Pill states `borderWidth`; 40 other measured nodes carry none of it. Not "present in 0 of 41 measurements".
   // (`opacity` is not the example: every node that paints or carries copy states it)
   const rows: NodeInput[] = Array.from({ length: 40 }, (_, i): NodeInput => ({ type: "TEXT", id: `3:${i + 1}`, name: `Name ${i + 1}`, text: `Person ${i + 1}`, font: { family: "Inter", size: 14 } }));
   const e2 = buildExpectation([doc([...rows, { ...pill, strokes: { colors: ["#2e7d32"], weight: 1 } }])]);
