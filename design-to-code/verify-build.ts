@@ -594,8 +594,9 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
 // older way and never blocks; one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
 // isRecordV2Shaped). A recorded@1 a person added keys to that no record writes (doc-guards.ts recordV1HandKeys) blocks
 // with ONE message naming them — not one per @2 key it lacks (one holding nothing but such keys is not a record, and
-// says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks. These messages are saved in the plan
-// (verification.hook.blocking): scripts are named in words.
+// says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks (plus one
+// per key it holds that was edited). These messages are saved in the plan (verification.hook.blocking): scripts are
+// named in words.
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
 function recordedEdits(plan: Plan, cwd: string): string[] {
@@ -633,7 +634,7 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
   const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
   if (lacks.length) {
     const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
-    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.join(", ")} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
   }
   return out;
 }

@@ -2090,7 +2090,7 @@ function recordedEdits(plan, cwd) {
   const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
   if (lacks.length) {
     const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
-    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.join(", ")} \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
   }
   return out;
 }

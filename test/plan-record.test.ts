@@ -472,7 +472,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
   write((_, rec) => { delete rec.schema; });
   const noSchema = recordBlocks();
   check(`the schema removed from a @2 block → still a @2 block, and it BLOCKS once, saying the schema is missing (got ${JSON.stringify(noSchema)})`,
-    noSchema.length === 1 && /^verification\.recorded has no schema but holds `mode`, .*`artifacts`.*, which only a @2 record writes; it lacks schema — re-run verify-screen --compare --record-plan \(or restore the block\); residuals go in deviations\[\]$/.test(noSchema[0] ?? ""));
+    noSchema.length === 1 && /^verification\.recorded has no schema but holds `mode`, .*`artifacts`.*, which only a @2 record writes; it lacks `schema` — re-run verify-screen --compare --record-plan \(or restore the block\); residuals go in deviations\[\]$/.test(noSchema[0] ?? ""));
   // --status says blocked at once for a closed plan whose record was edited (the hook's next check would block)
   write((_, rec) => { rec.verdict = "pass"; });
   const edited = statusOf(root);

@@ -331,12 +331,12 @@ console.log("verification.recorded — the tool's block:");
     recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: v1 }).length === 0 && recordBlocks({ recorded: { ...v1, behaviourHeadline: "B" } }).length === 0
     && has(problems(FILES, planWith({ mode: "static-only", recorded: v1 })), /^verification\.mode is "static-only" with no `reason`/));
   check(`a schema-less block holding a key the first record never wrote is a @2 block with its schema removed → BLOCKS (got ${JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } }))})`,
-    JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([LACKS("`mode`", "schema, artifacts, deltas")])
-    && JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered", note: "hand" } })) === JSON.stringify([EDITED("note"), LACKS("`mode`", "schema, artifacts, deltas")]));
+    JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([LACKS("`mode`", "`schema`, `artifacts`, `deltas`")])
+    && JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered", note: "hand" } })) === JSON.stringify([EDITED("note"), LACKS("`mode`", "`schema`, `artifacts`, `deltas`")]));
   // …and a key the block lacks is missing, not edited: ONE message (a first-format record with `a11y` moved inside)
   const moved = recordBlocks({ recorded: { ...v1, a11y: REC.a11y } });
   check(`a schema-less block with only \`a11y\` added → ONE block saying the @2 keys are missing, not four "edited" (got ${JSON.stringify(moved)})`,
-    JSON.stringify(moved) === JSON.stringify([LACKS("`a11y`", "schema, mode, artifacts, deltas")])
+    JSON.stringify(moved) === JSON.stringify([LACKS("`a11y`", "`schema`, `mode`, `artifacts`, `deltas`")])
     && JSON.stringify(recordBlocks({ recorded: { ...REC, mode: undefined } })) === JSON.stringify([EDITED("mode")]));
   // a block holding nothing a record writes is not a record: it is told so, once
   const handOnly = recordBlocks({ recorded: { note: "x", residuals: [] } });
