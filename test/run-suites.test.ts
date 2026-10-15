@@ -497,6 +497,13 @@ console.log("CMD " + JSON.stringify({
     await killChildTree(1, proc({ platform: "win32", calls: winUnknown, alive: new Set([1]) }), { capMs: 2_000 });
     check(`[kill-tree] killChildTree on Windows: one taskkill /T /F /PID <pid> of a running browser; nothing for one gone, unknown, or pid 1 (saw ${JSON.stringify([winCalls, winGone, winUnknown])})`,
       JSON.stringify(winCalls) === JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]) && winGone.length === 0 && winUnknown.length === 0);
+    // `exited` (this process has seen the child exit): Windows runs no taskkill though the pid exists (another process may
+    // hold it now); POSIX still signals the group, which outlives its leader while any member lives
+    const winExited: string[][] = [], posixExited: string[][] = [];
+    await killChildTree(4242, proc({ platform: "win32", calls: winExited, alive: new Set([4242]) }), { capMs: 2_000, exited: true });
+    await killChildTree(4242, proc({ platform: "darwin", calls: posixExited, groups: new Set([4242]) }), { capMs: 2_000, exited: true });
+    check(`[kill-tree] killChildTree, the child seen to exit: Windows → no taskkill though the pid exists; POSIX → SIGKILL to its group still (saw ${JSON.stringify([winExited, posixExited])})`,
+      winExited.length === 0 && JSON.stringify(posixExited) === JSON.stringify([["kill", "-4242", "SIGKILL"]]));
     // the grace: a browser that goes on its own within it is not killed (Windows: no taskkill); one that does not is, after it
     const going = new Set([4242]);
     const graceCalls: string[][] = [];

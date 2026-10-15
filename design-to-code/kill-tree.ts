@@ -60,6 +60,15 @@ export const PROC_HOST: ProcHost = {
 };
 
 const pidsIn = (text: string): number[] => text.split(/\s+/).filter((w) => /^\d+$/.test(w)).map(Number);
+
+/** The parent pid of `pid` from /proc/<pid>/stat (Linux procfs: field 4, after the parenthesised command, which may itself
+ *  hold spaces and parentheses), or undefined when that file cannot be read or parsed. */
+export function parentPid(pid: number, host: Pick<ProcHost, "readFile"> = PROC_HOST): number | undefined {
+  let stat: string;
+  try { stat = host.readFile(`/proc/${pid}/stat`); } catch { return undefined; }
+  const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  return Number.isInteger(ppid) && ppid >= 0 ? ppid : undefined;
+}
 const notFound = (e: Error | undefined): boolean => e !== undefined && "code" in e && e.code === "ENOENT";
 
 /** The pids of this process's direct children, or null when they cannot be listed. Linux: a scan of /proc/<pid>/stat for
@@ -77,10 +86,7 @@ export function childPids(host: ProcHost = PROC_HOST, capMs = 3_000): number[] |
       const kids: number[] = [];
       for (const e of entries) {
         if (!/^\d+$/.test(e)) continue;
-        let stat: string;
-        try { stat = host.readFile(`/proc/${e}/stat`); } catch { continue; } // gone since the listing
-        const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-        if (ppid === host.self) kids.push(Number(e));
+        if (parentPid(Number(e), host) === host.self) kids.push(Number(e)); // undefined: gone since the listing
       }
       return kids;
     }
@@ -106,12 +112,20 @@ const POLL_MS = 50;
  *  First waits up to `graceMs` for them to exit on their own (a browser told to quit usually goes within it), then:
  *  POSIX: SIGKILL to the group each leads (one that has exited may have left its group running: that ends it); when the
  *  known `pid` is still running but leads no group (a wrapper's child), each direct child is ended so instead, or alone
- *  when it leads no group. Windows: `taskkill /T /F /PID <pid>` while that pid exists (one that ended may be reused, and
- *  /T would end the new owner's tree); nothing when `pid` is unknown (there is no process table to read).
+ *  when it leads no group. A group kill is safe after the leader `pid` has exited: a process group id is not reused while
+ *  any member of that group lives, so the signal reaches only what the browser started (orphaned descendants included);
+ *  with no member left there is no such group (ESRCH) unless the pid has since been given to a new group leader, which
+ *  needs the pid space to cycle within the grace — POSIX hands pids out in sequence and wraps only at its maximum.
+ *  Windows: `taskkill /T /F /PID <pid>` while that pid exists; nothing when `pid` is unknown (there is no process table to
+ *  read) or when `exited` says this process has already seen `pid` exit. Windows may give an ended process's pid to a new
+ *  process as soon as no handle to the old one is open, and then exists() is true of the new owner and /T would end its
+ *  tree; while this process still holds the child's handle (it has not seen the exit) the pid is not reused. What remains
+ *  is a child that exits, and is reaped, between the exists() check and the taskkill — a window of one command start.
  *  A pgrep/ps is capped at `capMs`, a taskkill at the host's own cap. */
-export async function killChildTree(pid: number | undefined, host: ProcHost = PROC_HOST, { capMs = 3_000, graceMs = 0 }: { capMs?: number; graceMs?: number } = {}): Promise<void> {
+export async function killChildTree(pid: number | undefined, host: ProcHost = PROC_HOST,
+  { capMs = 3_000, graceMs = 0, exited = false }: { capMs?: number; graceMs?: number; exited?: boolean } = {}): Promise<void> {
   const known = pid !== undefined && pid > 1 ? pid : undefined;
-  if (host.platform === "win32" && known === undefined) return;
+  if (host.platform === "win32" && (known === undefined || exited)) return;
   const targets = known !== undefined ? [known] : childPids(host, capMs) ?? [];
   const until = Date.now() + graceMs;
   while (targets.some((t) => host.exists(t)) && Date.now() < until) await sleep(POLL_MS);

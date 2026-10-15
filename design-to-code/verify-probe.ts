@@ -48,7 +48,7 @@ import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response } from "playwright";
 import { spawnSync } from "node:child_process";
-import { PROC_HOST, killChildTree, taskkillCapped, type ProcHost } from "./kill-tree.ts";
+import { PROC_HOST, killChildTree, parentPid, taskkillCapped, type ProcHost } from "./kill-tree.ts";
 import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements } from "./probe-page.ts";
 import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
 import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
@@ -63,7 +63,7 @@ import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredCom
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { StepError, drivable, driveBudget, driveInteractions, raf2, readPageOverflow, submitGuard } from "./probe-drive.ts";
 import type { DriveResult } from "./probe-drive.ts";
-import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
+import { CLOSE_STEP_CAP_MS, KILL_STEP_CAP_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
@@ -162,19 +162,22 @@ async function launch(r: Extract<Resolution, { ok: true }>, dir: string, executa
   // grayscale AA, which Figma's PNG exports use and macOS Chromium uses by default. Linux chromium's default LCD (subpixel RGB)
   // text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's 4-decimal scale
   // came out as hot regions in the visual diff (the e2e's correct twin, on CI).
-  let browser: Browser;
-  try { browser = await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...(executablePath !== undefined ? { executablePath } : {}) }); } catch (e) {
+  try { return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`,
       hint: browserHint(dir) };
   }
-  const pid = await launchPid(browser);
-  if (pid !== undefined) launchPids.set(browser, pid);
-  return { browser };
 }
 
 /** The pid of each browser this process launched — what closeCapped ends when the browser does not go. */
 const launchPids = new WeakMap<object, number>();
+/** Records the launched browser's pid (launchPid) for closeCapped. Called once the browser is held where the --max-time
+ *  watchdog closes it, so a watchdog firing during this ≤ LAUNCH_PID_CAP_MS wait still closes the browser (its pid then
+ *  unknown: closeCapped ends this process's direct children). */
+async function recordLaunchPid(browser: Browser): Promise<void> {
+  const pid = await launchPid(browser);
+  if (pid !== undefined) launchPids.set(browser, pid);
+}
 /** What launchPid asks of a browser CDP session (a Playwright CDPSession is one). */
 interface ProcessInfoSession {
   send(method: "SystemInfo.getProcessInfo"): Promise<{ processInfo: Array<{ type: string; id: number }> }>;
@@ -184,13 +187,18 @@ interface ProcessInfoSession {
 const LAUNCH_PID_CAP_MS = 2_000;
 /** The browser's own pid, as it reports it (CDP SystemInfo.getProcessInfo, the entry of type "browser" — the process
  *  Playwright launched; an experimental domain), or undefined when it does not answer within capMs (closeCapped then ends
- *  this process's direct children instead). Never throws. */
-export async function launchPid(b: { newBrowserCDPSession(): Promise<ProcessInfoSession> }, capMs = LAUNCH_PID_CAP_MS): Promise<number | undefined> {
+ *  this process's direct children instead). On Linux the reported pid must be a child of this process (/proc/<pid>/stat):
+ *  a --browser-path wrapper that runs the browser in its own pid namespace reports a pid from that namespace, which here
+ *  names another process — so a pid whose parent is not this process, or cannot be read, counts as unknown. `host` is for
+ *  the tests. Never throws. */
+export async function launchPid(b: { newBrowserCDPSession(): Promise<ProcessInfoSession> }, capMs = LAUNCH_PID_CAP_MS,
+  host: Pick<ProcHost, "platform" | "self" | "readFile"> = PROBE_HOST): Promise<number | undefined> {
   const ask = (async (): Promise<number | undefined> => {
     const cdp = await b.newBrowserCDPSession();
     try {
       const id = (await cdp.send("SystemInfo.getProcessInfo")).processInfo.find((p) => p.type === "browser")?.id;
-      return id !== undefined && Number.isInteger(id) && id > 1 ? id : undefined;
+      if (id === undefined || !Number.isInteger(id) || id <= 1) return undefined;
+      return host.platform !== "linux" || parentPid(id, host) === host.self ? id : undefined;
     } finally { cdp.detach().catch(() => undefined); }
   })().catch(() => undefined);
   return Promise.race([ask, sleep(capMs, undefined, { ref: false })]);
@@ -1095,7 +1103,7 @@ const MAX_TIME_DEFAULT = 180_000;
 /** The largest --max-time: setTimeout's own bound (a 32-bit signed delay; a longer one fires at once). */
 const MAX_TIME_LIMIT = 2_147_483_647;
 /** What its own run's deadline allows past --max-time — the steps after the watchdog that are bounded, with room to
- *  spare: closing a browser that does not yield (closeCapped: two CLOSE_STEP_CAP_MS steps + the kill within PS_CAP_MS, ~13 s),
+ *  spare: closing a browser that does not yield (closeCapped: two CLOSE_STEP_CAP_MS steps + the kill within KILL_STEP_CAP_MS, ~13 s),
  *  the git state (2 s + 5 s), two status-lock waits (the `measuring`/`done` writes, 15 s each), and the visual diff in
  *  Node. Past it the next probe without --run takes the run for abandoned; this probe's later writes then find the
  *  status naming the run that replaced it, and write nothing (RunReplaced). */
@@ -1108,30 +1116,36 @@ const OWN_RUN_GRACE_MS = 120_000;
  *  still connected), and one that is merely slow to go: after Browser.close the handle is disconnected at once, but under
  *  load the process can take seconds to minutes to exit, and this process waits on its pipes past --max-time. The probe
  *  launched it and the browser was told to quit, so no page can be live after that and measured.json may be written.
+ *  A browser.close() that resolves within its cap has seen the browser process exit (Playwright's close of a browser it
+ *  launched waits for the process to close), so this process no longer holds a handle to it and Windows may already have
+ *  given its pid to another process: the kill is then POSIX-only (killBrowser's `exited`). A close that rejects or hits
+ *  its cap leaves the kill as it is.
  *  `pid` is the browser's (launchPid, recorded at launch); `host` is for the tests. */
 export async function closeCapped(b: Pick<Browser, "newBrowserCDPSession" | "close">, capMs = CLOSE_STEP_CAP_MS, pid: number | undefined = launchPids.get(b),
   host: ProcHost = PROBE_HOST): Promise<void> {
-  const cap = (): Promise<void> => sleep(capMs, undefined, { ref: false });
+  const cap = (): Promise<false> => sleep(capMs, false, { ref: false });
   await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => undefined), cap()]);
-  await Promise.race([b.close().catch(() => undefined), cap()]);
-  await killBrowser(pid, host);
+  const exited = await Promise.race([b.close().then(() => true, () => false), cap()]);
+  await killBrowser(pid, host, KILL_GRACE_MS, exited);
 }
 /** How long the kill waits for the browser to go on its own before it is killed. */
 const KILL_GRACE_MS = 1_000;
-/** The cap on the kill's one command: the wait and the command together fit in PS_CAP_MS. */
-const KILL_CAP_MS = PS_CAP_MS - KILL_GRACE_MS;
+/** The cap on the kill's one command: the wait and the command together fit in KILL_STEP_CAP_MS. */
+const KILL_CMD_CAP_MS = KILL_STEP_CAP_MS - KILL_GRACE_MS;
 /** The host the probe's kill runs on: the real one, its taskkill capped like its pgrep/ps. */
-const PROBE_HOST: ProcHost = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CAP_MS) };
+const PROBE_HOST: ProcHost = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CMD_CAP_MS) };
 /** End the browser this process launched and what it started — the last step of closeCapped, best-effort, never throws, by
  *  pid only (never by name: never the user's own browser). It first waits up to `graceMs` (KILL_GRACE_MS; 0 for a browser
  *  that stopped answering) for the browser to go on its own. The browser's pid known (launchPid): POSIX SIGKILLs its process
- *  group (Playwright spawns it detached, so it leads one), no command run; Windows runs `taskkill /T /F /PID` (hidden)
- *  while that pid exists. Unknown: each direct child of this process is ended — its only children are its browsers (its
- *  other commands are synchronous) — found by a /proc scan (Linux) or `pgrep -P` (else `ps` when pgrep is missing);
- *  Windows then leaves the browser to Playwright's exit hook (exitWhenDone). The wait and its one command (pgrep, ps or
- *  taskkill, capped at KILL_CAP_MS) fit in PS_CAP_MS, which the behaviour reserve includes. */
-async function killBrowser(pid: number | undefined, host: ProcHost = PROBE_HOST, graceMs = KILL_GRACE_MS): Promise<void> {
-  await killChildTree(pid, host, { capMs: KILL_CAP_MS, graceMs }).catch(() => undefined);
+ *  group (Playwright spawns it detached, so it leads one; that also reaches descendants the browser left after it exited),
+ *  no command run; Windows runs `taskkill /T /F /PID` (hidden) while that pid exists, and not at all when `exited` (this
+ *  process has seen the browser exit: the pid may be another process's by now — see killChildTree). Unknown: each direct
+ *  child of this process is ended — its only children are its browsers (its other commands are synchronous) — found by a
+ *  /proc scan (Linux) or `pgrep -P` (else `ps` when pgrep is missing); Windows then leaves the browser to Playwright's exit
+ *  hook (exitWhenDone). The wait and at most one command (pgrep, ps or taskkill, capped at KILL_CMD_CAP_MS) fit in
+ *  KILL_STEP_CAP_MS, which the behaviour reserve includes. */
+async function killBrowser(pid: number | undefined, host: ProcHost = PROBE_HOST, graceMs = KILL_GRACE_MS, exited = false): Promise<void> {
+  await killChildTree(pid, host, { capMs: KILL_CMD_CAP_MS, graceMs, exited }).catch(() => undefined);
 }
 
 /** Why a status write was refused: the run cache refused it, another status write held the lock for the whole wait,
@@ -1324,6 +1338,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
     held.browser = browser;
+    await recordLaunchPid(browser);
     const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version },
       browser: { name: "chromium", version: browser.version(), ...(browserPath !== undefined ? { executable: "custom" as const } : {}) } };
     // the path is printed (stdout/stderr), never written into a file

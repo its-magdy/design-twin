@@ -61,6 +61,16 @@ var PROC_HOST = {
   }
 };
 var pidsIn = (text) => text.split(/\s+/).filter((w) => /^\d+$/.test(w)).map(Number);
+function parentPid(pid, host = PROC_HOST) {
+  let stat;
+  try {
+    stat = host.readFile(`/proc/${pid}/stat`);
+  } catch {
+    return void 0;
+  }
+  const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  return Number.isInteger(ppid) && ppid >= 0 ? ppid : void 0;
+}
 var notFound = (e) => e !== void 0 && "code" in e && e.code === "ENOENT";
 function childPids(host = PROC_HOST, capMs = 3e3) {
   if (host.platform === "win32") return null;
@@ -74,14 +84,7 @@ function childPids(host = PROC_HOST, capMs = 3e3) {
       const kids2 = [];
       for (const e of entries) {
         if (!/^\d+$/.test(e)) continue;
-        let stat;
-        try {
-          stat = host.readFile(`/proc/${e}/stat`);
-        } catch {
-          continue;
-        }
-        const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-        if (ppid === host.self) kids2.push(Number(e));
+        if (parentPid(Number(e), host) === host.self) kids2.push(Number(e));
       }
       return kids2;
     }
@@ -99,9 +102,9 @@ function childPids(host = PROC_HOST, capMs = 3e3) {
   return kids;
 }
 var POLL_MS = 50;
-async function killChildTree(pid, host = PROC_HOST, { capMs = 3e3, graceMs = 0 } = {}) {
+async function killChildTree(pid, host = PROC_HOST, { capMs = 3e3, graceMs = 0, exited = false } = {}) {
   const known = pid !== void 0 && pid > 1 ? pid : void 0;
-  if (host.platform === "win32" && known === void 0) return;
+  if (host.platform === "win32" && (known === void 0 || exited)) return;
   const targets = known !== void 0 ? [known] : childPids(host, capMs) ?? [];
   const until = Date.now() + graceMs;
   while (targets.some((t) => host.exists(t)) && Date.now() < until) await sleep(POLL_MS);
@@ -3003,10 +3006,10 @@ async function driveInteractions(browser, o, hooks) {
 // design-to-code/probe-behaviour.ts
 import { setTimeout as sleep3 } from "node:timers/promises";
 var CLOSE_STEP_CAP_MS = 5e3;
-var PS_CAP_MS = 3e3;
+var KILL_STEP_CAP_MS = 3e3;
 var WRITE_MARGIN_MS = 2e3;
 var BEHAVIOUR_CAP_MS = 9e4;
-var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
+var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + KILL_STEP_CAP_MS + WRITE_MARGIN_MS;
 function behaviourBudget(now, deadline, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS) {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
@@ -6322,9 +6325,8 @@ function rendererUnavailable(reason, hint) {
 }
 var LAUNCH_ARGS = ["--disable-lcd-text"];
 async function launch(r, dir, executablePath) {
-  let browser;
   try {
-    browser = await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} });
+    return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} }) };
   } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return {
@@ -6332,18 +6334,20 @@ async function launch(r, dir, executablePath) {
       hint: browserHint(dir)
     };
   }
-  const pid = await launchPid(browser);
-  if (pid !== void 0) launchPids.set(browser, pid);
-  return { browser };
 }
 var launchPids = /* @__PURE__ */ new WeakMap();
+async function recordLaunchPid(browser) {
+  const pid = await launchPid(browser);
+  if (pid !== void 0) launchPids.set(browser, pid);
+}
 var LAUNCH_PID_CAP_MS = 2e3;
-async function launchPid(b, capMs = LAUNCH_PID_CAP_MS) {
+async function launchPid(b, capMs = LAUNCH_PID_CAP_MS, host = PROBE_HOST) {
   const ask = (async () => {
     const cdp = await b.newBrowserCDPSession();
     try {
       const id = (await cdp.send("SystemInfo.getProcessInfo")).processInfo.find((p) => p.type === "browser")?.id;
-      return id !== void 0 && Number.isInteger(id) && id > 1 ? id : void 0;
+      if (id === void 0 || !Number.isInteger(id) || id <= 1) return void 0;
+      return host.platform !== "linux" || parentPid(id, host) === host.self ? id : void 0;
     } finally {
       cdp.detach().catch(() => void 0);
     }
@@ -7100,16 +7104,16 @@ var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS, pid = launchPids.get(b), host = PROBE_HOST) {
-  const cap = () => sleep5(capMs, void 0, { ref: false });
+  const cap = () => sleep5(capMs, false, { ref: false });
   await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
-  await Promise.race([b.close().catch(() => void 0), cap()]);
-  await killBrowser(pid, host);
+  const exited = await Promise.race([b.close().then(() => true, () => false), cap()]);
+  await killBrowser(pid, host, KILL_GRACE_MS, exited);
 }
 var KILL_GRACE_MS = 1e3;
-var KILL_CAP_MS = PS_CAP_MS - KILL_GRACE_MS;
-var PROBE_HOST = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CAP_MS) };
-async function killBrowser(pid, host = PROBE_HOST, graceMs = KILL_GRACE_MS) {
-  await killChildTree(pid, host, { capMs: KILL_CAP_MS, graceMs }).catch(() => void 0);
+var KILL_CMD_CAP_MS = KILL_STEP_CAP_MS - KILL_GRACE_MS;
+var PROBE_HOST = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CMD_CAP_MS) };
+async function killBrowser(pid, host = PROBE_HOST, graceMs = KILL_GRACE_MS, exited = false) {
+  await killChildTree(pid, host, { capMs: KILL_CMD_CAP_MS, graceMs, exited }).catch(() => void 0);
 }
 var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
 function measuredRefusedWhy(by, runId, phase = "measured") {
@@ -7347,6 +7351,7 @@ ${USAGE}`);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
     held.browser = browser;
+    await recordLaunchPid(browser);
     const identity2 = {
       name: "verify-probe",
       version: probeVersion(),

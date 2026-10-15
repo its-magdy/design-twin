@@ -1797,8 +1797,8 @@ block("behaviour helpers", () => {
       && blocked.length === 20 && blocked[19]?.more === 1580 && blocked[0]?.more === undefined
       && /^not-run: the page tried to write \(WebSocket \/ws \+1599 more\) — blocked; not judged$/.test(out[0]?.detail ?? "") && ((bw) => Array.isArray(bw) && bw.length <= 5)(out[0]?.evidence?.blockedWrites);
   });
-  t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill (its wait and one command, within PS_CAP_MS) + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
-    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, PS_CAP_MS: ps } = PB;
+  t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill (its wait and at most one command, within KILL_STEP_CAP_MS) + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
+    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, KILL_STEP_CAP_MS: ps } = PB;
     return r !== undefined && c !== undefined && k !== undefined && w !== undefined && ps !== undefined && w >= 2000 && r >= c + 2 * k + ps + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
   });
   t("nameStatus: a titled iframe passes on its DOM name (`- iframe` never carries one), an untitled one fails; <summary> (`- text: …`) passes on its text; an unnamed group passes (its name is optional); an unnamed button fails", () => {
@@ -1994,20 +1994,37 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
   // that fails or does not answer within the cap gives none (closeCapped then ends this process's direct children)
   const cdpOf = (send: () => Promise<{ processInfo: Array<{ type: string; id: number; cpuTime: number }> }>) =>
     ({ newBrowserCDPSession: () => Promise.resolve({ send, detach: () => Promise.resolve() }) });
-  const reported = await VP.launchPid(cdpOf(() => Promise.resolve({ processInfo: [{ type: "GPU", id: 9, cpuTime: 0 }, { type: "browser", id: 4242, cpuTime: 0 }] })), 500);
-  const failed = await VP.launchPid(cdpOf(() => Promise.reject(new Error("'SystemInfo.getProcessInfo' wasn't found"))), 500);
+  const answers = () => Promise.resolve({ processInfo: [{ type: "GPU", id: 9, cpuTime: 0 }, { type: "browser", id: 4242, cpuTime: 0 }] });
+  // macOS / Windows take the pid as reported; Linux takes it only when /proc/<pid>/stat names this process its parent (a
+  // --browser-path wrapper with its own pid namespace reports a pid that here is another process's), else none
+  const SELF = 500;
+  const procOf = (platform: NodeJS.Platform, stats: Record<string, string>) => ({ platform, self: SELF,
+    readFile: (file: string): string => { const v = stats[/^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? ""]; if (v === undefined) throw new Error(`ENOENT ${file}`); return v; } });
+  const stat = (pid: number, ppid: number): string => `${pid} (headless shell) S ${ppid} ${pid} ${pid} 0 -1 4194560`;
+  const reported = await VP.launchPid(cdpOf(answers), 500, procOf("darwin", {}));
+  const linuxChild = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, SELF) }));
+  const linuxOther = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, 1) }));
+  const linuxNone = await VP.launchPid(cdpOf(answers), 500, procOf("linux", {}));
+  check(`launchPid: the reported pid as is on macOS; on Linux only when this process is its parent — another parent or no /proc/<pid>/stat → none (saw ${JSON.stringify([reported, linuxChild, linuxOther, linuxNone])})`,
+    reported === 4242 && linuxChild === 4242 && linuxOther === undefined && linuxNone === undefined);
+  const failed = await VP.launchPid(cdpOf(() => Promise.reject(new Error("'SystemInfo.getProcessInfo' wasn't found"))), 500, procOf("darwin", {}));
   const at = Date.now();
   const live = setTimeout(() => undefined, 2_000); // the cap is unref'd: a real browser's pipes keep the process up meanwhile
-  const silent = await VP.launchPid(cdpOf(() => new Promise(() => undefined)), 200);
+  const silent = await VP.launchPid(cdpOf(() => new Promise(() => undefined)), 200, procOf("darwin", {}));
   clearTimeout(live);
   check(`launchPid: the "browser" entry's id; none when the call fails or does not answer within the cap (saw ${JSON.stringify([reported, failed, silent])} in ${Date.now() - at} ms)`,
     reported === 4242 && failed === undefined && silent === undefined && Date.now() - at < 2_000);
-  // Windows, on any OS through a stand-in host: taskkill /T /F /PID <the browser's pid> while it runs, nothing else
-  const win: string[][] = [];
-  const winHost: ProcHost = { ...host("win32", win), exists: (pid) => pid === 4242 };
-  await VP.closeCapped(fake, 200, 4242, winHost);
-  check(`closeCapped on Windows: a browser still running after the close → one taskkill /T /F /PID <its pid>, no other command (saw ${JSON.stringify(win)})`,
-    JSON.stringify(win) === JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]));
+  // Windows, on any OS through a stand-in host. A close that hit its cap: taskkill /T /F /PID <the browser's pid> while it
+  // runs, nothing else. A close that resolved has seen the browser exit, so its pid may be another process's by now (exists()
+  // is true of the new owner here): no taskkill.
+  const win: string[][] = [], winClosed: string[][] = [];
+  const stuck = { ...fake, close: () => new Promise<void>(() => undefined) };
+  const pipes = setTimeout(() => undefined, 5_000); // the close caps are unref'd: a real browser's pipes keep the process up meanwhile
+  await VP.closeCapped(stuck, 200, 4242, { ...host("win32", win), exists: (pid) => pid === 4242 });
+  clearTimeout(pipes);
+  await VP.closeCapped(fake, 200, 4242, { ...host("win32", winClosed), exists: (pid) => pid === 4242 });
+  check(`closeCapped on Windows: the close capped, the browser still running → one taskkill /T /F /PID <its pid>, no other command; the close resolved → no taskkill though the pid exists (saw ${JSON.stringify([win, winClosed])})`,
+    JSON.stringify(win) === JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]) && winClosed.length === 0);
 }
 
 // The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page

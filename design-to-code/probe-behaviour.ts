@@ -57,12 +57,12 @@ declare function requestAnimationFrame(cb: () => void): number;
 
 // ---------------------------------------------------------------- pure helpers (unit-tested in test/verify-probe.test.ts)
 /** what the probe may still need after the behaviour budget ends — a cut unit's settle (CUT_SETTLE_MS), the capped close
- *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then its kill: one pgrep, ps or taskkill capped at PS_CAP_MS) and writing the files
- *  (WRITE_MARGIN_MS) — all inside
- *  --max-time, so a measurement that finished is never lost to the watchdog. */
+ *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then its kill within KILL_STEP_CAP_MS: a short wait for the browser to
+ *  go on its own, then at most one capped command — pgrep, ps or taskkill — or none) and writing the files (WRITE_MARGIN_MS)
+ *  — all inside --max-time, so a measurement that finished is never lost to the watchdog. */
 export { CUT_SETTLE_MS };
-export const CLOSE_STEP_CAP_MS = 5_000, PS_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
-export const BEHAVIOUR_CAP_MS = 90_000, BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
+export const CLOSE_STEP_CAP_MS = 5_000, KILL_STEP_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
+export const BEHAVIOUR_CAP_MS = 90_000, BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + KILL_STEP_CAP_MS + WRITE_MARGIN_MS;
 /** The behaviour sub-budget: min(90 s, what is left of --max-time less the reserve for settling, closing and writing) — never < 0. */
 export function behaviourBudget(now: number, deadline: number, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS): number {
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
