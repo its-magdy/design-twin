@@ -6,8 +6,11 @@
 //
 // Each task is still its own `node verify-probe.js` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
+import { KILL_HOST, killPidTree, type KillHost } from "../design-to-code/kill-tree.ts";
+
+export { killPidTree, type KillHost };
 
 /** A queue running at most `n` of its tasks at once, in the order they were queued. A task that throws synchronously rejects
  *  its own promise and still releases its slot (the call goes through `Promise.resolve().then(fn)`). */
@@ -46,36 +49,9 @@ export const poolSize = (env: NodeJS.ProcessEnv = process.env, cores: number = o
  *  ended the run's whole process tree (killTree's result: false when it fell back to the child alone, or the run was not killed). */
 export interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean; treeKilled: boolean }
 
-/** What killPidTree needs from the host: its platform, a way to run taskkill (spawnSync's result: `error` when it could not
- *  start or hit its timeout, `status` its exit code) and a way to signal a pid (process.kill: throws when there is no such
- *  process or group). The tests pass their own. The real taskkill runs hidden and is capped at 10 s: it blocks the event loop
- *  (it runs inside runNode's timer). */
-export interface KillHost {
-  platform: NodeJS.Platform;
-  taskkill: (args: string[]) => { error?: Error; status: number | null };
-  kill: (pid: number, signal: NodeJS.Signals) => void;
-}
-const HOST: KillHost = {
-  platform: process.platform,
-  taskkill: (args) => spawnSync("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: 10_000 }),
-  kill: (pid, s) => { process.kill(pid, s); },
-};
-
-/** Ends the process `pid` and its descendants; false when that did not happen (the caller can then kill what it holds).
- *  POSIX: SIGKILL to the process group `pid` leads (runNode spawns its child detached for that; Playwright spawns its browser
- *  detached) — false when there is no such group. Windows has no groups: `taskkill /T /F /PID <pid>` ends the process and the
- *  processes it started — false when taskkill does not start or exits non-zero (spawnSync reports both, it never throws).
- *  A pid below 2 is refused, false at once with nothing signalled (POSIX: -0 is this process's group, -1 every process; a
- *  child's or a browser's pid is never 1). */
-export const killPidTree = (pid: number, host: KillHost = HOST): boolean => {
-  if (!(pid > 1)) return false;
-  if (host.platform === "win32") { const r = host.taskkill(["/T", "/F", "/PID", String(pid)]); return r.error === undefined && r.status === 0; }
-  try { host.kill(-pid, "SIGKILL"); return true; } catch { return false; }
-};
-
 /** Ends `p` and its descendants (killPidTree) and returns true, else kills `p` alone and returns false: SIGKILL to the child
  *  when it has no pid or the tree kill failed. */
-export const killTree = (p: { pid?: number | undefined; kill: (signal: NodeJS.Signals) => boolean }, host: KillHost = HOST): boolean => {
+export const killTree = (p: { pid?: number | undefined; kill: (signal: NodeJS.Signals) => boolean }, host: KillHost = KILL_HOST): boolean => {
   if (p.pid !== undefined && killPidTree(p.pid, host)) return true;
   p.kill("SIGKILL");
   return false;

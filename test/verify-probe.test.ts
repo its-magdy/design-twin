@@ -32,6 +32,7 @@ import type * as PDT from "../design-to-code/probe-drive.ts";
 import type { VerifyExpectation, VerifyInteraction } from "../design-to-code/types.ts";
 import type * as PBT from "../design-to-code/probe-behaviour.ts";
 import { parseCssColor } from "../design-to-code/color.ts";
+import { PROC_HOST, type ProcHost } from "../design-to-code/kill-tree.ts";
 import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
 import { RunCacheUnwritable } from "../design-to-code/run-cache.ts";
 import { readStatus } from "../design-to-code/verify-run.ts";
@@ -1796,9 +1797,9 @@ block("behaviour helpers", () => {
       && blocked.length === 20 && blocked[19]?.more === 1580 && blocked[0]?.more === undefined
       && /^not-run: the page tried to write \(WebSocket \/ws \+1599 more\) — blocked; not judged$/.test(out[0]?.detail ?? "") && ((bw) => Array.isArray(bw) && bw.length <= 5)(out[0]?.evidence?.blockedWrites);
   });
-  t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill's capped ps + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
-    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, PS_CAP_MS: ps } = PB;
-    return r !== undefined && c !== undefined && k !== undefined && w !== undefined && ps !== undefined && w >= 2000 && r >= c + 2 * k + ps + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
+  t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill (its wait and at most one command, within KILL_STEP_CAP_MS) + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
+    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, KILL_STEP_CAP_MS: kill } = PB;
+    return r !== undefined && c !== undefined && k !== undefined && w !== undefined && kill !== undefined && w >= 2000 && r >= c + 2 * k + kill + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
   });
   t("nameStatus: a titled iframe passes on its DOM name (`- iframe` never carries one), an untitled one fails; <summary> (`- text: …`) passes on its text; an unnamed group passes (its name is optional); an unnamed button fails", () => {
     const ns = PB.nameStatus;
@@ -1967,36 +1968,69 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
 });
 
 // After Browser.close the handle is disconnected at once while the browser process (under load) can take minutes
-// to exit, and the probe waits on its pipes past --max-time — closeCapped SIGKILLs a still-running browser child however the
-// handle reads. A fake browser (its close done, disconnected) and a real direct child whose command names a headless shell.
-if (process.platform !== "win32") {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "dt-fake-headless-shell"], { stdio: "ignore" });
-  const exited = new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
-  await new Promise<void>((resolve) => { child.once("spawn", () => resolve()); });
+// to exit, and the probe waits on its pipes past --max-time — closeCapped SIGKILLs the browser it launched (its pid, recorded
+// at launch) however the handle reads, with no `ps`/`pgrep` to wait on: on a host where every command runs past its cap, a
+// real child still running after the close — detached, so it leads its own process group, as Playwright's browser — is
+// ended. A fake browser (its close done, disconnected).
+{
   const fake = { newBrowserCDPSession: () => Promise.reject(new Error("browser has disconnected")), close: () => Promise.resolve(), isConnected: () => false };
-  // Its kill rests on one `ps` the product caps at psCap: on a starved machine that `ps` can time out and kill nothing, so a
-  // call that took psCap or more with the child still running gets a fresh call (a fresh `ps`), up to CALLS. A call that
-  // returned sooner had its `ps` finish and killed nothing: a genuine failure, not retried. The exit is awaited on its exit
-  // event, capped at EXIT_WAIT_MS per call.
-  const CALLS = 3, EXIT_WAIT_MS = 5_000;
-  const psCap = PB.PS_CAP_MS ?? 3_000;
-  let threw = false, calls = 0, gone = false, psFinished = false;
-  while (!gone && !psFinished && calls < CALLS) {
-    calls++;
-    const at = Date.now();
-    try { await VP.closeCapped(fake, 200); } catch { threw = true; }
-    const took = Date.now() - at;
-    gone = await Promise.race([exited, sleep(EXIT_WAIT_MS, undefined, { ref: false }).then(() => false)]);
-    psFinished = !gone && took < psCap;
+  const timedOut = { error: Object.assign(new Error("spawnSync ps ETIMEDOUT"), { code: "ETIMEDOUT" }), status: null, stdout: "" };
+  const host = (platform: NodeJS.Platform, calls: string[][]): ProcHost => ({ ...PROC_HOST, platform,
+    run: (cmd, args) => { calls.push([cmd, ...args]); return timedOut; },
+    taskkill: (args) => { calls.push(["taskkill", ...args]); return { status: 0 }; } });
+  if (process.platform !== "win32") {
+    const slow: string[][] = [];
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: true });
+    const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once("exit", (_c, sig) => resolve(sig)));
+    await new Promise<void>((resolve) => { child.once("spawn", () => resolve()); });
+    let threw = false;
+    try { await VP.closeCapped(fake, 200, child.pid, host(process.platform, slow)); } catch { threw = true; }
+    const sig = await Promise.race([exited, sleep(5_000, undefined, { ref: false }).then(() => "still running" as const)]);
+    if (sig === "still running") child.kill("SIGKILL");
+    check(`closeCapped: the launched browser still running after the close (the handle already disconnected), every ps/pgrep past its cap → SIGKILLed with its group (${sig ?? "exited"}; commands run ${JSON.stringify(slow)}${threw ? ", closeCapped threw" : ""})`,
+      sig === "SIGKILL" && slow.length === 0 && !threw);
   }
-  if (!gone) child.kill("SIGKILL");
-  // A machine where this same `ps` fails or cannot finish inside the product's cap leaves nothing to judge: skipped, not failed.
-  const psAt = Date.now();
-  const ps = gone ? undefined : spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", timeout: psCap });
-  const psMs = Date.now() - psAt;
-  const starved = ps !== undefined && (ps.error !== undefined || psMs >= psCap);
-  if (starved) console.log(`  (skipped: closeCapped's browser-child kill — a \`ps\` of this machine ${ps.error ? `failed (${(ps.error as NodeJS.ErrnoException).code ?? ps.error.message}) after ${psMs} ms` : `took ${psMs} ms, past the ${psCap} ms the product allows it`})`);
-  else check(`closeCapped: a browser child still running after the close (the handle already disconnected) is SIGKILLed (${gone ? `gone after ${calls} call${calls === 1 ? "" : "s"}` : `still running after ${calls} call${calls === 1 ? "" : "s"}, ${EXIT_WAIT_MS / 1000} s each`}${threw ? ", closeCapped threw" : ""})`, gone && !threw);
+  // the pid closeCapped ends is the browser's own report at launch (SystemInfo.getProcessInfo's "browser" entry); a browser
+  // that fails or does not answer within the cap gives none (closeCapped then ends this process's direct children)
+  const cdpOf = (send: () => Promise<{ processInfo: Array<{ type: string; id: number; cpuTime: number }> }>) =>
+    ({ newBrowserCDPSession: () => Promise.resolve({ send, detach: () => Promise.resolve() }) });
+  const answers = () => Promise.resolve({ processInfo: [{ type: "GPU", id: 9, cpuTime: 0 }, { type: "browser", id: 4242, cpuTime: 0 }] });
+  // macOS / Windows take the pid as reported; Linux takes it only when /proc/<pid>/stat names this process its parent (a
+  // --browser-path wrapper with its own pid namespace reports a pid that here is another process's), else none
+  const SELF = 500;
+  const procOf = (platform: NodeJS.Platform, stats: Record<string, string>) => ({ platform, self: SELF,
+    readFile: (file: string): string => { const v = stats[/^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? ""]; if (v === undefined) throw new Error(`ENOENT ${file}`); return v; } });
+  const stat = (pid: number, ppid: number): string => `${pid} (headless shell) S ${ppid} ${pid} ${pid} 0 -1 4194560`;
+  const reported = await VP.launchPid(cdpOf(answers), 500, procOf("darwin", {}));
+  const linuxChild = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, SELF) }));
+  const linuxOther = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, 1) }));
+  const linuxNone = await VP.launchPid(cdpOf(answers), 500, procOf("linux", {}));
+  check(`launchPid: the reported pid as is on macOS; on Linux only when this process is its parent — another parent or no /proc/<pid>/stat → none (saw ${JSON.stringify([reported, linuxChild, linuxOther, linuxNone])})`,
+    reported === 4242 && linuxChild === 4242 && linuxOther === undefined && linuxNone === undefined);
+  const failed = await VP.launchPid(cdpOf(() => Promise.reject(new Error("'SystemInfo.getProcessInfo' wasn't found"))), 500, procOf("darwin", {}));
+  const at = Date.now();
+  const live = setTimeout(() => undefined, 2_000); // the cap is unref'd: a real browser's pipes keep the process up meanwhile
+  const silent = await VP.launchPid(cdpOf(() => new Promise(() => undefined)), 200, procOf("darwin", {}));
+  clearTimeout(live);
+  check(`launchPid: the "browser" entry's id; none when the call fails or does not answer within the cap (saw ${JSON.stringify([reported, failed, silent])} in ${Date.now() - at} ms)`,
+    reported === 4242 && failed === undefined && silent === undefined && Date.now() - at < 2_000);
+  // Windows, on any OS through a stand-in host. A close that hit its cap with the browser still connected (wedged), or that
+  // rejected with it connected: taskkill /T /F /PID <the browser's pid> while it runs, nothing else. A close that resolved,
+  // or one that hit its cap after the browser disconnected (Playwright's cleanup after the exit can outlast the cap), may
+  // follow the browser exit, so its pid may be another process's by now (exists() is true of the new owner here): no taskkill.
+  const win: string[][] = [], winClosed: string[][] = [], winGone: string[][] = [], winRejected: string[][] = [];
+  const stuck = { ...fake, close: () => new Promise<void>(() => undefined), isConnected: () => true };
+  const stuckGone = { ...stuck, isConnected: () => false };
+  const rejects = { ...fake, close: () => Promise.reject(new Error("close failed")), isConnected: () => true };
+  const pipes = setTimeout(() => undefined, 5_000); // the close caps are unref'd: a real browser's pipes keep the process up meanwhile
+  await VP.closeCapped(stuck, 200, 4242, { ...host("win32", win), exists: (pid) => pid === 4242 });
+  await VP.closeCapped(stuckGone, 200, 4242, { ...host("win32", winGone), exists: (pid) => pid === 4242 });
+  clearTimeout(pipes);
+  await VP.closeCapped(fake, 200, 4242, { ...host("win32", winClosed), exists: (pid) => pid === 4242 });
+  await VP.closeCapped(rejects, 200, 4242, { ...host("win32", winRejected), exists: (pid) => pid === 4242 });
+  const oneKill = JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]);
+  check(`closeCapped on Windows: the close capped, the browser still connected → one taskkill /T /F /PID <its pid>, no other command; the close rejected, still connected → the same; the close capped after the browser disconnected, or resolved → no taskkill though the pid exists (saw ${JSON.stringify([win, winRejected, winGone, winClosed])})`,
+    JSON.stringify(win) === oneKill && JSON.stringify(winRejected) === oneKill && winGone.length === 0 && winClosed.length === 0);
 }
 
 // The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page
