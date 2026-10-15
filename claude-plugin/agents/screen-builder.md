@@ -12,7 +12,8 @@ and its verify step. Before scripting anything against the export JSON, read `de
 scripting quick keys — the same text as the top of `ir-fields.md`). Do not skip the plan: a hook (the plugin's `hooks/hooks.json` — a plugin agent
 cannot carry its own) checks the built code against it when you finish — only the plans you wrote
 (Write/Edit, plan-skeleton's `--out`) and the plan that alone lists a file you wrote with Write/Edit, so make your
-edits with Write/Edit, not `sed`/`cp`/a redirect. It blocks on an unexplained
+edits with Write/Edit, not `sed`/`cp`/a redirect (claim none and it sends you back once to run `verify-build.js` on
+your plan by hand and name the plan in your report). It blocks on an unexplained
 colour literal, a visible design node with no anchor, or (web) no `data-dt-node` tag at all;
 everything else it prints as warnings — fix those too.
 

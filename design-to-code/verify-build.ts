@@ -1690,10 +1690,9 @@ const USAGE = [
   "A Claude Code hook payload (it has hook_event_name) gets a block as {\"decision\":\"block\",\"reason\":…} on stdout",
   "and exit 0 instead — a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
   "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
-  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing (a screen-builder's",
-  "SubagentStop then prints {\"systemMessage\":…} naming the open plans left unchecked — a notice, not a block; Claude",
-  "Code 2.1.299 was observed not to display a SubagentStop systemMessage, so it shows only in the hook output / transcript:",
-  "the plans stay open, and --status or a hand run, verify-build <plan.json>, checks them).",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing. A screen-builder's",
+  "SubagentStop that claims none blocks once instead, naming the open plans: the builder runs verify-build <plan.json>",
+  "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes.",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
   "--status computes the status from that, the file hashes, and design/verify/<…>.report.json. First match wins:",
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
@@ -1839,16 +1838,19 @@ async function main(argv: string[]): Promise<number> {
     if (own.scope === "none-named") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open ` +
         `plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
-      // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw.
-      // stderr on exit 0 reaches no one, so that case emits a systemMessage naming the unchecked plans — without blocking.
-      // Claude Code 2.1.299 was observed not to display a SubagentStop systemMessage: it shows in the hook output / transcript only.
-      // The plans stay open; --status or a hand run (verify-build <plan.json>) checks them.
+      // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw. Its
+      // tool calls name no plan of their own, so no other reader of them (the main session's Stop, a ledger) could claim
+      // one either: only the builder knows which plan it built. So its SubagentStop blocks ONCE, and the reason — which
+      // Claude Code delivers to the subagent as its next instruction — has it check its plan by hand and name the plan in
+      // its report. Its next stop carries stop_hook_active and returns above, so this never loops.
       if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)) {
         const names = open.map((p) => path.relative(cwd, p.file).replace(/\\/g, "/"));
-        console.log(JSON.stringify({ systemMessage: `verify-build: the ${input.agent_type} agent stopped without claiming a plan, so its build was NOT checked. `
-          + `Open plan(s) left unchecked: ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. `
+        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) are stopping without claiming a plan, so your build has NOT been checked. `
+          + `Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. `
           + "A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); "
-          + `shell edits (sed, cp, a redirect) are not read. Check one now: ${scriptCmd("verify-build")} <plan.json>` }));
+          + "shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run "
+          + `${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; `
+          + "if you built none of them, say so in your report. This is asked once: your next stop is not checked again." }));
       }
       return 0;
     }
