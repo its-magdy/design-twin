@@ -135,7 +135,7 @@ function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: 
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
-  // L-c: a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
+  // a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
   // waiver written from it would bind to values that may never have been rendered
   // the integrity reasons compare recorded (report.integrity, [] for a clean run); a report without the field cannot
   // show its run was verified, so nothing in it is accepted

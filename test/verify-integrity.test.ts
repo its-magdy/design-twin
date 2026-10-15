@@ -271,7 +271,7 @@ safe("a status 'done' naming this measured file → pass; inputs.runId = the run
   const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return r.verdict === "pass" && r.inputs?.runId === "run-7";
 });
-// L-c: --accept refuses a report whose run failed its integrity checks — a waiver would bind to unverified numbers
+// --accept refuses a report whose run failed its integrity checks — a waiver would bind to unverified numbers
 // (the report as --accept reads it: the JSON on disk, through its guard)
 const acceptSel = (r: VerifyReportV2, node: string, field: string): ReturnType<typeof VS.selectForAccept> => {
   const onDisk: unknown = JSON.parse(JSON.stringify(r));

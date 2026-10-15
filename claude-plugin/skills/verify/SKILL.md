@@ -291,7 +291,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --accept design/verify/<Sc
 
 `--node` needs `--field` (the delta's field label from the report), or `--all-fields` when the user
 means every delta on that node — one "keep the 16px" must not also waive a colour or copy delta. `--plan <plan.json>` points at the plan when the report cannot find it. Accepting the same
-node + field again replaces its waiver.
+node + field again replaces its waiver. It refuses a report whose run is unverified (its `integrity[]` lists a reason) or
+that records no `integrity[]` at all: re-measure or re-run `--compare` first, then accept against the new report.
 
 It writes a waiver into the screen's plan (`waivers[]`), bound to node id + field + designed value +
 built value (± the field's tolerance) + the content hash of the whole export. Then re-run step 4: the
