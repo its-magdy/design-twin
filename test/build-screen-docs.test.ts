@@ -135,6 +135,13 @@ console.log("verify docs (run integrity + agent safety):");
     && /without it the probe starts a run of its own \(build-screen's own loop\) and ends it itself, and it refuses \(exit 2, nothing started\) while another run of the screen is open/.test(verifySkill)
     && /Always pass your `--run <id>`: without it the probe starts a run of its own, and refuses \(exit 2\) beside yours/.test(verifier)
     && ![skill, verifier, verifySkill, verifyRef].some((t) => /unbound measured file|\*\*unbound\*\*|graded as an unbound/.test(t)));
+  check("a probe's own run never stays open behind it (exit, error, stop signal → failed; a killed probe's is ended by the next once its pid is gone, else refused in own-run wording) and replaces the published status (references/verify.md, build-screen)",
+    /Your own run never stays open behind the probe — every non-zero exit, an error, or a stop signal .{0,80}ends it `failed` before the probe exits/.test(verifyRef)
+    && /its run records the probe's pid and host: the next probe without `--run` on the same machine finds that pid gone, ends the run `failed` itself/.test(verifyRef)
+    && /When it cannot tell — the run was started on another host, or the pid is running — it refuses, naming that probe's own run/.test(verifyRef)
+    && /Each probe run replaces the published `design\/verify\/<Screen>\.status\.json` with its own run's/.test(verifyRef)
+    && /`--wait` on an old id returns at once on that run's old `done` only until a later run replaces the status/.test(skill)
+    && /Your own probe without `--run` is such a later run: it replaces the live status and the published `design\/verify\/<Screen>\.status\.json`/.test(skill));
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
     /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
     && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)

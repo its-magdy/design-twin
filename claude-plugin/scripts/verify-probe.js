@@ -3,6 +3,7 @@
 
 // design-to-code/verify-probe.ts
 import fs7 from "node:fs";
+import os3 from "node:os";
 import path9 from "node:path";
 
 // bridge/src/hash.ts
@@ -343,9 +344,9 @@ function measureElements(input) {
       const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : void 0;
       if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" };
       if (distinct.length > 1) return strokeMemo;
-      const os3 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
+      const os4 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
       const oc = rgba(cs.getPropertyValue("outline-color"));
-      if (!os3 || os3 === "none" || os3 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
+      if (!os4 || os4 === "none" || os4 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
       if (oo === -ow) return strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" };
       if (oo === 0) return strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" };
       return strokeMemo;
@@ -5667,6 +5668,11 @@ function pidAlive(pid) {
   }
 }
 var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
+var thisProcess = () => ({ pid: process.pid, host: os.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
+function processState(p) {
+  if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
+  return pidAlive(p.pid) ? "alive" : "gone";
+}
 var read = (file) => {
   try {
     return fs3.readFileSync(file, "utf8");
@@ -5912,8 +5918,9 @@ var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string";
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -5964,12 +5971,17 @@ function endedRun(prev, runId) {
 var RunOpen = class extends Error {
   constructor(base, open) {
     const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    super(`run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const o = open.ownRun;
+    super(o ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 };
+function abandonedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && processState(prev.ownRun) === "gone" ? prev : null;
+}
 function openRun(base, prev, runId) {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? new RunOpen(base, prev) : null;
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && !abandonedRun(prev, runId) ? new RunOpen(base, prev) : null;
 }
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
@@ -5981,6 +5993,24 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const put = (doc2) => {
+      lock.assertMine();
+      inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc2, null, 2) + "\n"));
+    };
+    const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
+    if (left?.ownRun) {
+      const o = left.ownRun;
+      const endDoc = {
+        ...left,
+        rev: left.rev + 1,
+        phase: "failed",
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        by: "verify-probe",
+        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) is gone; ended by the next probe`
+      };
+      put(endDoc);
+      hooks.abandoned?.(endDoc);
+    }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
@@ -5989,6 +6019,7 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
+    const ownRun = w.ownRun ?? (same ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -6001,10 +6032,10 @@ function writeStatus(base, p, hooks = {}) {
       ...pick("expectationSha256"),
       ...pick("measuredSha256"),
       ...pick("evidenceSha256"),
-      ...published !== void 0 ? { published } : {}
+      ...published !== void 0 ? { published } : {},
+      ...ownRun !== void 0 ? { ownRun } : {}
     };
-    lock.assertMine();
-    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    put(doc);
     hooks.after?.(doc);
     return doc;
   } finally {
@@ -6838,7 +6869,10 @@ var USAGE = `usage:
       that run. Without --run the probe starts a run of its own (\`run <id>\` on stderr) and ends it \u2014 \`done\` with the files
       (published as <Screen>.status.json beside the expectation), \`failed\` on an exit 3/4 (a re-run is a new run); refused
       before anything starts (exit 2) while another run of the screen is open \u2014 a verifier's writes the same files: wait for
-      it, or end one nobody runs any more. The probe writes the run's LIVE status (the run cache,
+      it, or end one nobody runs any more. Its own run never stays open behind it \u2014 every other non-zero exit, an error or
+      SIGINT/SIGTERM/SIGHUP (exit 128+n) ends it \`failed\`; it records the probe's pid and host, so one a killed probe left
+      open is ended \`failed\` by the next probe without --run once that pid is gone (same machine). The probe writes the
+      run's LIVE status (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed; with --run an
       exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that
@@ -6899,7 +6933,37 @@ function measuredRefusedWhy(by, runId, phase = "measured") {
   if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`${phase}\` status write was not made`;
   return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
 }
+var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
+  const armed = { end: null };
+  const onSignal = (sig) => {
+    armed.end?.(`probe stopped by ${sig} \u2014 nothing written`);
+    process.exit(128 + os3.constants.signals[sig]);
+  };
+  const own = {
+    arm: (e) => {
+      armed.end = e;
+      for (const s of STOP_SIGNALS) process.on(s, onSignal);
+    },
+    disarm: () => {
+      armed.end = null;
+      for (const s of STOP_SIGNALS) process.off(s, onSignal);
+    }
+  };
+  let code = 1;
+  try {
+    code = await probeMain(argv, own);
+    return code;
+  } catch (e) {
+    armed.end?.(`probe error: ${firstLine(e)} \u2014 nothing written`);
+    own.disarm();
+    throw e;
+  } finally {
+    if (code !== 0) armed.end?.(`probe exit ${code} \u2014 nothing written`);
+    own.disarm();
+  }
+}
+async function probeMain(argv, own) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     return 0;
@@ -7017,17 +7081,22 @@ ${USAGE}`);
     return 2;
   }
   const refusal = { by: "cache" };
+  const abandoned = (d) => {
+    console.error(`note  run ${d.runId} \u2014 ${d.detail}`);
+  };
   const status = (w, hooks = {}) => {
     try {
-      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true } : {} });
+      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned } : {} });
       return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {
         console.error(`verify-probe: ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
+        own.disarm();
         return "over";
       }
       if (e instanceof RunOpen) {
         console.error(`verify-probe: ${e.message} \u2014 it opened while this probe ran; nothing is written`);
+        own.disarm();
         return "over";
       }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
@@ -7040,7 +7109,9 @@ ${USAGE}`);
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
       const w = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} };
-      if (status(w) === "over") return 2;
+      const wrote = status(w);
+      if (ownRun) own.disarm();
+      if (wrote === "over") return 2;
     }
     return code;
   };
@@ -7051,10 +7122,27 @@ ${USAGE}`);
   }
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
-  const measuring = runId !== void 0 ? status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} }) : "refused";
+  const measuring = runId !== void 0 ? status({
+    runId,
+    phase: "measuring",
+    by: "verify-probe",
+    detail: `verify-probe measuring ${f.url ?? ""}`,
+    ...expSha ? { expectationSha256: expSha } : {},
+    ...ownRun ? { ownRun: { ...thisProcess(), startedAt: (/* @__PURE__ */ new Date()).toISOString() } } : {}
+  }) : "refused";
   if (measuring === "over") return 2;
   measuringRecorded = runId !== void 0 && measuring === "ok";
   if (ownRun && runId !== void 0) console.error(`run    ${runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
+  if (ownRun && measuringRecorded && runId !== void 0) {
+    const id = runId;
+    own.arm((detail) => {
+      try {
+        status({ runId: id, phase: "failed", by: "verify-probe", detail, ...expSha ? { expectationSha256: expSha } : {} });
+      } catch (e) {
+        console.error(`warning  run ${id} is not ended: ${firstLine(e)}`);
+      }
+    });
+  }
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   const held = {};
   let timer;
@@ -7303,6 +7391,7 @@ ${USAGE}`);
       detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
       ...expSha ? { expectationSha256: expSha } : {}
     }, { before: writeFiles, ...ownRun ? { after: publish } : {} });
+    own.disarm();
     if (wrote === "over") return 2;
     if (wrote === "refused") {
       statusRefused = true;

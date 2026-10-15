@@ -117,6 +117,14 @@ refuses with exit 2 before starting anything — wait for that run
 (`node "<scripts>/verify-screen.js" --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
 stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Screen> --phase failed --run <id>`.
 
+Your own run never stays open behind the probe — every non-zero exit, an error, or a stop signal (Ctrl-C, a command
+timeout's SIGTERM, a closed terminal) ends it `failed` before the probe exits. A probe killed outright (SIGKILL) cannot
+do that, so its run records the probe's pid and host: the next probe without `--run` on the same machine finds that pid
+gone, ends the run `failed` itself (it says so on stderr) and goes on. When it cannot tell — the run was started on
+another host, or the pid is running — it refuses, naming that probe's own run, when and by which pid it started; if no
+probe is running, end it with the `--status <Screen> --phase failed --run <id>` command it prints. Each probe run
+replaces the published `design/verify/<Screen>.status.json` with its own run's.
+
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded
 from "must match" — note their residual difference instead of iterating on them.

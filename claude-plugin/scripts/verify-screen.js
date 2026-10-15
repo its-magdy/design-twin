@@ -230,6 +230,10 @@ function pidAlive(pid) {
   }
 }
 var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
+function processState(p) {
+  if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
+  return pidAlive(p.pid) ? "alive" : "gone";
+}
 var read = (file) => {
   try {
     return fs3.readFileSync(file, "utf8");
@@ -1060,8 +1064,9 @@ var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var MEASURED_PHASES = ["measured", "done"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string";
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -1120,12 +1125,17 @@ function endedRun(prev, runId) {
 var RunOpen = class extends Error {
   constructor(base, open) {
     const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    super(`run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const o = open.ownRun;
+    super(o ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 };
+function abandonedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && processState(prev.ownRun) === "gone" ? prev : null;
+}
 function openRun(base, prev, runId) {
-  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? new RunOpen(base, prev) : null;
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && !abandonedRun(prev, runId) ? new RunOpen(base, prev) : null;
 }
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
@@ -1137,6 +1147,24 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const put = (doc2) => {
+      lock.assertMine();
+      inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc2, null, 2) + "\n"));
+    };
+    const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
+    if (left?.ownRun) {
+      const o = left.ownRun;
+      const endDoc = {
+        ...left,
+        rev: left.rev + 1,
+        phase: "failed",
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        by: "verify-probe",
+        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) is gone; ended by the next probe`
+      };
+      put(endDoc);
+      hooks.abandoned?.(endDoc);
+    }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
@@ -1145,6 +1173,7 @@ function writeStatus(base, p, hooks = {}) {
       return v !== void 0 ? { [k]: v } : {};
     };
     const published = w.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...w.published || []])].sort() : void 0;
+    const ownRun = w.ownRun ?? (same ? same.ownRun : void 0);
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -1157,10 +1186,10 @@ function writeStatus(base, p, hooks = {}) {
       ...pick("expectationSha256"),
       ...pick("measuredSha256"),
       ...pick("evidenceSha256"),
-      ...published !== void 0 ? { published } : {}
+      ...published !== void 0 ? { published } : {},
+      ...ownRun !== void 0 ? { ownRun } : {}
     };
-    lock.assertMine();
-    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    put(doc);
     hooks.after?.(doc);
     return doc;
   } finally {
@@ -4129,12 +4158,16 @@ function runIntegrity(cx) {
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
-    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : TERMINAL_PHASES.includes(st.phase) ? `record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}, or measure again` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
+    const S = shellArg(st.screen);
+    const record = measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) ? ` \u2014 a measured file that names no run is tied to a run by recording it: --status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>` : "";
     if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
     else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
-      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
+      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?${record}`);
+    else if (measuredRun === void 0 && !st.measuredSha256)
+      integrity.push(`${stFile} (run ${st.runId}, phase ${st.phase}) records no measured file, and this one names no run \u2014 nothing ties it to that run${record}`);
   }
   return { st, integrity, measuredRun };
 }
@@ -4492,7 +4525,7 @@ function evidenceInputs(cx, g) {
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : void 0;
   if (buildRaw !== void 0 && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) \u2014 not checked; write it with verify-screen --status`);
-  const runId = measuredRun ?? (st ? st.runId : void 0);
+  const runId = measuredRun ?? (st && st.measuredSha256 !== void 0 && st.measuredSha256 === opts.measuredSha256 ? st.runId : void 0);
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs = {
     expectationSchema: expectation.schema || "(none)",
@@ -5275,6 +5308,7 @@ function runStatusNote(base, now = Date.now()) {
   const st = found.status, name = path11.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
+  if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} \u2014 it wrote no measured file; this expectation is safe to re-measure against`;
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} \u2014 its measured/report files are partial; this expectation is safe to re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;
   const age = now - Date.parse(st.at);

@@ -112,7 +112,18 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e) { return errCode(e) === "EPERM"; }
 }
 /** Whether this process can probe the holder's pid: same host, same pid namespace. */
-const sameMachine = (h: Holder): boolean => h.host === os.hostname() && h.ns === PID_NS;
+const sameMachine = (h: Pick<Holder, "host" | "ns">): boolean => h.host === os.hostname() && h.ns === PID_NS;
+
+/** A process as a lock stamp names it: pid, host and (on Linux) its pid namespace. */
+export interface ProcessStamp { pid: number; host: string; ns?: string }
+/** This process's stamp — for a record that outlives a lock and must say whether its writer still runs (a probe's own run). */
+export const thisProcess = (): ProcessStamp => ({ pid: process.pid, host: os.hostname(), ...(PID_NS ? { ns: PID_NS } : {}) });
+/** The process a stamp names, judged as a lock holder is: "gone" (same machine, the pid no longer exists), "alive" (same
+ *  machine, the pid exists — or is reused), "unknown" (another host or pid namespace, or no usable pid: nothing to probe). */
+export function processState(p: ProcessStamp): "gone" | "alive" | "unknown" {
+  if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
+  return pidAlive(p.pid) ? "alive" : "gone";
+}
 const read = (file: string): string | null => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } };
 /** How far `t` (ms since the epoch) is from now, either way: a clock that jumped back must not keep a dead lock forever. */
 const ageOf = (t: number): number => Math.abs(Date.now() - t);

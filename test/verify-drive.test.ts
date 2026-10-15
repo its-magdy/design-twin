@@ -240,7 +240,7 @@ console.log("a run-bound probe row against the agent's:");
   const claimed = { ...probePass("2:2", "3:1"), by: "verify-probe" };
   const row: InteractionEvidence = claimed;
   const noStatus = compare(exp, measured([row, ...OTHERS]), { expectationSha256: SHA_E, measuredSha256: SHA_M, interactions: [fail2("2:2")] });
-  safe("(guard) unbound measured file (no status) with by:'verify-probe' ok:true + an agent fail → fail (later evidence wins)", () => res(noStatus, "2:2")?.result === "fail");
+  safe("(guard) a measured file that is not run-bound (no status) with by:'verify-probe' ok:true + an agent fail → fail (later evidence wins)", () => res(noStatus, "2:2")?.result === "fail");
   const otherSha = compare(exp, measured([row, ...OTHERS]), bound({ status: status("f".repeat(64)), interactions: [fail2("2:2")] }));
   safe("(guard) a status naming another measured file binds nothing either (and is an integrity failure)", () => res(otherSha, "2:2")?.result === "fail" && otherSha.verdict === "incomplete");
   const { probe: _p, ...noProbe } = measured([row, ...OTHERS]);

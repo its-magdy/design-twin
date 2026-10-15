@@ -57,7 +57,8 @@ Exit 0 done and the measured file matches (and the evidence file, when the run p
 `blocked` on permissions, 5 timeout or no progress, 6 run cache not accessible; defaults `--timeout 1200` s and
 `--stall 300` s. Use it instead of a hand-rolled poll loop: a moving `rev` means work is happening, a `rev` that
 has not moved for minutes is a real stall, and `phase` names the step to blame. `--wait` on an id that already
-ended returns at once on that run's old `done`.
+ended returns at once on that run's old `done` — until a later run (a probe without `--run` included) replaces the
+status; then it waits out its `--timeout`.
 
 A pass legitimately takes far longer inside a build than standalone. Standalone is one capture against finished
 code with the renderer often already warm; inside a build it runs once per fix round (render → report deltas →

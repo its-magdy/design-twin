@@ -71,7 +71,7 @@ import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 // design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
 // about to be written. Returns that file's path, or null.
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
-// failed/blocked: its measured/report files are partial; a non-terminal phase older than --wait's stall (300 s): it never
+// failed/blocked: its measured/report files are partial (a probe's own run that failed wrote no measured file); a non-terminal phase older than --wait's stall (300 s): it never
 // finished; younger: a run is measuring right now; v1: a hand-written status, not checked. done (or none): nothing to say.
 const STATUS_STALL_MS = 300_000;
 function runStatusNote(base: string, now = Date.now()): string | null {
@@ -80,6 +80,9 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   const st = found.status, name = path.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) — not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
+  // a probe's own run (no --run) that failed wrote no measured file (it is written last, inside the `done` write)
+  if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} — it wrote no measured file; ` +
+    `this expectation is safe to re-measure against`;
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; ` +
     `this expectation is safe to re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;

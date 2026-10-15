@@ -8,7 +8,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import * as VR from "../design-to-code/verify-run.ts";
-import { shellArg } from "../design-to-code/cli-args.ts";
+import { scriptCmd, shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
@@ -742,6 +742,130 @@ await block("verify-probe own run:", async () => {
   const beforeNone = fs.readFileSync(live, "utf8");
   const p4 = probe(noPw);
   safe("no Playwright resolvable → exit 3 before the run's first write: no `run` line, the status byte-identical", () => p4.status === 3 && ownLine(p4.stderr) === "" && fs.readFileSync(live, "utf8") === beforeNone);
+  safe("its own run records who started it: ownRun {pid of that probe, this host, startedAt} — carried to its `failed` write", () =>
+    st3 !== null && st3 !== "v1" && st3.ownRun?.pid === p3.pid && st3.ownRun.host === os.hostname() && !Number.isNaN(Date.parse(st3.ownRun.startedAt)));
+});
+
+// a probe's own run never stays open behind it: a throw, a stop signal, and (SIGKILL) the next probe that finds its pid gone
+console.log("verify-probe without --run — its own run is never left open:");
+await block("verify-probe own run left open:", async () => {
+  const { dir, base } = project();
+  const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
+  /** a project whose fake Playwright's chromium.launch is `launch` (JS source) */
+  const fakeProject = (launch: string): string => {
+    const d = mk("dt-run-fakepw-");
+    fs.writeFileSync(path.join(d, "package.json"), "{}");
+    const pw = path.join(d, "node_modules", "playwright");
+    fs.mkdirSync(pw, { recursive: true });
+    fs.writeFileSync(path.join(pw, "package.json"), JSON.stringify({ name: "playwright", version: "1.60.0", main: "index.js" }));
+    fs.writeFileSync(path.join(pw, "index.js"), `module.exports = { chromium: { launch: ${launch} } };\n`);
+    return d;
+  };
+  const args = (project: string): string[] => [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", project];
+  const throws = fakeProject("() => { throw new Error('fake'); }");
+  const ownLine = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
+  const st = (): VR.VerifyStatusV2 | null => { const s = VR.readStatus(base); return s !== null && s !== "v1" ? s : null; };
+
+  // a throw after `measuring` (a browser whose context cannot be opened for a reason that is not the browser being gone): exit 1, run failed
+  const boom = fakeProject("async () => ({ version: () => '1.0', close: async () => {}, newBrowserCDPSession: async () => { throw new Error('no cdp'); }, " +
+    "newContext: async () => { throw new Error('fake disk full'); } })");
+  const t1 = spawnSync(process.execPath, args(boom), { encoding: "utf8" });
+  const s1 = st();
+  safe("an uncaught error after its `measuring` write → exit 1 (the error printed), and its own run ended `failed` 'probe error: fake disk full — nothing written'", () =>
+    t1.status === 1 && /verify-probe: fake disk full/.test(t1.stderr) && s1 !== null && s1.runId === ownLine(t1.stderr) && s1.phase === "failed" && s1.rev === 2
+      && s1.detail === "probe error: fake disk full — nothing written");
+  if (t1.status !== 1) console.log(t1.stderr);
+
+  // stop signals (POSIX: Windows has none to send) and SIGKILL, on a probe whose launch never returns
+  if (process.platform === "win32") { console.log("  (skipped: the signal cases — Windows delivers no SIGTERM/SIGKILL to a child's handlers)"); return; }
+  const hangs = fakeProject("() => new Promise(() => {})");
+  /** start a probe that hangs in launch, wait for its own run's `measuring`, then send `sig`; resolves with its exit and stderr */
+  const killed = async (sig: NodeJS.Signals): Promise<{ code: number | null; signal: NodeJS.Signals | null; err: string; id: string; pid: number }> => {
+    const p = spawn(process.execPath, args(hangs));
+    let err = "";
+    p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => p.on("close", (code, signal) => resolve({ code, signal })));
+    for (const t0 = Date.now(); ownLine(err) === "" && Date.now() - t0 < 15_000;) await sleep(20);
+    await sleep(200);
+    p.kill(sig);
+    const r = await closed;
+    return { ...r, err, id: ownLine(err), pid: p.pid ?? 0 };
+  };
+  const term = await killed("SIGTERM");
+  const sT = st();
+  safe("SIGTERM while measuring → exit 143 (128 + 15), its own run ended `failed` 'probe stopped by SIGTERM — nothing written'", () =>
+    term.code === 143 && term.id !== "" && sT !== null && sT.runId === term.id && sT.phase === "failed" && sT.detail === "probe stopped by SIGTERM — nothing written");
+  if (term.code !== 143) console.log(`    exit ${String(term.code)} ${String(term.signal)}: ${term.err.slice(0, 400)}`);
+
+  // SIGKILL: nothing can answer it — the run stays at measuring, naming the dead probe's pid
+  const kill = await killed("SIGKILL");
+  const sK = st();
+  safe("SIGKILL while measuring → the run stays at `measuring`, its ownRun naming the killed probe's pid on this host", () =>
+    kill.signal === "SIGKILL" && kill.id !== "" && sK !== null && sK.runId === kill.id && sK.phase === "measuring" && sK.ownRun?.pid === kill.pid && sK.ownRun.host === os.hostname());
+  const next = spawnSync(process.execPath, args(throws), { encoding: "utf8" });
+  const sN = st();
+  const nextId = ownLine(next.stderr);
+  safe("…the next probe without --run finds that pid gone: says it ends the abandoned run `failed`, starts its own (a new id) and goes on (its fake launch: exit 3, failed)", () =>
+    next.status === 3 && next.stderr.includes(`note  run ${kill.id} — abandoned — the probe that started it (pid ${kill.pid} on ${os.hostname()}, `) && nextId !== "" && nextId !== kill.id
+      && sN !== null && sN.runId === nextId && sN.phase === "failed" && sN.rev === 2);
+  if (next.status !== 3) console.log(next.stderr);
+});
+
+// writeStatus `alone` over another probe's own run: abandoned (pid gone) → ended failed under the lock; alive or another host → refused, own-run wording
+console.log("writeStatus alone — another probe's own run:");
+await block("writeStatus alone own run:", async () => {
+  const { dir, base, live } = project();
+  const absDir = path.resolve(dir);
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  const own = (pid: number, host = os.hostname()): VR.OwnRunStamp => ({ pid, host, ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z" });
+  VR.writeStatus(base, { runId: "run-dead", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
+  const seen: VR.VerifyStatusV2[] = [];
+  const doc = VR.writeStatus(base, { runId: "run-next", phase: "measuring", by: "verify-probe" }, { alone: true, abandoned: (d) => { seen.push(d); } });
+  const ended = seen[0];
+  safe("its probe's pid is gone (same host) → abandonedRun; the write ends it `failed` first (rev 2, 'abandoned — the probe that started it (pid N …) is gone'), hands it to `abandoned`, then writes rev 1 of its own run",
+    () => seen.length === 1 && ended !== undefined && ended.runId === "run-dead" && ended.phase === "failed" && ended.rev === 2
+      && ended.detail.startsWith(`abandoned — the probe that started it (pid ${deadPid} on ${os.hostname()}, 2026-10-15T08:00:00.000Z) is gone`)
+      && doc.runId === "run-next" && doc.rev === 1 && doc.ownRun === undefined && readStatusFile(live)?.runId === "run-next");
+  VR.writeStatus(base, { runId: "run-next", phase: "failed", by: "verify-probe" });
+  VR.writeStatus(base, { runId: "run-live", phase: "measuring", by: "verify-probe", ownRun: own(process.pid) });
+  const liveDoc = fs.readFileSync(live, "utf8");
+  const refusedLive = ((): unknown => { try { VR.writeStatus(base, { runId: "run-x", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
+  const ownWording = (e: unknown, id: string, pid: number, host: string): boolean => e instanceof VR.RunOpen
+    && e.message === `run ${id} of Plots is a probe's own run (no --run), started at 2026-10-15T08:00:00.000Z by pid ${pid} on ${host} and still open (phase measuring) — ` +
+      `a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${scriptCmd("verify-screen")} --status Plots --phase failed --run ${id} --dir ${shellArg(absDir)}`
+    && !/--wait/.test(e.message);
+  safe("its probe's pid is alive (same host) → RunOpen in own-run wording (when, by which pid, how to end it; no --wait), the status unchanged", () =>
+    ownWording(refusedLive, "run-live", process.pid, os.hostname()) && fs.readFileSync(live, "utf8") === liveDoc);
+  VR.writeStatus(base, { runId: "run-live", phase: "failed", by: "agent" });
+  VR.writeStatus(base, { runId: "run-far", phase: "measuring", by: "verify-probe", ownRun: own(deadPid, "another-host.invalid") });
+  const refusedFar = ((): unknown => { try { VR.writeStatus(base, { runId: "run-y", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
+  safe("started on another host (its pid cannot be probed from here) → refused the same way, never taken for abandoned", () =>
+    ownWording(refusedFar, "run-far", deadPid, "another-host.invalid") && VR.abandonedRun(VR.readStatus(base), "run-y") === null && readStatusFile(live)?.runId === "run-far");
+  safe("isVerifyStatusV2 reads ownRun (and refuses a malformed one); a later write of the run carries it", () => {
+    const far = readStatusFile(live);
+    const next = VR.writeStatus(base, { runId: "run-far", phase: "failed", by: "agent" });
+    return far?.ownRun?.host === "another-host.invalid" && !VR.isVerifyStatusV2({ ...far, ownRun: { pid: "1", host: "h", startedAt: "t" } }) && next.ownRun?.host === "another-host.invalid";
+  });
+});
+
+// the probe passes `alone` on its own run's writes: a run that opens while it runs is never written over (fast — a fake launch writes it)
+console.log("verify-probe without --run — another run opened while it runs:");
+await block("verify-probe own run alone:", async () => {
+  const { dir, live } = project();
+  const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
+  const d = mk("dt-run-fakepw-");
+  fs.writeFileSync(path.join(d, "package.json"), "{}");
+  const pw = path.join(d, "node_modules", "playwright");
+  fs.mkdirSync(pw, { recursive: true });
+  fs.writeFileSync(path.join(pw, "package.json"), JSON.stringify({ name: "playwright", version: "1.60.0", main: "index.js" }));
+  // launch (after the probe's `measuring` write) puts a verifier's queued run in the live status, then fails: exit 3
+  fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { require('fs').writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); throw new Error('fake'); } } };\n");
+  const queued = JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots", runId: "run-q", rev: 1, phase: "queued", detail: "", at: new Date().toISOString(), by: "orchestrator" }, null, 2) + "\n";
+  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
+    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: queued } });
+  safe("a run queued while the probe's own run measures → its `failed` write is refused (RunOpen): exit 2, not 3, and the queued run's status byte-identical",
+    () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("run run-q of Plots is open (phase queued, rev 1, by orchestrator, ") && /it opened while this probe ran/.test(p.stderr));
+  if (p.status !== 2) console.log(p.stderr);
 });
 
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project

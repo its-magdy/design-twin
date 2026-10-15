@@ -10,8 +10,9 @@ import {
 } from "./doc-guards.ts";
 import { planInteractionsSha256 } from "./plan-waivers.ts";
 import { parseSteps, stepsSha256 } from "./probe-steps.ts";
-import { MEASURED_PHASES } from "./verify-run.ts";
+import { MEASURED_PHASES, TERMINAL_PHASES } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
+import { shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import { CANONICAL_MATCHED_BY, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
@@ -1490,15 +1491,25 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
     integrity.push(`the measured file was taken in run ${measuredRun}, but ` +
       `${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} ` +
       `— ${INTEGRITY_PHRASES.unrecorded}; ` +
-      `${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+      // a run still open is the current one (never record this file over it); an ended one takes a record of this run
+      `${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`
+        : TERMINAL_PHASES.includes(st.phase) ? `record it with --status ${shellArg(st.screen)} --phase done --run ${measuredRun}, or measure again`
+        : `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     // the measured file's own run — or, for one that names no run (written by hand on a native stack, which
-    // --status … --phase measured records by its sha), the run whose status is beside it: unfinished, or recording
-    // another measured file. Membership is the run id and the recorded sha, never a timestamp.
+    // --status … --phase measured records by its sha), the run whose status is beside it: unfinished, recording
+    // another measured file, or (a file naming no run) recording none. Membership is the run id and the recorded sha,
+    // never a timestamp.
     const stFile = opts.status ? opts.status.file : "status.json";
+    // the next step for a hand-written file beside an ended run: record it in a run of its own
+    const S = shellArg(st.screen);
+    const record = measuredRun === undefined && TERMINAL_PHASES.includes(st.phase)
+      ? ` — a measured file that names no run is tied to a run by recording it: --status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>` : "";
     if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
     else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
-      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?`);
+      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?${record}`);
+    else if (measuredRun === undefined && !st.measuredSha256)
+      integrity.push(`${stFile} (run ${st.runId}, phase ${st.phase}) records no measured file, and this one names no run — nothing ties it to that run${record}`);
   }
   return { st, integrity, measuredRun };
 }
@@ -1882,8 +1893,9 @@ function evidenceInputs(
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : undefined;
   if (buildRaw !== undefined && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) — not checked; write it with verify-screen --status`);
-  // the run the measured file names, else the run it was judged by (the status beside it)
-  const runId = measuredRun ?? (st ? st.runId : undefined);
+  // the run the measured file names, else the run whose status beside it records this very file (its sha) — never a
+  // run the file is not part of
+  const runId = measuredRun ?? (st && st.measuredSha256 !== undefined && st.measuredSha256 === opts.measuredSha256 ? st.runId : undefined);
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",

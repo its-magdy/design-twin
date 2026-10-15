@@ -449,6 +449,9 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     /Every measurement belongs to a run, and measured\.runId names it/.test(help.stdout) && /Without --run the probe starts a run of\s+its\s+own \(`run <id>` on stderr\) and ends it — `done` with the files/.test(help.stdout)
     && /`failed` on an exit 3\/4 \(a re-run is a new run\); refused\s+before anything starts \(exit 2\) while another run of the screen is open/.test(help.stdout)
     && /or \(no --run\) another run of the\s+screen is open/.test(help.stdout));
+  t("--help: its own run never stays open — a non-zero exit, an error or SIGINT/SIGTERM/SIGHUP ends it failed; a killed probe's run is ended by the next once its pid is gone", () =>
+    /Its own run never stays open behind it — every other non-zero exit, an error or\s+SIGINT\/SIGTERM\/SIGHUP \(exit 128\+n\) ends it `failed`/.test(help.stdout)
+    && /it records the probe's pid and host, so one a killed probe left\s+open is ended `failed` by the next probe without --run once that pid is gone \(same machine\)/.test(help.stdout));
   t("browserPathError: null for an executable file (this node binary)", () => {
     const f = (VP as Partial<typeof VP>).browserPathError;
     return f !== undefined && f(process.execPath) === null && typeof f(missing) === "string";
