@@ -55,7 +55,7 @@ import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems } from "./doc-guards.ts";
+import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
@@ -589,15 +589,25 @@ function recordedReportWarnings(plan: Plan, cwd: string): string[] {
 // anything that report decides (plan-record.ts recordFacts: verdict, headline, counts, mode, reason, renderer, the open
 // deltas, a11y; not artifacts, which depend on the disk) that is not what the report says, was edited by hand. The one
 // verification check that BLOCKS: a hand edit there would pass for the tool's record, and re-recording repairs it. It
-// also reopens a closed plan (isOpen) and reads as "blocked" in --status (computeStatus). A recorded block with only the
-// first record's keys (recorded@1) is read the older way and never blocks; one with a key that record never wrote is a
-// @2 block, `schema` or not (doc-guards.ts isRecordV2Shaped). These messages are saved in the plan
+// also reopens a plan the hook had closed (isOpen), and --status then reads "blocked" — or "failed" when a report says
+// fail, which comes first (computeStatus). A recorded block with only the first record's keys (recorded@1) is read the
+// older way and never blocks; one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
+// isRecordV2Shaped). A recorded@1 a person added keys to that no record writes (doc-guards.ts recordV1HandKeys) blocks
+// with ONE message naming them — not one per @2 key it lacks. These messages are saved in the plan
 // (verification.hook.blocking): scripts are named in words.
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
 function recordedEdits(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) return [];
+  if (!isJsonObject(rec)) return [];
+  const added = recordV1HandKeys(rec);
+  if (added.length) {
+    const named = added.map((k) => `\`${k}\``).join(", ");
+    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes — ` +
+      `remove ${added.length > 1 ? "them" : "it"}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${added.length > 1 ? "them" : "it"}); ` +
+      "residuals go in deviations[], anything else in notes"];
+  }
+  if (!isRecordV2Shaped(rec)) return [];
   const edited = recordProblems(rec);
   if (!edited.length && isVerificationRecord(rec)) {
     const bytes = readRegularFile(path.resolve(cwd, rec.report)); // (null: no report to compare with)

@@ -693,7 +693,10 @@ var RECORD_FIELDS = {
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var RECORD_V1_KEYS = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
 function isRecordV2Shaped(rec) {
-  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k));
+  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+}
+function recordV1HandKeys(rec) {
+  return isRecordV2Shaped(rec) ? [] : Object.keys(rec).filter((k) => !RECORD_KEYS.includes(k));
 }
 function recordProblems(rec) {
   const out = recClosed(rec, "", RECORD_FIELDS);
@@ -2051,7 +2054,13 @@ var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"
 var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
 function recordedEdits(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
-  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) return [];
+  if (!isJsonObject(rec)) return [];
+  const added = recordV1HandKeys(rec);
+  if (added.length) {
+    const named = added.map((k) => `\`${k}\``).join(", ");
+    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${added.length > 1 ? "them" : "it"}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${added.length > 1 ? "them" : "it"}); residuals go in deviations[], anything else in notes`];
+  }
+  if (!isRecordV2Shaped(rec)) return [];
   const edited = recordProblems(rec);
   if (!edited.length && isVerificationRecord(rec)) {
     const bytes = readRegularFile(path8.resolve(cwd, rec.report));

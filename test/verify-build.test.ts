@@ -312,7 +312,7 @@ console.log("verification.recorded — the tool's block:");
     a11y: { tool: "axe-core 4.13.0", violations: 0, warnings: 0, report: "design/verify/login.report.json" } };
   const planWith = (verification: Record<string, unknown>): Plan => { const r = parsePlan({ files: ["a.tsx"], verification }); if (!("plan" in r)) throw new Error(r.error); return r.plan; };
   const FILES = { "a.tsx": "", "design/verify/login.png": "png" };
-  const recordBlocks = (verification: Record<string, unknown>): string[] => blocks(FILES, planWith(verification)).filter((b) => b.startsWith("verification.recorded."));
+  const recordBlocks = (verification: Record<string, unknown>): string[] => blocks(FILES, planWith(verification)).filter((b) => b.startsWith("verification.recorded"));
   const p = parsePlan({ verification: { recorded: "fail" } });
   check("[shape] parsePlan refuses a non-object verification.recorded, naming it", "error" in p && p.error === "is not a valid plan: `verification.recorded` must be an object");
   check("[shape] …but reads a recorded block with hand edits inside (verify-build blocks on those, and --record-plan can still repair the plan)",
@@ -331,7 +331,13 @@ console.log("verification.recorded — the tool's block:");
     && has(problems(FILES, planWith({ mode: "static-only", recorded: v1 })), /^verification\.mode is "static-only" with no `reason`/));
   check(`a schema-less block holding a key the first record never wrote is a @2 block with its schema removed → BLOCKS (got ${JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } }))})`,
     JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered" } })) === JSON.stringify([EDITED("schema"), EDITED("artifacts"), EDITED("deltas")])
-    && JSON.stringify(recordBlocks({ recorded: { ...v1, note: "hand" } })) === JSON.stringify([EDITED("note"), EDITED("schema"), EDITED("mode"), EDITED("artifacts"), EDITED("deltas")]));
+    && JSON.stringify(recordBlocks({ recorded: { ...v1, mode: "rendered", note: "hand" } })) === JSON.stringify([EDITED("note"), EDITED("schema"), EDITED("artifacts"), EDITED("deltas")]));
+  // a key no record writes does not make a recorded@1 a @2 block: ONE block naming it, the plan read the older way
+  const v1Hand = recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand", residuals: [] } });
+  check(`a recorded@1 with keys no record writes → ONE block naming them and what to do, not one per @2 key it lacks (got ${JSON.stringify(v1Hand)})`,
+    v1Hand.length === 1 && (v1Hand[0] ?? "") === "verification.recorded is a record in the first format (no schema) with `note`, `residuals` added by hand, which verify-screen --compare --record-plan never writes — "
+      + "remove them, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops them); residuals go in deviations[], anything else in notes"
+    && !has(problems(FILES, planWith({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand" } })), /^verification\.recorded\.mode|ignored — verification\.recorded/));
   const { a11y: _dropped, ...noA11y } = REC;
   check("beside a recorded@2 with no a11y (its behaviour checks did not run) a top-level a11y is read, not ignored",
     !has(problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "manual", violations: 0 }, recorded: noA11y })), /ignored — verification\.recorded|has no a11y/)

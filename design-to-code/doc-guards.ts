@@ -369,10 +369,16 @@ const RECORD_FIELDS = {
 export const RECORD_KEYS: readonly string[] = Object.keys(RECORD_FIELDS);
 // What the first record (recorded@1, no `schema`) ever held — the report's facts only
 const RECORD_V1_KEYS: readonly string[] = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
-/** A recorded block to read and check as @2: it has a `schema`, or a key the first record never wrote (mode, artifacts,
- *  deltas, a11y, … — a @2 block whose schema was removed by hand is still a @2 block, and its edit still blocks). */
+/** A recorded block to read and check as @2: it has a `schema`, or a key only @2 writes (mode, artifacts, deltas,
+ *  a11y, … — a @2 block whose schema was removed by hand is still a @2 block, and its edit still blocks). A key no
+ *  record writes does not make a block @2: see recordV1HandKeys. */
 export function isRecordV2Shaped(rec: JsonObject): boolean {
-  return rec.schema !== undefined || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k));
+  return rec.schema !== undefined || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
+}
+/** The keys a person added to a recorded@1 block (no `schema`, no key only @2 writes) that no record ever writes
+ *  (`residuals`, `note`, …); [] for a @2 block or an untouched recorded@1. */
+export function recordV1HandKeys(rec: JsonObject): string[] {
+  return isRecordV2Shaped(rec) ? [] : Object.keys(rec).filter((k) => !RECORD_KEYS.includes(k));
 }
 /** The keys (dotted: `counts.high`, `deltas[2].note`, `a11y.tool`) of a recorded@2 block that are outside its
  *  closed set or hold the wrong kind of value; [] = the block is the tool's shape. */

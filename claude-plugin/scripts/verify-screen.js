@@ -654,7 +654,7 @@ var RECORD_FIELDS = {
 var RECORD_KEYS = Object.keys(RECORD_FIELDS);
 var RECORD_V1_KEYS = ["by", "at", "report", "reportSha256", "verdict", "headline", "behaviourHeadline", "counts"];
 function isRecordV2Shaped(rec) {
-  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k));
+  return rec.schema !== void 0 || Object.keys(rec).some((k) => !RECORD_V1_KEYS.includes(k) && RECORD_KEYS.includes(k));
 }
 function recordProblems(rec) {
   const out = recClosed(rec, "", RECORD_FIELDS);

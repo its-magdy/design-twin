@@ -283,6 +283,24 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
   check("…and the plan stays closed (planHash leaves verification out; no re-stamp needed)", !openOf(root) && !r.notes.some((n) => /re-stamped/.test(n)));
 }
 {
+  // a recorded@1 block a person added keys to that no record writes: ONE block naming them (not one per @2 key it
+  // lacks), the plan still read the older way; the next record drops them
+  const root = project();
+  const p = planOf(root);
+  fs.writeFileSync(path.join(root, REL), JSON.stringify({ ...p, verification: { ...p.verification, deltas: [], recorded: {
+    by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: sha256(fs.readFileSync(path.join(root, REPORT))), verdict: rep.verdict, headline: rep.headline,
+    counts: { high: 1, medium: 1, low: 2, accepted: 1, notMeasured: 0, inferred: 0 }, residuals: [{ nodeId: "80:2", why: "shadow" }], note: "checked by hand" } } }, null, 2) + "\n");
+  const blocks = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).blocking.filter((b) => /verification\.recorded/.test(b));
+  check(`a recorded@1 with hand keys \`residuals\`, \`note\` → ONE block naming both and what to do (got ${JSON.stringify(blocks)})`,
+    blocks.length === 1 && (blocks[0] ?? "").startsWith("verification.recorded is a record in the first format (no schema) with `residuals`, `note` added by hand, which verify-screen --compare --record-plan never writes — remove them, or re-run verify-screen --compare --record-plan")
+    && /residuals go in deviations\[\]/.test(blocks[0] ?? "") && verificationFacts(planOf(root).verification).at === "verification");
+  const r = recordPlan(REL, rep, REPORT, { cwd: root, now: NOW });
+  const recKeys = Object.keys(must(planOf(root).verification?.recorded, "recorded"));
+  check(`…the next record drops them with one note, and nothing blocks on the record (got ${JSON.stringify(r.notes)})`,
+    r.notes.some((n) => n.startsWith("verification.recorded held `residuals`, `note`, which --record-plan does not write — dropped")) && !recKeys.includes("residuals") && !recKeys.includes("note")
+    && !checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).blocking.some((b) => /verification\.recorded/.test(b)));
+}
+{
   // a static-only measured file → the report says so, and the record is static-only + the why, no renderer
   const so: VerifyReportV2 = compare(exp, { mode: "static-only", reason: "no dev server, no Playwright", nodes: [] }, {});
   check(`compare() of a static-only measured file: report.mode "static-only" + its reason (got ${JSON.stringify({ mode: so.mode, reason: so.reason })}); a rendered one carries no mode`,
