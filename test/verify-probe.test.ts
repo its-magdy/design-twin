@@ -1798,8 +1798,8 @@ block("behaviour helpers", () => {
       && /^not-run: the page tried to write \(WebSocket \/ws \+1599 more\) — blocked; not judged$/.test(out[0]?.detail ?? "") && ((bw) => Array.isArray(bw) && bw.length <= 5)(out[0]?.evidence?.blockedWrites);
   });
   t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill (its wait and at most one command, within KILL_STEP_CAP_MS) + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
-    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, KILL_STEP_CAP_MS: ps } = PB;
-    return r !== undefined && c !== undefined && k !== undefined && w !== undefined && ps !== undefined && w >= 2000 && r >= c + 2 * k + ps + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
+    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, KILL_STEP_CAP_MS: kill } = PB;
+    return r !== undefined && c !== undefined && k !== undefined && w !== undefined && kill !== undefined && w >= 2000 && r >= c + 2 * k + kill + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
   });
   t("nameStatus: a titled iframe passes on its DOM name (`- iframe` never carries one), an untitled one fails; <summary> (`- text: …`) passes on its text; an unnamed group passes (its name is optional); an unnamed button fails", () => {
     const ns = PB.nameStatus;
@@ -2014,17 +2014,23 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
   clearTimeout(live);
   check(`launchPid: the "browser" entry's id; none when the call fails or does not answer within the cap (saw ${JSON.stringify([reported, failed, silent])} in ${Date.now() - at} ms)`,
     reported === 4242 && failed === undefined && silent === undefined && Date.now() - at < 2_000);
-  // Windows, on any OS through a stand-in host. A close that hit its cap: taskkill /T /F /PID <the browser's pid> while it
-  // runs, nothing else. A close that resolved has seen the browser exit, so its pid may be another process's by now (exists()
-  // is true of the new owner here): no taskkill.
-  const win: string[][] = [], winClosed: string[][] = [];
-  const stuck = { ...fake, close: () => new Promise<void>(() => undefined) };
+  // Windows, on any OS through a stand-in host. A close that hit its cap with the browser still connected (wedged), or that
+  // rejected with it connected: taskkill /T /F /PID <the browser's pid> while it runs, nothing else. A close that resolved,
+  // or one that hit its cap after the browser disconnected (Playwright's cleanup after the exit can outlast the cap), has
+  // seen the browser exit, so its pid may be another process's by now (exists() is true of the new owner here): no taskkill.
+  const win: string[][] = [], winClosed: string[][] = [], winGone: string[][] = [], winRejected: string[][] = [];
+  const stuck = { ...fake, close: () => new Promise<void>(() => undefined), isConnected: () => true };
+  const stuckGone = { ...stuck, isConnected: () => false };
+  const rejects = { ...fake, close: () => Promise.reject(new Error("close failed")), isConnected: () => true };
   const pipes = setTimeout(() => undefined, 5_000); // the close caps are unref'd: a real browser's pipes keep the process up meanwhile
   await VP.closeCapped(stuck, 200, 4242, { ...host("win32", win), exists: (pid) => pid === 4242 });
+  await VP.closeCapped(stuckGone, 200, 4242, { ...host("win32", winGone), exists: (pid) => pid === 4242 });
   clearTimeout(pipes);
   await VP.closeCapped(fake, 200, 4242, { ...host("win32", winClosed), exists: (pid) => pid === 4242 });
-  check(`closeCapped on Windows: the close capped, the browser still running → one taskkill /T /F /PID <its pid>, no other command; the close resolved → no taskkill though the pid exists (saw ${JSON.stringify([win, winClosed])})`,
-    JSON.stringify(win) === JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]) && winClosed.length === 0);
+  await VP.closeCapped(rejects, 200, 4242, { ...host("win32", winRejected), exists: (pid) => pid === 4242 });
+  const oneKill = JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]);
+  check(`closeCapped on Windows: the close capped, the browser still connected → one taskkill /T /F /PID <its pid>, no other command; the close rejected, still connected → the same; the close capped after the browser disconnected, or resolved → no taskkill though the pid exists (saw ${JSON.stringify([win, winRejected, winGone, winClosed])})`,
+    JSON.stringify(win) === oneKill && JSON.stringify(winRejected) === oneKill && winGone.length === 0 && winClosed.length === 0);
 }
 
 // The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page

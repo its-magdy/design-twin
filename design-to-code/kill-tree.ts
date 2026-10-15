@@ -117,10 +117,11 @@ const POLL_MS = 50;
  *  with no member left there is no such group (ESRCH) unless the pid has since been given to a new group leader, which
  *  needs the pid space to cycle within the grace — POSIX hands pids out in sequence and wraps only at its maximum.
  *  Windows: `taskkill /T /F /PID <pid>` while that pid exists; nothing when `pid` is unknown (there is no process table to
- *  read) or when `exited` says this process has already seen `pid` exit. Windows may give an ended process's pid to a new
+ *  read) or when `exited` says the caller knows `pid` has exited. Windows may give an ended process's pid to a new
  *  process as soon as no handle to the old one is open, and then exists() is true of the new owner and /T would end its
  *  tree; while this process still holds the child's handle (it has not seen the exit) the pid is not reused. What remains
- *  is a child that exits, and is reaped, between the exists() check and the taskkill — a window of one command start.
+ *  is a child the caller still takes for running (a wedged but connected browser) that exits, and is reaped, between the
+ *  caller's check, the exists() check and the taskkill — a window of one command start.
  *  A pgrep/ps is capped at `capMs`, a taskkill at the host's own cap. */
 export async function killChildTree(pid: number | undefined, host: ProcHost = PROC_HOST,
   { capMs = 3_000, graceMs = 0, exited = false }: { capMs?: number; graceMs?: number; exited?: boolean } = {}): Promise<void> {

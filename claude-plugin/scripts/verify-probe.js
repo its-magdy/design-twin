@@ -7106,8 +7106,8 @@ var OWN_RUN_GRACE_MS = 12e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS, pid = launchPids.get(b), host = PROBE_HOST) {
   const cap = () => sleep5(capMs, false, { ref: false });
   await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
-  const exited = await Promise.race([b.close().then(() => true, () => false), cap()]);
-  await killBrowser(pid, host, KILL_GRACE_MS, exited);
+  const closed = await Promise.race([b.close().then(() => true, () => false), cap()]);
+  await killBrowser(pid, host, KILL_GRACE_MS, closed || !b.isConnected());
 }
 var KILL_GRACE_MS = 1e3;
 var KILL_CMD_CAP_MS = KILL_STEP_CAP_MS - KILL_GRACE_MS;
