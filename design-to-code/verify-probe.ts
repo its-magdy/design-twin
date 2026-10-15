@@ -1128,7 +1128,11 @@ export async function main(argv: string[]): Promise<number> {
   // (an object: set inside the closures)
   const armed: { end: ((detail: string) => void) | null } = { end: null };
   const onSignal = (sig: (typeof STOP_SIGNALS)[number]): void => {
-    armed.end?.(`probe stopped by ${sig} — nothing written`);
+    // taken once: a second signal (or main's own ender) before the exit lands writes nothing more; the listeners stay,
+    // so that signal does not fall back to Node's default unflushed kill
+    const end = armed.end;
+    armed.end = null;
+    end?.(`probe stopped by ${sig} — nothing written`);
     process.exitCode = 128 + os.constants.signals[sig];
     exitFlushed(process.exitCode);
   };
@@ -1571,10 +1575,14 @@ function exitWhenDone(code: number): void {
   process.exitCode = code;
   setTimeout(() => exitFlushed(code), EXIT_GRACE_MS).unref();
 }
-/** exit once stderr and stdout have flushed — the grace timer above, and a stop signal (its listener replaces Node's
- *  default exit, and Playwright's own SIGINT/SIGTERM/SIGHUP listeners only close the browser) */
+/** exit once stderr and stdout have flushed, or after FLUSH_CAP_MS when a reader never drains them — the grace timer
+ *  above, and a stop signal (its listener replaces Node's default exit; Playwright's SIGTERM/SIGHUP listeners only close
+ *  the browser, and its SIGINT one exits 130 only after a browser has launched) */
+const FLUSH_CAP_MS = 2_000;
 function exitFlushed(code: number): void {
-  process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));
+  const exit = (): never => process.exit(code);
+  setTimeout(exit, FLUSH_CAP_MS).unref(); // a pending write keeps the loop up, so this still fires
+  process.stderr.write("", () => process.stdout.write("", exit));
 }
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {

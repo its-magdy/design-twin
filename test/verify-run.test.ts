@@ -894,6 +894,23 @@ await block("verify-probe own run left open:", async () => {
         r.code === code && r.id !== "" && sS !== null && sS.runId === r.id && sS.phase === "failed" && sS.detail === `probe stopped by ${sig} — nothing written`);
       if (r.code !== code) console.log(`    exit ${String(r.code)} ${String(r.signal)}: ${r.err.slice(0, 400)}`);
     }
+    // a stdout reader that never drains (1 MB written, nobody reading) must not hold the exit: the flush is capped
+    const floods = fakeProject("() => { process.stdout.write('x'.repeat(1 << 20)); return new Promise(() => {}); }");
+    const p = spawn(process.execPath, args(floods));
+    p.stdout.pause();
+    let err = "";
+    p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+    const closed = new Promise<number | null>((resolve) => p.on("exit", (code) => resolve(code)));
+    for (const t0 = Date.now(); ownLine(err) === "" && Date.now() - t0 < 15_000;) await sleep(20);
+    await sleep(200);
+    const sentAt = Date.now();
+    p.kill("SIGTERM");
+    const stuck = setTimeout(() => p.kill("SIGKILL"), 10_000);
+    const code = await closed;
+    clearTimeout(stuck);
+    const took = Date.now() - sentAt;
+    safe(`SIGTERM with stdout never read (1 MB pending) → still exit 143 within the flush cap (took ${took} ms, < 6000), its own run ended \`failed\``, () =>
+      code === 143 && took < 6_000 && st()?.phase === "failed");
   }
 
   // SIGKILL: nothing can answer it — the run stays at measuring, naming the dead probe's pid

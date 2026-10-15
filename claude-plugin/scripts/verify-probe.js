@@ -6978,7 +6978,9 @@ var STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 async function main(argv) {
   const armed = { end: null };
   const onSignal = (sig) => {
-    armed.end?.(`probe stopped by ${sig} \u2014 nothing written`);
+    const end = armed.end;
+    armed.end = null;
+    end?.(`probe stopped by ${sig} \u2014 nothing written`);
     process.exitCode = 128 + os3.constants.signals[sig];
     exitFlushed(process.exitCode);
   };
@@ -7474,8 +7476,11 @@ function exitWhenDone(code) {
   process.exitCode = code;
   setTimeout(() => exitFlushed(code), EXIT_GRACE_MS).unref();
 }
+var FLUSH_CAP_MS = 2e3;
 function exitFlushed(code) {
-  process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));
+  const exit = () => process.exit(code);
+  setTimeout(exit, FLUSH_CAP_MS).unref();
+  process.stderr.write("", () => process.stdout.write("", exit));
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   main(process.argv.slice(2)).then(exitWhenDone, (e) => {
