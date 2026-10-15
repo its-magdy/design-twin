@@ -5982,12 +5982,15 @@ var RunOpen = class extends Error {
     this.name = "RunOpen";
   }
 };
-var RunOverdue = class extends Error {
-  constructor(run, deadline) {
-    super(`run ${run.runId} (this probe's own) passed its deadline ${deadline} \u2014 the next probe without --run takes it for abandoned, so nothing more is written in it`);
-    this.name = "RunOverdue";
+var RunReplaced = class extends Error {
+  constructor(runId, by) {
+    super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran \u2014 nothing more is written in it`);
+    this.name = "RunReplaced";
   }
 };
+function replacedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId ? new RunReplaced(runId, prev) : null;
+}
 function abandonedRun(prev, runId) {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
@@ -6004,6 +6007,8 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
+    if (replaced) throw replaced;
     const put = (doc2) => {
       lock.assertMine();
       inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc2, null, 2) + "\n"));
@@ -6024,7 +6029,6 @@ function writeStatus(base, p, hooks = {}) {
       hooks.abandoned?.(endDoc);
     }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-    if (hooks.alone && same?.ownRun && overdue(same.ownRun)) throw new RunOverdue(same, same.ownRun.deadline);
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k) => {
@@ -6886,13 +6890,15 @@ var USAGE = `usage:
       it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends
       its own run \`failed\`. One left at measuring \u2014 a SIGKILL, or an exit whose last status write was refused \u2014 names the
       probe's pid and host and a deadline (start + --max-time + 120 s): the next probe without --run ends it \`failed\` once
-      that pid is gone (same machine) or the deadline has passed, and goes on. The probe writes the run's LIVE status
+      that pid is gone (same machine) or, on any host, the deadline has passed, and goes on; before the deadline it refuses
+      when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one
+      (it was stopped or slept past its deadline) writes nothing more (exit 2). The probe writes the run's LIVE status
       (the run cache,
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed; with --run an
       exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that
-      ends (or, its own run, another run that opens) while the page is measured gets no files (exit 2 both ways).
-      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).
+      ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).
+      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
       --steps: a JSON list of steps (or a plan whose \`navigate\` holds them) replayed after every page load, before --ready,
       to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
       {"goto": "/same-origin/path"}. A click's selector must match exactly one visible element (a waitFor's at least one);
@@ -6916,11 +6922,12 @@ var USAGE = `usage:
   ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran, or (no --run) another run of the
-      screen is open \u2014 also instead of a 3 or 4 \xB7 3
+      screen is open, or replaced its own \u2014 also instead of a 3 or 4 \xB7 3
       renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept navigating / reloaded twice
       during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /
       the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
+var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
   const cap = () => sleep4(capMs, void 0, { ref: false });
@@ -7014,8 +7021,8 @@ ${USAGE}`);
     return 2;
   }
   const maxTime = f["max-time"] === void 0 ? MAX_TIME_DEFAULT : Number(f["max-time"]);
-  if (!Number.isFinite(maxTime) || maxTime <= 0) {
-    console.error(`verify-probe: --max-time must be a positive number of milliseconds
+  if (!Number.isFinite(maxTime) || maxTime <= 0 || maxTime > MAX_TIME_LIMIT) {
+    console.error(`verify-probe: --max-time must be a positive number of milliseconds, at most ${MAX_TIME_LIMIT}
 ${USAGE}`);
     return 2;
   }
@@ -7100,9 +7107,10 @@ ${USAGE}`);
   const abandoned = (d) => {
     console.error(`note  run ${d.runId} \u2014 ${d.detail}`);
   };
+  let measuringRecorded = false;
   const status = (w, hooks = {}) => {
     try {
-      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned } : {} });
+      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned, ...measuringRecorded ? { continues: true } : {} } : {} });
       return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {
@@ -7115,7 +7123,7 @@ ${USAGE}`);
         own.disarm();
         return "over";
       }
-      if (e instanceof RunOverdue) {
+      if (e instanceof RunReplaced) {
         console.error(`verify-probe: ${e.message}`);
         own.disarm();
         return "over";
@@ -7126,7 +7134,6 @@ ${USAGE}`);
       return "refused";
     }
   };
-  let measuringRecorded = false;
   const ended = (code) => {
     if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
       const w = { runId, phase: ownRun ? "failed" : "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} };
@@ -7416,7 +7423,8 @@ ${USAGE}`);
     if (wrote === "over") return 2;
     if (wrote === "refused") {
       statusRefused = true;
-      const endedNow = written ? null : ownRun ? openRun(statusBase, readStatus(statusBase), runId) : endedRun(readStatus(statusBase), runId);
+      const now = written ? null : readStatus(statusBase);
+      const endedNow = written ? null : !ownRun ? endedRun(now, runId) : (measuringRecorded ? replacedRun(now, runId) : null) ?? openRun(statusBase, now, runId);
       if (endedNow) {
         console.error(`verify-probe: ${endedNow.message}`);
         return 2;

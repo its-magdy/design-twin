@@ -370,6 +370,22 @@ const rA3 = await probe(["--expected", expected, "--url", url(), "--out", path.j
 check("…beside that open run, the next probe without --run → exit 2 before a browser starts, no files", rA3.status === 2 && !fs.existsSync(path.join(tmp, "stageA3"))
   && rA3.stderr.startsWith("verify-probe: run run-e2e-13 of Staff is open"));
 writeStatus(baseA2, { runId: "run-e2e-13", phase: "failed", by: "orchestrator", detail: "test over" });
+// no --run, its run replaced by one that has ENDED while the page is measured, and its own `done` write refused by the run
+// cache (read-only): the refused path finds the status naming the replacement and writes no files (exit 2)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write beside a replacement run — ${NO_READONLY_DIRS})`);
+else {
+  const stageA4 = path.join(tmp, "stageA4", "Staff");
+  const cacheA4 = path.dirname(liveStatusFile(baseA2));
+  onPage = () => { writeStatus(baseA2, { runId: "run-e2e-14", phase: "done", by: "agent", detail: "replaced it" }); fs.chmodSync(cacheA4, 0o555); };
+  const rA4 = await probe(["--expected", expected, "--url", url(), "--out", stageA4, "--project", ROOT]);
+  onPage = null;
+  fs.chmodSync(cacheA4, 0o755);
+  const stA4 = readStatus(liveStatusFile(baseA2));
+  const leftA4 = fs.existsSync(path.dirname(stageA4)) ? fs.readdirSync(path.dirname(stageA4)) : [];
+  check("no --run, replaced by a run that ended while measuring, its `done` write refused (read-only run cache) → exit 2, no files in --out's directory, the replacement's done status kept, no next step",
+    rA4.status === 2 && leftA4.length === 0 && stA4?.runId === "run-e2e-14" && stA4.phase === "done" && /was replaced by run run-e2e-14 \(done\) while this probe ran/.test(rA4.stderr) && !/^next /m.test(rA4.stderr));
+  if (rA4.status !== 2 || leftA4.length) console.log(`${rA4.stderr}\n  left: ${leftA4.join(", ")}`);
+}
 
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line

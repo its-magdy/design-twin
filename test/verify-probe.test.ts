@@ -451,8 +451,14 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     && /or \(no --run\) another run of the\s+screen is open/.test(help.stdout));
   t("--help: a non-zero exit, an error or SIGINT/SIGTERM/SIGHUP ends its own run failed; one left at measuring is ended by the next probe once its pid is gone or its deadline passed", () =>
     /Every other non-zero exit, an error or SIGINT\/SIGTERM\/SIGHUP \(exit 128\+n\) ends\s+its own run `failed`/.test(help.stdout)
-    && /One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\s+probe's pid and host and a deadline \(start \+ --max-time \+ 120 s\): the next probe without --run ends it `failed` once\s+that pid is gone \(same machine\) or the deadline has passed/.test(help.stdout)
+    && /One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\s+probe's pid and host and a deadline \(start \+ --max-time \+ 120 s\): the next probe without --run ends it `failed` once\s+that pid is gone \(same machine\) or, on any host, the deadline has passed, and goes on; before the deadline it refuses\s+when it cannot tell \(another host, or the pid runs\)/.test(help.stdout)
+    && /A probe that finds its own run replaced by such a later one\s+\(it was stopped or slept past its deadline\) writes nothing more \(exit 2\)/.test(help.stdout)
     && !/never stays open/.test(help.stdout));
+  // --max-time beyond setTimeout's 32-bit bound (it would fire at once, and the own run's deadline would not be a date)
+  const hugeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"], { encoding: "utf8" });
+  const edgeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"], { encoding: "utf8" });
+  t("--max-time above 2147483647 (1e16, 2^31) → exit 2 with the usage line, before any status write or browser; no RangeError", () =>
+    [hugeMax, edgeMax].every((r) => r.status === 2 && r.stderr.startsWith("verify-probe: --max-time must be a positive number of milliseconds, at most 2147483647\n") && !/RangeError|\n\s+at /.test(r.stderr) && !/^run {4}/m.test(r.stderr)));
   t("browserPathError: null for an executable file (this node binary)", () => {
     const f = (VP as Partial<typeof VP>).browserPathError;
     return f !== undefined && f(process.execPath) === null && typeof f(missing) === "string";

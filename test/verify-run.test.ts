@@ -878,17 +878,36 @@ await block("writeStatus alone own run:", async () => {
     lateSeen.length === 1 && lateSeen[0]?.runId === "run-late" && lateSeen[0].phase === "failed" && (lateSeen[0].detail.endsWith("is past the run's deadline 2026-01-01T00:00:00.000Z; ended by the next probe"))
       && after.runId === "run-new" && after.rev === 1);
   VR.writeStatus(base, { runId: "run-new", phase: "failed", by: "verify-probe" });
+  // a late probe (stopped or asleep past its deadline): nobody took its run over → it finishes in it; somebody did → nothing
   VR.writeStatus(base, { runId: "run-own", phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
+  let ownFiles = false;
+  const finished = VR.writeStatus(base, { runId: "run-own", phase: "done", by: "verify-probe" }, { alone: true, continues: true, before: () => { ownFiles = true; return {}; } });
+  safe("its own run past its deadline, still open under the lock (nobody took it over) → its late `done` goes through: files written, rev 2 done", () =>
+    ownFiles && finished.runId === "run-own" && finished.phase === "done" && finished.rev === 2);
+  for (const phase of ["done", "failed"] as const) {
+    // A (alive, past its deadline) is late; B takes R1 over (ends it, starts R2) and finishes R2 `done`, published
+    VR.writeStatus(base, { runId: `r1-${phase}`, phase: "measuring", by: "verify-probe", ownRun: own(process.pid, os.hostname(), "2026-01-01T00:00:00.000Z") }, { alone: true });
+    VR.writeStatus(base, { runId: `r2-${phase}`, phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
+    const r2done = VR.writeStatus(base, { runId: `r2-${phase}`, phase: "done", by: "verify-probe" }, { alone: true, continues: true, after: (d) => VR.publishStatus(base, d) });
+    const liveBefore = fs.readFileSync(live, "utf8"), pubBefore = fs.readFileSync(VR.statusFile(base), "utf8");
+    let lateFiles = false;
+    const late = ((): unknown => { try { VR.writeStatus(base, { runId: `r1-${phase}`, phase, by: "verify-probe" }, { alone: true, continues: true, before: () => { lateFiles = true; return {}; } }); return null; } catch (e) { return e; } })();
+    safe(`…its run was taken over and the replacement ended done → its late \`${phase}\` is refused (RunReplaced 'replaced by run r2-${phase} (done)'), \`before\` never runs, the live and published status stay the replacement's`, () =>
+      r2done.phase === "done" && late instanceof VR.RunReplaced && late.message === `run r1-${phase} was replaced by run r2-${phase} (done) while this probe ran — nothing more is written in it`
+        && !lateFiles && fs.readFileSync(live, "utf8") === liveBefore && fs.readFileSync(VR.statusFile(base), "utf8") === pubBefore);
+  }
+  safe("…the same late write without `continues` (its `measuring` was never recorded) is not refused for another run's status", () =>
+    VR.writeStatus(base, { runId: "r1-lone", phase: "measuring", by: "verify-probe" }, { alone: true }).rev === 1);
+  safe("replacedRun: the one refusal — the status names another v2 run in any phase; never its own run, a v1 file or no status", () => {
+    const st = VR.readStatus(base);
+    return VR.replacedRun(st, "r-other") instanceof VR.RunReplaced && VR.replacedRun(st, "r1-lone") === null && VR.replacedRun("v1", "x") === null && VR.replacedRun(null, "x") === null;
+  });
+  VR.writeStatus(base, { runId: "r1-lone", phase: "failed", by: "verify-probe" });
   const overdueDoc = fs.readFileSync(live, "utf8");
-  let filesWritten = false;
-  const overdue = ((): unknown => { try { VR.writeStatus(base, { runId: "run-own", phase: "done", by: "verify-probe" }, { alone: true, before: () => { filesWritten = true; return {}; } }); return null; } catch (e) { return e; } })();
-  safe("its own write past its own run's deadline → RunOverdue before the files (`before` never runs), the status unchanged", () =>
-    overdue instanceof VR.RunOverdue && overdue.message === "run run-own (this probe's own) passed its deadline 2026-01-01T00:00:00.000Z — the next probe without --run takes it for abandoned, so nothing more is written in it"
-      && !filesWritten && fs.readFileSync(live, "utf8") === overdueDoc);
 
   // a malformed ownRun is ignored: the status reads as a run nobody's probe owns (never as no status)
   const parsed: unknown = JSON.parse(overdueDoc);
-  const malformed = isJsonObject(parsed) ? { ...parsed, runId: "run-bad", ownRun: { pid: "nope" } } : {};
+  const malformed = isJsonObject(parsed) ? { ...parsed, runId: "run-bad", phase: "measuring", ownRun: { pid: "nope" } } : {};
   fs.writeFileSync(live, JSON.stringify(malformed, null, 2) + "\n");
   const readBad = VR.readStatus(base);
   const refusedBad = ((): unknown => { try { VR.writeStatus(base, { runId: "run-b2", phase: "measuring", by: "verify-probe" }, { alone: true }); return null; } catch (e) { return e; } })();
@@ -921,16 +940,26 @@ await block("verify-probe own run alone:", async () => {
   safe("a run queued while the probe's own run measures → its `failed` write is refused (RunOpen): exit 2, not 3, and the queued run's status byte-identical",
     () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("run run-q of Plots is open (phase queued, rev 1, by orchestrator, ") && /it opened while this probe ran/.test(p.stderr));
   if (p.status !== 2) console.log(p.stderr);
-  // its own run's deadline passes while it runs (the fake launch moves it into the past): its `failed` write is refused
+  // its own run's deadline passes while it runs (the fake launch moves it into the past) and nobody takes it over: its
+  // `failed` write goes through (exit 3) — the run is not left at measuring
   VR.writeStatus(path.join(dir, "Plots"), { runId: "run-q", phase: "failed", by: "orchestrator" });
   fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { const fs = require('fs'); const f = process.env.DT_TEST_LIVE; const d = require(f); " +
     "d.ownRun.deadline = '2026-01-01T00:00:00.000Z'; fs.writeFileSync(f, JSON.stringify(d)); throw new Error('fake'); } } };\n");
   const late = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
     { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live } });
   const lateSt = readStatusFile(live);
-  safe("its own run past its deadline while it runs → its `failed` write is refused (RunOverdue): exit 2, the run left at measuring for the next probe to end",
-    () => late.status === 2 && lateSt?.phase === "measuring" && lateSt.ownRun?.deadline === "2026-01-01T00:00:00.000Z" && /passed its deadline 2026-01-01T00:00:00\.000Z/.test(late.stderr));
-  if (late.status !== 2) console.log(late.stderr);
+  safe("its own run past its deadline while it runs, nobody took it over → its `failed` write goes through: exit 3, the run ended failed (not left at measuring)",
+    () => late.status === 3 && lateSt?.phase === "failed" && lateSt.ownRun?.deadline === "2026-01-01T00:00:00.000Z" && lateSt.detail === "probe exit 3 — nothing written");
+  if (late.status !== 3) console.log(late.stderr);
+  // its run is taken over and the replacement has ENDED while it runs (the fake launch writes that replacement): its
+  // `failed` write is refused — never a record over the run that replaced it
+  const replacement = JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots", runId: "run-b", rev: 2, phase: "done", detail: "", at: new Date().toISOString(), by: "verify-probe" }, null, 2) + "\n";
+  fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { require('fs').writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); throw new Error('fake'); } } };\n");
+  const taken = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
+    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: replacement } });
+  safe("its run replaced by one that has ended (done) while it runs → its `failed` write is refused (RunReplaced): exit 2, the replacement's status byte-identical",
+    () => taken.status === 2 && fs.readFileSync(live, "utf8") === replacement && /was replaced by run run-b \(done\) while this probe ran — nothing more is written in it/.test(taken.stderr));
+  if (taken.status !== 2) console.log(taken.stderr);
 });
 
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project

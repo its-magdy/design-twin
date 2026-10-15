@@ -66,7 +66,7 @@ import { CLOSE_STEP_CAP_MS, PS_CAP_MS, behaviourBudget, runBehaviour } from "./p
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, RunOpen, RunOverdue, endedRun, liveStatusFile, newRunId, openRun, publishStatus, readStatus, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, openRun, publishStatus, readStatus, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
 import { LockBusy, LockLost, thisProcess } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run.ts";
@@ -1026,13 +1026,15 @@ const USAGE =
   "      it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends\n" +
   "      its own run `failed`. One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\n" +
   "      probe's pid and host and a deadline (start + --max-time + 120 s): the next probe without --run ends it `failed` once\n" +
-  "      that pid is gone (same machine) or the deadline has passed, and goes on. The probe writes the run's LIVE status\n" +
+  "      that pid is gone (same machine) or, on any host, the deadline has passed, and goes on; before the deadline it refuses\n" +
+  "      when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one\n" +
+  "      (it was stopped or slept past its deadline) writes nothing more (exit 2). The probe writes the run's LIVE status\n" +
   "      (the run cache,\n" +
   "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
   "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed; with --run an\n" +
   "      exit 3/4 bumps its rev. A --run that already ended (done/failed/blocked) is refused before anything starts, and a run that\n" +
-  "      ends (or, its own run, another run that opens) while the page is measured gets no files (exit 2 both ways).\n" +
-  "      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).\n" +
+  "      ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).\n" +
+  "      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --steps: a JSON list of steps (or a plan whose `navigate` holds them) replayed after every page load, before --ready,\n" +
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
   "      {\"goto\": \"/same-origin/path\"}. A click's selector must match exactly one visible element (a waitFor's at least one);\n" +
@@ -1056,15 +1058,19 @@ const USAGE =
   `  ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage, or (--run) the run already ended / ended while the probe ran, or (no --run) another run of the\n" +
-  "      screen is open — also instead of a 3 or 4 · 3\n" +
+  "      screen is open, or replaced its own — also instead of a 3 or 4 · 3\n" +
   "      renderer unavailable (ask the user to install; never installed here) · 4 the page kept navigating / reloaded twice\n" +
   "      during measurement / was unreachable / timed out / passed --max-time / a --steps step failed /\n" +
   "      the page or browser closed or crashed (re-run once; if it recurs, run --check) (nothing written).";
 
 const MAX_TIME_DEFAULT = 180_000;
-/** What its own run's deadline allows past --max-time: closing a browser that does not yield (capped steps, a kill), the
- *  visual diff in Node, the files, and up to a 15 s wait for the status lock — with room to spare. Past it the next
- *  probe without --run takes the run for abandoned, and this probe writes nothing more in it. */
+/** The largest --max-time: setTimeout's own bound (a 32-bit signed delay; a longer one fires at once). */
+const MAX_TIME_LIMIT = 2_147_483_647;
+/** What its own run's deadline allows past --max-time — the steps after the watchdog that are bounded, with room to
+ *  spare: closing a browser that does not yield (closeCapped: two CLOSE_STEP_CAP_MS steps + a PS_CAP_MS `ps`, ~13 s),
+ *  the git state (2 s + 5 s), two status-lock waits (the `measuring`/`done` writes, 15 s each), and the visual diff in
+ *  Node. Past it the next probe without --run takes the run for abandoned; this probe's later writes then find the
+ *  status naming the run that replaced it, and write nothing (RunReplaced). */
 const OWN_RUN_GRACE_MS = 120_000;
 
 /** Close the browser even when a page never yields: browser.close() closes each page first, and a page whose script never
@@ -1156,7 +1162,9 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   const timeout = f.timeout === undefined ? 30_000 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) { console.error(`verify-probe: --timeout must be a positive number of milliseconds\n${USAGE}`); return 2; }
   const maxTime = f["max-time"] === undefined ? MAX_TIME_DEFAULT : Number(f["max-time"]);
-  if (!Number.isFinite(maxTime) || maxTime <= 0) { console.error(`verify-probe: --max-time must be a positive number of milliseconds\n${USAGE}`); return 2; }
+  if (!Number.isFinite(maxTime) || maxTime <= 0 || maxTime > MAX_TIME_LIMIT) {
+    console.error(`verify-probe: --max-time must be a positive number of milliseconds, at most ${MAX_TIME_LIMIT}\n${USAGE}`); return 2;
+  }
   // a visible switch (never used by the skills) — the measured file then says behaviour did not run and why
   if (f.behaviour !== undefined && f.behaviour !== "on" && f.behaviour !== "off") { console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'\n${USAGE}`); return 2; }
   if (f.behaviour !== undefined && f.check) { console.error(`verify-probe: --behaviour does not apply to --check\n${USAGE}`); return 2; }
@@ -1221,19 +1229,20 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   const refusal: { by: StatusRefusal } = { by: "cache" };
   // its own run: another probe's own run left open by a probe that is gone is ended `failed` by this run's first write
   const abandoned = (d: VerifyStatusV2): void => { console.error(`note  run ${d.runId} — ${d.detail}`); };
+  // set once the `measuring` write is recorded (read by `ended`, which runs before it too): every later write of its own
+  // run continues it — refused once the status names another run (it was replaced: this probe was late)
+  let measuringRecorded = false;
   const status = (w: StatusWrite, hooks: Pick<StatusWriteHooks, "before" | "after"> = {}): "ok" | "refused" | "over" => {
-    try { writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned } : {}) }); return "ok"; } catch (e) {
+    try { writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned, ...(measuringRecorded ? { continues: true } : {}) } : {}) }); return "ok"; } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); own.disarm(); return "over"; }
       if (e instanceof RunOpen) { console.error(`verify-probe: ${e.message} — it opened while this probe ran; nothing is written`); own.disarm(); return "over"; }
-      if (e instanceof RunOverdue) { console.error(`verify-probe: ${e.message}`); own.disarm(); return "over"; }
+      if (e instanceof RunReplaced) { console.error(`verify-probe: ${e.message}`); own.disarm(); return "over"; }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);
       refusal.by = statusRefusalOf(e);
       return "refused";
     }
   };
-  // set once the `measuring` write is recorded (read by `ended`, which runs before it too)
-  let measuringRecorded = false;
   // an exit 3/4: with --run the status says so (rev bumped, phase stays measuring — the one allowed re-run follows in
   // that run); a run of its own that started ends `failed` (a re-run starts a new one). Any other non-zero exit, a throw
   // or a stop signal ends its own run in main.
@@ -1509,10 +1518,11 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     if (wrote === "over") return 2; // ended (or another run opened beside its own) while the page was measured: no files, no next step
     if (wrote === "refused") {
       // the measured file stays when the status write is refused: the run's status still says measuring, so say what
-      // records it. Refused before the files (the lock itself): checked for an ended run (own run: another open run)
-      // without the lock, then written
+      // records it. Refused before the files (the lock itself): checked without the lock for an ended run (own run: a
+      // status naming another run once its `measuring` was recorded — it was replaced —, else another open run), then written
       statusRefused = true;
-      const endedNow = written ? null : ownRun ? openRun(statusBase, readStatus(statusBase), runId) : endedRun(readStatus(statusBase), runId);
+      const now = written ? null : readStatus(statusBase);
+      const endedNow = written ? null : !ownRun ? endedRun(now, runId) : (measuringRecorded ? replacedRun(now, runId) : null) ?? openRun(statusBase, now, runId);
       if (endedNow) { console.error(`verify-probe: ${endedNow.message}`); return 2; }
       if (!written) writeFiles();
     }

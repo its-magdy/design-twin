@@ -12,6 +12,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { findExistingExpectedFor } from "../design-to-code/verify-screen.ts";
+import { liveStatusFile } from "../design-to-code/verify-run.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, tokenFor } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -867,10 +868,14 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     /note {2}the last run of Orders__5_6 \(run r-7f3a\) ended at phase failed \(the probe could not reach the page\) — its measured\/report files are partial/.test(r1.stderr));
   okOuter("identical bytes → 'byte-identical … says nothing about the build', and no .prev written",
     /byte-identical to the expectation on disk \(same export inputs/.test(r1.stderr) && /re-measure to check the code/.test(r1.stderr) && !fs.existsSync(prevFile));
-  // a probe's own run (no --run) that failed recorded no measured file: nothing beside the expectation is partial
-  fs.writeFileSync(path.join(vdir, "Orders__5_6.status.json"), JSON.stringify({ schema: "designtwin/verify-status@2", screen: "Orders__5_6", runId: "r-own", rev: 2, phase: "failed",
+  // a probe's own run (no --run) that failed recorded no measured file: nothing beside the expectation is partial. Its
+  // ownRun lives only in the LIVE status (the run cache: no package.json here, so the OS temp dir) — never the published one
+  const ownLive = liveStatusFile(path.join(vdir, "Orders__5_6"));
+  fs.mkdirSync(path.dirname(ownLive), { recursive: true });
+  fs.writeFileSync(ownLive, JSON.stringify({ schema: "designtwin/verify-status@2", screen: "Orders__5_6", runId: "r-own", rev: 2, phase: "failed",
     detail: "probe exit 4 — nothing written", at: new Date().toISOString(), by: "verify-probe", ownRun: { pid: 4242, host: "h", startedAt: new Date().toISOString(), deadline: new Date().toISOString() } }));
   const rOwn = run("--expect", screenFile);
+  fs.rmSync(path.dirname(ownLive), { recursive: true, force: true }); // the live status goes: the published one below is read again
   okOuter("a failed probe's own run → 'was a probe's own run (no --run) that ended failed (…) — it recorded no measured file', never 'partial'",
     /note {2}the last run of Orders__5_6 \(run r-own\) was a probe's own run \(no --run\) that ended failed \(probe exit 4 — nothing written\) — it recorded no measured file; this expectation is safe to re-measure against/.test(rOwn.stderr)
     && !/are partial/.test(rOwn.stderr));

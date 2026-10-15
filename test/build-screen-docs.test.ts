@@ -138,8 +138,9 @@ console.log("verify docs (run integrity + agent safety):");
   check("a probe's own run ends failed on an exit, error or stop signal; one left at measuring (SIGKILL, a refused last write) is ended by the next probe once its pid is gone or its deadline passed, else refused in own-run wording; the published status holds no pid/host; --wait on an old id ends stalled (references/verify.md, build-screen, run protocol)",
     /Every non-zero exit, an error, or a stop signal .{0,80}ends your own run `failed` before the probe exits/.test(verifyRef)
     && /Two cases leave it at `measuring` — a probe killed outright \(SIGKILL\), and an exit whose last status write was refused/.test(verifyRef)
-    && /the run records the probe's pid, host and a deadline \(its start \+ `--max-time` \+ 120 s\): the next probe without `--run` ends it `failed` itself .{0,40}once that pid is gone on the same machine or the deadline has passed/.test(verifyRef)
-    && /When it cannot tell — the run was started on another host, or the pid is running before the deadline — it refuses, naming that probe's own run/.test(verifyRef)
+    && /the run records the probe's pid, host and a deadline \(its start \+ `--max-time` \+ 120 s\): the next probe without `--run` ends it `failed` itself .{0,40}once that pid is gone on the same machine or, on any host, the deadline has passed/.test(verifyRef)
+    && /Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it refuses, naming that probe's own run/.test(verifyRef)
+    && /when a later probe did, it finds the status naming that run and writes nothing more \(exit 2\)/.test(verifyRef)
     && /Each probe run replaces the published `design\/verify\/<Screen>\.status\.json` with its own run's \(the pid and host stay in the run cache, never in that file\)/.test(verifyRef)
     && !/never stays open/.test(verifyRef)
     && /`--wait` on an old id returns at once on that run's old `done` only until a later run replaces the status — after that it ends in exit 5, `stalled` once that run's status stops changing \(`--stall`\), at the latest on `--timeout`/.test(skill)

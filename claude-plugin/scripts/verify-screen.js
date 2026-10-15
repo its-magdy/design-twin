@@ -1136,12 +1136,15 @@ var RunOpen = class extends Error {
     this.name = "RunOpen";
   }
 };
-var RunOverdue = class extends Error {
-  constructor(run, deadline) {
-    super(`run ${run.runId} (this probe's own) passed its deadline ${deadline} \u2014 the next probe without --run takes it for abandoned, so nothing more is written in it`);
-    this.name = "RunOverdue";
+var RunReplaced = class extends Error {
+  constructor(runId, by) {
+    super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran \u2014 nothing more is written in it`);
+    this.name = "RunReplaced";
   }
 };
+function replacedRun(prev, runId) {
+  return prev && prev !== "v1" && prev.runId !== runId ? new RunReplaced(runId, prev) : null;
+}
 function abandonedRun(prev, runId) {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
@@ -1158,6 +1161,8 @@ function writeStatus(base, p, hooks = {}) {
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
+    if (replaced) throw replaced;
     const put = (doc2) => {
       lock.assertMine();
       inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc2, null, 2) + "\n"));
@@ -1178,7 +1183,6 @@ function writeStatus(base, p, hooks = {}) {
       hooks.abandoned?.(endDoc);
     }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-    if (hooks.alone && same?.ownRun && overdue(same.ownRun)) throw new RunOverdue(same, same.ownRun.deadline);
     lock.assertMine();
     const w = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k) => {

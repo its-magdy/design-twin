@@ -201,13 +201,20 @@ export class RunOpen extends Error {
     this.name = "RunOpen";
   }
 }
-/** A write of a probe's own run past its deadline (OwnRunStamp.deadline): by then the next probe without --run takes the
- *  run for abandoned, so a probe that is merely late writes nothing more in it. Refused by writeStatus (`alone`). */
-export class RunOverdue extends Error {
-  constructor(run: VerifyStatusV2, deadline: string) {
-    super(`run ${run.runId} (this probe's own) passed its deadline ${deadline} — the next probe without --run takes it for abandoned, so nothing more is written in it`);
-    this.name = "RunOverdue";
+/** A later write of a run whose earlier write was recorded (`continues`: the probe's own run after its `measuring`) while
+ *  the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as abandoned (a stopped or
+ *  sleeping probe past its deadline) and started its own, which may have ended since. Nothing more is written in it, so
+ *  a late probe never writes over the run that replaced it. Refused by writeStatus itself. */
+export class RunReplaced extends Error {
+  constructor(runId: string, by: VerifyStatusV2) {
+    super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran — nothing more is written in it`);
+    this.name = "RunReplaced";
   }
+}
+/** The refusal for a continuing write of run `runId` over the status `prev` (readStatus's), or null while the status still
+ *  names that run (or there is none, or only a v1 file). The one place that sentence is built. */
+export function replacedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunReplaced | null {
+  return prev && prev !== "v1" && prev.runId !== runId ? new RunReplaced(runId, prev) : null;
 }
 /** Another open run over `prev` (readStatus's) that a probe without --run left behind: its own run, whose probe is
  *  provably gone (same machine, the pid no longer exists — file-lock.ts processState) or that is past its deadline
@@ -231,10 +238,13 @@ export interface StatusWriteHooks {
   after?: (doc: VerifyStatusV2) => void;
   /** the write is of a run that must be the screen's only open one (the probe's own run): refused (RunOpen) while
    *  another run is open — checked with the ended-run check, before `before`. An abandoned one (abandonedRun) is ended
-   *  `failed` first, under the same lock, and handed to `abandoned`; a write of its own run past that run's deadline is
-   *  refused (RunOverdue). Only such writes carry the run's ownRun forward (and one that ends the run) */
+   *  `failed` first, under the same lock, and handed to `abandoned`. Only such writes carry the run's ownRun forward (and
+   *  one that ends the run) */
   alone?: boolean;
   abandoned?: (ended: VerifyStatusV2) => void;
+  /** the write continues a run whose earlier write was recorded (the probe's own run after its `measuring`): refused
+   *  (RunReplaced) when the status now names another run, in any phase — checked before `before` */
+  continues?: boolean;
 }
 /** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
 const STATUS_LOCK = { waitMs: 15_000 };
@@ -247,8 +257,8 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * that ends is not reopened, published into or given files by a writer that checked it earlier. With hooks.alone, another
  * probe's own run that its probe left open (abandonedRun) is first ended `failed` under the same lock (hooks.abandoned).
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, RunOpen (hooks.alone) when another run is open, RunOverdue (hooks.alone)
- * when its own run is past its deadline, LockBusy when another status write holds the lock past 15 s (or
+ * RunEnded when the same run has already ended, RunReplaced (hooks.continues) when the status names another run,
+ * RunOpen (hooks.alone) when another run is open, LockBusy when another status write holds the lock past 15 s (or
  * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
  * written then); a hook's own error is thrown as it is.
  */
@@ -261,6 +271,9 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     if (ended) throw ended;
     const open = hooks.alone ? openRun(base, prev, p.runId) : null;
     if (open) throw open;
+    // (after the open-run check: an open run that replaced it is refused as open, with how to wait for it)
+    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
+    if (replaced) throw replaced;
     const put = (doc: VerifyStatusV2): void => { lock.assertMine(); inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n")); };
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
@@ -272,7 +285,6 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
       hooks.abandoned?.(endDoc);
     }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
-    if (hooks.alone && same?.ownRun && overdue(same.ownRun)) throw new RunOverdue(same, same.ownRun.deadline);
     lock.assertMine();
     const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;
     const pick = (k: "expectationSha256" | "measuredSha256" | "evidenceSha256"): { [K in typeof k]?: string } => {
