@@ -1,6 +1,6 @@
 // Offline tests for the BRIDGE layer — the two files the plugin harness can't reach:
 //   1. bridge/src/server-core.ts  — verifyClient, the bridge's only real access control (token + Origin
-//      + loopback Host). Previously reachable only through a live WebSocket handshake, so untested.
+//      + loopback Host). Reachable otherwise only through a live WebSocket handshake.
 //   2. bridge/src/seed-components.ts — a CLI, so it's driven as a subprocess in a temp dir.
 // Run with:  node test/bridge.test.ts
 import fs from "node:fs";
@@ -151,7 +151,7 @@ ok("[id-nested] instance path I7-8;9-10 -> I7:8;9:10", forms.Nested?.nodeId === 
 
 console.log("\nseed-components — reserved-key hardening:");
 // A component literally named "__proto__" must not resolve to Object.prototype: its entry must not vanish
-// from components.json NOR the backfills land on the prototype, after which no OTHER entry could
+// from components.json, nor may the backfills land on the prototype, after which no OTHER entry could
 // be filled either (their `=== undefined` checks would become false). Both halves are asserted here.
 const poisoned = must(runSeed(
   "poison",
@@ -525,8 +525,8 @@ void (async () => {
   }
 
   // ------------------------------------------------- server-core: MULTI-CLIENT routing (two files)
-  // The bridge keeps every plugin socket, not ONE with the incumbent terminated (which makes two open Figma
-  // files ping-pong: the displaced plugin's 3s auto-reconnect steals the bridge straight back, forever).
+  // The bridge keeps every plugin socket rather than ONE (terminating the incumbent would make two open Figma
+  // files ping-pong: the displaced plugin's auto-reconnect would steal the bridge straight back, forever).
   // Connections coexist and commands are ADDRESSED. These drive real sockets —
   // two of them — because the whole failure mode lives in the interaction between two clients, which
   // no single-socket test could reach.
@@ -560,7 +560,7 @@ void (async () => {
     const soloRes = await bridge.request("ping", {}, 5000);
     ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.file === "base");
 
-    // The second file connects. Under the old rule this terminated the first.
+    // The second file connects. It coexists with the first; nothing is terminated.
     const lib = await open();
     identify(lib, { instanceId: "fig-lib", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens" });
     autoReply(lib, { pong: true, page: "Tokens", file: "lib" });
@@ -684,7 +684,7 @@ void (async () => {
   }
 
   // ---------------------------------------------------------------- figma-pull: argument parsing
-  // Untested until now, and it was the fiddliest code in the CLI: value-taking flags, an `=` form,
+  // The fiddliest code in the CLI: value-taking flags, an `=` form,
   // a repeatable flag, and a positional [outDir] that must not swallow any of their values.
   // Importing the module must NOT start a bridge — see the import.meta.main guard in figma-pull.ts.
   // Kept as a dynamic import at this exact spot (not hoisted): the enclosing scope is this async IIFE.
@@ -723,8 +723,8 @@ void (async () => {
   ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NIMA", "--css"]) || ""));
   ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NIMA", "--serve"]) || ""));
 
-  // The regression: `--timeout` with no value fell into the validator's own `!== undefined` exemption,
-  // so it was silently IGNORED and the default applied — invisible until the export died at a limit
+  // `--timeout` with no value must not fall into the validator's own `!== undefined` exemption,
+  // where it would be silently IGNORED and the default applied — invisible until the export died at a limit
   // the caller believed they had raised. A flag that cannot be honoured must fail, never default.
   ok("[args] --timeout with no value is an ERROR, not a silent default", /positive number/.test(usage(["--timeout"]) || ""));
   ok("[args] --timeout followed by another flag is an ERROR too", /positive number/.test(usage(["--timeout", "--no-assets"]) || ""));
@@ -971,9 +971,9 @@ void (async () => {
   ok("[args] --children with no value is an ERROR", /needs a node id/.test(usage(["--children"]) || ""));
   // Parity: --page and --timeout both take `=`, so --children silently rejecting it was a papercut.
   ok("[args] --children= form is accepted", parse(["--children=131:1879"]).childrenId === "131:1879");
-  // --children now goes through node-id.js, the same parser figma_list_children uses, so the CLI and
-  // the MCP twin accept the SAME inputs. Previously the raw token went straight to the plugin, whose
-  // only normalisation is replace(/-/g, ":") — so a pasted design URL worked via MCP and failed here.
+  // --children goes through node-id.js, the same parser figma_list_children uses, so the CLI and
+  // the MCP twin accept the SAME inputs. The raw token does not go straight to the plugin, whose
+  // only normalisation is replace(/-/g, ":") — a pasted design URL would work via MCP and fail here.
   ok("[args] --children accepts the DASH form (normalised to colons)",
     parse(["--children", "131-1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a full figma.com design URL",
@@ -982,7 +982,7 @@ void (async () => {
     parse(["--children=131%3A1879"]).childrenId === "131:1879");
   ok("[args] --children accepts a nested-instance path",
     parse(["--children", "I131-1879;12-34"]).childrenId === "I131:1879;12:34");
-  // An id shape node-id.js doesn't recognise must keep working exactly as before rather than becoming
+  // An id shape node-id.js doesn't recognise must keep working rather than becoming
   // a new hard failure — the plugin is the authority on what resolves, not this parser.
   ok("[args] an unrecognised id shape is passed through untouched",
     parse(["--children", "weird_id"]).childrenId === "weird_id");
@@ -1246,9 +1246,8 @@ void (async () => {
   // Read here rather than reusing the `mcpSrc` below: this section runs first, and a const declared
   // further down is in its temporal dead zone.
   const libMcpSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts"), "utf8");
-  // Until the TS port this compared a generated figma-mcp.mjs bundle against src/figma-mcp.mts (a tool
-  // added only to the bundle vanished on the next build — what happened to figma_whoami). There is no
-  // bundle any more, so the two checks now pin the registered tool set: the core tools every agent
+  // There is no generated bundle to compare against src/figma-mcp.ts (a tool added only to a bundle
+  // would vanish on the next build), so the two checks pin the registered tool set: the core tools every agent
   // workflow depends on, and every tool `dtwin mcp --help` promises (a renamed tool must not leave the
   // help naming one that no longer exists).
   {
@@ -1295,7 +1294,7 @@ void (async () => {
   })());
   ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
     /Several Figma files are connected/.test(libMcpSrc));
-  // The whoami description must no longer claim the bridge holds ONE connection — that was the old rule.
+  // The whoami description must not claim the bridge holds ONE connection.
   ok("[mcp-multi] no tool description still claims a single-connection bridge",
     !/holds exactly ONE plugin connection/.test(libMcpSrc));
 
@@ -1453,7 +1452,7 @@ void (async () => {
   ok("[exit] the harness actually produced a payload larger than a pipe buffer", intended > 65536);
   ok("[exit] closing the bridge lets the process exit on its own (no hang, no process.exit)",
     drained.status === 0 && !drained.error);
-  // The regression itself: every byte survives. Under the old process.exit(0) this landed at 65,536.
+  // Every byte survives (a process.exit(0) would stop at 65,536).
   ok("[exit] the WHOLE payload reaches a pipe — stdout is not truncated",
     drained.stdout.length === intended + 1); // +1 for console.log's newline
   ok("[exit] and the delivered payload is still parseable JSON",
@@ -1467,7 +1466,7 @@ void (async () => {
   console.log("\nfigma-pull / figma-mcp — snapshot freshness stamp:");
   const snapshotMeta = await import("../bridge/src/snapshot-meta.ts");
   // readSnapshotInfo returns SnapshotInfo | SnapshotParseError | null; the assertions below probe fields
-  // of either arm (a missing one reads as undefined, exactly as before), so read it through that view.
+  // of either arm (a missing one reads as undefined), so read it through that view.
   const readSnapshotInfo = (dir?: string): Partial<SnapshotInfo & SnapshotParseError> | null => snapshotMeta.readSnapshotInfo(dir);
   const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-stamp-"));
   const stampedAt = new Date(Date.now() - 5 * 3600000).toISOString(); // 5h old
@@ -1791,7 +1790,7 @@ void (async () => {
       "2026-08-12T00:00:00.000Z");
 
   // --- the design-system split (bridge/design-system-layout.js) -------------------------------
-  // The catalog is no longer one flat object: Figma's own model has three separate systems
+  // The catalog is not one flat object: Figma's own model has three separate systems
   // (VariableCollections+Variables / Paint|Text|Effect|GridStyle / Components), and library
   // components are not nodes in this file at all.
   // The eight parts land in design-system/ — design/tokens.json and design/components.json at the
@@ -2658,8 +2657,8 @@ void (async () => {
     }));
 
   console.log("\nserver-core — hashed compare:");
-  // safeEqual previously short-circuited on length before timingSafeEqual, leaking the token's
-  // length. Hashing first makes both sides 32 bytes, so unequal lengths compare normally (and false)
+  // safeEqual does not short-circuit on length before timingSafeEqual (which would leak the token's
+  // length). Hashing first makes both sides 32 bytes, so unequal lengths compare normally (and false)
   // rather than returning early — or throwing, which is what a raw timingSafeEqual would do.
   ok("[auth] equal tokens compare true", core.safeEqual("abc", "abc"));
   ok("[auth] different-LENGTH tokens compare false instead of throwing", core.safeEqual("abc", "abcdef") === false);
@@ -2863,8 +2862,8 @@ void (async () => {
     helpVerb.stdout.indexOf("Quick start") > 0 && helpVerb.stdout.indexOf("Quick start") < helpVerb.stdout.indexOf("dtwin doctor")
     && helpVerb.stdout.indexOf("dtwin doctor") < helpVerb.stdout.indexOf("Full reference"));
   ok("[verbs-cli] help still has no side effects (no token minted)", !fs.existsSync(path.join(cliDir, "bridge-token")));
-  // `version` is not in the did-you-mean ALIASES table, which would refuse `dtwin version` with
-  // "did you mean `dtwin --version`?" before figma-pull ever saw it.
+  // `version` is not in the did-you-mean ALIASES table (if it were, `dtwin version` would be refused with
+  // "did you mean `dtwin --version`?" before figma-pull ever saw it).
   const versionVerb = runCli(["version"]);
   ok("[verbs-cli] `dtwin version` = `dtwin --version`, exit 0, prints the package version",
     versionVerb.status === 0 && /^\d+\.\d+\.\d+/.test(versionVerb.stdout) && versionVerb.stdout === runCli(["--version"]).stdout);
@@ -2886,7 +2885,7 @@ void (async () => {
 
   // `dtwin list` against a fake plugin that answers listPages with the REAL reply shape
   // (figma-plugin/src/collect.ts listPages): top-level layers live under pages[].frames — there is no
-  // top-level `frames`. The CLI must not read `r.frames`, which the plugin never sends: the per-type
+  // top-level `frames`. The CLI reads pages[].frames, not `r.frames` (which the plugin never sends), so the per-type
   // breakdown and the SECTION hint print on a real file. Driven end to end because both
   // lines are stderr of main(), with no pure seam. 8789, not 8787: never contend with a real bridge.
   {
@@ -3099,7 +3098,7 @@ void (async () => {
       c2.some((c) => c.status === "warn" && /pages\/PageA\/index\.json is not valid JSON/.test(c.detail)));
     fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({ layers: [null, { file: "pages/PageA/S1.json", exportedAt: at }] }));
     const c3 = doctor.checkProject(badDir).filter((c) => c.id === "export");
-    ok("[doctor] a valid index (a null row is still skipped, as before) adds no warn and counts the screen",
+    ok("[doctor] a valid index (a null row is skipped) adds no warn and counts the screen",
       c3.length === 1 && /1 screen\(s\)/.test(c3[0]?.detail ?? ""));
     fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: { name: "x" } }));
     const c4 = doctor.checkProject(badDir).filter((c) => c.id === "export");
@@ -3697,10 +3696,9 @@ void (async () => {
   }
 
   // ---------------------------------------------------------------- request ids, reply routing, stall wording, whoami connection
-  // Live (session 14): a direct pull stalled out; the next request through a fresh daemon failed with
-  // "export cancelled: … abandoned" — the plugin's late failure for the dead bridge's `r1` settled the
-  // daemon's own `r1`. Ids are now unique per bridge, and a reply settles only from the socket the
-  // request went to. Each check drives the REAL socket path with a fake plugin.
+  // Ids are unique per bridge, and a reply settles only from the socket the request went to: after a
+  // direct pull stalls out, the plugin's late failure for the dead bridge's `r1` must not settle a fresh
+  // daemon's own `r1` ("export cancelled: … abandoned"). Each check drives the REAL socket path with a fake plugin.
   console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection:");
   {
     const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
@@ -3956,7 +3954,7 @@ void (async () => {
       onDisk.length === 1 && onDisk[0] === "Ellipse_2327.svg");
     ok("[content-dedup] the reused asset's `a.file` points at the EXISTING name, not the one it arrived under",
       a2.file === "assets/Ellipse_2327.svg");
-    // duplicates must be EMPTY for this group now that dedup happens before either file is written —
+    // duplicates must be EMPTY for this group, since dedup happens before either file is written —
     // there is only ever one file, so there is nothing for the duplicates scan to find.
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
     writeOut.writeScreenAssets(dir, screenPaths({ screenName: "S", page: "P" }, "/"), [a1, a2]);
@@ -4267,7 +4265,7 @@ void (async () => {
   // ---------------------------------------------------------------- write-out
   // RP-*: assertInsideCwd accepts a path that is inside the server's cwd once symlinks are resolved (macOS
   // /tmp → /private/tmp: getcwd() is resolved, a path built from PWD or os.tmpdir() is not), and still
-  // refuses one whose REAL location is outside. Each test makes its own symlink, so it fails before the fix
+  // refuses one whose REAL location is outside. Each test makes its own symlink, so it exercises the symlink case
   // on every platform, not just macOS.
   // PREV-*: the MCP server's implicit spill (keepPrev) keeps a one-level `<file>.prev` for every JSON it
   // replaces with different content (stamps ignored); the CLI path (keepPrev omitted) keeps nothing.

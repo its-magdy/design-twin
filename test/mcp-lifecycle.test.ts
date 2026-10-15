@@ -476,8 +476,7 @@ void (async () => {
       } else ok("server came up", false);
     });
     await daemonSection("stdin EOF, routed through a daemon", async () => {
-      // routed through a daemon (not holding the bridge) → exits at once. Passes at HEAD too:
-      // a regression guard for the via path.
+      // routed through a daemon (not holding the bridge) → exits at once (the via path).
       const f = fakeBridge();
       const fake = await daemon.serve(f.b, { port: 8789, idleMin: 0, signals: false, crashHandlers: false }); // a socket name only
       const s = startServer({ tmp: OWN_TMP });
@@ -508,7 +507,7 @@ void (async () => {
         s.p.stdout.destroy();
         // the client is killed — both pipes break, but the plugin's progress ticks reach stdout BEFORE
         // stdin's end is seen. The first such write hits EPIPE; with no stdout 'error' listener yet, that
-        // was an uncaught exception that killed the orphan.
+        // would be an uncaught exception that kills the orphan.
         let n = 0;
         const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.ws.send(JSON.stringify({ type: "progress", requestId: reqId, phase: "walk", nodes: ++n })); } catch { /* gone */ } } }, 5);
         await until(() => s.exit() !== null || /went away \(stdout closed\)/.test(s.err()), 3000);

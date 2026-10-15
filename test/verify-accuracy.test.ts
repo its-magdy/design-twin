@@ -71,7 +71,7 @@ console.log("Figma's text case and CSS text-transform: compare what each side re
     run("2:3", { text: "save", textTransform: "uppercase" }).length === 0 && run("2:3", { text: "SAVE" }).length === 0
     && run("2:3", { text: "Save", textTransform: "none" }).length === 1);
   safe("[text-case] a real copy change under a case is still HIGH", () => run("2:1", { text: "Billing Notes", textTransform: "none" })[0]?.severity === "high");
-  safe("[text-case] no case anywhere: a case-only difference keeps today's low + text-transform hint", () => {
+  safe("[text-case] no case anywhere: a case-only difference keeps the low + text-transform hint", () => {
     const d = run("2:5", { text: "ORDER TOTAL" });
     return d.length === 1 && d[0]?.severity === "low" && /^differs only in case — check for a text-transform/.test(d[0].note ?? "");
   });
@@ -145,7 +145,7 @@ console.log("a transparent element whose background another element paints:");
     const d = bg({ backgroundColor: TRANSPARENT, paintedBy: { backgroundColor: "rgb(1, 2, 3)", via: "ancestor", tag: "tr", depth: 1 } });
     return d.length === 1 && d[0]?.severity === "high" && d[0].actual === "#010203ff" && /painted by its <tr>/.test(d[0].note ?? "");
   });
-  safe("[painted-by] no paintedBy (a hand-written probe) → HIGH with actual transparent, as before", () => {
+  safe("[painted-by] no paintedBy (a hand-written probe) → HIGH with actual transparent (its own colour)", () => {
     const d = bg({ backgroundColor: TRANSPARENT });
     return d.length === 1 && d[0]?.severity === "high" && d[0].actual === "transparent";
   });

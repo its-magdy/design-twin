@@ -165,7 +165,7 @@ check("[defs] but the SAME hex used in a component still fails, even with the th
 check("[defs] a CSS PROPERTY declaration is not a token declaration", (() => {
   return has(problems({ "Card.tsx": "color: #5b5fc7" }, { files: ["Card.tsx"], tokens: [brand], verification: STATIC }), /brand-600/);
 })());
-check("[defs] allowedLiterals may now name a FILE instead of a value", (() => {
+check("[defs] allowedLiterals may name a FILE instead of a value", (() => {
   return problems({ "gen.css": "/* generated */ .x{background:#5B5FC7}" },
     { files: ["gen.css"], tokens: [brand], allowedLiterals: [{ file: "gen.css", reason: "generated token source" }], verification: STATIC }).length === 0;
 })());
@@ -365,7 +365,7 @@ check("a hand edit to a file the plan describes turns `static-only` into `stale`
   return ok1 && stale === "stale" && r.status === 2 && statusOf(root) === "blocked";
 })());
 // FU-shared-shell: the plan's anchors/components map a shared shell another plan lists in its files[] — the
-// hook and the report hash it too, so a shell edit reopens THIS plan (before: it stayed verified/static-only).
+// hook and the report hash it too, so a shell edit reopens THIS plan (it does not stay verified/static-only).
 check("planCodeFiles = files[] (as written, in order) then the mapped modules not already listed, sorted; `#Export` stripped; absolute / `..` / package / alias / extensionless skipped", (() => {
   const got = planCodeFiles({
     files: ["src/b/Screen.tsx", "src/a/Table.tsx"],
@@ -385,10 +385,10 @@ check("planCodeFiles = files[] (as written, in order) then the mapped modules no
     r.status === 0 && statusOf(root) === "static-only" && JSON.stringify(Object.keys(hooked)) === JSON.stringify(["src/Screen.tsx", "src/shell/Shell.tsx"]) && typeof hooked["src/shell/Shell.tsx"] === "string");
   fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// a shared nav item\n");
   const st = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
-  check(`editing the shared shell → stale, naming it (before: still static-only) (got ${st.status}: ${st.reasons.join(" | ")})`,
+  check(`editing the shared shell → stale, naming it (not static-only) (got ${st.status}: ${st.reasons.join(" | ")})`,
     st.status === "stale" && st.reasons.some((x) => /file\(s\) changed since the hook passed: src\/shell\/Shell\.tsx$/.test(x)));
   // a hook record written when only files[] was hashed — the shell key is absent. That is the
-  // upgrade, not a change: the plan the hook closed stays closed (before: stale + open with no file changed), one note
+  // upgrade, not a change: the plan the hook closed stays closed (not stale + open with no file changed), one note
   runHook(root);
   const p = planOf(root);
   const hook = p.verification?.hook;
@@ -704,8 +704,8 @@ const colourBlocks = (r: CheckPlanResult) => r.blocking.filter((m) => /raw colou
 
 console.log("a hex in a comment or a provenance note is not a literal:");
 {
-  // Header.tsx's doc comment: "…resolves to #121319 in Dark and #ffffff in Light." Before: three blocks
-  // (#121319 twice — two plan rows resolve it — and #ffffff) for a comment.
+  // Header.tsx's doc comment: "…resolves to #121319 in Dark and #ffffff in Light." A comment raises no blocks
+  // (not three: #121319 twice — two plan rows resolve it — and #ffffff).
   const plan = Object.assign(fxPlan(JR), { status: "pending", files: ["app/src/layout/Header.tsx"] });
   const root = liveProject({ [JR]: plan });
   check("the real Header.tsx (hexes only in its doc comment) raises no colour block", colourBlocks(checkLive(root, JR)).length === 0);
@@ -730,7 +730,7 @@ check("`https://` in code is not mistaken for a comment", /#777777/.test(scanTex
 console.log("exported SVG artwork is not code:");
 {
   // Guided Policies resolves #d4d4d4 to two tokens; calendar-2.svg's baked-in stroke is #D4D4D4.
-  // Before: two blocks for a file the skill forbids editing, cured only by allowedLiterals padding.
+  // No blocks for a file the skill forbids editing (no allowedLiterals padding needed).
   const plan = Object.assign(fxPlan(GP), { status: "pending", files: ["app/src/assets/calendar-2.svg"],
     allowedLiterals: fxPlan(GP).allowedLiterals?.filter((a) => !(a.file && /\.svg$/.test(a.file))) });
   const root = liveProject({ [GP]: plan });
@@ -753,8 +753,8 @@ console.log("a reused component resolves by module path, not by substring:");
   check("…and a mapModule written as the alias itself",
     moduleImported("@/components/PageTitle", byFile, gpRoot));
   check("a module nobody imports is still caught", !moduleImported("app/src/components/Tooltip.tsx", byFile, gpRoot));
-  // The full plan, rewritten the honest way the live build first wrote it (repo-path mapModule): before
-  // the fix, six "was it regenerated instead of reused?" BLOCKS; now zero warnings about imports.
+  // The full plan, rewritten the honest way the live build first wrote it (repo-path mapModule): zero
+  // warnings about imports, not six "was it regenerated instead of reused?" BLOCKS.
   const plan = fxPlan(GP);
   const repo: Record<string, string> = { "../../../components/PageTitle": "app/src/components/PageTitle.tsx", "../../../components/SearchInput": "app/src/components/SearchInput.tsx",
     "../../../components/SquareButton": "app/src/components/SquareButton.tsx", "../../../components/DataTable": "app/src/components/DataTable.tsx",
@@ -958,12 +958,12 @@ console.log("freshness by content, never by clock:");
   fs.utimesSync(path.join(root, "app/src/layout/Header.tsx"), future, future);
   fs.utimesSync(exportFile, future, future);
   const s1 = st();
-  check(`\`touch\` on the code and the export changes nothing — no mtime is consulted (got ${s1.status}; before: unverified, "older than the newest file")`, s1.status === "verified");
+  check(`\`touch\` on the code and the export changes nothing — no mtime is consulted (got ${s1.status}, not unverified "older than the newest file")`, s1.status === "verified");
   // a no-change re-pull: the export is replaced by the real "after" pull, then --expect is re-run
   fs.copyFileSync(after, exportFile);
   const x2 = vs(["--expect", `${E}/${JR}.json`]);
   const s2 = st();
-  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}; before: unverified)`,
+  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}, not unverified)`,
     /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
   // a real design change
   const edited = parseAs(rawA, isScreenExport, "the export");
@@ -1031,7 +1031,7 @@ console.log("freshness by content, never by clock:");
   const g5 = st();
   check(`a failing report stays failed after the owner accepts something, and says to re-compare (got ${g5.status})`,
     g5.status === "failed" && /waivers changed since the last compare/.test(g5.reasons.join(" ")));
-  // the plan now maps a shared shell the report never hashed (a report written before the shell was
+  // the plan maps a shared shell the report never hashed (a report written before the shell was
   // mapped) → unverified, the shell labelled "(not recorded)": one re-compare records it
   const shellPlan = readFixture(planFile, isPlan);
   withReport("pass", { plan: `design/plan/${JR}.json`, sha256: waiversHash(shellPlan) });

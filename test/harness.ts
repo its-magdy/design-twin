@@ -373,8 +373,8 @@ const src = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin",
 const context: Record<string, unknown> = { figma, __html__: "<ui/>", Promise, JSON, Math, Array, Object, Symbol, Map, Set, Date, console, parseInt, Number, String, Boolean, isNaN, undefined };
 vm.createContext(context);
 vm.runInContext(src, context);
-// code.js is now an esbuild IIFE bundle (TypeScript source in figma-plugin/src/). It exposes the
-// read API on a namespaced global; lift those onto the sandbox so the assertions below read as before.
+// code.js is an esbuild IIFE bundle (TypeScript source in figma-plugin/src/). It exposes the
+// read API on a namespaced global; lift those onto the sandbox so the assertions below read plainly.
 Object.assign(context, context.__designExport || {});
 // The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi).
 // Narrowed by a runtime check — every API member present as a function, `figma` the fake passed in —
@@ -418,7 +418,7 @@ const sandbox: Sandbox = context;
     primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
   const aroundOut = await sandbox.serialize(aroundFrame, 0, false);
   ok("[SPACE_AROUND] -> justifyContent: space-around", aroundOut.layout?.justifyContent === "space-around");
-  // counterAxisAlignItems still maps as before (unaffected by the SPACE_EVENLY/SPACE_AROUND addition).
+  // counterAxisAlignItems maps independently of SPACE_EVENLY/SPACE_AROUND.
   const counterFrame = { type: "FRAME", name: "Counter", visible: true, id: "al:3", width: 100, height: 20,
     layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "MIN", counterAxisAlignItems: "CENTER", children: [] };
@@ -539,7 +539,7 @@ const sandbox: Sandbox = context;
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
-  ok("COLUMNS grid keeps its sectionSize as `size` (not only GRID's cell size is read)", abs.layoutGrids?.[0]?.size === 60);
+  ok("COLUMNS grid keeps its sectionSize as `size` (not just GRID's cell size)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   const abs0 = flatPaint(must(abs.fills?.[0], "abs.fills[0]"));
@@ -696,8 +696,8 @@ const sandbox: Sandbox = context;
   ok("component description captured", !!(btnComp && btnComp.description === "Primary action button"));
   ok("INSTANCE_SWAP preferredValues captured", !!(btnComp && btnComp.props?.Icon && btnComp.props.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props.Icon.preferredValues) && btnComp.props.Icon.preferredValues.length === 2));
 
-  // --- READ additions (verified vs developers.figma.com 2026-07-23): bug fix + HIGH tier + MED ---
-  // BUG FIX: progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (were dropped).
+  // --- READ additions (verified vs developers.figma.com 2026-07-23): HIGH tier + MED ---
+  // progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (kept, not dropped).
   const absEffect0 = flatEffect(must(abs.effects?.[0], "abs.effects[0]"));
   ok("progressive blur endOffset Vector kept", !!(absEffect0.blurType === "progressive" && absEffect0.endOffset && absEffect0.endOffset.y === 1));
   const absEffect1 = must(abs.effects?.[1], "abs.effects[1]");
@@ -752,8 +752,8 @@ const sandbox: Sandbox = context;
   const tblCell00 = tbl.tableCells?.[0]?.[0];
   ok("table cells traversed via cellAt", Array.isArray(tbl.tableCells) && tbl.tableCells.length === 2 && tblCell00 !== undefined && tblCell00.text === "r0c0");
 
-  // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
-  // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
+  // --- READ additions (2026-07-23 fresh 3-agent doc audit): grid fidelity + prop/style bindings ---
+  // textDecorationThickness/Offset are { value:number, unit } — .value IS the number (not .value.value, which would always drop it).
   ok("text decoration thickness (value+unit)", !!(txt.runs?.[1]?.font.decorationThickness && txt.runs?.[1]?.font.decorationThickness.value === 2 && txt.runs?.[1]?.font.decorationThickness.unit === "px"));
   ok("text decoration offset (value+unit)", !!(txt.runs?.[1]?.font.decorationOffset && txt.runs?.[1]?.font.decorationOffset.value === 1));
   ok("text decoration skip-ink (only when false)", txt.runs?.[1]?.font.decorationSkipInk === false);
@@ -859,14 +859,14 @@ const sandbox: Sandbox = context;
   ok("text style variable binding (fontSize -> token)", !!(bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad"));
 
   // --- Tier-1 read additions ---
-  // inferredVariables USED to be emitted as `inferredTokens` for every unbound field. It
-  // measured 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
+  // inferredVariables is NOT emitted as `inferredTokens` for every unbound field: it
+  // would measure 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
   // value-coincidence. The mock still SUPPLIES inferredVariables on scrollFrame, so this pins that the
   // extractor ignores it rather than that the fixture stopped providing it.
   ok("inferredTokens is not emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
   ok("and no inferred* key leaks under another name", !Object.keys(tree).some((k) => /^inferred/.test(k)));
   // css / measurements / pluginData are OPT-IN — off by default.
-  // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
+  // css AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
   // is tiny (4 nodes), so the CSS oracle comes back without an explicit opt-in.
   ok("css auto-on for small single selection", !!(tree.css && tree.css.display === "flex" && tree.css.padding === "16px"));
   ok("pluginData still off by default (not auto-enabled)", tree.pluginData === undefined);
@@ -925,7 +925,7 @@ const sandbox: Sandbox = context;
     af0.tracks?.[0]?.op === "scale" && af0.tracks?.[0]?.keyframes?.[1]?.value === 0.5));
   const af2 = an.fills?.["2"];
   const af2Phase = af2 && "properties" in af2 ? af2.properties["shader:phase"] : undefined;
-  // must() only once duration matched — the old && chain never reached `tracks` otherwise
+  // must() only once duration matched — an && chain would never reach `tracks` otherwise
   const af2PhaseTrack0 = af2Phase && af2Phase.duration === 3 ? must(af2Phase.tracks, "af2 shader:phase tracks")[0] : undefined;
   ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2Phase && af2Phase.duration === 3 &&
     af2PhaseTrack0 && af2PhaseTrack0.op === undefined && af2PhaseTrack0.keyframes?.[0]?.value === 6));
@@ -957,7 +957,7 @@ const sandbox: Sandbox = context;
 
   // --- FIX: image-BACKED container (image fill + children) must NOT flatten to a PNG ---
   // A hero/cover-card/banner uses an image as its background but has real children (text, buttons).
-  // Flattening it to a single raster silently dropped all of that; the guard now recurses instead.
+  // Flattening it to a single raster would silently drop all of that; the guard recurses instead.
   const heroFrame = {
     type: "FRAME", name: "Hero", visible: true, id: "hero:0", layoutMode: "VERTICAL",
     width: 375, height: 200, itemSpacing: 8, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
@@ -970,7 +970,7 @@ const sandbox: Sandbox = context;
   ok("image-backed container NOT flattened (no asset)", hero.asset === undefined);
   ok("image-backed container keeps children (text survives)", Array.isArray(hero.children) && hero.children.length === 1 && hero.children[0]?.text === "Welcome");
   ok("image-backed container keeps image as background fill", Array.isArray(hero.fills) && hero.fills.some((f) => flatPaint(f).hash === "abc123"));
-  // A childless image node (a plain image rectangle) still rasterizes to a PNG asset as before.
+  // A childless image node (a plain image rectangle) still rasterizes to a PNG asset.
   const imageRect = { type: "RECTANGLE", name: "Photo", visible: true, id: "img:1",
     fills: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "abc123" }],
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
@@ -1248,8 +1248,8 @@ const sandbox: Sandbox = context;
   sandbox.figma.currentPage.selection = [libNode];
   const aliasSel = await sandbox.collectSelection({ css: false });
   const aliasHyg = aliasSel.variables.hygiene;
-  // Matched loosely on purpose: the old wording was "broken/remote alias in '…'", so a regex tied to
-  // the new phrasing would pass against the old behaviour too and prove nothing.
+  // Matched loosely on purpose: a regex tied to one exact phrasing would pass against a different,
+  // broken behaviour too and prove nothing.
   ok("alias to a RESOLVED library variable is not called broken", !aliasHyg.some((h) => /broken.*'color\/brand'/.test(h)));
   ok("alias to a resolved library var still resolves to its name", aliasSel.variables.variables.some((v) => v.name === "color/brand" && v.values.Light && aliasOf(v.values.Light) === "brand/accent"));
   ok("a genuinely dangling alias IS still reported", aliasHyg.some((h) => /broken alias in 'color\/ghost'/.test(h)));
@@ -1666,7 +1666,7 @@ const sandbox: Sandbox = context;
   sandbox.figma.root.children = prevKids;
 
   // ---- WRITE plane (writes.ts) ----
-  // Previously untested entirely. The two contracts that matter to an agent driving figma_write:
+  // The two contracts that matter to an agent driving figma_write:
   // a write that didn't happen must NOT report success, and a failed batch must still surface what
   // it already applied (Figma gives no transaction, so the earlier ops are committed for good).
   const created: FakeNode[] = [];
@@ -1686,7 +1686,7 @@ const sandbox: Sandbox = context;
   ok("write: setText actually mutated the node", textTarget.characters === "new");
   ok("write: setFill applies a parsed hex", (await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00ff00" }])).ok === true && Math.round(rectTarget.fills[0]?.color.g ?? NaN) === 1);
 
-  // A missing node must FAIL, not silently report {id} — the old behaviour told the agent it worked.
+  // A missing node must FAIL, not silently report {id} (which would tell the agent it worked).
   const wMissing = await sandbox.applyWrites([{ op: "setFill", nodeId: "nope:1", color: "#fff" }]);
   ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(must(wMissing.error, "wMissing.error")));
   const wWrongType = await sandbox.applyWrites([{ op: "setText", nodeId: "r:1", text: "x" }]);
@@ -1738,10 +1738,10 @@ const sandbox: Sandbox = context;
   ok("write: unknown op is rejected", must((await sandbox.applyWrites([{ op: "nope" }])).error, "write nope error").indexOf("unknown write op") !== -1);
   ok("write: empty/omitted batch is a no-op success", (await sandbox.applyWrites(undefined)).ok === true);
 
-  // ---- parentId (was entirely uncovered, which is how the silent-reparent bug survived) ----
+  // ---- parentId (a silent reparent must not slip through) ----
   // The contract mirrors setFill/setText: if the node did NOT land where it was asked to go, the op
-  // must fail. The old code fell back to currentPage and still returned {id}, so an agent composing a
-  // tree got ok:true and a flat pile of nodes on the canvas.
+  // must fail. Falling back to currentPage and still returning {id} would leave an agent composing a
+  // tree with ok:true and a flat pile of nodes on the canvas.
   const parentKids: FakeNode[] = [];
   const containerTarget = { id: "c:1", type: "FRAME", name: "Root", appendChild: (n: FakeNode) => parentKids.push(n) };
   const pageLoads = [];
@@ -2169,8 +2169,8 @@ const sandbox: Sandbox = context;
   const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
   const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
   ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", !!(tagOff && tagOff.visuals && flatPaint(must(tagOff.visuals.fills?.[0], "tagOff.visuals.fills[0]")).color === "#9947ff"));
-  ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", !!(tagOff && tagOff.variants === undefined));
-  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", !!(soloOff && soloOff.node === undefined));
+  ok("[VARIANTVIS] off by default: no per-variant data attached", !!(tagOff && tagOff.variants === undefined));
+  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either", !!(soloOff && soloOff.node === undefined));
 
   const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
   const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
@@ -2417,24 +2417,24 @@ const sandbox: Sandbox = context;
       return { ok: r && r.ok, result: r && r.result, error: r && r.error, queued: posted.some((m) => m.type === "run-begin") };
     };
 
-    // Today's text for a missing node id, captured from the pre-guard plugin: "No node id provided."
-    // It must stay byte-identical, AND the request must now be refused before it is queued (pre-guard,
-    // exportNode/screenshot went through serializeRun and posted run-begin before the collector threw).
+    // The text for a missing node id is "No node id provided." It must stay byte-identical, AND the request
+    // must be refused before it is queued (exportNode/screenshot must not go through serializeRun and post
+    // run-begin before the collector throws).
     for (const [cmd, args] of [["exportNode", {}], ["exportNode", { nodeId: null }], ["exportNode", null], ["screenshot", {}]] as const) {
       const r = await wire(cmd, args);
       ok(`[WIRE-ARGS] ${cmd} ${JSON.stringify(args)} -> "No node id provided." (unchanged), refused before queueing`,
         r.ok === false && r.error === "No node id provided." && !r.queued);
     }
     // listChildren is unqueued, so "refused before queueing" is not observable; paired with its
-    // wrong-typed twin instead (pre-guard: "Node 5 is not in the open file…").
+    // wrong-typed twin instead (without the guard: "Node 5 is not in the open file…").
     const listNoId = await wire("listChildren", {});
     const listBadId = await wire("listChildren", { nodeId: 5 });
     ok("[WIRE-ARGS] listChildren {} -> \"No node id provided.\" (unchanged); nodeId:5 -> named type error",
       listNoId.ok === false && listNoId.error === "No node id provided." &&
       listBadId.ok === false && listBadId.error === "bad listChildren args: `nodeId` is not a string");
 
-    // Wrong-typed args. Pre-guard: nodeId 5 was looked up as "5" ("Node 5 is not in the open file…"),
-    // depth "2" silently meant depth 2, scale "x" silently meant the default, a bogus write op came back
+    // Wrong-typed args. Without the guard, nodeId 5 would be looked up as "5" ("Node 5 is not in the open file…"),
+    // depth "2" would silently mean depth 2, scale "x" the default, and a bogus write op would come back
     // as an ok:false reply after the batch started.
     const badNode = await wire("exportNode", { nodeId: 5 });
     ok("[WIRE-ARGS] exportNode nodeId:5 -> named type error, not queued",
@@ -2493,9 +2493,9 @@ const sandbox: Sandbox = context;
     }
   }
 
-  // ---------- [UNREAD] typed-but-previously-unread Figma fields: shader properties, complex strokes,
+  // ---------- [UNREAD] typed Figma fields: shader properties, complex strokes,
   // SLOT slotSettings, per-run textWrapStyle. Each: a node WITH the field -> exact IR; WITHOUT / at the
-  // default -> the key is absent and the rest of the record is byte-identical to before. ----------
+  // default -> the key is absent and the rest of the record is unaffected. ----------
   {
     const alias = (id: string) => ({ type: "VARIABLE_ALIAS", id });
     const shape = (id: string, extra: Record<string, unknown>): FakeNode =>
@@ -3047,7 +3047,6 @@ const sandbox: Sandbox = context;
     ok("[hidden-root] …and under a visible parent the same vector exports (asset path, hiddenNodes 0)",
       typeof visRun.screen.nodes[0]?.children?.[0]?.asset === "string" && visRun.screen.manifest.hiddenNodes === 0 && g13Exports === 1);
     // a root hidden by an ancestor, or hidden itself, is exported WITH a warning.
-    // pre-fix: no warning in either case.
     const hiddenRootNote = (w: string[]) => w.filter((m) => /^'Card' \(g13p:2\) is hidden /.test(m));
     hiddenParent.visible = false;
     const ancRun = await sandbox.collectNode("g13p:2", { css: false });
@@ -3065,7 +3064,7 @@ const sandbox: Sandbox = context;
 
     // a hidden layer that paints nothing (no visible paint, or no area) stays what it was
     // without the hidden-graphics handling: assetsSkippedInvisible, no marker — and a zero-area icon container still recurses.
-    // pre-fix: both became assetSkipped:"hidden" leaves and were counted assetsHidden (3).
+    // neither becomes an assetSkipped:"hidden" leaf or counts toward assetsHidden (3).
     const ghost = { type: "VECTOR", name: "Ghost", visible: false, id: "g13i:1", width: 12, height: 12, fills: [{ type: "SOLID", visible: false, color: { r: 0, g: 0, b: 0 } }], strokes: [], exportAsync: spySvg };
     const flat = { type: "INSTANCE", name: "icon/flat", visible: false, id: "g13i:2", width: 0, height: 16, findOne: () => null,
       getMainComponentAsync: async () => null, exportAsync: spySvg,
@@ -3161,7 +3160,7 @@ const sandbox: Sandbox = context;
     const lc = await sandbox.listChildren("g13s:0");
     // the "Page Title" search uses up its budget on a wide frame, and the first-text
     // fallback still gets one of its own: a heading that is node #2 is found. a hidden colliding row
-    // is titled from its own (visible) text. pre-fix: no title for either.
+    // is titled from its own (visible) text.
     const wide = (id: string, heading: string, visible = true) => ({ type: "FRAME", name: "Grid", id, width: 900, height: 600, visible,
       children: [txt(id + ":h", heading), ...Array.from({ length: 6000 }, (_, i) => ({ type: "FRAME", name: "cell", id: id + ":" + i, width: 1, height: 1, children: [] }))] });
     const hiddenTwin = (id: string, label: string, visible: boolean) => ({ type: "FRAME", name: "Sheet", id, width: 300, height: 200, visible, children: [txt(id + ":t", label)] });

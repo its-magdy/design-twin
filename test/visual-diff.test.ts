@@ -354,7 +354,7 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
   const k = 1.4222, a = img(300, 120), b = img(300, 120);
   rect(a, 20, 40, 200, 2, [51, 51, 51, 255]); // a dark 1-CSS-px border (2 device px) the build lacks
   const d = diffPixels(a, b, diffOptionsFor(k));
-  safe(`[hot] a missing 1-CSS-px line (2 of 11 rows of a cell) is a region now (${d.hotTotal}; it never reached 25 %)`, () => d.hotTotal >= 1 && d.shiftTolerant > 0);
+  safe(`[hot] a missing 1-CSS-px line (2 of 11 rows of a cell) is a region (${d.hotTotal}; under 25 % of the cell)`, () => d.hotTotal >= 1 && d.shiftTolerant > 0);
   const o = diffOptionsFor(k);
   safe("[hot] the options record the rule: hotFraction 0.08, hotMinPx 4", () => o.hotFraction === 0.08 && o.hotMinPx === 4);
   const s1 = img(40, 40), s2 = img(40, 40); put(s2, 21, 21, [0, 0, 0, 255]);

@@ -331,7 +331,7 @@ check("a button with no focus indicator holding a running WAAPI spinner → keyb
 const rE3 = await P.rE3;
 const mE3 = read(projBare, out("Edge3"));
 if (rE3.status !== 0) console.log(rE3.stderr);
-check("[write block] E3 (card with Delete, Enter=confirm dialog, keydown-open + focus Delete, a global Enter hotkey): the server receives 0 POSTs", rE3.status === 0 && mE3 !== null && writesOf(E3).length === 0);
+check("[write block] a card with Delete, an Enter=confirm dialog, a keydown-open + focus Delete and a global Enter hotkey: the server receives 0 POSTs", rE3.status === 0 && mE3 !== null && writesOf(E3).length === 0);
 check("keyboard.reachable counts only the opener's own control: the card's inline Delete is reached, the card (80:16) is not known to be — not-run 'the opener is a container; Tab reaches <button aria-label=\"Delete crate\"> inside it' (not counted as reached)",
   statusOf(mE3, "keyboard.reachable", "80:16") === "not-run" && /the opener is a container; Tab reaches <button aria-label="Delete crate"> inside it/.test(row(mE3, "keyboard.reachable", "80:16")?.detail ?? ""));
 check("the card opener's inline Delete is never pressed: keyboard.activation 80:16 not-run 'the opener is a container; its focusable child … is not pressed'",

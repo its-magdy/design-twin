@@ -427,7 +427,7 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
   fs.writeFileSync(path.join(dir, "plan", "RotaSettings.json"), JSON.stringify({ file: "RotaSettings.json", screenName: "Rota Prefs", nodeId: "4:1" }));
   const pub = resolveScreen(dir, "SeedSwaps");
   ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" (got ${pub.status})`, pub.status === "resolved" && pub.row.id === "1:1");
-  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds as before", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
+  ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
   const staff = resolveScreen(dir, "StaffRoles");
   ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows is AMBIGUOUS, listing both node ids (got ${staff.status})`,
     staff.status === "ambiguous" && staff.candidates.map((c) => c.id).sort().join() === "2:1,2:2");

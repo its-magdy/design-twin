@@ -238,8 +238,8 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- no finding may cite a layer the designer switched off ----------
 // Real exports (test/fixtures/livetest3/verify/, built from a field run and proven to audit
-// byte-identically to the full files). Before: 44 of Jet Roles' 119 findings (and 40 of Guided
-// Policies' 105) cited hidden nodes, including I7314:87216;6:87 "_selected icon" with the instruction
+// byte-identically to the full files). No finding cites a hidden node (they made up 44 of Jet Roles' 119 findings and 40 of Guided
+// Policies' 105), such as I7314:87216;6:87 "_selected icon" with the instruction
 // "the build uses these values EXACTLY".
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
@@ -539,7 +539,7 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     raster.length === 1 && /1\.89 MB — a raster image embedded in an SVG shell; use it as an image/.test(raster[0]?.message ?? "") && /PNG\/JPG export/.test(raster[0]?.message ?? "") && !/<path>|too heavy/.test(raster[0]?.message ?? "") && raster[0]?.embeddedRaster === 1);
   const paths = codes(mk({ file: "assets/big.svg", bytes: 2465864, paths: 1523 }), "heavy-asset");
   // the pull's rule — an <image> in an illustration of 2000 paths is still "too many paths", not a shell.
-  // pre-fix: the raster wording (the audit read embeddedRaster alone).
+  // the audit reads the path count too, not embeddedRaster alone (which would give the raster wording).
   const busy = codes(mk({ file: "assets/illustration.svg", bytes: 2400000, paths: 2000, embeddedRaster: 1 }), "heavy-asset");
   check("embeddedRaster with 2000 paths keeps the paths wording (the bridge's raster-shell rule: under 50 paths)",
     busy.length === 1 && /2\.29 MB \/ 2000 <path> elements — too heavy to inline/.test(busy[0]?.message ?? "") && !/SVG shell/.test(busy[0]?.message ?? "") && busy[0]?.embeddedRaster === 1);
@@ -911,7 +911,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
 
 {
   // finding ids are `code` / `code@nodeId` (+ `~n`), on every finding — so a blocker added EARLIER in
-  // the report leaves the others' ids alone. Before: `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
+  // the report leaves the others' ids alone. Not `<code>#<i>` by position among blockers (#0/#1 → #1/#2).
   const text = (id: string, name: string): NodeInput => ({ id, type: "TEXT", name, text: name, missingFont: true, font: { family: "Acme Sans", size: 14 } });
   const run = (nodes: NodeInput[]) => audit({ doc: screenExport([{ id: "1:0", type: "FRAME", name: "Sample App", children: nodes }], { screen: "Sample App" }), label: "Sample App" }, { platform: "web" });
   const two = run([text("1:1", "A"), text("1:2", "B")]);

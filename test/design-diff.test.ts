@@ -255,7 +255,7 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
   return first.status === 0 && second.status === 0 && /unchanged/.test(second.stdout);
 })());
 
-// a snapshot of ONE file is not a copy of the export it belongs to. --snapshot now also
+// a snapshot of ONE file is not a copy of the export it belongs to. --snapshot also
 // copies the sibling set: a design-system file's other 8 siblings (bridge/design-system-layout.js is
 // the one definition of that 9-file set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.

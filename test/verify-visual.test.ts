@@ -198,7 +198,7 @@ console.log("[ref-unusable] --expect: a thumbnail or an unreadable file is refus
 }
 
 // ---------------------------------------------------------------- the PNG's height, the pointer's place (--expect)
-console.log("[ref-unusable] --expect: width AND height of the PNG checked; the pointer confined to design/export:");
+console.log("[ref-bounds] --expect: width AND height of the PNG checked; the pointer confined to design/export:");
 {
   const tall = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: png(REF_W, 150000) }) }));
   safe("the right width but 150000 px tall → usable:false naming both sizes (never decoded by the probe)", () =>

@@ -5,7 +5,7 @@
 import { ok, report } from "./assert.ts";
 import { prettyJsonSize, prettyJsonWithin } from "../bridge/src/json-size.ts";
 
-// The formula the MCP server used before: serialise, then compare the length.
+// The reference formula: serialise, then compare the length.
 const oldDecision = (v: unknown, limit: number): string | null => {
   const text = JSON.stringify(v, null, 2);
   return text.length <= limit ? text : null;
@@ -64,8 +64,8 @@ for (const [name, v] of exotic) {
   ok(`${name}: reported unsupported and decided like the old formula`, prettyJsonSize(v, 1e9).kind === "unsupported" && aroundCap(v));
 }
 ok("a too-deep value is measured by stringify, not by recursion", prettyJsonSize(Array.from({ length: 500 }).reduce<unknown>((acc) => [acc], 1), 1e9).kind === "unsupported");
-ok("a bigint throws as before", (() => { try { prettyJsonWithin({ n: 1n }, 100); return false; } catch { return true; } })());
-ok("a cycle throws as before", (() => { const c: Record<string, unknown> = {}; c["self"] = c; try { prettyJsonWithin(c, 1e9); return false; } catch { return true; } })());
+ok("a bigint throws", (() => { try { prettyJsonWithin({ n: 1n }, 100); return false; } catch { return true; } })());
+ok("a cycle throws", (() => { const c: Record<string, unknown> = {}; c["self"] = c; try { prettyJsonWithin(c, 1e9); return false; } catch { return true; } })());
 
 // ---- a seeded fuzz: random JSON-like values, every limit around the length
 let seed = 20240607;

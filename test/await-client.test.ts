@@ -357,7 +357,7 @@ console.log("\nawaitClient — a partial name while another window has not said 
   connect(r3, "Design App");
   connect(r3);
   const none = await timed(r3, () => r3.awaitClient("Nobody Has This", 200));
-  ok("[identifying] a name with no match ends at the window as before", none.ms >= 190 && none.ms < 500 && clean(none));
+  ok("[identifying] a name with no match ends at the window", none.ms >= 190 && none.ms < 500 && clean(none));
 }
 
 // ------------------------------------------------------------------ listings name a window that just opened

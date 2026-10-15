@@ -155,7 +155,7 @@ console.log("an icon drawn by an <img> has no readable fill:");
 // ---------------------------------------------------------------- the NEVER MEASURED denominator
 console.log("NEVER MEASURED counts the nodes that state the field:");
 {
-  // Only the Status Pill states `borderWidth`; 40 other measured nodes carry none of it. Before: "present in 0 of 41 measurements".
+  // Only the Status Pill states `borderWidth`; 40 other measured nodes carry none of it. Not "present in 0 of 41 measurements".
   // (`opacity` is not the example: every node that paints or carries copy states it)
   const rows: NodeInput[] = Array.from({ length: 40 }, (_, i): NodeInput => ({ type: "TEXT", id: `3:${i + 1}`, name: `Name ${i + 1}`, text: `Person ${i + 1}`, font: { family: "Inter", size: 14 } }));
   const e2 = buildExpectation([doc([...rows, { ...pill, strokes: { colors: ["#2e7d32"], weight: 1 } }])]);

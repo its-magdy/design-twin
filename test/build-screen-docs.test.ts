@@ -272,7 +272,7 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
       && /never `ok: false`|NEVER `ok: false`/.test(t) && /`data-dt-node` tag (on or )?INSIDE|tag INSIDE|on or inside/i.test(t)));
   check("the dialog contract selectors, in order (verifier, verify skill, references)",
     [verifier, verifySkill, verifyRef].every((t) => /`:modal`, `dialog\[open\]`, `\[role=dialog\]`, `\[role=alertdialog\]`,\s*`\[aria-modal="true"\]`, `:popover-open`/.test(t)));
-  check("the agent does not re-drive rows the probe drove, drives the rest as before, and its own detector uses the same contract — never `[role=dialog]` alone",
+  check("the agent does not re-drive rows the probe drove, drives the rest, and its own detector uses the same contract — never `[role=dialog]` alone",
     /Do not re-drive a row the probe drove with `ok: true`/.test(verifier) && /SAME contract the probe does — never a `\[role=dialog\]`-only\s+detector/.test(verifier)
     && /does NOT re-drive rows the probe drove with `ok: true`/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifyRef));
   check("builders tag a dialog/overlay's ROOT with its destination frame id (data-dt-node); an untagged dialog is not-probed",

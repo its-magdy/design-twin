@@ -374,7 +374,7 @@ const changed = (r: { dom: string | null; why: string | null }): boolean => r.do
 check("a status dot (drawn by a border) re-mounted beside the sole Delete by requestAnimationFrame, or by a 16-ms timer → refused 'the opener's content changed while it was compared' (not driven with the re-mounted dot hidden as outside in shot A)",
   await one(remount("const f = () => { put(); requestAnimationFrame(f); }; requestAnimationFrame(f);"), async (p) => changed(await drive(p)))
   && await one(remount("setInterval(put, 16);"), async (p) => changed(await drive(p))));
-check("the same dot mounted once (never re-mounted) → refused by the pixels as before ('paints something of its own'); a cell holding only its sole Delete → driven",
+check("the same dot mounted once (never re-mounted) → refused by the pixels ('paints something of its own'); a cell holding only its sole Delete → driven",
   await one(remount(""), async (p) => /paints something of its own/.test((await drive(p)).why ?? ""))
   && await one(`${BASE}</style><div class="row"><div class="cell" id="c">${DEL}</div></div>`, async (p) => driven(await drive(p))));
 check("a cell whose sole Delete re-mounts its OWN icon every frame (a hover icon swap: inside the control, hidden in every shot) → still driven",

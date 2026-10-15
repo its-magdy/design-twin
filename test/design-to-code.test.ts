@@ -382,8 +382,8 @@ check("[unit-line-height] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toC
 // [unit-letter-spacing] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[unit-letter-spacing] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));
 // ---------- real-data cases (unit-*, name-fold): names/scopes taken from a live design-system
-// file. The mock fixtures above all set NARROW scopes, which hid these: real
-// files leave Figma's default ALL_SCOPES in place, so the scopes-only unit rule emitted invalid CSS.
+// file. The mock fixtures above all set NARROW scopes, which would hide these: real
+// files leave Figma's default ALL_SCOPES in place, so a scopes-only unit rule would emit invalid CSS.
 check("[unit-name-weight] ALL_SCOPES font-weight is unitless by NAME (not `500px`, invalid CSS)",
   toCSS(tokens({ variables: [{ name: "Font-Weight/medium", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 500 } }] })).includes("--Font-Weight-medium: 500;"));
 check("[unit-name-opacity] ALL_SCOPES opacity is unitless by NAME (not `0.5px`, invalid CSS)",
@@ -438,7 +438,7 @@ check("[name-fold] and the fold is REPORTED by lintTokens",
   lintTokens(tokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] })).some((w) => /illegal in a CSS custom property/.test(w) && /\(Space 3\)/.test(w)));
 // ---------- real-data case (unit-mixed, unit-pure) from a live design-system export (a typography
 // scale): a "Body 2" FLOAT is scoped to FONT_WEIGHT *and* FONT_SIZE/LINE_HEIGHT/LETTER_SPACING/
-// PARAGRAPH_SPACING/PARAGRAPH_INDENT at once. `.some()` let the single unitless scope win, emitting
+// PARAGRAPH_SPACING/PARAGRAPH_INDENT at once. `.some()` would let the single unitless scope win, emitting
 // `--Body-2: 18;` (invalid as a font-size) with no hygiene warning at all.
 check("[unit-mixed] a scope mix of FONT_WEIGHT + length scopes keeps px (majority-length wins)",
   toCSS(tokens({ variables: [{ name: "Body 2", type: "FLOAT", scopes: ["FONT_WEIGHT", "FONT_SIZE", "LINE_HEIGHT", "LETTER_SPACING", "PARAGRAPH_SPACING", "PARAGRAPH_INDENT"], values: { v: 18 } }] })).includes("--Body-2: 18px;"));
@@ -1226,9 +1226,9 @@ console.log("map — SLOT props:");
 }
 
 // ---------- an INVALID map is a validation message, not a TypeError, and is never rewritten ----------
-// drift-lint's only map check was "is it an object", so {"components":{"X":null}} reached driftLint and
-// died with a TypeError stack. map-bootstrap merged whatever it read and rewrote it: an array
-// `components` came back as {"0": …}. Both now run map-validate's validator first.
+// Both drift-lint and map-bootstrap run map-validate's validator first. A bare "is it an object" check would let
+// {"components":{"X":null}} reach driftLint and die with a TypeError stack, and map-bootstrap would merge whatever
+// it read and rewrite it (an array `components` coming back as {"0": …}).
 (() => {
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-badmap-"));
@@ -1456,7 +1456,7 @@ console.log("map — SLOT props:");
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const emptyMapFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "p6-123-")), "map.json");
-  // version:1 — drift-lint validates the map now, and a map without it is not a valid map.
+  // version:1 — drift-lint validates the map, and a map without it is not a valid map.
   fs.writeFileSync(emptyMapFile, JSON.stringify({ version: 1, components: {} }));
   const catalogFile = path.join(FXL, "design-system", "components.local.json");
   const screens = [

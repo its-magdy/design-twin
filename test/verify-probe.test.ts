@@ -614,7 +614,7 @@ t("an unrelated message that merely says 'navigating' is not a reload", () => er
 t("a timeout is 'other' to errorKind (its callers that wait on one ask pwErrorKind)", () =>
   errorKind(Object.assign(new Error("locator.click: Timeout 2000ms exceeded."), { name: "TimeoutError" })) === "other");
 // a failed load's cause in plain words — a 204 and a download both end net::ERR_ABORTED; the thrown message
-// tells them apart; another cause is Playwright's first line, as before
+// tells them apart; another cause is Playwright's first line
 t("loadFailureWhy: net::ERR_ABORTED → no document (e.g. 204 No Content) or the page stopped its own load",
   () => /^the browser cancelled the navigation before any page arrived \(net::ERR_ABORTED\) — the URL answered with no document \(e\.g\. 204 No Content\) or the page stopped its own load; point it at the page that renders the screen$/.test(VP.loadFailureWhy("page.goto: net::ERR_ABORTED at http://h/none\nCall log:\n  - navigating")));
 t("loadFailureWhy: 'Download is starting' → a file download, not a page",
@@ -869,7 +869,7 @@ console.log("verify-probe — owner hover, paintedBy, textTransform:");
     const r = oh(inherited, btn.path, [hiddenRow, cell, btn, table]), r2 = oh(inherited, btn.path, [hiddenRow, btn, table]);
     return r?.kind === "owner" && r.id === "71:5" && r.path === cell.path && r2?.kind === "untagged" && r2.owner === "71:3";
   });
-  t("…an own state, or an expectation written before drawnStateFrom → none (hovered as before)", () =>
+  t("…an own state, or an expectation written before drawnStateFrom → none (hovered)", () =>
     oh(spec({ nodeId: "71:3", type: "FRAME", drawnState: "hover", ancestorIds: ["71:2"] }), row.path, [row])?.kind === "none"
     && oh(spec({ nodeId: "71:6", type: "INSTANCE", drawnState: "hover", ancestorIds: ["71:5", "71:3"] }), btn.path, [row, btn])?.kind === "none"
     && oh(spec({ nodeId: "71:3", drawnState: "hover", drawnStateFrom: "71:3" }), row.path, [row])?.kind === "none");

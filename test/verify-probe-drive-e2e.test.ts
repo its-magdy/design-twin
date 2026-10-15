@@ -153,7 +153,7 @@ check("[covered-opener] an opener under a transparent layer → synthetic click,
 const e12 = ix(m2, "70:50");
 check("[plan-only] a plan-only opener (plan.interactions expect dialog) → driven: ok:true, dialog-opened, the dialog itself carries the tag", e12?.ok === true && e12.detectedBy === ":modal" && e12.destination?.inside === true);
 const e13 = ix(m2, "70:53");
-check("[planner default 1] a panel that is only the destination tag (no dialog contract) → ok:true, selector-appeared, detectedBy destination-tag", e13?.ok === true && e13.outcome === "selector-appeared" && e13.detectedBy === "destination-tag");
+check("[planner-default] a panel that is only the destination tag (no dialog contract) → ok:true, selector-appeared, detectedBy destination-tag", e13?.ok === true && e13.outcome === "selector-appeared" && e13.detectedBy === "destination-tag");
 check("[page-width] measured.page at the design width: scrollWidth = clientWidth = 1024, not scrollable, no offenders, standards mode",
   m2?.page?.scrollWidth === 1024 && m2.page.clientWidth === 1024 && m2.page.viewport.w === 1024 && !m2.page.scrollable && m2.page.offenders.length === 0 && m2.page.overflowX === "visible" && m2.page.compatMode === "CSS1Compat");
 
@@ -391,7 +391,7 @@ check(`the drive pressed no Delete (server saw: ${p1.writes.join(", ") || "nothi
 const p2 = await ownPx("own-pixels-2", P.px2);
 check("a dot drawn by a border (70:46), a swatch drawn by a box-shadow (70:47), a band across the centre (70:48), a colour tile holding the Delete (70:49) → not driven by the pixels, naming the Delete",
   ["70:46", "70:47", "70:48", "70:49"].every((id) => byPixels(p2.m, id)));
-check("a <progress> (70:44), a <meter> (70:45) → not driven, naming the Delete — now by the DOM's media rule, before the pixels",
+check("a <progress> (70:44), a <meter> (70:45) → not driven, naming the Delete — by the DOM's media rule, before the pixels",
   ["70:44", "70:45"].every((id) => notDrivenFor(p2.m, id, DEL) && !/paints something of its own beside it/.test(ix(p2.m, id)?.detail ?? "")));
 check("a cell with a Tailwind sr-only label (70:53), a cell with a transform:scale(0) aria-hidden tooltip (70:50) → still driven, ok:true, mouse",
   drivenOk(p2.m, ["70:53", "70:50"]));

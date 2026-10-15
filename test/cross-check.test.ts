@@ -579,10 +579,10 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 }
 
 // ---------- cross-check never cites a hidden layer (hidden.js predicate in both walks) ----------
-// Real Jet Roles export (test/fixtures/livetest3/verify/). Before: `walkWithBg` skipped
-// `visible === false` (a flag the export never sets) and the token-usage walk skipped nothing, so
-// `token-name-collision` cited the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
-// derived-mode contrast check graded hidden text.
+// Real Jet Roles export (test/fixtures/livetest3/verify/). Both walks use the hidden.js predicate, not `walkWithBg`'s
+// `visible === false` (a flag the export never sets) or no skip at all, so
+// `token-name-collision` never cites the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
+// derived-mode contrast check never grades hidden text.
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const jr = readFixture(path.join(FXL, "verify", "positions___7314_87192.json"), isScreenExport);
@@ -615,9 +615,9 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // ---------------------------------------------------------------- CLI: auto-discovery of variables.json ----------
 // Real layout: test/fixtures/livetest3/pages/<Page>/<Screen>.json + test/fixtures/livetest3/variables.json
 // (the export root, two levels up from the screen file) — the same shape design/export/ has in a real
-// project. Before the fix, the CLI looked in path.dirname(argv[0]) (the <Page> directory) and never
-// found the export-root file, so every invocation without an explicit --variables reported "not
-// checked". After the fix it is found automatically and the path used is printed on stderr.
+// project. The CLI looks above path.dirname(argv[0]) (the <Page> directory) for the export-root file,
+// so an invocation without an explicit --variables finds it automatically (not reporting "not
+// checked") and prints the path used on stderr.
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
