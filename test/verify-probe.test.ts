@@ -34,6 +34,7 @@ import type * as PBT from "../design-to-code/probe-behaviour.ts";
 import { parseCssColor } from "../design-to-code/color.ts";
 import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
 import { RunCacheUnwritable } from "../design-to-code/run-cache.ts";
+import { readStatus } from "../design-to-code/verify-run.ts";
 import type { BehaviourCheck as BehaviourCheckRow, InteractionEvidence } from "../design-to-code/types.ts";
 // probe-behaviour.ts is loaded dynamically too (a tree without it: every behaviour check is a clean ✗)
 const PB: Partial<typeof PBT> = await import("../design-to-code/probe-behaviour.ts").then((m) => ({ ...m }), () => ({}));
@@ -419,6 +420,11 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     goneRun.status === 4
     && goneRun.stderr.includes("verify-probe: the page or browser closed or crashed (browser.newContext: Target page, context or browser has been closed) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.")
     && !/\n\s+at /.test(goneRun.stderr) && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders.measured.json")));
+  const goneSt = readStatus(path.join(goneProj, "design", "verify", "Orders"));
+  const goneId = /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(goneRun.stderr)?.[1] ?? "";
+  t("…run without --run, that exit 4 ends the probe's own run: `failed` rev 2 'probe exit 4 — nothing written', the run the stderr named; no durable status published", () =>
+    goneId !== "" && goneSt !== null && goneSt !== "v1" && goneSt.runId === goneId && goneSt.phase === "failed" && goneSt.rev === 2 && goneSt.detail === "probe exit 4 — nothing written"
+    && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders.status.json")));
   const usage = spawnSync(process.execPath, [PROBE_CLI, "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] --url without --expected → exit 2 (usage)", () => usage.status === 2);
   const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
@@ -439,6 +445,20 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   const help = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
   t("--help: --browser-path, only guaranteed with the bundled Chromium, the inner binary on macOS, executable \"custom\"", () =>
     /\[--browser-path <executable>\]/.test(help.stdout) && /only\s+guaranteed with the bundled Chromium/.test(help.stdout) && /Contents\/MacOS/.test(help.stdout) && /executable says "custom"/.test(help.stdout));
+  t("--help: every measurement names its run; without --run the probe starts a run of its own and ends it (done / failed), refused beside another open run (exit 2)", () =>
+    /Every measurement belongs to a run, and measured\.runId names it/.test(help.stdout) && /Without --run the probe starts a run of\s+its\s+own \(`run <id>` on stderr\) and ends it — `done` with the files/.test(help.stdout)
+    && /`failed` on an exit 3\/4 \(a re-run is a new run\); refused\s+before anything starts \(exit 2\) while another run of the screen is open/.test(help.stdout)
+    && /or \(no --run\) another run of the\s+screen is open/.test(help.stdout));
+  t("--help: a non-zero exit, an error or SIGINT/SIGTERM/SIGHUP ends its own run failed; one left at measuring is ended by the next probe once its pid is gone or its deadline passed", () =>
+    /Every other non-zero exit, an error or SIGINT\/SIGTERM\/SIGHUP \(exit 128\+n\) ends\s+its own run `failed`/.test(help.stdout)
+    && /One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\s+probe's pid and host and a deadline \(start \+ --max-time \+ 120 s\): the next probe without --run ends it `failed` once\s+that pid is gone \(same machine\) or, on any host, the deadline has passed, and goes on; before the deadline it refuses\s+when it cannot tell \(another host, or the pid runs\)/.test(help.stdout)
+    && /A probe that finds its own run replaced by such a later one\s+\(it was stopped or slept past its deadline\) writes nothing more \(exit 2; 128\+n after a stop signal, 1 after an\s+error\)/.test(help.stdout)
+    && !/never stays open/.test(help.stdout));
+  // --max-time beyond setTimeout's 32-bit bound (it would fire at once, and the own run's deadline would not be a date)
+  const hugeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"], { encoding: "utf8" });
+  const edgeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"], { encoding: "utf8" });
+  t("--max-time above 2147483647 (1e16, 2^31) → exit 2 with the usage line, before any status write or browser; no RangeError", () =>
+    [hugeMax, edgeMax].every((r) => r.status === 2 && r.stderr.startsWith("verify-probe: --max-time must be a positive number of milliseconds, at most 2147483647\n") && !/RangeError|\n\s+at /.test(r.stderr) && !/^run {4}/m.test(r.stderr)));
   t("browserPathError: null for an executable file (this node binary)", () => {
     const f = (VP as Partial<typeof VP>).browserPathError;
     return f !== undefined && f(process.execPath) === null && typeof f(missing) === "string";
@@ -2068,5 +2088,8 @@ t("measuredRefusedWhy: a lock taken over (LockLost), a lock held throughout (Loc
     && /held the status lock of run run-1 for the whole wait/.test(busy) && !/run cache/.test(busy)
     && cache === "the run cache refused the probe's `measured` status write for run run-1";
 });
+t("measuredRefusedWhy: the probe's own run (no --run) names its `done` write", () =>
+  VP.measuredRefusedWhy(VP.statusRefusalOf(new RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-2", "done") === "the run cache refused the probe's `done` status write for run run-2"
+  && /the probe's `done` status write held it/.test(VP.measuredRefusedWhy(VP.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-2", "done")));
 
 report();

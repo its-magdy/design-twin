@@ -1051,7 +1051,7 @@ export type PageOverflowCoverage = "ok" | "overflows" | "clipped" | "not measure
 /** "undesigned": the destination was never exported; "descoped": the owner removed it from the graded set. */
 export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
 export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string; outcome?: string; navEvents?: number;
-  /** whose row was graded — the run-bound shipped probe's, or the agent's (--interactions / an unbound measured row) */
+  /** whose row was graded — the run-bound shipped probe's, or the agent's (--interactions / a measured row that is not run-bound) */
   evidenceFrom?: "probe" | "agent";
   activation?: string; detectedBy?: string; revealedBy?: string;
   /** the other side's disagreeing claim that this result overrides */

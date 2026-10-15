@@ -129,6 +129,31 @@ console.log("verify docs (run integrity + agent safety):");
     [verifier, verifySkill, verifyRef].every((t) => /--status <Screen> --phase <(phase|p)> --run <id>|--status <screen> --phase <p> --run <id>/.test(t) && /--wait <(Screen|screen)> --run <id>/.test(t))
     && /never by hand/.test(verifier) && /--wait <Screen> --run <id>/.test(skill) && !/"at": "<ISO timestamp>"|date -u \+%Y-%m-%dT%H:%M:%SZ`\. A/.test(verifier));
   check("the probe is given --run <id> and writes measuring/measured itself", /verify-probe\.js".{0,300}--run <id>/.test(verifier) && /verify-probe\.js.{0,300}--run <id>/.test(verifySkill));
+  check("a probe without --run starts and ends a run of its own and refuses beside another open run (references/verify.md, the run protocol, the verifier); no 'unbound' measured file is left in the docs",
+    /Without `--run` \(your own loop\) the probe starts a run of its own, prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3\/4/.test(verifyRef)
+    && /It never measures beside another open run of the screen: .{0,200}the probe refuses with exit 2 before starting anything/.test(verifyRef)
+    && /without it the probe starts a run of its own \(build-screen's own loop\) and ends it itself, and it refuses \(exit 2, nothing started\) while another run of the screen is open/.test(verifySkill)
+    && /Always pass your `--run <id>`: without it the probe starts a run of its own, and refuses \(exit 2\) beside yours/.test(verifier)
+    && ![skill, verifier, verifySkill, verifyRef].some((t) => /unbound measured file|\*\*unbound\*\*|graded as an unbound/.test(t)));
+  check("a probe's own run ends failed on an exit, error or stop signal; one left at measuring (SIGKILL, a refused last write) is ended by the next probe once its pid is gone or its deadline passed, else refused in own-run wording; the published status holds no pid/host; --wait on an old id ends stalled (references/verify.md, build-screen, run protocol)",
+    /Every non-zero exit, an error, or a stop signal .{0,80}ends your own run `failed` before the probe exits/.test(verifyRef)
+    && /Two cases leave it at `measuring` — a probe killed outright \(SIGKILL\), and an exit whose last status write was refused/.test(verifyRef)
+    && /the run records the probe's pid, host and a deadline \(its start \+ `--max-time` \+ 120 s\): the next probe without `--run` ends it `failed` itself .{0,40}once that pid is gone on the same machine or, on any host, the deadline has passed/.test(verifyRef)
+    && /Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it refuses, naming that probe's own run/.test(verifyRef)
+    && /when a later probe did, it finds the status naming that run and writes nothing more \(exit 2, or 128 \+ the signal's number when a stop signal ended it, or 1 after an error\)/.test(verifyRef)
+    && /An own run that ends `done` replaces the published `design\/verify\/<Screen>\.status\.json` with its run's \(the pid and host stay in the run cache, never in that file\); one that ends `failed` publishes nothing/.test(verifyRef)
+    && !/Each probe run replaces the published/.test(verifyRef)
+    && !/never stays open/.test(verifyRef)
+    && /`--wait` on an old id returns at once on that run's old `done` only until a later run replaces the status — after that it ends in exit 5, `stalled` once that run's status stops changing \(`--stall`\), at the latest on `--timeout`/.test(skill)
+    && /then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on `--timeout`/.test(verifySkill)
+    && !/waits out its `--timeout`/.test(skill + verifySkill)
+    && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Screen>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
+  check("--status without --new-run writes no run over ANOTHER run that has not ended (the run protocol)",
+    /Nor does `--status` \(without `--new-run`\) write your run while the status names ANOTHER run that has not ended \(exit 2, naming it and how to wait for it or end it\)/.test(verifySkill));
+  check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
+    /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
+    && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)
+    && /The file names no run: write it before sending `--status <Screen> --phase measured --run <id>`, which records its sha256 in your run/.test(verifier));
   // (phrases matched loosely: whitespace and line breaks collapse, case-insensitive where it is prose)
   const ws = (t: string): string => t.replace(/\s+/g, " ");
   check("the verifier stages evidence.json and state PNGs in node_modules/.cache/designtwin-verify/stage/<runId>/ and publishes with --phase done --publish; nothing written into the project while a page is open; watch-ignore is only a suggestion",
@@ -281,8 +306,8 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
     /`plan\.navigate`/.test(skill) && /`plan\.interactions` as `\{nodeId, trigger, expect: "dialog" \| "url" \|\s*"selector:<css>", destinationId\}`/.test(skill) && /`destinationId` required for `dialog`/.test(skill)
     && /Change `plan\.interactions` afterwards and `--compare` is `incomplete` until `--expect` is re-run/.test(skill)
     && /`--plan <plan\.json>`, else the ONE plan in\s+`design\/plan\/` that describes the frame/.test(verifySkill) && /`incomplete` until `--expect` is\s+re-run/.test(verifySkill));
-  check("precedence in plain words: probe rows authoritative only in a --run with an intact status chain; a probe miss never overrides full agent evidence; a `by` field means nothing",
-    /authoritative only in a `--run` with an intact status chain/.test(verifySkill) && /A `by` field in a file means nothing/.test(verifySkill) && /a probe miss \(`ok: null`\) or a row cut by the time budget never overrides an agent row that has full evidence/.test(verifySkill)
+  check("precedence in plain words: probe rows authoritative only in a run with an intact status chain (--run's or the probe's own); a probe miss never overrides full agent evidence; a `by` field means nothing",
+    /authoritative only in a run with an intact status chain \(`--run <id>`'s, or the run a probe without `--run` starts itself\)/.test(verifySkill) && /A `by` field in a file means nothing/.test(verifySkill) && /a probe miss \(`ok: null`\) or a row cut by the time budget never overrides an agent row that has full evidence/.test(verifySkill)
     && /a probe miss\s+never overrides it/.test(verifier));
   check("overflowX: a high, waivable delta on the root frame via --accept --node <frame> --field overflowX",
     /Page overflow at the design width \(`overflowX`\)/.test(verifySkill) && /HIGH delta on the root frame \(field `overflowX`/.test(verifySkill) && /recorded as in step 6 with `--node <frame id> --field overflowX`/.test(verifySkill) && /`overflowX`, a high waivable delta on the root frame|\(`overflowX`, a high waivable delta/.test(verifyRef));

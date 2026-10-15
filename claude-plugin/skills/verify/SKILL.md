@@ -205,8 +205,8 @@ The verdict is one of four values:
   node specs never measured, fields the probe did not report, deltas on low-confidence matches (any
   delta a match cap lowered), or no screenshot on disk. An integrity
   failure — a measurement taken against a different expectation or naming none, a run whose status had not
-  finished, or the measured file's own run's status naming another measured file (an unbound measured file — no
-  `--run` — is never judged by an ended run's status) — is listed first and makes the verdict `incomplete`
+  finished, or the measured file's own run's status naming another measured file (every probe-written file names its
+  run; a hand-written one that names none is judged by the run whose status is beside it) — is listed first and makes the verdict `incomplete`
   even when there are high mismatches: those numbers belong to an unverified run. A screen can match every pixel and still be the dead mockup
   the tooling exists to avoid.
 

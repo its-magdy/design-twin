@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
-import { LockBusy, LockLost, PID_NS, acquireFileLock, breakGuardOf, breakStale, lockFileOf, withFileLock } from "../bridge/src/file-lock.ts";
+import { LockBusy, LockLost, PID_NS, acquireFileLock, breakGuardOf, breakStale, lockFileOf, processState, thisProcess, withFileLock } from "../bridge/src/file-lock.ts";
 import { updateJsonLike } from "../bridge/src/json-file.ts";
 
 const t = (name: string, cond: () => boolean): void => {
@@ -448,5 +448,15 @@ console.log("updateJsonLike — a locked read-modify-write in the file's own for
   t("acquireFileLock returns a release; releasing twice is harmless", () => held && !fs.existsSync(lock));
 }
 
+// processState: a record that outlives a lock (a probe's own run) judged the way a lock holder is
+console.log("processState — the holder judgement for a stamped process:");
+{
+  const me = thisProcess();
+  t("thisProcess: this pid and host (and the pid namespace on Linux)", () => me.pid === process.pid && me.host === os.hostname() && (me.ns ?? "") === PID_NS);
+  t("this process → alive; a finished child on this host → gone", () => processState(me) === "alive" && processState({ ...me, pid: deadPid() }) === "gone");
+  t("another host, another pid namespace, or no usable pid → unknown (nothing to probe), never gone", () =>
+    processState({ ...me, pid: deadPid(), host: "another-host.invalid" }) === "unknown" && processState({ ...me, pid: deadPid(), ns: "pid:[1]" }) === "unknown"
+    && processState({ ...me, pid: 0 }) === "unknown" && processState({ ...me, pid: -1 }) === "unknown");
+}
 for (const r of roots) fs.rmSync(r, { recursive: true, force: true });
 report();

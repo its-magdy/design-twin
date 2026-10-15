@@ -67,7 +67,10 @@ Check these before you call anything wrong:
 ## The measured file on a native stack
 
 Put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at the top level,
-so a report can never be read against a newer expectation than it was measured on. On a native stack everything —
+so a report can never be read against a newer expectation than it was measured on. The file names no run: write it
+before sending `--status <Screen> --phase measured --run <id>`, which records its sha256 in your run — that record is
+what ties it to the run (`--compare` judges a measured file that names no run by the run whose status is beside it,
+and a file that run did not record is `incomplete`). On a native stack everything —
 nodes, components, interactions — goes in `design/verify/<screen>.measured.json` (on web the probe writes
 `measured.json` and your rows go in the staged evidence file):
 

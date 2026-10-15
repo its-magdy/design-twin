@@ -45,7 +45,8 @@ import { scriptCmd, shellArg } from "./cli-args.ts";
 import { RunCacheUnwritable, UNWRITABLE_CODES, canonical, runCacheDir, runCacheOf } from "./run-cache.ts";
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
-import { LockBusy, acquireFileLock, lockFileOf } from "../bridge/src/file-lock.ts";
+import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
+import type { ProcessStamp } from "../bridge/src/file-lock.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
@@ -75,15 +76,27 @@ export interface VerifyStatusV2 {
   evidenceSha256?: string;
   /** file names --publish copied into the verify directory */
   published?: string[];
+  /** a probe's own run (started without --run): the process that started it and when — so a run its probe left open
+   *  (killed outright) can be told from a live one (file-lock.ts processState) */
+  ownRun?: OwnRunStamp;
 }
+/** Who started a probe's own run: the probe process (file-lock.ts thisProcess), the time it started the run, and the
+ *  deadline past which no live probe still writes in it (its start + --max-time + a grace for closing the browser,
+ *  writing the files and the status lock) — the backstop for a pid that a later process reuses. */
+export interface OwnRunStamp extends ProcessStamp { startedAt: string; deadline: string }
 
 const isPhase = (x: unknown): x is StatusPhase => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 const optStr = (x: unknown): boolean => x === undefined || typeof x === "string";
+const isOwnRunStamp = (x: unknown): x is OwnRunStamp => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string"
+  && typeof x.deadline === "string";
+/** Whether a probe's own run is past its deadline (an unreadable deadline is not). */
+const overdue = (o: OwnRunStamp): boolean => Date.parse(o.deadline) < Date.now();
 export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number"
     && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator")
     && optStr(x.expectationSha256) && optStr(x.measuredSha256) && optStr(x.evidenceSha256)
-    && (x.published === undefined || (Array.isArray(x.published) && x.published.every((p) => typeof p === "string")));
+    && (x.published === undefined || (Array.isArray(x.published) && x.published.every((p) => typeof p === "string")))
+    && (x.ownRun === undefined || isOwnRunStamp(x.ownRun));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 
@@ -114,8 +127,8 @@ export const lockFileOfStatus = (base: string): string => lockFileOf(liveStatusF
 /** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
 export const stageDirOf = (base: string, runId: string): string => path.join(runCacheDir(path.dirname(base)), "stage", runId);
 
-/** A run id: time + randomness, sortable, safe in a file name and a shell word. */
-function newRunId(): string {
+/** A run id: time + randomness, sortable, safe in a file name and a shell word (--new-run's, and the probe's own run's). */
+export function newRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto.randomBytes(3).toString("hex");
 }
 
@@ -123,6 +136,11 @@ function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
+  // a malformed ownRun is ignored (read as a run nobody's probe owns), never the whole status
+  if (isJsonObject(r.doc) && r.doc.ownRun !== undefined) {
+    const { ownRun: _malformed, ...rest } = r.doc;
+    if (isVerifyStatusV2(rest)) return rest;
+  }
   return isJsonObject(r.doc) && r.doc.schema === undefined && typeof r.doc.phase === "string" ? "v1" : null;
 }
 /** The status of `<base>` and the file it was read from: the live one first, else the published
@@ -149,6 +167,8 @@ export interface StatusWrite {
   measuredSha256?: string;
   evidenceSha256?: string;
   published?: string[];
+  /** a probe's own run: who started it (carried forward by that probe's own writes, and by a write that ends the run) */
+  ownRun?: OwnRunStamp;
 }
 /** A status write for a run that has already ended (done/failed/blocked): refused by writeStatus itself, so a writer
  *  that checked at its start (the probe, up to its time budget earlier) cannot reopen the run with a late write. */
@@ -163,6 +183,76 @@ export class RunEnded extends Error {
 export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunEnded | null {
   return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
 }
+/** A write of a run the probe started itself (no --run) while ANOTHER run of the screen is open: a verifier's live run
+ *  writes the same files, so the probe measures nothing beside it. Refused by writeStatus itself (`alone`), so a run
+ *  that opens after the probe looked is not written over either. Another probe's own run that is still open is named
+ *  as one (its pid could not be found gone: another host, or the pid runs) — nobody waits for that. */
+export class RunOpen extends Error {
+  constructor(base: string, open: VerifyStatusV2) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const o = open.ownRun;
+    super(o
+      ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) — ` +
+        `a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}`
+      : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
+        `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) ` +
+        `or, only if nobody is running it any more, ends it (${endIt})`);
+    this.name = "RunOpen";
+  }
+}
+/** A later write of a run whose earlier write was recorded (`continues`: the probe's own run after its `measuring`) while
+ *  the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as abandoned (a stopped or
+ *  sleeping probe past its deadline) and started its own, which may have ended since. Nothing more is written in it, so
+ *  a late probe never writes over the run that replaced it. Refused by writeStatus itself. */
+export class RunReplaced extends Error {
+  constructor(runId: string, by: VerifyStatusV2) {
+    super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran — nothing more is written in it`);
+    this.name = "RunReplaced";
+  }
+}
+/** The refusal for a continuing write of run `runId` over the status `prev` (readStatus's), or null while the status still
+ *  names that run (or there is none, or only a v1 file). The one place that sentence is built. */
+export function replacedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunReplaced | null {
+  return prev && prev !== "v1" && prev.runId !== runId ? new RunReplaced(runId, prev) : null;
+}
+/** Another open run over `prev` (readStatus's) that a probe without --run left behind: its own run, whose probe is
+ *  provably gone (same machine, the pid no longer exists — file-lock.ts processState) or that is past its deadline
+ *  (a reused pid). The next own run ends it. */
+export function abandonedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): VerifyStatusV2 | null {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
+}
+/** Another v2 run over `prev` (readStatus's) that has not ended — open, abandoned or not. */
+function otherOpenRun(prev: VerifyStatusV2 | "v1" | null, runId: string): VerifyStatusV2 | null {
+  return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) ? prev : null;
+}
+/** The refusal for a write of run `runId` that must be the screen's only open run, over the status `prev` (readStatus's):
+ *  null when no other v2 run is open (none, a v1 file, an ended run, `runId` itself) or the open one is abandoned
+ *  (abandonedRun: the write ends it). The one place that sentence is built. */
+export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunOpen | null {
+  const open = otherOpenRun(prev, runId);
+  return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
+}
+/** A `--status` write of run `runId` (named by --run, or the run in progress when it read the status) while the status
+ *  names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
+ *  one left behind too), and a record of `runId` would replace it in the status and publish over it. Refused by
+ *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. */
+export class RunNotCurrent extends Error {
+  constructor(base: string, runId: string, open: VerifyStatusV2) {
+    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
+      `nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ` +
+      `end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    this.name = "RunNotCurrent";
+  }
+}
+/** The refusal for a `--status` write of run `runId` over the status `prev` (readStatus's): null when no other v2 run is
+ *  open (none, a v1 file, an ended run, `runId` itself). openRun's test without its abandoned-run exemption — only a
+ *  probe's own run ends an abandoned one. The one place that sentence is built. */
+export function notCurrentRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunNotCurrent | null {
+  const open = otherOpenRun(prev, runId);
+  return open ? new RunNotCurrent(base, runId, open) : null;
+}
 /** What a status write does around the record itself, inside its lock (see writeStatus). */
 export interface StatusWriteHooks {
   /** after the ended-run check, before the record: files the record stands for (the probe's measured file and
@@ -171,6 +261,19 @@ export interface StatusWriteHooks {
   before?: () => Pick<StatusWrite, "measuredSha256">;
   /** after the record: what must not land in a run that ended meanwhile (a --publish commit, the durable copy) */
   after?: (doc: VerifyStatusV2) => void;
+  /** the write is of a run that must be the screen's only open one (the probe's own run): refused (RunOpen) while
+   *  another run is open — checked with the ended-run check, before `before`. An abandoned one (abandonedRun) is ended
+   *  `failed` first, under the same lock, and handed to `abandoned`. Only such writes carry the run's ownRun forward (and
+   *  one that ends the run) */
+  alone?: boolean;
+  abandoned?: (ended: VerifyStatusV2) => void;
+  /** the write continues a run whose earlier write was recorded (the probe's own run after its `measuring`): refused
+   *  (RunReplaced) when the status now names another run, in any phase — checked before `before` */
+  continues?: boolean;
+  /** the write is of a run its writer names (verify-screen --status without --new-run): refused (RunNotCurrent) when the
+   *  status names another run that has not ended, an abandoned one included — checked with the ended-run check, before
+   *  `before`. An ended run or no status takes it (the record of a measured file after the status's run ended) */
+  current?: boolean;
 }
 /** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
 const STATUS_LOCK = { waitMs: 15_000 };
@@ -178,11 +281,13 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * Write the LIVE status of `<base>` atomically (never into the project's watched tree). rev = the previous rev + 1
  * when it is the same run, else 1. Within one run the shas and the published list carry forward (a `driving`
  * write after the probe's `measured` still names the measured file the probe wrote; published is the run's union).
- * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run check → hooks.before → write → hooks.after
+ * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run (and open-run) check → hooks.before → write → hooks.after
  * happen with no other status write of this screen in between, so two writers never write the same rev and a run
- * that ends is not reopened, published into or given files by a writer that checked it earlier.
+ * that ends is not reopened, published into or given files by a writer that checked it earlier. With hooks.alone, another
+ * probe's own run that its probe left open (abandonedRun) is first ended `failed` under the same lock (hooks.abandoned).
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, LockBusy when another status write holds the lock past 15 s (or
+ * RunEnded when the same run has already ended, RunReplaced (hooks.continues) when the status names another run,
+ * RunOpen (hooks.alone) or RunNotCurrent (hooks.current) when another run is open, LockBusy when another status write holds the lock past 15 s (or
  * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
  * written then); a hook's own error is thrown as it is.
  */
@@ -193,6 +298,23 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     const prev = readStatus(base);
     const ended = endedRun(prev, p.runId);
     if (ended) throw ended;
+    const open = hooks.alone ? openRun(base, prev, p.runId) : null;
+    if (open) throw open;
+    const other = hooks.current ? notCurrentRun(base, prev, p.runId) : null;
+    if (other) throw other;
+    // (after the open-run check: an open run that replaced it is refused as open, with how to wait for it)
+    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
+    if (replaced) throw replaced;
+    const put = (doc: VerifyStatusV2): void => { lock.assertMine(); inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n")); };
+    const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
+    if (left?.ownRun) {
+      const o = left.ownRun;
+      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
+      const endDoc: VerifyStatusV2 = { ...left, rev: left.rev + 1, phase: "failed", at: new Date().toISOString(), by: "verify-probe",
+        detail: `abandoned — the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe` };
+      put(endDoc);
+      hooks.abandoned?.(endDoc);
+    }
     const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
     lock.assertMine();
     const w: StatusWrite = hooks.before ? { ...p, ...hooks.before() } : p;
@@ -201,20 +323,26 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
       return v !== undefined ? { [k]: v } : {};
     };
     const published = w.published !== undefined || (same && same.published) ? [...new Set([...(same && same.published) || [], ...(w.published || [])])].sort() : undefined;
+    // a probe's own run stays one only through that probe's own writes (`alone`), or a write that ends it: a writer that
+    // continues the run (an orchestrator's --status without --run, a verifier's probe --run) adopts it — no later probe
+    // may take it for abandoned while they work in it
+    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(w.phase)) ? same.ownRun : undefined);
     const doc: VerifyStatusV2 = {
       schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase: w.phase, detail: w.detail ?? "", at: new Date().toISOString(), by: w.by,
       ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
       ...(published !== undefined ? { published } : {}),
+      ...(ownRun !== undefined ? { ownRun } : {}),
     };
-    lock.assertMine();
-    inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+    put(doc);
     hooks.after?.(doc);
     return doc;
   } finally { lock.release(); }
 }
-/** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now). */
+/** `done`: the live status, published as the durable record design/verify/<S>.status.json (every page is closed by now) —
+ *  without ownRun: the project commits that file, and a pid and host name are nobody's business there. */
 export function publishStatus(base: string, doc: VerifyStatusV2): void {
-  writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
+  const { ownRun: _private, ...durable } = doc;
+  writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
 }
 
 // Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
@@ -296,7 +424,8 @@ const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0,
 export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined;
   by?: string | undefined }
 /**
- * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused (a check, or another status write held the lock) / 2 usage (or a write to a run that already ended) / 6 the run cache is not writable (printed as
+ * `--status <S> --phase <p> …` → exit 0 wrote / 1 refused (a check, or another status write held the lock) / 2 usage (or a write to a run that already ended,
+ * or, without --new-run, while another run is open) / 6 the run cache is not writable (printed as
  * one sentence naming the cache and the project root — never a stack). Prints `run <id> rev <n>` on stdout and the
  * live status file + the run's stage dir on stderr. Writes only the live status (outside the watched tree); `done`
  * checks first, then writes the live status, then publishes (--publish) and writes its durable copy <dir>/<S>.status.json.
@@ -305,7 +434,7 @@ export interface StatusFlags { phase?: string | undefined; run?: string | undefi
 export function statusMain(screen: string | undefined, f: StatusFlags, usage: string): number {
   try { return statusRun(screen, f, usage); } catch (e) {
     if (e instanceof RunCacheUnwritable) { console.error(e.message); return EXIT_RUN_CACHE; }
-    if (e instanceof RunEnded) { console.error(e.message); return 2; } // it ended while this write was checked
+    if (e instanceof RunEnded || e instanceof RunNotCurrent) { console.error(e.message); return 2; } // it ended, or another run opened, while this write was checked
     if (e instanceof LockBusy) { console.error(`refused  ${e.message}`); return 1; } // another status write held the lock throughout
     throw e;
   }
@@ -339,6 +468,13 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   // checks again under its lock (a run that ends after this read)
   const ended = endedRun(prev, runId);
   if (ended) { console.error(ended.message); return 2; }
+  // a run of its writer's (not --new-run) is written only while no other run is open: a recovery or end-it command run
+  // late, after another run started, would replace that run in the status (and a `done` publish over it). Checked again
+  // under the lock — that also catches a run started between the read above and the write (the inferred id is stale then;
+  // a run that starts AND ends inside that gap is not caught: an ended run takes the record by design)
+  const current = !f["new-run"];
+  const other = current ? notCurrentRun(base, prev, runId) : null;
+  if (other) { console.error(other.message); return 2; }
   const S = path.basename(base), dir = path.dirname(base);
   // the run cache must take a write BEFORE anything is checked or published (a `done` that publishes, then cannot
   // record itself, would leave design/verify changed and the run unfinished)
@@ -383,9 +519,10 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     // the publish commit and the durable copy happen inside the status write's lock, after the record: a run that
     // another writer ends meanwhile is ended before this write (refused, nothing published) or after the commit
     doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(prep ? { published: prep.files } : {}) }, {
+      current,
       after: (d) => { prep?.commit(); if (phase === "done") publishStatus(base, d); },
     });
-  } catch (e) { prep?.abort(); throw e; } // refused (the run ended meanwhile, the cache is unwritable, the lock is busy): nothing is published
+  } catch (e) { prep?.abort(); throw e; } // refused (the run ended, or another opened, meanwhile; the cache is unwritable; the lock is busy): nothing is published
   if (prep) console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
   const stage = stageDirOf(base, runId);
   if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs.mkdirSync(stage, { recursive: true }));

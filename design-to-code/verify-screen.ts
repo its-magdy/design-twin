@@ -71,7 +71,7 @@ import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 // design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
 // about to be written. Returns that file's path, or null.
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
-// failed/blocked: its measured/report files are partial; a non-terminal phase older than --wait's stall (300 s): it never
+// failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
 // finished; younger: a run is measuring right now; v1: a hand-written status, not checked. done (or none): nothing to say.
 const STATUS_STALL_MS = 300_000;
 function runStatusNote(base: string, now = Date.now()): string | null {
@@ -80,6 +80,9 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   const st = found.status, name = path.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) — not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
+  // a probe's own run (no --run) that failed recorded no measured file (its record is the `done` write)
+  if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} — it recorded no measured file; ` +
+    `this expectation is safe to re-measure against`;
   if (st.phase === "failed" || st.phase === "blocked") return `the last run of ${name} (run ${st.runId}) ended at phase ${st.phase}${detail} — its measured/report files are partial; ` +
     `this expectation is safe to re-measure against`;
   if (TERMINAL_PHASES.includes(st.phase)) return null;
@@ -205,7 +208,8 @@ function main(argv: string[]): number | Promise<number> {
     "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
     "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
-    "      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run). `done` checks first — refuses (exit 1)\n" +
+    "      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run),\n" +
+    "      and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
     "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
     "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +

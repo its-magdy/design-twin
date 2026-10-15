@@ -399,8 +399,8 @@ Copy this checklist into your notes and keep it updated:
      the verifier does not re-drive those. A page that scrolls sideways at the design width is a high waivable
      delta (`overflowX`) on the root frame.
 
-     What `--expect` emits, what `--compare` grades, and how a probe run without `--run` is judged beside a
-     verifier's run are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
+     What `--expect` emits, what `--compare` grades, and the run a probe without `--run` starts (it is refused while
+     a verifier's run of the screen is open) are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
      them into a code comment, and report the verdict `--compare` computes: it exits non-zero unless the verdict is
      `pass` or `pass-with-deviations` — waivers and descopes are the user's word, never yours.
    - Render the screen at the frame's exact size (`box.w`×`box.h`, fonts loaded, animations off) with
@@ -465,7 +465,11 @@ and writes `design/verify/<Screen>.measured.json` — measurements, not a verdic
 on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
 `verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
 gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
-more writes, and `--wait` on an old id returns at once on that run's old `done`.
+more writes, and `--wait` on an old id returns at once on that run's old `done` only until a later run replaces the
+status — after that it ends in exit 5, `stalled` once that run's status stops changing (`--stall`), at the latest on
+`--timeout`. Your own probe without `--run` is such a later run: it
+replaces the live status with its own run's, and the published `design/verify/<Screen>.status.json` too once that run
+ends `done` (a `failed` one publishes nothing).
 
 It runs for minutes and reports progress into the run cache (`node_modules/.cache/designtwin-verify/`; published as
 `design/verify/<screen>.status.json` at `done`). **Wait with `verify-screen.js --wait <Screen> --run <id>` rather than

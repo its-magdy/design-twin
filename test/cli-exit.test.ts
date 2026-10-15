@@ -91,7 +91,7 @@ const ALLOWED: Record<string, [number, string]> = {
   "cli-args.ts": [1, "cliParse rejects a bad command line before the tool has written anything to stdout"],
   "catalog-input.ts": [3, "input-file guards: every current caller reads its inputs before writing any stdout, and they print only to stderr — a NEW caller must do the same, or this exit truncates piped output again"],
   "verify-build.ts": [1, "the hook watchdog: it fires when the process is hung (a stuck read), where a clean exit is not available"],
-  "verify-probe.ts": [1, "exitWhenDone: only when the process is still up 1 s after main returned (Playwright waiting up to 30 s on a browser slow to quit), and only inside the stderr/stdout write callbacks, so every printed byte has flushed; the exit runs Playwright's exit hook, which kills that browser"],
+  "verify-probe.ts": [1, "exitFlushed: when the process is still up 1 s after main returned (Playwright waiting up to 30 s on a browser slow to quit), or on a stop signal that ended the probe's own run (the listener replaces Node's default exit), and only inside the stderr/stdout write callbacks, so every printed byte has flushed; the exit runs Playwright's exit hook, which kills that browser"],
 };
 console.log("no process.exit() in design-to-code/*.ts outside the allow-list:");
 for (const f of fs.readdirSync(D2C).filter((x) => x.endsWith(".ts")).sort()) {

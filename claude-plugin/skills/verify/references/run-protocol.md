@@ -33,8 +33,13 @@ Use the run id you were given. Only when you were given none does your first cal
 (it prints `run <id> rev <n>`) — starting a new run while the caller holds an id forks it, and the caller's
 `--wait` then ends in exit 5. Without `--run` a call only continues a run that has not ended. A run id is good for ONE pass: each verifier pass and each re-verify round
 gets its own new run id. A run that ended (`done`, `failed`, `blocked`) takes no more writes, with or without
-`--run <id>` — `--status` and the probe's `--run` both refuse them (exit 2). If the id you were given has already
-ended, start a new run with `--new-run` and say so.
+`--run <id>` — `--status` and the probe's `--run` both refuse them (exit 2). Nor does `--status` (without
+`--new-run`) write your run while the status names ANOTHER run that has not ended (exit 2, naming it and how to wait
+for it or end it): a recovery command run late never writes over a run started since while that run is open (once
+it has ended, the record replaces it — measure again rather than record an old run after another one). If the id you were given has already
+ended, start a new run with `--new-run` and say so. Always give the probe your `--run <id>`: without it the probe
+starts a run of its own (build-screen's own loop) and ends it itself, and it refuses (exit 2, nothing started) while
+another run of the screen is open — so a builder's probe never writes over a verifier's files mid-run.
 
 Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-ready` → `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`)
 
@@ -55,7 +60,9 @@ Exit 0 done and the measured file matches (and the evidence file, when the run p
 `blocked` on permissions, 5 timeout or no progress, 6 run cache not accessible; defaults `--timeout 1200` s and
 `--stall 300` s. Use it instead of a hand-rolled poll loop: a moving `rev` means work is happening, a `rev` that
 has not moved for minutes is a real stall, and `phase` names the step to blame. `--wait` on an id that already
-ended returns at once on that run's old `done`.
+ended returns at once on that run's old `done` — until a later run (a probe without `--run` included) replaces the
+status; then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on
+`--timeout`.
 
 A pass legitimately takes far longer inside a build than standalone. Standalone is one capture against finished
 code with the renderer often already warm; inside a build it runs once per fix round (render → report deltas →
@@ -163,7 +170,8 @@ remaining", suggesting the user approve it or add a narrow allow rule for `node 
 
 The probe stops itself at `--max-time` (default 180000 ms) with exit 4 and nothing written. Re-run it ONCE after an
 exit 4 (with `--run` its exit 3/4 bumps the status, phase still `measuring` — unless the run ended meanwhile: then it
-leaves the status as it is and exits 2, like a probe of a run that had already ended), then write status `failed`
+leaves the status as it is and exits 2, like a probe of a run that had already ended; without `--run` its own run
+ends `failed` and the re-run is a new run), then write status `failed`
 with the navigation log — one re-run, never a loop.
 
 ## When a run ends `blocked` or `failed`

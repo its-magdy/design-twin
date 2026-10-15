@@ -106,7 +106,13 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 // runs the behaviour checks)
 const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
 const probe = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE, behaviourOff(args));
-const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
+// (a probe without --run keeps its run's status in the run cache of the expectation's dir — tmp has no package.json, so
+// that is <os tmpdir>/designtwin-verify/<key>/: removed with tmp)
+const finish = (): void => {
+  server.closeAllConnections(); server.close();
+  fs.rmSync(path.dirname(liveStatusFile(path.join(tmp, "Staff"))), { recursive: true, force: true });
+  fs.rmSync(tmp, { recursive: true, force: true });
+};
 
 // ---- the expectation, from the real --expect
 const exp = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--expect", path.join(FIX, "staff-directory.json"), "--out", path.join(tmp, "Staff")], { encoding: "utf8" });
@@ -134,6 +140,24 @@ const r1 = await probe(["--expected", expected, "--url", url(), "--out", base, "
 const m1 = read(base);
 check("a clean page → exit 0, measured.json (a valid VerifyMeasured) and the screenshot written", r1.status === 0 && m1 !== null && fs.existsSync(base + ".png"));
 if (r1.status !== 0) console.log(r1.stderr);
+
+// no --run: a run of its own, keyed (like --run's) by the expectation's dir + the --out name — the measured file names it,
+// and its `done` (published beside the expectation) records that file's sha, so --compare judges it by that run
+const ownRunOf = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
+const statusOf = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown; ownRun?: unknown } | null => readJsonOrNull(f, isJsonObject);
+const own1 = ownRunOf(r1.stderr);
+const live1 = liveStatusFile(path.join(tmp, "Staff"));
+const st1 = statusOf(live1), pub1 = statusOf(path.join(tmp, "Staff.status.json"));
+const sha1 = fs.existsSync(base + ".measured.json") ? crypto.createHash("sha256").update(fs.readFileSync(base + ".measured.json")).digest("hex") : "";
+check("no --run → a run of its own: `run <id>` on stderr, measured.runId = that id; its live status `done` rev 2 by verify-probe, measuredSha256 = the measured file's; the same doc, without its ownRun (pid, host), published as <Screen>.status.json beside the expectation",
+  /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(own1) && m1?.runId === own1 && st1?.runId === own1 && st1.phase === "done" && st1.rev === 2 && st1.by === "verify-probe" && st1.measuredSha256 === sha1
+  && isJsonObject(st1.ownRun) && st1.ownRun.pid !== process.pid && pub1 !== null && !("ownRun" in pub1) && JSON.stringify({ ...pub1, ownRun: st1.ownRun }) === JSON.stringify(st1));
+const cmp1 = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--compare", expected, base + ".measured.json", "--out", base], { encoding: "utf8" });
+const rep1 = readJsonOrNull(base + ".report.json", isJsonObject);
+const inputs1 = rep1 !== null && isJsonObject(rep1.inputs) ? rep1.inputs : null;
+check("…--compare finds that run by the expectation's dir: no integrity reason, report.inputs.runId = the run",
+  cmp1.status !== 2 && rep1 !== null && Array.isArray(rep1.integrity) && rep1.integrity.length === 0 && inputs1?.runId === own1);
+if (rep1 === null || !Array.isArray(rep1.integrity) || rep1.integrity.length) console.log(cmp1.stderr);
 
 const nav3 = node(m1, "50:3");
 check("'Shift Planner' (also a page <h1> and a closed dialog's <h2>) → the sidebar <button>, matchedBy text", nav3?.matchedBy === "text" && styleOf(nav3, "tag") === "button" && styleOf(nav3, "fontSize") === 12 && /button:nth-child\(1\)$/.test(nav3.selector || ""));
@@ -327,6 +351,41 @@ check("a run ended while the page is measured → exit 2, nothing in --out's dir
   rA1.status === 2 && leftA1.length === 0 && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
   && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr) && !fs.existsSync(lockFileOfStatus(path.join(vdir, "Staff"))));
 if (rA1.status !== 2 || leftA1.length) console.log(`${rA1.stderr}\n  left: ${leftA1.join(", ")}`);
+
+// no --run, and a verifier's run is started (--new-run) while the page is measured: the probe's own run never writes over
+// it — exit 2, no files, the new run's status kept
+const stageA2 = path.join(tmp, "stageA2", "Staff");
+const baseA2 = path.join(tmp, "Staff");
+onPage = () => writeStatus(baseA2, { runId: "run-e2e-13", phase: "queued", by: "orchestrator" });
+const rA2 = await probe(["--expected", expected, "--url", url(), "--out", stageA2, "--project", ROOT]);
+onPage = null;
+const stA2 = readStatus(liveStatusFile(baseA2));
+const leftA2 = fs.existsSync(path.dirname(stageA2)) ? fs.readdirSync(path.dirname(stageA2)) : [];
+check("no --run, another run opened while the page is measured → exit 2, nothing in --out's directory, that run's queued status unchanged, no next step",
+  rA2.status === 2 && leftA2.length === 0 && stA2?.runId === "run-e2e-13" && stA2.phase === "queued" && stA2.rev === 1
+  && rA2.stderr.includes("run run-e2e-13 of Staff is open (phase queued, rev 1, by orchestrator, ") && rA2.stderr.includes("— it opened while this probe ran; nothing is written") && !/^next /m.test(rA2.stderr));
+if (rA2.status !== 2 || leftA2.length) console.log(`${rA2.stderr}\n  left: ${leftA2.join(", ")}`);
+// …and while that run is open, a probe without --run is refused before anything starts; once it ended, it measures again
+const rA3 = await probe(["--expected", expected, "--url", url(), "--out", path.join(tmp, "stageA3", "Staff"), "--project", ROOT]);
+check("…beside that open run, the next probe without --run → exit 2 before a browser starts, no files", rA3.status === 2 && !fs.existsSync(path.join(tmp, "stageA3"))
+  && rA3.stderr.startsWith("verify-probe: run run-e2e-13 of Staff is open"));
+writeStatus(baseA2, { runId: "run-e2e-13", phase: "failed", by: "orchestrator", detail: "test over" });
+// no --run, its run replaced by one that has ENDED while the page is measured, and its own `done` write refused by the run
+// cache (read-only): the refused path finds the status naming the replacement and writes no files (exit 2)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write beside a replacement run — ${NO_READONLY_DIRS})`);
+else {
+  const stageA4 = path.join(tmp, "stageA4", "Staff");
+  const cacheA4 = path.dirname(liveStatusFile(baseA2));
+  onPage = () => { writeStatus(baseA2, { runId: "run-e2e-14", phase: "done", by: "agent", detail: "replaced it" }); fs.chmodSync(cacheA4, 0o555); };
+  const rA4 = await probe(["--expected", expected, "--url", url(), "--out", stageA4, "--project", ROOT]);
+  onPage = null;
+  fs.chmodSync(cacheA4, 0o755);
+  const stA4 = readStatus(liveStatusFile(baseA2));
+  const leftA4 = fs.existsSync(path.dirname(stageA4)) ? fs.readdirSync(path.dirname(stageA4)) : [];
+  check("no --run, replaced by a run that ended while measuring, its `done` write refused (read-only run cache) → exit 2, no files in --out's directory, the replacement's done status kept, no next step",
+    rA4.status === 2 && leftA4.length === 0 && stA4?.runId === "run-e2e-14" && stA4.phase === "done" && /was replaced by run run-e2e-14 \(done\) while this probe ran/.test(rA4.stderr) && !/^next /m.test(rA4.stderr));
+  if (rA4.status !== 2 || leftA4.length) console.log(`${rA4.stderr}\n  left: ${leftA4.join(", ")}`);
+}
 
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line
@@ -580,10 +639,10 @@ check(`the same page as a goto step's target → measured (exit ${String(rAbS.st
   rAbS.status === 0 && node(mAbS, "50:1")?.matchedBy === "frame" && !/could not load/.test(rAbS.stderr));
 // a URL with no document → exit 4 "could not load" in plain words, not Playwright's raw text
 const r204 = await probe(["--expected", expected, "--url", `${origin}/no-content`, "--out", path.join(tmp, "abort", "NoContent"), "--timeout", "3000", "--project", ROOT]);
-check(`a 204 → exit 4, 'could not load … no document (e.g. 204 No Content)' (got ${String(r204.status)}: ${r204.stderr.split("\n")[0] ?? ""})`,
+check(`a 204 → exit 4, 'could not load … no document (e.g. 204 No Content)' (got ${String(r204.status)}: ${r204.stderr.split("\n").find((l) => l.startsWith("verify-probe:")) ?? ""})`,
   r204.status === 4 && /could not load .*no document \(e\.g\. 204/.test(r204.stderr));
 const rDl = await probe(["--expected", expected, "--url", `${origin}/download`, "--out", path.join(tmp, "abort", "Download"), "--timeout", "3000", "--project", ROOT]);
-check(`a download → exit 4, 'could not load … started a file download, not a page' (got ${String(rDl.status)}: ${rDl.stderr.split("\n")[0] ?? ""})`,
+check(`a download → exit 4, 'could not load … started a file download, not a page' (got ${String(rDl.status)}: ${rDl.stderr.split("\n").find((l) => l.startsWith("verify-probe:")) ?? ""})`,
   rDl.status === 4 && /could not load .*started a file download, not a page/.test(rDl.stderr));
 
 finish();
