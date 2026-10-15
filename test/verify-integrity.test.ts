@@ -271,7 +271,7 @@ safe("a status 'done' naming this measured file → pass; inputs.runId = the run
   const r = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
   return r.verdict === "pass" && r.inputs?.runId === "run-7";
 });
-// L-c: --accept refuses a report whose run failed its integrity checks — a waiver would bind to unverified numbers
+// --accept refuses a report whose run failed its integrity checks — a waiver would bind to unverified numbers
 // (the report as --accept reads it: the JSON on disk, through its guard)
 const acceptSel = (r: VerifyReportV2, node: string, field: string): ReturnType<typeof VS.selectForAccept> => {
   const onDisk: unknown = JSON.parse(JSON.stringify(r));
@@ -375,7 +375,7 @@ safe("…its own run's done naming this file → pass; no runId in the measured 
   const bare = run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: null });
   return own.verdict === "pass" && bare.verdict === "pass";
 });
-// the integrity reasons are recorded as report.integrity; --accept reads that field first
+// the integrity reasons are recorded as report.integrity; --accept reads that field only
 safe("report.integrity holds exactly the integrity reasons (the unfinished run), [] for a clean run", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
@@ -386,14 +386,21 @@ safe("--accept refuses on report.integrity even when no why[] entry carries a kn
   const sel = acceptSel({ ...clean, integrity: ["the run was measured by a probe this version does not know"] }, "2:1", "font-size");
   return "error" in sel && /the report's run is unverified \(the run was measured by a probe this version does not know\)/.test(sel.error);
 });
-safe("…an older report (no integrity field) still refused by why[] wording; integrity [] trusts the field", () => {
-  const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
-  const { integrity: _i, ...older } = r;
-  const onDisk: unknown = JSON.parse(JSON.stringify(older));
-  const selOld = isVerifyReport(onDisk) ? VS.selectForAccept(onDisk, { node: "2:1", field: "font-size" }) : { error: "" };
+const NO_INTEGRITY = "the report records no integrity[] — nothing says whether its run was verified; re-run --compare, then accept against the new report";
+safe("--accept refuses a report with no integrity field, whatever its why[] says (a clean run's, or one naming an unfinished run)", () => {
+  const unfinished = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
   const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
-  const selNew = acceptSel(clean, "2:1", "font-size");
-  return "error" in selOld && /the verifier had not finished/.test(selOld.error) && "deltas" in selNew;
+  return [unfinished, clean].every((r) => {
+    const { integrity: _i, ...without } = r;
+    const onDisk: unknown = JSON.parse(JSON.stringify(without));
+    const sel = isVerifyReport(onDisk) ? VS.selectForAccept(onDisk, { node: "2:1", field: "font-size" }) : { error: "not a report" };
+    return "error" in sel && sel.error === NO_INTEGRITY;
+  }) && unfinished.why.some((w) => /the verifier had not finished/.test(w));
+});
+safe("…integrity [] (a clean run) → the delta is selectable", () => {
+  const clean = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("done", SHA_M) });
+  const sel = acceptSel(clean, "2:1", "font-size");
+  return clean.integrity.length === 0 && "deltas" in sel && sel.deltas.length === 1 && sel.deltas[0]?.nodeId === "2:1" && sel.deltas[0].field === "font-size";
 });
 
 // ---------------------------------------------------------------- CLI

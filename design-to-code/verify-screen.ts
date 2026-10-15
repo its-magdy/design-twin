@@ -60,7 +60,7 @@ import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
-import { compare, isIntegrityReason } from "./verify-compare.ts";
+import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 
 // Defaulting `--out` to the input's own basename only helps when the caller actually uses that default.
@@ -135,10 +135,12 @@ function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: 
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
-  // L-c: a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
+  // a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
   // waiver written from it would bind to values that may never have been rendered
-  // the integrity reasons compare recorded (report.integrity); an older report has only why[] — match its wording
-  const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
+  // the integrity reasons compare recorded (report.integrity, [] for a clean run); a report without the field cannot
+  // show its run was verified, so nothing in it is accepted
+  const integrity = rep.integrity;
+  if (!Array.isArray(integrity)) return { error: "the report records no integrity[] — nothing says whether its run was verified; re-run --compare, then accept against the new report" };
   if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
   const deltas: VerifyDelta[] = Array.isArray(rep.deltas) ? rep.deltas : [];
   const picked = sel.group !== undefined ? deltas.filter((d) => d.group === sel.group)
@@ -195,7 +197,8 @@ function main(argv: string[]): number | Promise<number> {
     `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
     "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
     "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
-    "      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.\n" +
+    "      absent components, failed interactions and unmeasured nodes are never waivable. Refuses a report whose run is\n" +
+    "      unverified (its integrity[]), or that records no integrity[] (re-run --compare first). Re-run --compare to apply.\n" +
     `  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
     "      writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache —\n" +
     "      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +

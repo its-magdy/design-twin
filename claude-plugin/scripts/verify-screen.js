@@ -2906,7 +2906,6 @@ var INTEGRITY_PHRASES = {
   unrecorded: "no status of that run records it",
   measuredBefore: "was measured before that run ended"
 };
-var isIntegrityReason = (w) => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
 function excludedNow(d, nc) {
   const rows = nc.filter((g) => g.nodeId === d.nodeId && fieldBase(g.field) === fieldBase(d.field));
   if (!rows.length) return void 0;
@@ -5310,7 +5309,8 @@ function choosePlan(flagged, frameId, stem) {
   return { all };
 }
 function selectForAccept(rep, sel) {
-  const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
+  const integrity = rep.integrity;
+  if (!Array.isArray(integrity)) return { error: "the report records no integrity[] \u2014 nothing says whether its run was verified; re-run --compare, then accept against the new report" };
   if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) \u2014 nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
   const deltas = Array.isArray(rep.deltas) ? rep.deltas : [];
   const picked = sel.group !== void 0 ? deltas.filter((d) => d.group === sel.group) : deltas.filter((d) => d.nodeId === sel.node && (sel.field === void 0 || d.field === sel.field));
@@ -5360,7 +5360,8 @@ function main(argv) {
   ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
       writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed
       and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:
-      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.
+      absent components, failed interactions and unmeasured nodes are never waivable. Refuses a report whose run is
+      unverified (its integrity[]), or that records no integrity[] (re-run --compare first). Re-run --compare to apply.
   ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "\u2026"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]
       writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache \u2014
       node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the

@@ -450,6 +450,23 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   safe("--accept --node without --field or --all-fields → exit 2, nothing written", () => noField.status === 2 && /--field "<label>" \/ --all-fields/.test(noField.stderr) && !readPlan()?.waivers);
   const noDelta = cli("--accept", "design/verify/Orders.report.json", "--node", "2:4", "--all-fields", "--reason", "x", "--by", "Sam Doe");
   safe("--accept on a node with no delta → refused, exit 1", () => noDelta.status === 1 && /refused {2}no delta in the report for 2:4/.test(noDelta.stderr));
+  // --accept reads report.integrity only: a report without it is refused, whatever its why[] says
+  const planBytes = fs.readFileSync(path.join(cwd, "design/plan/Orders__1_1.json"), "utf8");
+  const planUnchanged = (): boolean => fs.readFileSync(path.join(cwd, "design/plan/Orders__1_1.json"), "utf8") === planBytes;
+  const { integrity: _i, ...noIntegrity } = r1 ?? { why: [] };
+  const unfinishedWhy = "Orders.status.json (run run-7, rev 2) is at phase measuring — the verifier had not finished";
+  put("design/verify/OrdersA.report.json", noIntegrity);
+  put("design/verify/OrdersB.report.json", { ...noIntegrity, why: [unfinishedWhy, ...(noIntegrity.why ?? [])] });
+  put("design/verify/OrdersC.report.json", { ...noIntegrity, integrity: [unfinishedWhy] });
+  const acceptOn = (rel: string) => cli("--accept", rel, "--node", "2:1", "--field", "font-size", "--reason", "x", "--by", "Sam Doe");
+  const noIntA = acceptOn("design/verify/OrdersA.report.json"), noIntB = acceptOn("design/verify/OrdersB.report.json"), unverified = acceptOn("design/verify/OrdersC.report.json");
+  const NO_INTEGRITY = "refused  the report records no integrity[] — nothing says whether its run was verified; re-run --compare, then accept against the new report\n";
+  safe("--compare wrote integrity [] for this run", () => Array.isArray(r1?.integrity) && r1.integrity.length === 0);
+  safe("--accept on a report with no integrity[] (its why[] clean, or naming an unfinished run) → exit 1, says re-run --compare, no waiver written", () =>
+    noIntA.status === 1 && noIntA.stderr === NO_INTEGRITY && noIntB.status === 1 && noIntB.stderr === NO_INTEGRITY && planUnchanged() && !readPlan()?.waivers);
+  safe("--accept on a report whose integrity[] lists a reason → exit 1, names it, no waiver written", () =>
+    unverified.status === 1 && unverified.stderr === `refused  the report's run is unverified (${unfinishedWhy}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report\n`
+    && planUnchanged() && !readPlan()?.waivers);
   const flagOnCompare = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json", "--reason", "x");
   safe("--reason outside --accept → exit 2", () => flagOnCompare.status === 2);
   const a = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--field", "font-size", "--reason", "the wider type reads better", "--by", "Sam Doe");
