@@ -11,6 +11,7 @@ import { ok, report } from "./assert.ts";
 import { node, screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
+import { buildPageLayout } from "../bridge/src/pages-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { Asset, IrNode, ScreenExport } from "../bridge/src/doc-types.ts";
 
@@ -151,15 +152,16 @@ console.log("\ncross-screen hidden reuse reads other screens' .assets.json throu
 // ------------------------------------------------------------------ one row per node: stem and index agree, a rename replaces its row
 console.log("\na screen's stem and its index row name one node, and a frame renamed in Figma keeps one row:");
 {
-  interface Row { id?: unknown; name?: unknown; file?: unknown; sourceFile?: unknown }
+  interface Row { id?: unknown; name?: unknown; file?: unknown; sourceFile?: unknown; sourceFileKey?: unknown }
   const rowsOf = (dir: string, rel: string): Row[] => {
     const doc: unknown = JSON.parse(fs.readFileSync(path.join(dir, rel), "utf8"));
     const layers = doc && typeof doc === "object" && "layers" in doc && Array.isArray(doc.layers) ? doc.layers : [];
     return layers.filter((l): l is Row => !!l && typeof l === "object");
   };
-  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string; pageId?: string } = {}): void => {
+  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string; sourceFileKey?: string; pageId?: string; page?: string } = {}): void => {
     writeOut.writeScreen(dir, screenReply({
-      screenName: name, page: "Page", pageId: opts.pageId ?? "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+      screenName: name, page: opts.page ?? "Page", pageId: opts.pageId ?? "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+      ...(opts.sourceFileKey ? { sourceFileKey: opts.sourceFileKey } : {}),
       screen: { screen: name, exportedAt: "2026-10-06T00:00:00.000Z", nodes: [{ id: "5:1", type: "FRAME", name }], manifest: { nodes: 1 } },
     }));
   };
@@ -181,22 +183,34 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
   pullAs(ren, "Tray Other", { nodeId: "5:1", sourceFile: "Other File" });
   t("the same node id from another Figma file (another name, so another file) is another row", () => rowsOf(ren, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length === 2);
 
-  // a row pulled before rows were stamped with their Figma file: ids repeat across files, so it is the same node only
-  // when the incoming row is unstamped too, or names the same page
+  // a row pulled before rows were stamped with their Figma file: ids repeat across files (page ids too: every file's
+  // first page is 0:1), so beside a stamped or an unstamped row it is the same node only when both name the same page —
+  // its pageId and its name
   const idsOf = (dir: string): number => rowsOf(dir, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length;
-  const old = tmp("stem-unstamped");
-  pullAs(old, "Tray", { nodeId: "5:1" });
-  pullAs(old, "Tray Other", { nodeId: "5:1", sourceFile: "Other File", pageId: "9:9" });
-  t("an unstamped row is kept when another Figma file (stamped, another page) pulls the same id", () => idsOf(old) === 2);
-  const samePage = tmp("stem-unstamped-page");
-  pullAs(samePage, "Tray", { nodeId: "5:1" });
-  pullAs(samePage, "Tray Panel", { nodeId: "5:1", sourceFile: "Sample File" });
-  t("…replaced when the stamped pull names the same page", () => idsOf(samePage) === 1);
-  const bothBare = tmp("stem-unstamped-both");
-  pullAs(bothBare, "Tray", { nodeId: "5:1" });
-  pullAs(bothBare, "Tray Panel", { nodeId: "5:1", pageId: "9:9" });
-  t("…and replaced when the incoming row is unstamped too", () => idsOf(bothBare) === 1);
-  for (const d of [noId, ren, old, samePage, bothBare]) fs.rmSync(d, { recursive: true, force: true });
+  const dirs: string[] = [];
+  const pair = (label: string, first: Parameters<typeof pullAs>[2], second: Parameters<typeof pullAs>[2]): number => {
+    const d = tmp("stem-" + label);
+    dirs.push(d);
+    pullAs(d, "Tray", { nodeId: "5:1", ...first });
+    pullAs(d, "Tray Panel", { nodeId: "5:1", ...second });
+    return idsOf(d);
+  };
+  t("an unstamped row is kept when another Figma file (stamped, another page) pulls the same id", () => pair("mixed-page-id", {}, { sourceFile: "Other File", pageId: "9:9" }) === 2);
+  t("…kept when the stamped pull names the same pageId but another page name", () => pair("mixed-page-name", {}, { sourceFile: "Other File", page: "Other Page" }) === 2);
+  t("…replaced when the stamped pull names the same page (pageId and name)", () => pair("mixed-same", {}, { sourceFile: "Sample File" }) === 1);
+  t("two unstamped rows of another pageId: kept", () => pair("bare-page-id", {}, { pageId: "9:9" }) === 2);
+  t("…of the same pageId and another page name: kept", () => pair("bare-page-name", {}, { page: "Other Page" }) === 2);
+  t("…of the same page (pageId and name): replaced", () => pair("bare-same", {}, {}) === 1);
+  // both stamped: the same file name is one Figma file only when the keys, where both have one, agree
+  t("two stamped rows of one file name and two keys: kept (two files that share a name)", () => pair("key-differs", { sourceFile: "Sample File", sourceFileKey: "k1" }, { sourceFile: "Sample File", sourceFileKey: "k2" }) === 2);
+  t("…of one file name and one key: replaced", () => pair("key-same", { sourceFile: "Sample File", sourceFileKey: "k1" }, { sourceFile: "Sample File", sourceFileKey: "k1" }) === 1);
+  t("…of one file name, a key on one side only: replaced", () => pair("key-one", { sourceFile: "Sample File" }, { sourceFile: "Sample File", sourceFileKey: "k1" }) === 1);
+  const keyed = dirs[dirs.length - 1];
+  t("a stamped row carries the file's key beside its name", () => keyed !== undefined && rowsOf(keyed, path.join("pages", "index.json")).some((r) => r.sourceFile === "Sample File" && r.sourceFileKey === "k1"));
+  const walked = buildPageLayout({ sourceFile: "Sample File", sourceFileKey: "k1", index: [{ id: "5:1", name: "Tray", page: "Page", pageId: "0:1" }],
+    layers: [{ id: "5:1", name: "Tray", page: "Page", pageId: "0:1", tree: node({ type: "FRAME", id: "5:1", name: "Tray" }) }] }, "/");
+  t("…a page pull's row too", () => walked.meta.layers?.[0]?.sourceFile === "Sample File" && walked.meta.layers[0].sourceFileKey === "k1");
+  for (const d of [noId, ren, ...dirs]) fs.rmSync(d, { recursive: true, force: true });
 }
 
 report();
