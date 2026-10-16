@@ -239,6 +239,17 @@ const statusOf = (p: Project) => { const st = computeStatus(p.plan(), { cwd: p.r
 }
 {
   const p = project("Crates", { record: false });
+  byNamePlan(p, "9:9");
+  const before = statusOf(p);
+  const { r } = run(p, false);
+  check(`setup: a plan of node 9:9 finds the set by its name (got ${JSON.stringify(before.reports)})`, JSON.stringify(before.reports) === JSON.stringify(["design/verify/Crates.report.json"]));
+  check(`a plan of another node: the set is skipped, naming both nodes, never told to add the set's node id (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    r.skipped.length === 1 && /^design\/plan\/Crates\.json is a plan of node 9:9, and finds this set \(of node 80:1\) only by its name — if the plan is of node 80:1, give it `"nodeId": "80:1"`/.test(r.skipped[0]?.why[0] ?? "")
+    && !/^design\/plan\/Crates\.json finds this set only by its name — add/.test(r.skipped[0]?.why[0] ?? ""));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project("Crates", { record: false });
   writeSet(p.put, "Crates__80_1");
   byNamePlan(p);
   const { r } = run(p, true);

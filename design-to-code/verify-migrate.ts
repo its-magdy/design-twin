@@ -32,7 +32,8 @@
 //   - a plan verify-build ties the set's report to by the name alone (verify-locate.ts locateReports: its `screen`, its
 //     `file`, its export's or its own file name is the set's name) would lose it under the new name unless its node id
 //     (planNodeId: its nodeId, its export's, the id in its `screen` or file name) is the set's — it then finds the
-//     renamed report by id. Otherwise the set is skipped (renamed or retired), saying to add `nodeId` to the plan;
+//     renamed report by id. Otherwise the set is skipped (renamed or retired), saying to add `nodeId` to the plan — or,
+//     a plan of another node, naming both nodes;
 //   - a set with an open run (status v2 not ended), under its name or the new one, is skipped. Both status locks are held
 //     from the last checks to the end, so no status write lands in between; the live status moves with the set;
 //   - after the move every plan written is checked again (recordedEdits == [] and its record names its report), and
@@ -284,10 +285,16 @@ function plansFinding(plans: readonly PlanText[], set: string, d: { cwd: string;
 }
 /** Why the set `set` of node `id` cannot change its name: a plan that finds its report by the name alone (its `screen`,
  *  its `file`, its export's or its own file name is the set's name) and whose node id (planNodeId) is another, or none,
- *  would find nothing under the new name. */
+ *  would find nothing under the new name. A plan with no node id is told to add the set's; one of another node is told
+ *  which two nodes differ. */
 function nameOnlyBlocks(plans: readonly PlanText[], set: string, id: string, d: { cwd: string; verifyDir: string }, refsOf: RefsOf): string[] {
-  return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) =>
-    planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd)) === id ? [] : [`${p.rel} finds this set only by its name — add \`"nodeId": "${id}"\` to it, then --migrate`]);
+  return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) => {
+    const pid = planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd));
+    if (pid === id) return [];
+    if (pid === null) return [`${p.rel} finds this set only by its name — add \`"nodeId": "${id}"\` to it, then --migrate`];
+    return [`${p.rel} is a plan of node ${pid}, and finds this set (of node ${id}) only by its name — if the plan is of node ${id}, give it \`"nodeId": "${id}"\`; ` +
+      `if not, the set is another screen's: retire it or verify node ${pid} under its own set; then --migrate`];
+  });
 }
 
 /** The `<set>-…` files that are the set's: `<set>-diff.png`, and every one its measured file or its report lists in

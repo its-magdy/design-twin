@@ -6176,7 +6176,12 @@ function plansFinding(plans, set, d, refsOf) {
   });
 }
 function nameOnlyBlocks(plans, set, id, d, refsOf) {
-  return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) => planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd)) === id ? [] : [`${p.rel} finds this set only by its name \u2014 add \`"nodeId": "${id}"\` to it, then --migrate`]);
+  return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) => {
+    const pid = planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd));
+    if (pid === id) return [];
+    if (pid === null) return [`${p.rel} finds this set only by its name \u2014 add \`"nodeId": "${id}"\` to it, then --migrate`];
+    return [`${p.rel} is a plan of node ${pid}, and finds this set (of node ${id}) only by its name \u2014 if the plan is of node ${id}, give it \`"nodeId": "${id}"\`; if not, the set is another screen's: retire it or verify node ${pid} under its own set; then --migrate`];
+  });
 }
 function dashFiles(verifyDir, set) {
   const own = /* @__PURE__ */ new Set([`${set}-diff.png`]);
