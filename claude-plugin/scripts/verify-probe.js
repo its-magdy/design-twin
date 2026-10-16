@@ -6546,7 +6546,7 @@ async function docTokenOrNull(page) {
 async function docTokenWithin(page, capMs) {
   const read2 = docTokenOrNull(page);
   read2.catch(() => void 0);
-  return Promise.race([read2, sleep5(Math.max(1, capMs), null, { ref: false })]);
+  return Promise.race([read2, sleep5(Math.max(1, capMs), void 0, { ref: false })]);
 }
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
@@ -6647,7 +6647,7 @@ async function settle(page, log, ready, timeout, root) {
           if (errorKind(e, page) === "gone") throw gone(e);
           if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
-          const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
+          const now = await docTokenOrNull(page);
           if (now !== null && now !== "" && (token === null || now === token)) {
             token = now;
             log.loadTimedOut.set(now, loadNote);
@@ -6667,12 +6667,13 @@ async function settle(page, log, ready, timeout, root) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
       const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
-      if (now !== null && token !== null && now !== token) {
+      const unanswered = now === void 0;
+      if (!unanswered && now !== null && token !== null && now !== token) {
         await newDocument();
         continue;
       }
-      const sameDocument = token !== null && token !== "" && now === token;
-      if (token === null && now !== null) token = now;
+      const sameDocument = token !== null && token !== "" && (unanswered || now === token);
+      if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") {
         await sleep5(POLL_MS3);

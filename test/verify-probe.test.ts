@@ -527,8 +527,8 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     const tok = await VP.docTokenWithin(hung, 50);
     const tokMs = Date.now() - t2;
     const answered = await VP.docTokenWithin({ evaluate: async (): Promise<unknown> => "doc7", isClosed: () => false }, 50);
-    t("[ready] docTokenWithin (the document token read after the frame's wait ran out) on a page that never answers → null (no token) within its bound (50 ms); a page that answers → its token", () =>
-      tok === null && tokMs < 1_000 && answered === "doc7");
+    t("[ready] docTokenWithin (the document token read after the frame's wait ran out) on a page that never answers → undefined (unanswered, not null) within its bound (50 ms); a page that answers → its token", () =>
+      tok === undefined && tokMs < 1_000 && answered === "doc7");
     const t1 = Date.now();
     const waited = await VP.waitForScreenTags(hung, root, 200).then(() => "met", (e: unknown) => (e instanceof Error ? e.name : "?"));
     const waitMs = Date.now() - t1;
@@ -564,7 +564,8 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   // size; `untagged-dialog` — a screen + dialog expectation whose screen shows all its root's tags and none of the
   // dialog's (closed); `selector-error` — the frame's wait throws a selector error, not a timeout, on a page that shows
   // every own tag; `hung` — the frame's tag never shows, and from the end of that wait on the page answers no
-  // page.evaluate (a hung main thread). The measurement itself finds nothing (no candidates), so a page that gets past the wait is written
+  // page.evaluate (a hung main thread); `redirect-hung` — the `redirect` swap, then the login page's wait for the frame's
+  // tag runs out and the page answers no page.evaluate from then on. The measurement itself finds nothing (no candidates), so a page that gets past the wait is written
   // with every node not measured.
   const READY_PW = `const S = process.env.DT_STUB_SCENARIO || "";
 const FRAME = '[data-dt-node="1:1"]', VIS = " >> visible=true";
@@ -605,10 +606,11 @@ function newPage() {
     },
     locator: (sel) => ({
       first: () => ({ waitFor: async (o) => {
-        if (S === "redirect" && doc === 1) setTimeout(() => { doc = 2; }, 20);
+        const onDoc = doc;
+        if ((S === "redirect" || S === "redirect-hung") && doc === 1) setTimeout(() => { doc = 2; }, 20);
         if (S === "selector-error") throw new Error("locator.waitFor: Unexpected token \\"=\\" while parsing css selector");
         for (const end = Date.now() + o.timeout; Date.now() < end; await sleep(10)) if (visible(sel)) return;
-        if (S === "hung") hung = true;
+        if (S === "hung" || (S === "redirect-hung" && onDoc === 2)) hung = true;
         throw new TimeoutError("locator.waitFor: Timeout " + o.timeout + "ms exceeded.");
       } }),
     }),
@@ -668,6 +670,11 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   const hungMs = Date.now() - hungStart;
   t(`[ready] a page that stops answering when the frame's wait runs out → exit 4 'did not answer within 2s when its tags were counted' within seconds (the document token and the look are both bounded), never held to --max-time (took ${hungMs} ms)`, () =>
     hungRun.status === 4 && hungRun.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)") && hungMs < 15_000 && !fs.existsSync(measuredFile));
+  const redirectHung = spawnSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"],
+    { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "redirect-hung" } });
+  t("[ready] a redirect during settle, then a page that stops answering when the frame's wait runs out → exit 4 'did not answer within 2s' (an unanswered token read is no sign of another document) — never 'kept navigating'; nothing written", () =>
+    redirectHung.status === 4 && redirectHung.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)")
+    && !/kept navigating|watch tree/.test(redirectHung.stderr) && !fs.existsSync(measuredFile));
   // a screen + dialog export: the dialog root (closed at load) has more nodes than the screen root
   const panelExp = path.join(readyProj, "design", "verify", "Panel.expected.json");
   fs.writeFileSync(panelExp, JSON.stringify(buildExpectation([{ label: "Panel", doc: screenExport([
@@ -685,8 +692,7 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     VP.screenTagsWhy({ shown: 1, foreign: null }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
     && VP.screenTagsWhy({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
     && VP.refusingRoot({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === null
-    && VP.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");
-  t("[ready] foreignRootHint names the element, says the probe reached another screen, where to look (with/without --steps) and the fix for a wrapper of this screen", () =>
+    && VP.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");  t("[ready] foreignRootHint names the element, says the probe reached another screen, where to look (with/without --steps) and the fix for a wrapper of this screen", () =>
     VP.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "encloses", encloses: 3 }, true) === "[data-dt-node=\"1:1\"] is the default --ready (the frame's tag), and the page shows another screen's tagged root " +
       "(data-dt-node=\"7:1\" encloses most of this screen's visible tags): the probe reached another screen — check the --steps plan's navigate list; if that element is a wrapper of this screen tagged " +
       "with another id, tag this screen's root data-dt-node=\"1:1\" or pass --ready <root selector>"

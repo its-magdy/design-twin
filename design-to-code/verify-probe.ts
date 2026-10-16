@@ -344,12 +344,13 @@ async function docTokenOrNull(page: Pick<Page, "evaluate" | "isClosed">): Promis
   }
 }
 
-/** The current document's token as docTokenOrNull reads it, or null when the page does not answer within `capMs` (a
- *  hung main thread never answers a page.evaluate) — the same as a navigation with no document to evaluate in. */
-export async function docTokenWithin(page: Pick<Page, "evaluate" | "isClosed">, capMs: number): Promise<string | null> {
+/** The current document's token as docTokenOrNull reads it (null: a navigation with no document to evaluate in), or
+ *  undefined when the page does not answer within `capMs` (a hung or busy main thread does not answer a page.evaluate):
+ *  no evidence of another document. */
+export async function docTokenWithin(page: Pick<Page, "evaluate" | "isClosed">, capMs: number): Promise<string | null | undefined> {
   const read = docTokenOrNull(page);
   read.catch(() => undefined); // a page gone after the race ended is the next call's to find
-  return Promise.race([read, sleep(Math.max(1, capMs), null, { ref: false })]);
+  return Promise.race([read, sleep(Math.max(1, capMs), undefined, { ref: false })]);
 }
 
 /** What settle() found: a note for the measured file (or null), and the token of the document it saw quiet (the
@@ -509,7 +510,7 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
           if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
           // remembered for THIS document (the token it has now): no later settle waits for its load again
-          const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
+          const now = await docTokenOrNull(page);
           if (now !== null && now !== "" && (token === null || now === token)) {
             token = now;
             log.loadTimedOut.set(now, loadNote);
@@ -533,12 +534,14 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
-      // bounded like the look below: a page that does not answer has no token to tell documents apart by
+      // bounded like the look below: a page that does not answer (undefined) shows no other document, so it is taken
+      // as the one the wait ran on — the look then says it did not answer, or a busy page gets its look
       const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
-      if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
+      const unanswered = now === undefined;
+      if (!unanswered && now !== null && token !== null && now !== token) { await newDocument(); continue; }
       // the document the wait ran on is still the current one (an empty token tells no documents apart)
-      const sameDocument = token !== null && token !== "" && now === token;
-      if (token === null && now !== null) token = now;
+      const sameDocument = token !== null && token !== "" && (unanswered || now === token);
+      if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") { await sleep(POLL_MS); continue; }
       if (next === "kept") throw kept();
