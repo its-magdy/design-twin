@@ -6013,6 +6013,7 @@ function openRunOf(base) {
   const st = readStatus(base);
   return st && st !== "v1" && !TERMINAL_PHASES.includes(st.phase) ? `run ${st.runId} of ${path14.basename(base)} is open (phase ${st.phase}, ${st.at}) \u2014 wait for it to end, then --migrate` : null;
 }
+var HAND_FIELDS = ["verification.a11y.report", "verification.artifacts"];
 function rewriteRefs(plan, map, write2) {
   const changed = [];
   const v = plan.verification;
@@ -6020,25 +6021,28 @@ function rewriteRefs(plan, map, write2) {
   const one = (o, key, field) => {
     const ref = o[key];
     if (typeof ref !== "string") return;
-    const to = map(ref);
+    const to = map(ref, field);
     if (to === null) return;
     if (write2) o[key] = to;
     if (!changed.includes(field)) changed.push(field);
+  };
+  const list = (arts, field) => {
+    if (Array.isArray(arts)) arts.forEach((a, i) => {
+      if (typeof a !== "string") return;
+      const to = map(a, field);
+      if (to === null) return;
+      if (write2) arts[i] = to;
+      if (!changed.includes(field)) changed.push(field);
+    });
   };
   const rec = v.recorded;
   if (isJsonObject(rec)) {
     one(rec, "report", "verification.recorded.report");
     if (isJsonObject(rec.a11y)) one(rec.a11y, "report", "verification.recorded.a11y.report");
-    const arts = rec.artifacts;
-    if (Array.isArray(arts)) arts.forEach((a, i) => {
-      if (typeof a !== "string") return;
-      const to = map(a);
-      if (to === null) return;
-      if (write2) arts[i] = to;
-      if (!changed.includes("verification.recorded.artifacts")) changed.push("verification.recorded.artifacts");
-    });
+    list(rec.artifacts, "verification.recorded.artifacts");
   }
   if (isJsonObject(v.a11y)) one(v.a11y, "report", "verification.a11y.report");
+  list(v.artifacts, "verification.artifacts");
   return changed;
 }
 function recordedReport(plan) {
@@ -6097,7 +6101,7 @@ function migrate(opts) {
       continue;
     }
     if (s.kind === "retire") {
-      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path14.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path14.join(verifyDir, s.canonical))})`);
+      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path14.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path14.join(verifyDir, s.canonical))}; its other files stay under ${s.set})`);
     } else {
       out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path14.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
       for (const f of s.files) out(`  rename  ${path14.basename(f.from)} -> ${path14.basename(f.to)}`);
@@ -6126,7 +6130,11 @@ function readPlans(planDir, cwd) {
   }
   return out;
 }
-function namedFile(ref, planFile, d) {
+function namedFile(ref, field, planFile, d) {
+  if (field !== "verification.a11y.report") {
+    const abs = path14.resolve(d.cwd, ref);
+    return path14.dirname(abs) === d.verifyDir ? path14.basename(abs) : null;
+  }
   for (const abs of [path14.resolve(d.cwd, ref), path14.resolve(path14.dirname(planFile), ref)]) {
     if (path14.dirname(abs) === d.verifyDir) return path14.basename(abs);
   }
@@ -6138,7 +6146,7 @@ function planBlocks(p, names, d) {
   if (edits.length) return [`${p.rel} has a hand-edited record \u2014 fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
   const rec = recordedReport(p.plan);
   if (rec) {
-    const name = namedFile(rec.report, p.file, d);
+    const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
       return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
     }
@@ -6157,14 +6165,26 @@ function plansFinding(plans, set, d, refsOf) {
 function nameOnlyBlocks(plans, set, id, d, refsOf) {
   return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) => planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd)) === id ? [] : [`${p.rel} finds this set only by its name \u2014 add \`"nodeId": "${id}"\` to it, then --migrate`]);
 }
+function dashFiles(verifyDir, set) {
+  const own = /* @__PURE__ */ new Set([`${set}-diff.png`]);
+  for (const tail of [".measured.json", ".report.json"]) {
+    const doc = readJsonOrNull(path14.join(verifyDir, set + tail), isJsonObject);
+    const arts = doc && Array.isArray(doc.artifacts) ? doc.artifacts : [];
+    for (const a of arts) if (typeof a === "string" && path14.basename(a).startsWith(set + "-")) own.add(path14.basename(a));
+  }
+  return own;
+}
 function planMigration(d) {
   const sets = allSets(d.verifyDir);
   if (!sets.length) return [];
   const names = sets.map((s) => s.name).sort((a, b) => b.length - a.length);
+  const dashCache = /* @__PURE__ */ new Map();
+  const ownsDash = (set, file) => getOrInit(dashCache, set, () => dashFiles(d.verifyDir, set)).has(file);
   const filesOf = /* @__PURE__ */ new Map();
   for (const e of fs15.readdirSync(d.verifyDir, { withFileTypes: true })) {
     if (!e.isFile()) continue;
-    const owner = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    const longest = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    const owner = longest !== void 0 && (e.name.startsWith(longest + ".") || ownsDash(longest, e.name)) ? longest : void 0;
     if (owner !== void 0) filesOf.set(owner, [...filesOf.get(owner) ?? [], e.name]);
   }
   const live = sets.filter((s) => !s.retired).map((s) => s.name);
@@ -6283,7 +6303,7 @@ function planMigration(d) {
       if (to === T && baseExists) {
         const recording = plans.filter((p) => {
           const r = recordedReport(p.plan);
-          return r !== null && namedFile(r.report, p.file, d) === report;
+          return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report;
         }).map((p) => p.rel);
         if (recording.length) {
           steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and ${recording.join(", ")} still record${recording.length === 1 ? "s" : ""} ${report} \u2014 re-run verify-screen --compare --record-plan on ${T}, then --migrate`] });
@@ -6322,8 +6342,8 @@ function planMigration(d) {
       const blocks = [];
       for (const p of plans) {
         const used = /* @__PURE__ */ new Map();
-        rewriteRefs(p.plan, (ref) => {
-          const n = namedFile(ref, p.file, d);
+        rewriteRefs(p.plan, (ref, field) => {
+          const n = namedFile(ref, field, p.file, d);
           const nn = n === null ? void 0 : nameMap.get(n);
           if (n !== null && nn !== void 0) used.set(n, nn);
           return null;
@@ -6527,7 +6547,7 @@ function applyRetire(s, d) {
     const plans = readPlans(d.planDir, d.cwd);
     const recording = plans.filter((p) => {
       const r = recordedReport(p.plan);
-      return r !== null && namedFile(r.report, p.file, d) === report;
+      return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report;
     });
     if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} \u2014 re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
@@ -6574,8 +6594,8 @@ function applyRename(s, d) {
     if (exists2(journal)) return { why: [`${path14.basename(journal)} already exists \u2014 run --migrate again (it rolls that migration back first)`], notes };
     const plans = readPlans(d.planDir, d.cwd);
     const nameMap = new Map(s.files.map((m) => [path14.basename(m.from), path14.basename(m.to)]));
-    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref) => {
-      const n = namedFile(ref, p.file, d);
+    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref, field) => {
+      const n = namedFile(ref, field, p.file, d);
       return n !== null && nameMap.has(n) ? "" : null;
     }, false).length > 0);
     const refsOf = freshRefs(d);
@@ -6619,8 +6639,8 @@ function applyRename(s, d) {
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
-        fields = rewriteRefs(plan, (ref) => {
-          const n = namedFile(ref, p.file, d);
+        fields = rewriteRefs(plan, (ref, field) => {
+          const n = namedFile(ref, field, p.file, d);
           const nn = n === null ? void 0 : nameMap.get(n);
           return n !== null && nn !== void 0 ? respell(ref, n, nn) : null;
         }, true);
@@ -6636,7 +6656,7 @@ function applyRename(s, d) {
         return plan;
       });
       if (w.before !== void 0 && w.after !== void 0) writes.push({ file: p.file, before: w.before, after: w.after });
-      if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) \u2014 rewritten to the renamed report`);
+      for (const f of HAND_FIELDS.filter((h) => fields.includes(h))) notes.push(`${p.rel}: ${f} is yours (hand-written) \u2014 rewritten to the renamed ${f === "verification.artifacts" ? "files" : "report"}`);
       crash();
     });
     const problems = [];
@@ -6802,8 +6822,9 @@ function main(argv) {
   ${scriptCmd("verify-screen")} --migrate [--apply] [--dir design/verify]
       renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> \u2014 a variant of
       it to <Layer>__<id>.<slug> \u2014 with every file of the set (the live status too), and rewrites the paths a plan's
-      verification.recorded (report, a11y.report, artifacts) and verification.a11y.report name. A dry run unless --apply.
-      A legacy set whose node already has its <Layer>__<id> set has its expectation retired (<S>.expected.json.retired).
+      verification.recorded (report, a11y.report, artifacts), verification.a11y.report and verification.artifacts name.
+      A dry run unless --apply. A legacy set whose node already has its <Layer>__<id> set has its expectation retired
+      (<S>.expected.json.retired; its other files stay under <S>).
       Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
       records with a hand-edited record or finds by its name alone with no node id of the set's (add "nodeId" to it).
       Never rewrites a report, measured file or expectation; plans are never renamed.

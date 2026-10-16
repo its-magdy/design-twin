@@ -103,6 +103,7 @@ console.log("\n--apply renames the set and the plan's recorded paths together:")
   const p = project();
   const shaBefore = new Map(SET_FILES.map((s) => [s, sha256(fs.readFileSync(path.join(p.root, "design/verify/Crates." + s)))] as const));
   const recBefore = recOf(p.plan());
+  const stBefore = computeStatus(p.plan(), { cwd: p.root, planFile: path.join(p.root, REL) });
   const c = cli(p, "--migrate", "--apply");
   check(`exit 0 (got ${c.status}: ${c.stderr.trim().split("\n").pop() ?? ""})`, c.status === 0);
   const ls = p.ls();
@@ -118,7 +119,9 @@ console.log("\n--apply renames the set and the plan's recorded paths together:")
   const edits = recordedEdits(plan, p.root);
   check(`recordedEdits stays [] (got ${JSON.stringify(edits)})`, edits.length === 0);
   const st = computeStatus(plan, { cwd: p.root, planFile: path.join(p.root, REL) });
-  check(`verify-build reads the plan as before: not blocked, the renamed report found (got ${st.status})`, st.status !== "blocked" && st.reports.some((x) => x.rel === "design/verify/Crates__80_1.report.json"));
+  const renamed = (x: string[]): string => JSON.stringify(x).replaceAll("design/verify/Crates.", "design/verify/Crates__80_1.");
+  check(`verify-build reads the plan as before: the same status and reasons, the renamed report found (before ${stBefore.status}, after ${st.status})`,
+    st.status === stBefore.status && renamed(stBefore.reasons) === JSON.stringify(st.reasons) && st.reports.some((x) => x.rel === "design/verify/Crates__80_1.report.json"));
   const again = cli(p, "--migrate", "--apply");
   check(`a second run has nothing to do (exit ${again.status}) and changes nothing`, again.status === 0 && /nothing to migrate/.test(again.stderr) && JSON.stringify(p.ls()) === JSON.stringify(ls));
   fs.rmSync(p.root, { recursive: true, force: true });
@@ -359,6 +362,7 @@ console.log("\na legacy set beside its node's canonical set is retired:");
   check(`Crates.expected.json → Crates.expected.json.retired; the canonical set untouched (got ${JSON.stringify(r.done)}; ${out.join(" | ")})`,
     JSON.stringify(r.done) === JSON.stringify(["Crates"]) && fs.existsSync(path.join(p.root, "design/verify/Crates.expected.json.retired")) && !fs.existsSync(path.join(p.root, "design/verify/Crates.expected.json"))
     && fs.existsSync(path.join(p.root, "design/verify/Crates__80_1.expected.json")));
+  check("…the line says the set's other files stay under its name", out.some((l) => l.endsWith("(node 80:1 already has design/verify/Crates__80_1; its other files stay under Crates)")) && fs.existsSync(path.join(p.root, "design/verify/Crates.report.json")));
   const again = run(p, true);
   check("a second run has nothing to do", again.r.steps.length === 0);
   fs.rmSync(p.root, { recursive: true, force: true });
@@ -372,15 +376,45 @@ console.log("\na legacy set beside its node's canonical set is retired:");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
-console.log("\nthe hand-owned verification.a11y.report is rewritten, with a note:");
+console.log("\nthe hand-owned verification.a11y.report and verification.artifacts are rewritten, each with a note:");
 {
   const p = project("Crates", { record: false });
   const plan0 = p.plan();
-  must(plan0.verification, "verification").a11y = { tool: "axe-core", violations: 0, warnings: 0, report: "design/verify/Crates.report.md" };
+  const v0 = must(plan0.verification, "verification");
+  v0.a11y = { tool: "axe-core", violations: 0, warnings: 0, report: "design/verify/Crates.report.md" };
+  v0.artifacts = ["design/verify/Crates.png", "design/verify/Crates.report.json", "src/Crates.tsx"];
   fs.writeFileSync(path.join(p.root, REL), JSON.stringify(plan0, null, 2) + "\n");
   const { r, err } = run(p, true);
-  check(`rewritten to the renamed file, and said (got ${p.plan().verification?.a11y?.report}; ${err.join(" | ")})`,
-    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && p.plan().verification?.a11y?.report === "design/verify/Crates__80_1.report.md" && err.some((l) => /verification\.a11y\.report is yours/.test(l)));
+  const v = p.plan().verification;
+  check(`rewritten to the renamed files, and said (got ${v?.a11y?.report}, ${JSON.stringify(v?.artifacts)}; ${err.join(" | ")})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && v?.a11y?.report === "design/verify/Crates__80_1.report.md" && err.some((l) => /verification\.a11y\.report is yours/.test(l))
+    && JSON.stringify(v?.artifacts) === JSON.stringify(["design/verify/Crates__80_1.png", "design/verify/Crates__80_1.report.json", "src/Crates.tsx"]) && err.some((l) => /verification\.artifacts is yours \(hand-written\) — rewritten to the renamed files/.test(l)));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
+console.log("\nwhich files are the set's, and which paths a plan names, as verify-build reads them:");
+{
+  const p = project("Crates", { record: false });
+  const m = JSON.parse(fs.readFileSync(path.join(p.root, "design/verify/Crates.measured.json"), "utf8")) as { artifacts: string[] };
+  m.artifacts.push("design/verify/Crates-hover.png");
+  p.put("design/verify/Crates.measured.json", m);
+  p.put("design/verify/Crates-hover.png", "hover");
+  p.put("design/verify/Crates-detail.png", "another screen's");
+  const { r } = run(p, true);
+  const ls = p.ls();
+  check(`a <S>-… file the set's measured file lists moves; a stray Crates-detail.png (another screen's, maybe) stays (got ${JSON.stringify(ls)})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && ls.includes("Crates__80_1-hover.png") && ls.includes("Crates-detail.png") && !ls.includes("Crates__80_1-detail.png"));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project();
+  const plan0 = p.plan();
+  recOf(plan0).report = "../verify/Crates.report.json"; // relative to the plan file: verify-build reads it from the project root, and finds nothing
+  fs.writeFileSync(path.join(p.root, REL), JSON.stringify(plan0, null, 2) + "\n");
+  const { r } = run(p, false);
+  const s = r.steps[0];
+  check(`a recorded report path verify-build cannot read is not taken for the set's report: no misleading reportSha256 skip (got ${s?.kind === "skip" ? s.why[0] : s?.kind})`,
+    s?.kind === "rename" && s.to === "Crates__80_1");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 

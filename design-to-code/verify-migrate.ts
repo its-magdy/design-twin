@@ -13,15 +13,19 @@
 //     retired and never becomes the base; "-" is not read this way (layer names hold dashes). Any other name is the
 //     base (a nickname). Two sets of one node that extend nothing are skipped (which one is the screen is a person's call);
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
-//     every reader skips) — unless a plan's verification.recorded names the legacy report (re-record first: skipped);
-//   - else every file of the set (`<S>.*`, `<S>-*`; a file of a longer set name belongs to that set) is renamed, a
-//     case-only rename through a temp name. Refused when a new name is taken; each move is a hard link then an unlink
+//     every reader skips) and its other files stay under `<S>` — unless a plan's verification.recorded names the
+//     legacy report (re-record first: skipped);
+//   - else every file of the set is renamed: `<S>.*`, and of `<S>-*` only `<S>-diff.png` and what the set's measured
+//     file or report lists in `artifacts` (any other may be another screen's); a file of a longer set name belongs to
+//     that set. A case-only rename goes through a temp name. Refused when a new name is taken; each move is a hard link then an unlink
 //     (link refuses an existing name), so a name taken meanwhile is never replaced (a disk without hard links: a rename
 //     after an existence check, under the status locks). Bytes a sha256 binds (the expectation,
 //     measured file, report, evidence) are never rewritten — only file names change;
 //   - a plan that names the set's files is rewritten under its lock: verification.recorded.report, .a11y.report and
 //     .artifacts together (recordFacts makes a11y.report the report path, so changing one alone reads as a hand edit),
-//     and the hand-owned verification.a11y.report (said in a note). Never screen/file/nodeId (planHash covers them). The
+//     and the hand-owned verification.a11y.report and verification.artifacts (each said in a note). Each path is read as
+//     verify-build reads it (only verification.a11y.report may be relative to the plan file, or a bare file name).
+//     Never screen/file/nodeId (planHash covers them). The
 //     hook's record is re-stamped only when it matched the plan under the older formula (legacyPlanHash), as
 //     --record-plan does. Before anything moves: a plan whose record was edited by hand (verify-build recordedEdits), or
 //     whose reportSha256 no longer names the report on disk (a rename would hide that), skips the set;
@@ -60,6 +64,7 @@ import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from ".
 import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
 import type { ReportRef } from "./verify-locate.ts";
 import { getOrInit } from "./map-util.ts";
+import { readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
 
@@ -112,35 +117,40 @@ function openRunOf(base: string): string | null {
 
 // ---------------------------------------------------------------- the paths a plan names
 
-type RefField = "verification.recorded.report" | "verification.recorded.a11y.report" | "verification.recorded.artifacts" | "verification.a11y.report";
+type RefField = "verification.recorded.report" | "verification.recorded.a11y.report" | "verification.recorded.artifacts" | "verification.a11y.report" | "verification.artifacts";
+/** The fields a person writes (not --record-plan): rewriting one is said in a note. */
+const HAND_FIELDS: readonly RefField[] = ["verification.a11y.report", "verification.artifacts"];
 /** Every path in the plan's verification that may name a verify file — `map` gives each one's new spelling (null: not
  *  one of the set's files). With `write`, the plan is changed in place. The fields changed, in order. */
-function rewriteRefs(plan: Plan, map: (ref: string) => string | null, write: boolean): RefField[] {
+function rewriteRefs(plan: Plan, map: (ref: string, field: RefField) => string | null, write: boolean): RefField[] {
   const changed: RefField[] = [];
   const v: unknown = plan.verification;
   if (!isJsonObject(v)) return changed;
   const one = (o: Record<string, unknown>, key: string, field: RefField): void => {
     const ref = o[key];
     if (typeof ref !== "string") return;
-    const to = map(ref);
+    const to = map(ref, field);
     if (to === null) return;
     if (write) o[key] = to;
     if (!changed.includes(field)) changed.push(field);
+  };
+  const list = (arts: unknown, field: RefField): void => {
+    if (Array.isArray(arts)) arts.forEach((a, i) => {
+      if (typeof a !== "string") return;
+      const to = map(a, field);
+      if (to === null) return;
+      if (write) arts[i] = to;
+      if (!changed.includes(field)) changed.push(field);
+    });
   };
   const rec = v.recorded;
   if (isJsonObject(rec)) {
     one(rec, "report", "verification.recorded.report");
     if (isJsonObject(rec.a11y)) one(rec.a11y, "report", "verification.recorded.a11y.report");
-    const arts = rec.artifacts;
-    if (Array.isArray(arts)) arts.forEach((a, i) => {
-      if (typeof a !== "string") return;
-      const to = map(a);
-      if (to === null) return;
-      if (write) arts[i] = to;
-      if (!changed.includes("verification.recorded.artifacts")) changed.push("verification.recorded.artifacts");
-    });
+    list(rec.artifacts, "verification.recorded.artifacts");
   }
   if (isJsonObject(v.a11y)) one(v.a11y, "report", "verification.a11y.report");
+  list(v.artifacts, "verification.artifacts");
   return changed;
 }
 
@@ -192,7 +202,7 @@ export function migrate(opts: MigrateOpts): MigrateResult {
   for (const s of steps) {
     if (s.kind === "skip") { skip(result, s.set, s.why); continue; }
     if (s.kind === "retire") {
-      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path.join(verifyDir, s.canonical))})`);
+      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path.join(verifyDir, s.canonical))}; its other files stay under ${s.set})`);
     } else {
       out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
       for (const f of s.files) out(`  rename  ${path.basename(f.from)} -> ${path.basename(f.to)}`);
@@ -223,9 +233,11 @@ function readPlans(planDir: string, cwd: string): PlanText[] {
   return out;
 }
 
-/** The verify file a plan's path names — project-relative or absolute, relative to the plan file, or a bare file name —
- *  as its file name in the verify dir; null for any other path. */
-function namedFile(ref: string, planFile: string, d: { cwd: string; verifyDir: string }): string | null {
+/** The verify file a plan's path names, as its file name in the verify dir; null for any other path. Read as verify-build
+ *  reads that field: verification.a11y.report project-relative or absolute, relative to the plan file, or a bare file
+ *  name (a11yReportOf); every other field project-relative or absolute only (reportRecordNames, the artifact checks). */
+function namedFile(ref: string, field: RefField, planFile: string, d: { cwd: string; verifyDir: string }): string | null {
+  if (field !== "verification.a11y.report") { const abs = path.resolve(d.cwd, ref); return path.dirname(abs) === d.verifyDir ? path.basename(abs) : null; }
   for (const abs of [path.resolve(d.cwd, ref), path.resolve(path.dirname(planFile), ref)]) {
     if (path.dirname(abs) === d.verifyDir) return path.basename(abs);
   }
@@ -240,7 +252,7 @@ function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: s
   if (edits.length) return [`${p.rel} has a hand-edited record — fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
   const rec = recordedReport(p.plan);
   if (rec) {
-    const name = namedFile(rec.report, p.file, d);
+    const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
       return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
     }
@@ -268,17 +280,33 @@ function nameOnlyBlocks(plans: readonly PlanText[], set: string, id: string, d: 
     planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd)) === id ? [] : [`${p.rel} finds this set only by its name — add \`"nodeId": "${id}"\` to it, then --migrate`]);
 }
 
+/** The `<set>-…` files that are the set's: `<set>-diff.png`, and every one its measured file or its report lists in
+ *  `artifacts` (a hand-taken `<set>-dark.png`, `<set>-<state>.png`). Any other `<set>-…` name may be another screen's
+ *  (`Crates-detail.png` of a screen named `Crates-detail`) and stays where it is. */
+function dashFiles(verifyDir: string, set: string): Set<string> {
+  const own = new Set<string>([`${set}-diff.png`]);
+  for (const tail of [".measured.json", ".report.json"]) {
+    const doc = readJsonOrNull(path.join(verifyDir, set + tail), isJsonObject);
+    const arts = doc && Array.isArray(doc.artifacts) ? doc.artifacts : [];
+    for (const a of arts) if (typeof a === "string" && path.basename(a).startsWith(set + "-")) own.add(path.basename(a));
+  }
+  return own;
+}
+
 /** What --migrate would do, computed from the disk now (nothing written). */
 export function planMigration(d: Dirs): MigrateStep[] {
   const sets = allSets(d.verifyDir);
   if (!sets.length) return [];
-  // each file of the dir belongs to the LONGEST set name it starts with, followed by "." or "-" (retired sets count:
-  // their files are theirs)
+  // each file of the dir belongs to the LONGEST set name it starts with, followed by "." or "-" — a "-" file only when
+  // that set owns it (dashFiles), else to no set (retired sets count: their files are theirs)
   const names = sets.map((s) => s.name).sort((a, b) => b.length - a.length);
+  const dashCache = new Map<string, Set<string>>();
+  const ownsDash = (set: string, file: string): boolean => getOrInit(dashCache, set, () => dashFiles(d.verifyDir, set)).has(file);
   const filesOf = new Map<string, string[]>();
   for (const e of fs.readdirSync(d.verifyDir, { withFileTypes: true })) {
     if (!e.isFile()) continue;
-    const owner = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    const longest = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    const owner = longest !== undefined && (e.name.startsWith(longest + ".") || ownsDash(longest, e.name)) ? longest : undefined;
     if (owner !== undefined) filesOf.set(owner, [...(filesOf.get(owner) ?? []), e.name]);
   }
   const live = sets.filter((s) => !s.retired).map((s) => s.name);
@@ -378,7 +406,7 @@ export function planMigration(d: Dirs): MigrateStep[] {
       const report = name + ".report.json";
       if (to === T && baseExists) {
         // the node's canonical set is there: this one is history — unless a plan still records its report
-        const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, p.file, d) === report; }).map((p) => p.rel);
+        const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report; }).map((p) => p.rel);
         if (recording.length) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and ${recording.join(", ")} still record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${T}, then --migrate`] }); continue; }
         const byName = nameOnlyBlocks(plans, name, id, d, refsOf);
         if (byName.length) { steps.push({ kind: "skip", set: name, why: byName }); continue; }
@@ -398,7 +426,7 @@ export function planMigration(d: Dirs): MigrateStep[] {
       const blocks: string[] = [];
       for (const p of plans) {
         const used = new Map<string, string>();
-        rewriteRefs(p.plan, (ref) => { const n = namedFile(ref, p.file, d); const nn = n === null ? undefined : nameMap.get(n); if (n !== null && nn !== undefined) used.set(n, nn); return null; }, false);
+        rewriteRefs(p.plan, (ref, field) => { const n = namedFile(ref, field, p.file, d); const nn = n === null ? undefined : nameMap.get(n); if (n !== null && nn !== undefined) used.set(n, nn); return null; }, false);
         if (!used.size) continue;
         blocks.push(...planBlocks(p, nameMap, d));
         edits.push({ file: p.file, rel: p.rel, names: used });
@@ -581,7 +609,7 @@ function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: stri
     if (open) return { why: [open], notes: [] };
     const report = s.set + ".report.json";
     const plans = readPlans(d.planDir, d.cwd);
-    const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, p.file, d) === report; });
+    const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report; });
     if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
@@ -625,7 +653,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
     if (exists(journal)) return { why: [`${path.basename(journal)} already exists — run --migrate again (it rolls that migration back first)`], notes };
     const plans = readPlans(d.planDir, d.cwd);
     const nameMap = new Map(s.files.map((m) => [path.basename(m.from), path.basename(m.to)] as const));
-    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref) => { const n = namedFile(ref, p.file, d); return n !== null && nameMap.has(n) ? "" : null; }, false).length > 0);
+    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref, field) => { const n = namedFile(ref, field, p.file, d); return n !== null && nameMap.has(n) ? "" : null; }, false).length > 0);
     const refsOf = freshRefs(d);
     const blocks = [...touched.flatMap((p) => planBlocks(p, nameMap, d)), ...nameOnlyBlocks(plans, s.set, s.nodeId, d, refsOf)];
     if (blocks.length) return { why: blocks, notes };
@@ -664,7 +692,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
-        fields = rewriteRefs(plan, (ref) => { const n = namedFile(ref, p.file, d); const nn = n === null ? undefined : nameMap.get(n); return n !== null && nn !== undefined ? respell(ref, n, nn) : null; }, true);
+        fields = rewriteRefs(plan, (ref, field) => { const n = namedFile(ref, field, p.file, d); const nn = n === null ? undefined : nameMap.get(n); return n !== null && nn !== undefined ? respell(ref, n, nn) : null; }, true);
         if (restamp && hook) hook.planHash = planHash(plan);
         const after = formatPlan(plan, raw);
         w.before = raw;
@@ -673,7 +701,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
         return plan;
       });
       if (w.before !== undefined && w.after !== undefined) writes.push({ file: p.file, before: w.before, after: w.after });
-      if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) — rewritten to the renamed report`);
+      for (const f of HAND_FIELDS.filter((h) => fields.includes(h))) notes.push(`${p.rel}: ${f} is yours (hand-written) — rewritten to the renamed ${f === "verification.artifacts" ? "files" : "report"}`);
       crash();
     });
 
