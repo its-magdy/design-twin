@@ -732,13 +732,14 @@ function screenTags(a) {
     if (s !== null) knownSuffix.add(s);
   }
   const ownOf = (id) => {
-    if (want.has(id)) return id;
+    if (want.has(id)) return { id, by: "tag" };
     const viaAlias = alias.get(id);
-    if (viaAlias !== void 0) return viaAlias;
+    if (viaAlias !== void 0) return { id: viaAlias, by: "alias" };
     if (known.has(id)) return "";
     const s = suffix(id);
     if (s === null) return null;
-    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+    const viaPath = ownBySuffix.get(s);
+    return viaPath !== void 0 ? { id: viaPath, by: "path" } : knownSuffix.has(s) ? "" : null;
   };
   const visible = (el) => {
     const st = getComputedStyle(el);
@@ -758,28 +759,40 @@ function screenTags(a) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  const own = /* @__PURE__ */ new Map(), foreign = [];
+  const hits = /* @__PURE__ */ new Map(), foreign = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
     if (id === null) continue;
     const mine = ownOf(id);
     if (mine === "") continue;
     if (!visible(el)) continue;
-    if (mine !== null) {
-      const l = own.get(mine);
-      if (l) l.push(el);
-      else own.set(mine, [el]);
-    } else foreign.push({ id, el });
+    if (mine === null) {
+      foreign.push({ id, el });
+      continue;
+    }
+    let h = hits.get(mine.id);
+    if (!h) {
+      h = { tag: [], alias: [], path: [] };
+      hits.set(mine.id, h);
+    }
+    h[mine.by].push(el);
+  }
+  const own = /* @__PURE__ */ new Map();
+  let ambiguous = 0;
+  for (const [id, h] of hits) {
+    const els = h.tag.length ? h.tag : h.path.length === 1 ? h.path : h.alias.length === 1 ? h.alias : null;
+    if (els !== null) own.set(id, els);
+    else ambiguous++;
   }
   const shown = own.size;
   for (const { id, el } of foreign) {
     const r = el.getBoundingClientRect();
-    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, ambiguous, foreign: { id, by: "size", encloses: 0 } };
     let encloses = 0;
     for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
-    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+    if (shown > 0 && encloses * 2 > shown) return { shown, ambiguous, foreign: { id, by: "encloses", encloses } };
   }
-  return { shown, foreign: null };
+  return { shown, ambiguous, foreign: null };
 }
 function focusInfo(path10) {
   const el = document.querySelector(path10);
@@ -6532,6 +6545,11 @@ async function docTokenOrNull(page) {
     throw e;
   }
 }
+async function docTokenWithin(page, capMs) {
+  const read2 = docTokenOrNull(page);
+  read2.catch(() => void 0);
+  return Promise.race([read2, sleep5(Math.max(1, capMs), void 0, { ref: false })]);
+}
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
 var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
@@ -6570,7 +6588,8 @@ function screenTagsWhy(s, total) {
   if (f !== null) {
     return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
   }
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half)`;
+  const amb = s.ambiguous ?? 0;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count \u2014 tag them with their own ids` : ""})`;
 }
 function settleMiss(s) {
   if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";
@@ -6650,13 +6669,14 @@ async function settle(page, log, ready, timeout, root) {
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
-      const now = await docTokenOrNull(page);
-      if (now !== null && token !== null && now !== token) {
+      const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
+      const unanswered = now === void 0;
+      if (!unanswered && now !== null && token !== null && now !== token) {
         await newDocument();
         continue;
       }
-      const sameDocument = token !== null && token !== "" && now === token;
-      if (token === null && now !== null) token = now;
+      const sameDocument = token !== null && token !== "" && (unanswered || now === token);
+      if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") {
         await sleep5(POLL_MS3);
@@ -7950,6 +7970,7 @@ export {
   buildFrom,
   closeCapped,
   defaultReadyMissed,
+  docTokenWithin,
   driveOutcome,
   errorKind,
   foreignRootHint,

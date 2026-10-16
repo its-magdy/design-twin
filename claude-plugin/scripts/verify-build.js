@@ -2995,14 +2995,16 @@ function ownPlans(open, input, all, cwd) {
 }
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
-  const closed = (b) => {
-    const doc = readJsonOrNull(b.file, anyJson);
-    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
-  };
   return bad.filter((b) => {
     const rel = path8.relative(cwd, path8.resolve(b.file));
-    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b);
+    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b);
   });
+}
+function closedStatusOf(b) {
+  const doc = readJsonOrNull(b.file, anyJson);
+  if (!isJsonObject(doc) || typeof doc.status !== "string") return null;
+  const s = doc.status.trim().toLowerCase();
+  return /^(abandoned|awaiting-user)$/.test(s) ? s : null;
 }
 var USAGE2 = [
   `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
@@ -3114,11 +3116,14 @@ async function main(argv) {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path8.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
-    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f) => {
       const r = path8.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
+    for (const b of bad) {
+      const closed = closedStatusOf(b);
+      console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" \u2014 skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+    }
     const rows = plans.map((p) => {
       const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
       const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
@@ -3150,6 +3155,7 @@ async function main(argv) {
     if (input.stop_hook_active) return 0;
   }
   const asDecision = typeof input.hook_event_name === "string";
+  const thenAsk = input.hook_event_name === "SubagentStop" ? "then put the question in your report to the session that delegated this build" : "then ask the user";
   const said = [];
   const say = (s) => {
     console.error(s);
@@ -3183,7 +3189,7 @@ async function main(argv) {
     for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path8.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
       const rel = path8.relative(cwd, b.file);
-      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/`);
+      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
@@ -3215,7 +3221,8 @@ async function main(argv) {
   for (const l of lines) say(l);
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    if (checkBlocked) say('(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    if (checkBlocked) say(`(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${thenAsk}):
+`);
     else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;

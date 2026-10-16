@@ -336,12 +336,21 @@ interface NavLog {
 }
 
 /** The current document's token (INIT_SCRIPT) — null while a navigation has no document to evaluate in. */
-async function docTokenOrNull(page: Page): Promise<string | null> {
+async function docTokenOrNull(page: Pick<Page, "evaluate" | "isClosed">): Promise<string | null> {
   try { const v: unknown = await page.evaluate("window.__dtProbeDoc || ''"); return String(v); } catch (e) {
     if (errorKind(e, page) === "gone") throw gone(e);
     if (errorKind(e) === "navigated") return null;
     throw e;
   }
+}
+
+/** The current document's token as docTokenOrNull reads it (null: a navigation with no document to evaluate in), or
+ *  undefined when the page does not answer within `capMs` (a hung or busy main thread does not answer a page.evaluate):
+ *  no evidence of another document. */
+export async function docTokenWithin(page: Pick<Page, "evaluate" | "isClosed">, capMs: number): Promise<string | null | undefined> {
+  const read = docTokenOrNull(page);
+  read.catch(() => undefined); // a page gone after the race ended is the next call's to find
+  return Promise.race([read, sleep(Math.max(1, capMs), undefined, { ref: false })]);
 }
 
 /** What settle() found: a note for the measured file (or null), and the token of the document it saw quiet (the
@@ -398,15 +407,19 @@ export async function waitForScreenTags(page: Pick<Page, "evaluate" | "isClosed"
 /** The other screen's tagged root that refused a page, if any: only on a page that shows enough of the own tags (fewer
  *  is the reason on its own). */
 export const refusingRoot = (s: ScreenTags, total: number): ForeignRoot | null => (takesForScreen(s.shown, total) ? s.foreign : null);
-/** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half, else
- *  another screen's tagged root. */
+/** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half (and
+ *  how many more it carries only ambiguously: by ids this expectation does not name — an alias or the same component
+ *  path — on several elements each), else another screen's tagged root. */
 export function screenTagsWhy(s: ScreenTags, total: number): string {
   const f = refusingRoot(s, total);
   if (f !== null) {
     return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ` +
       `${f.by === "size" ? "has the frame's size (±2 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
   }
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half)`;
+  const amb = s.ambiguous ?? 0;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half${amb > 0
+    ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, ` +
+      "which do not count — tag them with their own ids" : ""})`;
 }
 
 /** What settle() does when its load / fonts / --ready wait threw on a document that is still the current one (a
@@ -525,11 +538,14 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
-      const now = await docTokenOrNull(page);
-      if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
+      // bounded like the look below: a page that does not answer (undefined) shows no other document, so it is taken
+      // as the one the wait ran on — the look then says it did not answer, or a busy page gets its look
+      const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
+      const unanswered = now === undefined;
+      if (!unanswered && now !== null && token !== null && now !== token) { await newDocument(); continue; }
       // the document the wait ran on is still the current one (an empty token tells no documents apart)
-      const sameDocument = token !== null && token !== "" && now === token;
-      if (token === null && now !== null) token = now;
+      const sameDocument = token !== null && token !== "" && (unanswered || now === token);
+      if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") { await sleep(POLL_MS); continue; }
       if (next === "kept") throw kept();

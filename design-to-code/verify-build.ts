@@ -1732,11 +1732,15 @@ function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null |
 // raw JSON because parsePlan, which fails on such a plan, never gets as far as the status.
 function ownBadPlans(bad: readonly BadPlan[], scan: TranscriptScan | undefined, cwd: string): BadPlan[] {
   if (!scan) return [];
-  const closed = (b: BadPlan): boolean => {
-    const doc = readJsonOrNull(b.file, anyJson);
-    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
-  };
-  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b); });
+  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b); });
+}
+
+// The closed status ("abandoned", "awaiting-user") the raw JSON of an unreadable plan holds, or null when it holds none.
+function closedStatusOf(b: BadPlan): string | null {
+  const doc = readJsonOrNull(b.file, anyJson);
+  if (!isJsonObject(doc) || typeof doc.status !== "string") return null;
+  const s = doc.status.trim().toLowerCase();
+  return /^(abandoned|awaiting-user)$/.test(s) ? s : null;
 }
 
 // ================================================================ CLI
@@ -1849,8 +1853,12 @@ async function main(argv: string[]): Promise<number> {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
-    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
+    // An unreadable plan whose raw JSON holds a closed status is given up on, as the Stop hook treats it: skipped, not unreadable
+    for (const b of bad) {
+      const closed = closedStatusOf(b);
+      console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" — skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+    }
     // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
     const rows = plans.map((p) => {
       const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
@@ -1883,6 +1891,9 @@ async function main(argv: string[]): Promise<number> {
   // PowerShell (Windows without Git Bash runs shell-form hooks there) a native exit 2 reaches Claude Code as 1, a
   // non-blocking error, so the gate would never block. The reason is everything printed to stderr, which exit 2 delivered.
   const asDecision = typeof input.hook_event_name === "string";
+  // A subagent (a screen-builder's SubagentStop) cannot ask the user: it hands the question back to the session that delegated it
+  const thenAsk = input.hook_event_name === "SubagentStop"
+    ? "then put the question in your report to the session that delegated this build" : "then ask the user";
   const said: string[] = [];
   const say = (s: string): void => { console.error(s); said.push(s); };
   const all: Array<{ p: PlanFile; cwd: string }> = [];
@@ -1913,7 +1924,7 @@ async function main(argv: string[]): Promise<number> {
     for (const b of badOwn) {
       const rel = path.relative(cwd, b.file);
       blockedOut.push(`# ${path.basename(b.file)}`, `  - ${rel} ${b.error} — you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. `
-        + "A plan you will not finish: set \"status\" to \"abandoned\" (or \"awaiting-user\", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/");
+        + `A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     // An agent that claims none of the open plans checks nothing — unless it broke a plan of its own (blocked above).
@@ -1962,7 +1973,7 @@ async function main(argv: string[]): Promise<number> {
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed — do not report this screen as done until these are resolved");
     // Setting a status closes a plan the hook can read; an unreadable plan has its own way out, stated in its item.
-    if (checkBlocked) say("(a plan that will not be finished: set its status to \"abandoned\", or move it out of design/plan/; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
+    if (checkBlocked) say(`(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${thenAsk}):\n`);
     else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;
