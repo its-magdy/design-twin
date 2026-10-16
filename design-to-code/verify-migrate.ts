@@ -50,7 +50,8 @@
 // bytes the migration wrote — then migrates as usual. A rollback that cannot finish keeps the journal and says what is
 // left. The verify tools read no dot file there (it names no set); the visual-verifier may not write one.
 // Not migrated: plans (never renamed), audit files, design/.sync snapshots, design/changes.
-// Exit: 0 nothing skipped, 1 a set skipped or refused (each says why), 2 usage.
+// Exit: 0 nothing skipped, 1 a set skipped or refused (each says why) or an interrupted migration awaiting its rollback
+// (a dry run, or an --apply whose rollback could not finish), 2 usage.
 import fs from "node:fs";
 import path from "node:path";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
@@ -184,7 +185,14 @@ export function migrate(opts: MigrateOpts): MigrateResult {
   const planDir = path.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== undefined ? path.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs: string): string => slash(path.relative(cwd, abs)) || ".";
-  const link = opts.link ?? fs.linkSync;
+  /** A path relative to the project (its own spelling or its real path, as the run cache names it), or absolute when it
+   *  is outside (a run cache in the OS temp dir). */
+  const roots = [cwd, ((): string => { try { return fs.realpathSync(cwd); } catch { return cwd; } })()];
+  const shownAnywhere = (abs: string): string => {
+    for (const root of roots) { const rel = path.relative(root, abs); if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return slash(rel); }
+    return slash(abs);
+  };
+  const link =opts.link ?? fs.linkSync;
   const skip =(result: MigrateResult, set: string, why: string[]): void => {
     result.skipped.push({ set, why });
     err(`skip    ${shown(path.join(verifyDir, set))}: ${why[0] ?? ""}`);
@@ -220,6 +228,9 @@ export function migrate(opts: MigrateOpts): MigrateResult {
     } else {
       out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
       for (const f of s.files) out(`  rename  ${path.basename(f.from)} -> ${path.basename(f.to)}`);
+      // the live status in the run cache moves too, when the new name has none (as applyRename decides)
+      const liveOld = liveStatusFile(path.join(verifyDir, s.set)), liveNew = liveStatusFile(path.join(verifyDir, s.to));
+      if (exists(liveOld) && !exists(liveNew)) out(`  live    ${shownAnywhere(liveOld)} -> ${path.basename(liveNew)}`);
       for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
     }
     if (!opts.apply) continue;

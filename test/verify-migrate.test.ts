@@ -137,6 +137,9 @@ console.log("\nthe live status moves with the set; the hook's record is re-stamp
   const v = must(plan0.verification, "verification");
   v.hook = { result: "pass", checkedAt: NOW, blocking: [], warnings: 0, planHash: legacyPlanHash(plan0), files: {} };
   fs.writeFileSync(path.join(p.root, REL), JSON.stringify(plan0, null, 2) + "\n");
+  const dry = run(p, false);
+  check(`the dry run lists the live status among what moves (got ${JSON.stringify(dry.out.filter((l) => l.startsWith("  live")))})`,
+    dry.out.includes("  live    node_modules/.cache/designtwin-verify/Crates.status.json -> Crates__80_1.status.json"));
   const { r, err } = run(p, true);
   const plan = p.plan();
   check(`migrated (got ${JSON.stringify(r.done)}; ${err.join(" | ")})`, JSON.stringify(r.done) === JSON.stringify(["Crates"]));
@@ -299,6 +302,8 @@ for (const [when, at] of [["after 3 of the moves", (a: { moved: number; plansWri
   const dry = run(p, false);
   check(`…a dry run reports it, plans nothing, writes nothing (got ${JSON.stringify(dry.r.skipped.map((s) => s.why[0]))})`,
     dry.r.steps.length === 0 && dry.r.skipped.length === 1 && /an interrupted migration of Crates -> Crates__80_1 .* left design\/verify\/\.migrate-Crates\.json — --migrate --apply rolls it back first/.test(dry.r.skipped[0]?.why[0] ?? "") && snap() === half);
+  const dryCli = cli(p, "--migrate");
+  check(`…the CLI's dry run exits 1 while it awaits its rollback (got ${dryCli.status})`, dryCli.status === 1 && snap() === half);
   const back = run(p, true, { postCheck: () => ["held here, to see the rolled-back disk"] });
   check(`…--apply rolls it back first, and the journal is gone (got rolledBack ${JSON.stringify(back.r.rolledBack)}; ${back.out.find((l) => l.startsWith("rolled back")) ?? "no 'rolled back' line"})`,
     JSON.stringify(back.r.rolledBack) === JSON.stringify(["Crates"]) && !fs.existsSync(journal));
@@ -524,6 +529,8 @@ console.log("\nthe CLI's usage:");
   const h = cli(p, "--help");
   check(`--apply without --migrate, --migrate with --out or a file: exit 2 (got ${a.status}, ${b.status}, ${c.status})`, a.status === 2 && b.status === 2 && c.status === 2 && /--migrate takes none of --out/.test(b.stderr));
   check("--help lists --migrate [--apply] [--dir design/verify]", h.status === 0 && /--migrate \[--apply\] \[--dir design\/verify\]/.test(h.stdout));
+  check("…and its exit codes: 1 for a skip, a refusal or an interrupted migration awaiting its rollback",
+    /exit \(--migrate\): 0 nothing skipped · 1 a set skipped or refused, or an interrupted migration awaits its rollback \(a dry run,\s+or --apply whose rollback could not finish\) · 2 usage\./.test(h.stdout));
   const d = cli(p, "--migrate", "--dir", "design/nowhere");
   check(`--dir naming no directory: exit 2 (got ${d.status})`, d.status === 2);
   fs.rmSync(p.root, { recursive: true, force: true });

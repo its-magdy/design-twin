@@ -239,7 +239,8 @@ function main(argv: string[]): number | Promise<number> {
     "      nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes\n" +
     "      unless written again since), then migrates.\n" +
     "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).\n" +
-    "exit (--migrate): 0 nothing skipped · 1 a set skipped or refused · 2 usage.";
+    "exit (--migrate): 0 nothing skipped · 1 a set skipped or refused, or an interrupted migration awaits its rollback (a dry run,\n" +
+    "      or --apply whose rollback could not finish) · 2 usage.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
   const OPTIONS = {

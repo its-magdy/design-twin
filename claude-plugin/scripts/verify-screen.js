@@ -6093,6 +6093,20 @@ function migrate(opts) {
   const planDir = path15.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== void 0 ? path15.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs) => slash2(path15.relative(cwd, abs)) || ".";
+  const roots = [cwd, (() => {
+    try {
+      return fs16.realpathSync(cwd);
+    } catch {
+      return cwd;
+    }
+  })()];
+  const shownAnywhere = (abs) => {
+    for (const root of roots) {
+      const rel = path15.relative(root, abs);
+      if (rel && !rel.startsWith("..") && !path15.isAbsolute(rel)) return slash2(rel);
+    }
+    return slash2(abs);
+  };
   const link = opts.link ?? fs16.linkSync;
   const skip = (result2, set, why) => {
     result2.skipped.push({ set, why });
@@ -6142,6 +6156,8 @@ function migrate(opts) {
     } else {
       out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path15.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
       for (const f of s.files) out(`  rename  ${path15.basename(f.from)} -> ${path15.basename(f.to)}`);
+      const liveOld = liveStatusFile(path15.join(verifyDir, s.set)), liveNew = liveStatusFile(path15.join(verifyDir, s.to));
+      if (exists2(liveOld) && !exists2(liveNew)) out(`  live    ${shownAnywhere(liveOld)} -> ${path15.basename(liveNew)}`);
       for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
     }
     if (!opts.apply) continue;
@@ -6889,7 +6905,8 @@ function main(argv) {
       nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes
       unless written again since), then migrates.
 exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).
-exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused \xB7 2 usage.`;
+exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an interrupted migration awaits its rollback (a dry run,
+      or --apply whose rollback could not finish) \xB7 2 usage.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     return argv.length ? 0 : 2;
