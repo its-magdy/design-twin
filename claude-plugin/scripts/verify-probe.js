@@ -732,13 +732,14 @@ function screenTags(a) {
     if (s !== null) knownSuffix.add(s);
   }
   const ownOf = (id) => {
-    if (want.has(id)) return id;
+    if (want.has(id)) return { id, by: "tag" };
     const viaAlias = alias.get(id);
-    if (viaAlias !== void 0) return viaAlias;
+    if (viaAlias !== void 0) return { id: viaAlias, by: "alias" };
     if (known.has(id)) return "";
     const s = suffix(id);
     if (s === null) return null;
-    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+    const viaPath = ownBySuffix.get(s);
+    return viaPath !== void 0 ? { id: viaPath, by: "path" } : knownSuffix.has(s) ? "" : null;
   };
   const visible = (el) => {
     const st = getComputedStyle(el);
@@ -758,18 +759,28 @@ function screenTags(a) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  const own = /* @__PURE__ */ new Map(), foreign = [];
+  const hits = /* @__PURE__ */ new Map(), foreign = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
     if (id === null) continue;
     const mine = ownOf(id);
     if (mine === "") continue;
     if (!visible(el)) continue;
-    if (mine !== null) {
-      const l = own.get(mine);
-      if (l) l.push(el);
-      else own.set(mine, [el]);
-    } else foreign.push({ id, el });
+    if (mine === null) {
+      foreign.push({ id, el });
+      continue;
+    }
+    let h = hits.get(mine.id);
+    if (!h) {
+      h = { tag: [], alias: [], path: [] };
+      hits.set(mine.id, h);
+    }
+    h[mine.by].push(el);
+  }
+  const own = /* @__PURE__ */ new Map();
+  for (const [id, h] of hits) {
+    const els = h.tag.length ? h.tag : h.path.length === 1 ? h.path : h.alias.length === 1 ? h.alias : null;
+    if (els !== null) own.set(id, els);
   }
   const shown = own.size;
   for (const { id, el } of foreign) {

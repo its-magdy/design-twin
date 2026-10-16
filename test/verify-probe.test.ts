@@ -760,6 +760,13 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     const knownAlias = look(el(null, 1440, 900, [el("9:7", 1280, 800, [el("1:2", 10, 10), el("1:3", 10, 10)])]), { ids: ["1:2", "1:3"], known: ["1:1", "1:2", "1:3", "9:6", "9:7"], frame });
     t("[ready] …an element tagged with an alias of another root's node (known, not own) is neither counted nor foreign", () =>
       knownAlias.shown === 2 && knownAlias.foreign === null);
+    // the measurement's rule for a tag that is not the node's own: exactly one visible element, several are ambiguous
+    const oneRule = { ids: ["1:2", "I1:5;3:4", "1:3"], known: ["1:1", "1:2", "I1:5;3:4", "1:3", "8:2", "8:3"], alias: { "8:2": "1:2", "8:3": "1:2" }, frame };
+    const twoEach = look(el(null, 1440, 900, [el("8:2", 100, 20), el("8:3", 100, 20), el("I8:5;3:4", 100, 20), el("I9:5;3:4", 100, 20), el("1:3", 100, 20), el("1:3", 100, 20)]), oneRule);
+    t("[ready] screenTags: an own node whose aliases tag 2 visible elements, or whose component path tags 2, is not shown (ambiguous, as the measurement reads it); its own tag on 2 still is (1 of 3)", () =>
+      twoEach.shown === 1 && twoEach.foreign === null);
+    const oneEach = look(el(null, 1440, 900, [el("8:2", 100, 20), el("8:3", 100, 20, [], {}, false), el("I8:5;3:4", 100, 20), el("I9:5;3:4", 0, 0), el("1:3", 100, 20)]), oneRule);
+    t("[ready] …an alias or a component path on one visible element (the other copy hidden) is shown (3 of 3)", () => oneEach.shown === 3);
   }
 
   // --steps with a plan that has no navigate list: no steps, a note — never exit 2

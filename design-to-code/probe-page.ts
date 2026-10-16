@@ -665,7 +665,8 @@ export interface ScreenTags { shown: number; foreign: ForeignRoot | null }
 /** How far a page whose frame tag is missing looks like the screen: how many of `ids` tag at least one visible element,
  *  and another screen's tagged root on it, if any (ForeignRoot). An own node shows by its own tag, or as the
  *  measurement matches a shared shell kept from another screen: by a tag that is one of its aliases (tag-alias), or
- *  an id with the same component path — the part after the first `;` (tag-shared-path); a tag with a known id's
+ *  an id with the same component path — the part after the first `;` (tag-shared-path), each only when exactly one
+ *  visible element carries it (several are ambiguous, never measured); a tag with a known id's
  *  component path is known too. Visible as Playwright reads it: a display:contents element by its children (a visible
  *  child element or a text node with a box), any other one by checkVisibility(), visibility "visible" and a box with a
  *  size. SELF-CONTAINED. */
@@ -675,15 +676,16 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
   const ownBySuffix = new Map<string, string>(), knownSuffix = new Set<string>();
   for (const id of a.ids) { const s = suffix(id); if (s !== null && !ownBySuffix.has(s)) ownBySuffix.set(s, id); }
   for (const id of a.known) { const s = suffix(id); if (s !== null) knownSuffix.add(s); }
-  /** the own node a tag shows (its own id, an alias, the same component path), "" for another known node's, else null */
-  const ownOf = (id: string): string | null => {
-    if (want.has(id)) return id;
+  /** the own node a tag shows and how (its own id, an alias, the same component path), "" for another known node's, else null */
+  const ownOf = (id: string): { id: string; by: "tag" | "alias" | "path" } | "" | null => {
+    if (want.has(id)) return { id, by: "tag" };
     const viaAlias = alias.get(id);
-    if (viaAlias !== undefined) return viaAlias;
+    if (viaAlias !== undefined) return { id: viaAlias, by: "alias" };
     if (known.has(id)) return "";
     const s = suffix(id);
     if (s === null) return null;
-    return ownBySuffix.get(s) ?? (knownSuffix.has(s) ? "" : null);
+    const viaPath = ownBySuffix.get(s);
+    return viaPath !== undefined ? { id: viaPath, by: "path" } : knownSuffix.has(s) ? "" : null;
   };
   const visible = (el: PageElement): boolean => {
     const st = getComputedStyle(el);
@@ -702,14 +704,25 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  const own = new Map<string, PageElement[]>(), foreign: Array<{ id: string; el: PageElement }> = [];
+  /** an own node's visible elements, by how their tags show it */
+  const hits = new Map<string, { tag: PageElement[]; alias: PageElement[]; path: PageElement[] }>(), foreign: Array<{ id: string; el: PageElement }> = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
     const id = el.getAttribute("data-dt-node");
     if (id === null) continue;
     const mine = ownOf(id);
     if (mine === "") continue;
     if (!visible(el)) continue;
-    if (mine !== null) { const l = own.get(mine); if (l) l.push(el); else own.set(mine, [el]); } else foreign.push({ id, el });
+    if (mine === null) { foreign.push({ id, el }); continue; }
+    let h = hits.get(mine.id);
+    if (!h) { h = { tag: [], alias: [], path: [] }; hits.set(mine.id, h); }
+    h[mine.by].push(el);
+  }
+  // As the measurement matches: an own tag on any visible element shows the node; an alias or a component path only on
+  // exactly one visible element (several are ambiguous, and the measurement does not measure the node)
+  const own = new Map<string, PageElement[]>();
+  for (const [id, h] of hits) {
+    const els = h.tag.length ? h.tag : h.path.length === 1 ? h.path : h.alias.length === 1 ? h.alias : null;
+    if (els !== null) own.set(id, els);
   }
   const shown = own.size;
   for (const { id, el } of foreign) {
