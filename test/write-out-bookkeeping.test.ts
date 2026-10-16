@@ -11,6 +11,7 @@ import { ok, report } from "./assert.ts";
 import { node, screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { Asset, IrNode, ScreenExport } from "../bridge/src/doc-types.ts";
 
 const t = (name: string, cond: () => boolean): void => {
@@ -145,6 +146,41 @@ console.log("\ncross-screen hidden reuse reads other screens' .assets.json throu
   const b1 = pull(broken, "Settings", "8", hidden("8", "k-tab"));
   t("a malformed other .assets.json offers no twin (and does not throw)", () => reusedFrom(b1, "8") === undefined);
   for (const d of [stale, fresh, broken]) fs.rmSync(d, { recursive: true, force: true });
+}
+
+// ------------------------------------------------------------------ one row per node: stem and index agree, a rename replaces its row
+console.log("\na screen's stem and its index row name one node, and a frame renamed in Figma keeps one row:");
+{
+  interface Row { id?: unknown; name?: unknown; file?: unknown; sourceFile?: unknown }
+  const rowsOf = (dir: string, rel: string): Row[] => {
+    const doc: unknown = JSON.parse(fs.readFileSync(path.join(dir, rel), "utf8"));
+    const layers = doc && typeof doc === "object" && "layers" in doc && Array.isArray(doc.layers) ? doc.layers : [];
+    return layers.filter((l): l is Row => !!l && typeof l === "object");
+  };
+  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string } = {}): void => {
+    writeOut.writeScreen(dir, screenReply({
+      screenName: name, page: "Page", pageId: "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+      screen: { screen: name, exportedAt: "2026-10-06T00:00:00.000Z", nodes: [{ id: "5:1", type: "FRAME", name }], manifest: { nodes: 1 } },
+    }));
+  };
+  const noId = tmp("stem-root");
+  pullAs(noId, "Tray");
+  const root0 = rowsOf(noId, path.join("pages", "index.json"));
+  t("a reply naming no nodeId files under its root node's id, and the index row names that file and id", () =>
+    fs.existsSync(path.join(noId, "pages", "Page", "Tray__5_1.json")) && root0.length === 1 && root0[0]?.id === "5:1" && root0[0]?.file === "pages/Page/Tray__5_1.json");
+
+  const ren = tmp("stem-rename");
+  pullAs(ren, "Tray", { nodeId: "5:1", sourceFile: "Sample File" });
+  pullAs(ren, "Tray Panel", { nodeId: "5:1", sourceFile: "Sample File" });
+  const rootRows = rowsOf(ren, path.join("pages", "index.json")), pageRows = rowsOf(ren, path.join("pages", "Page", "index.json"));
+  t("re-pulled under a new name: ONE row for the node in the root index and in the page index, naming the new file", () =>
+    rootRows.filter((r) => r.id === "5:1").length === 1 && pageRows.filter((r) => r.id === "5:1").length === 1
+    && rootRows[0]?.file === "pages/Page/Tray_Panel__5_1.json" && pageRows[0]?.name === "Tray Panel");
+  const byId = resolveScreen(ren, "5:1");
+  t("…so a lookup by the node id resolves it", () => byId.status === "resolved" && byId.row.name === "Tray Panel");
+  pullAs(ren, "Tray Other", { nodeId: "5:1", sourceFile: "Other File" });
+  t("the same node id from another Figma file (another name, so another file) is another row", () => rowsOf(ren, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length === 2);
+  for (const d of [noId, ren]) fs.rmSync(d, { recursive: true, force: true });
 }
 
 report();

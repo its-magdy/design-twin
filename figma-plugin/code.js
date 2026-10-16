@@ -36,6 +36,9 @@
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
   }
+  function screenStem(name, id) {
+    return safe(name || "layer") + "__" + safe(id);
+  }
   var shown = (c) => !!c && typeof c === "object" && !c.hidden;
   function firstByName(node, name) {
     if (!node || typeof node !== "object") return null;
@@ -130,7 +133,7 @@
         byPage.set(key, bucket);
         pages.push(bucket);
       }
-      const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+      const base = screenStem(l.name, l.id) + ".json";
       const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
       layerFiles.push({
         path: join(bucket.dir, base),

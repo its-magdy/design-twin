@@ -27,7 +27,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { check as ok, report } from "./assert.ts";
-import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths } from "../bridge/src/pages-layout.ts";
+import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths, screenStem } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
@@ -374,6 +374,16 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
     const layerStem = path.basename(must(pl.layerFiles[0], "a layer file").path, ".json");
     ok(`[stem] ${id}: screenPaths' base (${sp.base}) and the page layout's file stem (${layerStem}) both read back as ${id}`,
       nodeIdFromStem(sp.base) === id && nodeIdFromStem(layerStem) === id && nodeIdFromSafe(safe(id)) === id);
+    ok(`[stem] ${id}: both pull shapes give the same stem, screenStem's (${screenStem("Odd  name / ü_", id)})`,
+      sp.base === layerStem && layerStem === screenStem("Odd  name / ü_", id));
+  }
+  {
+    // a reply without a top-level nodeId: the root node's id names the file, as it keys the index row
+    const viaRoot = screenPaths({ screenName: "Tray", page: "P", screen: { nodes: [{ id: "4:9" }] } }, "/");
+    ok(`[stem] a reply naming no nodeId files under its root node's id (got ${viaRoot.base})`, viaRoot.base === "Tray__4_9" && viaRoot.nodeId === "4:9");
+    const bare = screenPaths({ screenName: "Tray", page: "P" }, "/");
+    ok("[stem] control: with no id anywhere the base carries none", bare.base === "Tray" && bare.nodeId === null);
+    ok("[stem] a nameless layer's stem is `layer__<id>`", screenStem(undefined, "1:2") === "layer__1_2" && screenStem("", "1:2") === "layer__1_2");
   }
   const table: Array<[string, string | null]> = [
     ["Foo__12_34", "12:34"], ["Foo____12_34", "12:34"], ["a__b__12_34", "12:34"], ["__12_34", "12:34"],
