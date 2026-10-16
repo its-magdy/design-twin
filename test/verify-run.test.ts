@@ -892,8 +892,8 @@ await block("verify-probe --run current:", async () => {
   const opened = queuedDoc("run-new2");
   const p2 = probe("run-old", { DT_TEST_ON: "load", DT_TEST_DOC: opened });
   safe("…run-new2 opens after the start check, before the `measuring` write → that write is refused under the lock: exit 2, not 3; run-new2's status byte-identical; no files",
-    () => p2.status === 2 && p2.stderr.includes("verify-probe: run run-old is not the current run of Plots: run run-new2 is open (phase queued, rev 1, by orchestrator, ")
-      && p2.stderr.includes("— it opened while this probe ran") && fs.readFileSync(live, "utf8") === opened && noFiles());
+    () => p2.status === 2 && p2.stderr.includes("verify-probe: another run opened while this probe ran — run run-old is not the current run of Plots: run run-new2 is open (phase queued, rev 1, by orchestrator, ")
+      && /end it \([^\n]*--phase failed --run run-new2 --dir [^\n]*\)\n/.test(p2.stderr) && fs.readFileSync(live, "utf8") === opened && noFiles());
   if (p2.status !== 2) console.log(p2.stderr);
 
   // run-new3 opens after the `measuring` write, before the exit-3 failed-attempt write
@@ -902,7 +902,7 @@ await block("verify-probe --run current:", async () => {
   const opened3 = queuedDoc("run-new3");
   const p3 = probe("run-old2", { DT_TEST_ON: "launch", DT_TEST_DOC: opened3 });
   safe("…run-new3 opens after the `measuring` write → the exit-3 attempt write is refused (never counted over run-new3): exit 2, not 3; run-new3's status byte-identical; no attempt line",
-    () => p3.status === 2 && p3.stderr.includes("verify-probe: run run-old2 is not the current run of Plots: run run-new3 is open (phase queued, rev 1, by orchestrator, ")
+    () => p3.status === 2 && p3.stderr.includes("verify-probe: another run opened while this probe ran — run run-old2 is not the current run of Plots: run run-new3 is open (phase queued, rev 1, by orchestrator, ")
       && fs.readFileSync(live, "utf8") === opened3 && !/failed probe attempt|^status run /m.test(p3.stderr) && noFiles());
   if (p3.status !== 2) console.log(p3.stderr);
 
@@ -938,7 +938,7 @@ await block("writeStatus replaced:", async () => {
   safe("a `current` write of run-x over run-y, which has ended (done) → rev 1 of run-x with replaced {runId run-y, phase done, at = run-y's last write}", () =>
     xDoc.rev === 1 && JSON.stringify(xDoc.replaced) === JSON.stringify({ runId: "run-y", phase: "done", at: yDoc.at }) && JSON.stringify(readStatusFile(live)?.replaced) === JSON.stringify(xDoc.replaced));
   safe("replacedNote: one line naming both runs, the replaced run's phase and time", () =>
-    VR.replacedNote(xDoc) === `note  run run-x replaced run run-y (ended at done, ${yDoc.at}) in the live status — recorded as \`replaced\` in run run-x's status`);
+    VR.replacedNote(xDoc) === `note  run run-x replaced run run-y (ended at done, ${yDoc.at}) as the screen's last run — recorded as \`replaced\` in run run-x's status`);
   const x2 = VR.writeStatus(base, { runId: "run-x", phase: "driving", by: "agent" }, { current: true });
   const x3 = VR.writeStatus(base, { runId: "run-x", phase: "driving", by: "orchestrator" });
   safe("…carried forward within the run (rev 2, rev 3 without `current`), and no note for those writes", () =>
@@ -971,7 +971,7 @@ await block("writeStatus replaced:", async () => {
   const late = cli("--status", "Plots", "--phase", "driving", "--run", "run-late");
   safe("verify-screen --status --run run-late over run-z, which has ended (blocked) → exit 0, rev 1, one note line naming run-z", () =>
     late.status === 0 && late.stdout.trim() === "run run-late rev 1"
-      && late.stderr.split("\n").filter((l) => l === `note  run run-late replaced run run-z (ended at blocked, ${zAt}) in the live status — recorded as \`replaced\` in run run-late's status`).length === 1);
+      && late.stderr.split("\n").filter((l) => l === `note  run run-late replaced run run-z (ended at blocked, ${zAt}) as the screen's last run — recorded as \`replaced\` in run run-late's status`).length === 1);
   const again = cli("--status", "Plots", "--phase", "driving", "--run", "run-late");
   safe("…its next write (rev 2) prints no note", () => again.status === 0 && !/^note {2}run run-late replaced/m.test(again.stderr));
   fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-late" }));
@@ -1257,7 +1257,7 @@ await block("verify-probe own run alone:", async () => {
   const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
     { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: queued } });
   safe("a run queued while the probe's own run measures → its `failed` write is refused (RunOpen): exit 2, not 3, and the queued run's status byte-identical",
-    () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("run run-q of Plots is open (phase queued, rev 1, by orchestrator, ") && /it opened while this probe ran/.test(p.stderr));
+    () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("verify-probe: another run opened while this probe ran; nothing is written — run run-q of Plots is open (phase queued, rev 1, by orchestrator, "));
   if (p.status !== 2) console.log(p.stderr);
   // its own run's deadline passes while it runs (the fake launch moves it into the past) and nobody takes it over: its
   // `failed` write goes through (exit 3) — the run is not left at measuring

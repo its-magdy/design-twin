@@ -342,7 +342,7 @@ check("after close: status `measured` rev 2 by verify-probe, measuredSha256 = sh
   st8?.phase === "measured" && st8.rev === 2 && st8.by === "verify-probe" && st8.runId === "run-e2e-1" && fs.existsSync(stage + ".measured.json")
   && st8.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(stage + ".measured.json")).digest("hex") && m8?.runId === "run-e2e-1");
 check("the status is the verify dir's (live, run cache), not in the --out staging dir, and not in design/verify until done; no tmp files left", !fs.existsSync(stage + ".status.json") && treeState(projDir) === treeBefore && fs.existsSync(path.dirname(stage)) && !fs.readdirSync(path.dirname(stage)).some((f) => f.includes(".tmp-")));
-// each later --run below is a run of its own: a --run is written only while the status names no other run that has not ended
+// each later --run below names a new run: a --run is written only while the status names no other run that has not ended
 writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-1", phase: "failed", by: "orchestrator", detail: "test over" });
 
 // The two refused-write blocks make a directory read-only with chmod; on Windows that refuses nothing.
@@ -465,7 +465,7 @@ const stA2 = readStatus(liveStatusFile(baseA2));
 const leftA2 = fs.existsSync(path.dirname(stageA2)) ? fs.readdirSync(path.dirname(stageA2)) : [];
 check("no --run, another run opened while the page is measured → exit 2, nothing in --out's directory, that run's queued status unchanged, no next step",
   rA2.status === 2 && leftA2.length === 0 && stA2?.runId === "run-e2e-13" && stA2.phase === "queued" && stA2.rev === 1
-  && rA2.stderr.includes("run run-e2e-13 of Staff is open (phase queued, rev 1, by orchestrator, ") && rA2.stderr.includes("— it opened while this probe ran; nothing is written") && !/^next /m.test(rA2.stderr));
+  && rA2.stderr.includes("verify-probe: another run opened while this probe ran; nothing is written — run run-e2e-13 of Staff is open (phase queued, rev 1, by orchestrator, ") && !/^next /m.test(rA2.stderr));
 if (rA2.status !== 2 || leftA2.length) console.log(`${rA2.stderr}\n  left: ${leftA2.join(", ")}`);
 // …and while that run is open, a probe without --run is refused before anything starts; once it ended, it measures again
 const rA3 = await probe(["--expected", expected, "--url", url(), "--out", path.join(tmp, "stageA3", "Staff"), "--project", ROOT]);

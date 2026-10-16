@@ -1567,8 +1567,9 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       return "ok";
     } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); own.disarm(); return "over"; }
-      if (e instanceof RunOpen) { console.error(`verify-probe: ${e.message} — it opened while this probe ran; nothing is written`); own.disarm(); return "over"; }
-      if (e instanceof RunNotCurrent) { console.error(`verify-probe: ${e.message} — it opened while this probe ran`); own.disarm(); return "over"; }
+      // the clause before the refusal: its message ends with a command to paste
+      if (e instanceof RunOpen) { console.error(`verify-probe: another run opened while this probe ran; nothing is written — ${e.message}`); own.disarm(); return "over"; }
+      if (e instanceof RunNotCurrent) { console.error(`verify-probe: another run opened while this probe ran — ${e.message}`); own.disarm(); return "over"; }
       if (e instanceof RunReplaced) { console.error(`verify-probe: ${e.message}`); own.disarm(); return "over"; }
       if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
       console.error(`warning  ${e.message}`);

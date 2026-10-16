@@ -1357,7 +1357,7 @@ function publishStatus(base, doc) {
 }
 function replacedNote(doc) {
   const r = doc.replaced;
-  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) in the live status \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 function prepareStaged(stageDir, destDir) {
@@ -5582,9 +5582,9 @@ function main(argv) {
       watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
       stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run),
       and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it; a probe's own run is named as
-      one \u2014 when and by which pid it started, whether that probe is gone \u2014 with only the command that ends it). Over another run that
-      has ended it is written and says so: a \`note  run <id> replaced run <other> \u2026\` line, and replaced {runId, phase, at} in the
-      status (carried through the run, kept in the published copy). \`done\` checks first \u2014 refuses (exit 1)
+      one \u2014 when and by which pid it started, whether that probe is gone or past its deadline \u2014 with only the command that ends
+      it). Over another run that has ended it is written and says so: a \`note  run <id> replaced run <other> \u2026\` line, and
+      replaced {runId, phase, at} in the status (carried through the run, kept in the published copy). \`done\` checks first \u2014 refuses (exit 1)
       a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
       not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
       .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every

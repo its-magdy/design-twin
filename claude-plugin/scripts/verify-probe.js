@@ -6309,7 +6309,7 @@ function publishStatus(base, doc) {
 }
 function replacedNote(doc) {
   const r = doc.replaced;
-  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) in the live status \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
 // bridge/src/is-main.ts
@@ -7551,12 +7551,12 @@ ${USAGE}`);
         return "over";
       }
       if (e instanceof RunOpen) {
-        console.error(`verify-probe: ${e.message} \u2014 it opened while this probe ran; nothing is written`);
+        console.error(`verify-probe: another run opened while this probe ran; nothing is written \u2014 ${e.message}`);
         own.disarm();
         return "over";
       }
       if (e instanceof RunNotCurrent) {
-        console.error(`verify-probe: ${e.message} \u2014 it opened while this probe ran`);
+        console.error(`verify-probe: another run opened while this probe ran \u2014 ${e.message}`);
         own.disarm();
         return "over";
       }

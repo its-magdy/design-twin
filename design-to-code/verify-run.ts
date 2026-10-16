@@ -293,7 +293,8 @@ export class RunNotCurrent extends Error {
     this.name = "RunNotCurrent";
   }
 }
-/** The refusal for a `--status` write of run `runId` over the status `prev` (readStatus's): null when no other v2 run is
+/** The refusal for a `--status` write, or a write of the probe's --run, of run `runId` over the status `prev`
+ *  (readStatus's): null when no other v2 run is
  *  open (none, a v1 file, an ended run, `runId` itself). openRun's test without its abandoned-run exemption — only a
  *  probe's own run ends an abandoned one. The one place that sentence is built. */
 export function notCurrentRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunNotCurrent | null {
@@ -408,7 +409,7 @@ export function publishStatus(base: string, doc: VerifyStatusV2): void {
  *  rev 1 — is the one that records `replaced`; later writes only carry it), else null. The one place it is built. */
 export function replacedNote(doc: VerifyStatusV2): string | null {
   const r = doc.replaced;
-  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) in the live status — recorded as \`replaced\` in run ${doc.runId}'s status` : null;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run — recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
 // Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
