@@ -99,6 +99,9 @@ export interface MigrateOpts {
   /** tests only: called after a journal is read, before its rollback takes the status locks — where the run that wrote
    *  it may still finish and remove it */
   journalRead?: (file: string) => void;
+  /** tests only: how a file gets its new name before its old one is unlinked (default fs.linkSync) — a disk's link
+   *  refusals are injected here */
+  link?: LinkFn;
 }
 export interface MigrateResult {
   steps: MigrateStep[]; done: string[]; skipped: Array<{ set: string; why: string[] }>;
@@ -177,7 +180,8 @@ export function migrate(opts: MigrateOpts): MigrateResult {
   const planDir = path.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== undefined ? path.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs: string): string => slash(path.relative(cwd, abs)) || ".";
-  const skip = (result: MigrateResult, set: string, why: string[]): void => {
+  const link = opts.link ?? fs.linkSync;
+  const skip =(result: MigrateResult, set: string, why: string[]): void => {
     result.skipped.push({ set, why });
     err(`skip    ${shown(path.join(verifyDir, set))}: ${why[0] ?? ""}`);
     for (const w of why.slice(1)) err(`        ${w}`);
@@ -192,7 +196,7 @@ export function migrate(opts: MigrateOpts): MigrateResult {
     const what = `an interrupted migration of ${j.set} -> ${j.to} (${j.at}) left ${shown(file)}`;
     if (!opts.apply) { skip(first, j.set, [`${what} — --migrate --apply rolls it back first (every file to its old name, every plan it rewrote to its old bytes), then migrates`]); continue; }
     opts.journalRead?.(file);
-    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir });
+    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir, link });
     if ("gone" in rb) { err(`note  ${shown(file)} is gone: the migration of ${j.set} -> ${j.to} ended while its status locks were awaited — nothing to roll back`); continue; }
     const now = `an interrupted migration of ${rb.j.set} -> ${rb.j.to} (${rb.j.at}) left ${shown(file)}`;
     if (rb.retry) { skip(first, j.set, [`${now} — rolled back in part; the journal stays, so --migrate --apply tries again:`, ...rb.left.map((x) => `  ${x}`)]); continue; }
@@ -215,7 +219,7 @@ export function migrate(opts: MigrateOpts): MigrateResult {
       for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
     }
     if (!opts.apply) continue;
-    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck, crashAt: opts.crashAt });
+    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir, link }) : applyRename(s, { cwd, verifyDir, planDir, link, postCheck: opts.postCheck, crashAt: opts.crashAt });
     if (r.why.length) skip(result, s.set, r.why);
     else result.done.push(s.set);
     for (const n of r.notes) err(`note  ${n}`);
@@ -467,15 +471,23 @@ function lockStatuses(bases: string[]): { locks: HeldLock[] } | { why: string } 
 
 // ---------------------------------------------------------------- moving files, never over another
 
+/** How a file gets its second name (fs.linkSync; MigrateOpts.link in tests). */
+export type LinkFn = (from: string, to: string) => void;
 /** Link errors that mean the disk has no hard links (FAT/exFAT, some network shares). */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EMLINK"]);
+/** Does a link error `code` mean the disk has no hard links? On Windows, CreateHardLink on FAT/exFAT fails with
+ *  ERROR_INVALID_FUNCTION, which libuv reports as EISDIR — the source of a move is always a regular file, so there
+ *  EISDIR means no hard links too. */
+export function noHardLinks(code: string | undefined, platform: string = process.platform): boolean {
+  return code !== undefined && (NO_HARD_LINKS.has(code) || (code === "EISDIR" && platform === "win32"));
+}
 /** `from` renamed to `to`, never replacing a file there: a hard link (which refuses an existing name), then the old name
  *  unlinked. A disk without hard links gets a rename after an existence check instead — the status locks are held, so
  *  no verify tool writes either name in between. */
-function moveNoReplace(from: string, to: string): void {
-  try { fs.linkSync(from, to); } catch (e) {
+function moveNoReplace(from: string, to: string, link: LinkFn): void {
+  try { link(from, to); } catch (e) {
     const code = errCode(e);
-    const noLinks = code !== undefined && NO_HARD_LINKS.has(code);
+    const noLinks = noHardLinks(code);
     if (code === "EEXIST" || (noLinks && exists(to))) throw new Error(`${path.basename(to)} appeared during the move — refusing to replace it`);
     if (!noLinks) throw e;
     fs.renameSync(from, to);
@@ -487,10 +499,10 @@ function moveNoReplace(from: string, to: string): void {
   }
 }
 /** A move: a case-only one (`from` and `to` one name on a case-insensitive disk) goes through its temp name. */
-function doMove(m: FileMove): void {
-  if (m.tmp === undefined) { moveNoReplace(m.from, m.to); return; }
+function doMove(m: FileMove, link: LinkFn): void {
+  if (m.tmp === undefined) { moveNoReplace(m.from, m.to, link); return; }
   fs.renameSync(m.from, m.tmp);
-  try { moveNoReplace(m.tmp, m.to); } catch (e) { fs.renameSync(m.tmp, m.from); throw e; }
+  try { moveNoReplace(m.tmp, m.to, link); } catch (e) { fs.renameSync(m.tmp, m.from); throw e; }
 }
 /** Is `p`'s own name, case and all, in its directory? (existsSync answers for any spelling on a case-insensitive disk.) */
 function listed(p: string): boolean {
@@ -498,7 +510,7 @@ function listed(p: string): boolean {
 }
 /** One move undone from whatever state it reached — not begun, inside its temp name, linked but not yet unlinked, done:
  *  null, or why it could not be. */
-function undoMove(m: FileMove): string | null {
+function undoMove(m: FileMove, link: LinkFn): string | null {
   const name = path.basename;
   try {
     if (m.tmp !== undefined && listed(m.tmp)) {
@@ -506,7 +518,7 @@ function undoMove(m: FileMove): string | null {
       // linked to the new name, the temp name not yet unlinked: the new name goes first (on a case-insensitive disk it
       // is the old name in another case, and a link to the old name would find it taken)
       if (listed(m.to) && sameFile(m.tmp, m.to)) fs.unlinkSync(m.to);
-      moveNoReplace(m.tmp, m.from);
+      moveNoReplace(m.tmp, m.from, link);
       return null;
     }
     const atFrom = listed(m.from), atTo = listed(m.to);
@@ -517,10 +529,10 @@ function undoMove(m: FileMove): string | null {
     }
     if (atFrom) return null; // never moved, or already back
     if (!atTo) return `${name(m.from)} is gone and ${name(m.to)} is not there — restore it by hand`;
-    if (m.from.toLowerCase() !== m.to.toLowerCase()) { moveNoReplace(m.to, m.from); return null; }
+    if (m.from.toLowerCase() !== m.to.toLowerCase()) { moveNoReplace(m.to, m.from, link); return null; }
     const tmp = m.to + tmpSuffix();
     fs.renameSync(m.to, tmp);
-    try { moveNoReplace(tmp, m.from); } catch (e) { fs.renameSync(tmp, m.to); throw e; }
+    try { moveNoReplace(tmp, m.from, link); } catch (e) { fs.renameSync(tmp, m.to); throw e; }
     return null;
   } catch (e) { return `${name(m.to)} could not be renamed back to ${name(m.from)}: ${errMsg(e)}`; }
 }
@@ -547,8 +559,8 @@ function restorePlan(w: PlanWrite, cwd: string): Unsettled | null {
   } catch (e) { return { why: `${rel} could not be restored: ${errMsg(e)}`, final: false }; }
 }
 /** Undo steps in order: what is left (said), and whether a retry may still settle part of it (the journal stays). */
-function settle(plans: Array<Unsettled | null>, moves: readonly FileMove[]): { left: string[]; retry: boolean } {
-  const all = [...plans, ...moves.map((m): Unsettled | null => { const why = undoMove(m); return why === null ? null : { why, final: false }; })].filter((x): x is Unsettled => x !== null);
+function settle(plans: Array<Unsettled | null>, moves: readonly FileMove[], link: LinkFn): { left: string[]; retry: boolean } {
+  const all = [...plans, ...moves.map((m): Unsettled | null => { const why = undoMove(m, link); return why === null ? null : { why, final: false }; })].filter((x): x is Unsettled => x !== null);
   return { left: all.map((x) => x.why), retry: all.some((x) => !x.final) };
 }
 
@@ -600,7 +612,7 @@ function journalMoves(j: Journal, verifyDir: string): FileMove[] {
  *  nothing is left a retry could settle. The journal is read again under the locks — `read` came before them, and the
  *  run that wrote it may have finished meanwhile: no journal then is nothing to roll back (`gone`). The journal rolled
  *  back, and what could not be (settle). */
-function rollbackJournal(file: string, read: Journal, d: { cwd: string; verifyDir: string; planDir: string }): { gone: true } | { j: Journal; left: string[]; retry: boolean } {
+function rollbackJournal(file: string, read: Journal, d: ApplyDirs): { gone: true } | { j: Journal; left: string[]; retry: boolean } {
   const held = lockStatuses([path.join(d.verifyDir, read.set), path.join(d.verifyDir, read.to)]);
   if ("why" in held) return { j: read, left: [held.why], retry: true };
   try {
@@ -609,16 +621,19 @@ function rollbackJournal(file: string, read: Journal, d: { cwd: string; verifyDi
     if ("why" in j) return { j: read, left: [`${path.basename(file)} is ${j.why} now — run --migrate again`], retry: true };
     if (j.set !== read.set || j.to !== read.to) return { j: read, left: [`${path.basename(file)} names another migration now (${j.set} -> ${j.to}) — run --migrate again`], retry: true };
     const plans = j.plans.flatMap((p) => (p.after === undefined ? [] : [restorePlan({ file: path.join(d.planDir, p.file), before: p.before, after: p.after }, d.cwd)]));
-    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse());
+    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse(), d.link);
     if (!retry) fs.rmSync(file, { force: true });
     return { j, left, retry };
   } finally { for (const l of held.locks) l.release(); }
 }
 
+/** Where a step applies: the dirs, and how a file gets its second name. */
+interface ApplyDirs { cwd: string; verifyDir: string; planDir: string; link: LinkFn }
+
 /** A thrown value that stands for the process dying (MigrateOpts.crashAt): it passes every catch untouched. */
 class Crash extends Error {}
 
-function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: string; verifyDir: string; planDir: string }): { why: string[]; notes: string[] } {
+function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: ApplyDirs): { why: string[]; notes: string[] } {
   const base = path.join(d.verifyDir, s.set);
   const held = lockStatuses([base]);
   if ("why" in held) return { why: [held.why], notes: [] };
@@ -632,14 +647,14 @@ function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: stri
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
     if (exists(s.file.to)) return { why: [`${path.basename(s.file.to)} already exists — refusing to replace it`], notes: [] };
-    moveNoReplace(s.file.from, s.file.to);
+    moveNoReplace(s.file.from, s.file.to, d.link);
     return { why: [], notes: [] };
   } catch (e) {
     return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
   } finally { for (const l of held.locks) l.release(); }
 }
 
-function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: string; verifyDir: string; planDir: string; postCheck?: MigrateOpts["postCheck"]; crashAt?: MigrateOpts["crashAt"] }): { why: string[]; notes: string[] } {
+function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs & { postCheck?: MigrateOpts["postCheck"]; crashAt?: MigrateOpts["crashAt"] }): { why: string[]; notes: string[] } {
   const oldBase = path.join(d.verifyDir, s.set), newBase = path.join(d.verifyDir, s.to);
   const held = lockStatuses([oldBase, newBase]);
   if ("why" in held) return { why: [held.why], notes: [] };
@@ -649,7 +664,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
   const journal = journalFile(d.verifyDir, s.set);
   let journaled = false;
   const rollback = (): string[] => {
-    const { left, retry } = settle(writes.map((w) => restorePlan(w, d.cwd)), [...moved].reverse());
+    const { left, retry } = settle(writes.map((w) => restorePlan(w, d.cwd)), [...moved].reverse(), d.link);
     // a rollback a retry may still finish keeps the journal, so the next --apply tries again
     if (journaled && !retry) fs.rmSync(journal, { force: true });
     keepJournal = journaled && retry;
@@ -696,7 +711,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
     saveJournal();
     journaled = true;
     if (live) moves.push({ from: liveOld, to: liveNew });
-    for (const m of moves) { moved.push(m); doMove(m); crash(); }
+    for (const m of moves) { moved.push(m); doMove(m, d.link); crash(); }
 
     // the plans: every path naming a moved file, together, under the plan's lock. The bytes replaced and the bytes to be
     // written go into the journal before the write (inside updatePlan, under that lock), so a rollback — now or after a

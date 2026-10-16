@@ -6069,6 +6069,7 @@ function migrate(opts) {
   const planDir = path15.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== void 0 ? path15.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs) => slash2(path15.relative(cwd, abs)) || ".";
+  const link = opts.link ?? fs16.linkSync;
   const skip = (result2, set, why) => {
     result2.skipped.push({ set, why });
     err(`skip    ${shown(path15.join(verifyDir, set))}: ${why[0] ?? ""}`);
@@ -6087,7 +6088,7 @@ function migrate(opts) {
       continue;
     }
     opts.journalRead?.(file);
-    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir });
+    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir, link });
     if ("gone" in rb) {
       err(`note  ${shown(file)} is gone: the migration of ${j.set} -> ${j.to} ended while its status locks were awaited \u2014 nothing to roll back`);
       continue;
@@ -6120,7 +6121,7 @@ function migrate(opts) {
       for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
     }
     if (!opts.apply) continue;
-    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck, crashAt: opts.crashAt });
+    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir, link }) : applyRename(s, { cwd, verifyDir, planDir, link, postCheck: opts.postCheck, crashAt: opts.crashAt });
     if (r.why.length) skip(result, s.set, r.why);
     else result.done.push(s.set);
     for (const n of r.notes) err(`note  ${n}`);
@@ -6393,12 +6394,15 @@ function lockStatuses(bases) {
   return { locks };
 }
 var NO_HARD_LINKS = /* @__PURE__ */ new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EMLINK"]);
-function moveNoReplace(from, to) {
+function noHardLinks(code, platform = process.platform) {
+  return code !== void 0 && (NO_HARD_LINKS.has(code) || code === "EISDIR" && platform === "win32");
+}
+function moveNoReplace(from, to, link) {
   try {
-    fs16.linkSync(from, to);
+    link(from, to);
   } catch (e) {
     const code = errCode(e);
-    const noLinks = code !== void 0 && NO_HARD_LINKS.has(code);
+    const noLinks = noHardLinks(code);
     if (code === "EEXIST" || noLinks && exists2(to)) throw new Error(`${path15.basename(to)} appeared during the move \u2014 refusing to replace it`);
     if (!noLinks) throw e;
     fs16.renameSync(from, to);
@@ -6414,14 +6418,14 @@ function moveNoReplace(from, to) {
     throw e;
   }
 }
-function doMove(m) {
+function doMove(m, link) {
   if (m.tmp === void 0) {
-    moveNoReplace(m.from, m.to);
+    moveNoReplace(m.from, m.to, link);
     return;
   }
   fs16.renameSync(m.from, m.tmp);
   try {
-    moveNoReplace(m.tmp, m.to);
+    moveNoReplace(m.tmp, m.to, link);
   } catch (e) {
     fs16.renameSync(m.tmp, m.from);
     throw e;
@@ -6434,13 +6438,13 @@ function listed(p) {
     return false;
   }
 }
-function undoMove(m) {
+function undoMove(m, link) {
   const name = path15.basename;
   try {
     if (m.tmp !== void 0 && listed(m.tmp)) {
       if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
       if (listed(m.to) && sameFile(m.tmp, m.to)) fs16.unlinkSync(m.to);
-      moveNoReplace(m.tmp, m.from);
+      moveNoReplace(m.tmp, m.from, link);
       return null;
     }
     const atFrom = listed(m.from), atTo = listed(m.to);
@@ -6452,13 +6456,13 @@ function undoMove(m) {
     if (atFrom) return null;
     if (!atTo) return `${name(m.from)} is gone and ${name(m.to)} is not there \u2014 restore it by hand`;
     if (m.from.toLowerCase() !== m.to.toLowerCase()) {
-      moveNoReplace(m.to, m.from);
+      moveNoReplace(m.to, m.from, link);
       return null;
     }
     const tmp = m.to + tmpSuffix();
     fs16.renameSync(m.to, tmp);
     try {
-      moveNoReplace(tmp, m.from);
+      moveNoReplace(tmp, m.from, link);
     } catch (e) {
       fs16.renameSync(tmp, m.to);
       throw e;
@@ -6492,9 +6496,9 @@ function restorePlan(w, cwd) {
     return { why: `${rel} could not be restored: ${errMsg(e)}`, final: false };
   }
 }
-function settle(plans, moves) {
+function settle(plans, moves, link) {
   const all = [...plans, ...moves.map((m) => {
-    const why = undoMove(m);
+    const why = undoMove(m, link);
     return why === null ? null : { why, final: false };
   })].filter((x) => x !== null);
   return { left: all.map((x) => x.why), retry: all.some((x) => !x.final) };
@@ -6547,7 +6551,7 @@ function rollbackJournal(file, read2, d) {
     if ("why" in j) return { j: read2, left: [`${path15.basename(file)} is ${j.why} now \u2014 run --migrate again`], retry: true };
     if (j.set !== read2.set || j.to !== read2.to) return { j: read2, left: [`${path15.basename(file)} names another migration now (${j.set} -> ${j.to}) \u2014 run --migrate again`], retry: true };
     const plans = j.plans.flatMap((p) => p.after === void 0 ? [] : [restorePlan({ file: path15.join(d.planDir, p.file), before: p.before, after: p.after }, d.cwd)]);
-    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse());
+    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse(), d.link);
     if (!retry) fs16.rmSync(file, { force: true });
     return { j, left, retry };
   } finally {
@@ -6573,7 +6577,7 @@ function applyRetire(s, d) {
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
     if (exists2(s.file.to)) return { why: [`${path15.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
-    moveNoReplace(s.file.from, s.file.to);
+    moveNoReplace(s.file.from, s.file.to, d.link);
     return { why: [], notes: [] };
   } catch (e) {
     return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
@@ -6591,7 +6595,7 @@ function applyRename(s, d) {
   const journal = journalFile(d.verifyDir, s.set);
   let journaled = false;
   const rollback = () => {
-    const { left, retry } = settle(writes.map((w) => restorePlan(w, d.cwd)), [...moved].reverse());
+    const { left, retry } = settle(writes.map((w) => restorePlan(w, d.cwd)), [...moved].reverse(), d.link);
     if (journaled && !retry) fs16.rmSync(journal, { force: true });
     keepJournal = journaled && retry;
     return left;
@@ -6647,7 +6651,7 @@ function applyRename(s, d) {
     if (live) moves.push({ from: liveOld, to: liveNew });
     for (const m of moves) {
       moved.push(m);
-      doMove(m);
+      doMove(m, d.link);
       crash();
     }
     touched.forEach((p, i) => {

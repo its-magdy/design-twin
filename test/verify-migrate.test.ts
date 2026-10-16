@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
 import { must, readFixture, screenExport } from "./fixtures.ts";
-import { migrate } from "../design-to-code/verify-migrate.ts";
+import { migrate, noHardLinks } from "../design-to-code/verify-migrate.ts";
 import type { MigrateOpts, MigrateResult } from "../design-to-code/verify-migrate.ts";
 import { recordPlan } from "../design-to-code/plan-record.ts";
 import { computeStatus, recordedEdits } from "../design-to-code/verify-build.ts";
@@ -319,6 +319,31 @@ for (const [when, at] of [["after 3 of the moves", (a: { moved: number; plansWri
   const { r } = run(p, true);
   check(`a journal naming a path outside the verify dir is refused, nothing moved (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
     r.skipped.length === 1 && /not a journal --migrate wrote/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before) && fs.existsSync(path.join(p.root, "package.json")));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
+console.log("\na disk without hard links: a rename after an existence check; a name taken meanwhile is never replaced:");
+check("a link's EISDIR means no hard links on Windows only (CreateHardLink on FAT/exFAT), EPERM everywhere, EEXIST nowhere",
+  noHardLinks("EISDIR", "win32") && !noHardLinks("EISDIR", "darwin") && !noHardLinks("EISDIR", "linux") && noHardLinks("EPERM", "linux") && !noHardLinks("EEXIST", "win32") && !noHardLinks(undefined, "win32"));
+const linkError = (code: string): Error => Object.assign(new Error(`${code}: injected`), { code });
+{
+  const p = project();
+  const { r, err } = run(p, true, { link: () => { throw linkError("EPERM"); } });
+  const ls = p.ls();
+  check(`every link refused with EPERM: the set is migrated by renames (got ${JSON.stringify(r.done)}; ${err.join(" | ")})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && JSON.stringify(ls) === JSON.stringify(["Crates__80_1-diff.png", ...SET_FILES.map((s) => "Crates__80_1." + s)].sort()));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+for (const code of ["EEXIST", "EPERM"]) {
+  // another writer takes the new name between the checks and the move: the link refuses (EEXIST), or there are no
+  // hard links and the existence check sees it (EPERM)
+  const p = project();
+  const verify = path.join(p.root, "design/verify");
+  const diff = path.join(verify, "Crates-diff.png"), taken = path.join(verify, "Crates__80_1-diff.png");
+  const { r } = run(p, true, { link: (_from, to) => { if (to === taken) fs.writeFileSync(to, "another writer's"); throw linkError(code); } });
+  check(`${code} with the new name taken meanwhile: refused, the other file is not replaced and the set's file keeps its bytes (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    r.done.length === 0 && /Crates__80_1-diff\.png appeared during the move — refusing to replace it/.test(r.skipped[0]?.why[0] ?? "")
+    && fs.readFileSync(taken, "utf8") === "another writer's" && fs.readFileSync(diff, "utf8") === "diff");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
