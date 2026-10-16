@@ -17,10 +17,12 @@
 //     legacy report (re-record first: skipped);
 //   - else every file of the set is renamed: `<S>.*`, and of `<S>-*` only `<S>-diff.png` and what the set's measured
 //     file or report lists in `artifacts` (any other may be another screen's); a file of a longer set name belongs to
-//     that set. A case-only rename goes through a temp name. Refused when a new name is taken; each move is a hard link then an unlink
-//     (link refuses an existing name), so a name taken meanwhile is never replaced (a disk without hard links: a rename
-//     after an existence check, under the status locks). Bytes a sha256 binds (the expectation,
-//     measured file, report, evidence) are never rewritten — only file names change;
+//     that set. A case-only rename goes through a temp name. Refused when a new name is taken; each move is a hard link
+//     then an unlink (link refuses an existing name), so a name taken meanwhile is never replaced. A disk without hard
+//     links gets a rename after an existence check: the status locks keep status writes out, but a verify tool's other
+//     writes (--expect, --compare, a probe's files) take no lock, so there a file written under the new name between
+//     that check and the rename is replaced. Bytes a sha256 binds (the expectation, measured file, report, evidence) are
+//     never rewritten — only file names change;
 //   - a plan that names the set's files is rewritten under its lock: verification.recorded.report, .a11y.report and
 //     .artifacts together (recordFacts makes a11y.report the report path, so changing one alone reads as a hand edit),
 //     and the hand-owned verification.a11y.report and verification.artifacts (each said in a note). Each path is read as
@@ -41,7 +43,8 @@
 //     plan restored — a plan only while it still holds the bytes the migration wrote (read under its lock): one written
 //     again since is left as it is, and said.
 // Recovery: a rename keeps a journal, `<verifyDir>/.migrate-<set>.json`, from before its first move until its post-check
-// passes (or its rollback completes). A run that dies in between leaves it, and the next --migrate reports it and does
+// passes (or its rollback completes), each write of it synced to disk before the steps it records begin (so after a power
+// cut, too, every step that can have reached the disk is in it). A run that dies in between leaves it, and the next --migrate reports it and does
 // nothing else; --migrate --apply rolls it back first — every file to its old name (from whatever state each move
 // reached), the live status back, and every plan it rewrote back to its old bytes, only while that plan still holds the
 // bytes the migration wrote — then migrates as usual. A rollback that cannot finish keeps the journal and says what is
@@ -490,8 +493,9 @@ export function noHardLinks(code: string | undefined, platform: string = process
   return code !== undefined && (NO_HARD_LINKS.has(code) || (code === "EISDIR" && platform === "win32"));
 }
 /** `from` renamed to `to`, never replacing a file there: a hard link (which refuses an existing name), then the old name
- *  unlinked. A disk without hard links gets a rename after an existence check instead — the status locks are held, so
- *  no verify tool writes either name in between. */
+ *  unlinked. A disk without hard links gets a rename after an existence check instead. The status locks held here keep
+ *  out status writes only — a verify tool's other writes (--expect, --compare, a probe's files) take no such lock — so
+ *  on that disk a file written under `to` between the check and the rename is replaced. */
 function moveNoReplace(from: string, to: string, link: LinkFn): void {
   try { link(from, to); } catch (e) {
     const code = errCode(e);
@@ -574,8 +578,9 @@ function settle(plans: Array<Unsettled | null>, moves: readonly FileMove[], link
 
 // ---------------------------------------------------------------- the journal: what a rename in progress has done
 
-// `<verifyDir>/.migrate-<set>.json`, written (atomically) before a rename's first move and removed once its post-check
-// passes or its rollback is complete: the moves (file names in the verify dir, a case-only one's temp name, and whether
+// `<verifyDir>/.migrate-<set>.json`, written (atomically, and synced to disk: writeFileAtomic's `sync`) before a
+// rename's first move and before each plan write, and removed once its post-check passes or its rollback is complete:
+// the moves (file names in the verify dir, a case-only one's temp name, and whether
 // the live status moves too) and each plan it rewrites, with the bytes it replaced and — once written — the bytes it
 // wrote. A run that dies half way leaves it; the next --migrate reports it, and --apply rolls it back first. Names
 // only, never paths: a journal can move nothing outside the verify dir, the run cache's live status of its two sets,
@@ -720,7 +725,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs &
       moves: moves.map((m) => ({ from: path.basename(m.from), to: path.basename(m.to), ...(m.tmp !== undefined ? { tmp: path.basename(m.tmp) } : {}) })),
       plans: touched.map((p) => ({ file: path.basename(p.file), before: readText(p.file) ?? "" })),
     };
-    const saveJournal = (): void => { writeFileAtomic(journal, JSON.stringify(jdoc, null, 2) + "\n"); };
+    const saveJournal = (): void => { writeFileAtomic(journal, JSON.stringify(jdoc, null, 2) + "\n", { sync: true }); };
     saveJournal();
     journaled = true;
     if (live) moves.push({ from: liveOld, to: liveNew });

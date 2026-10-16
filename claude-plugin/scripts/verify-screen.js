@@ -153,11 +153,34 @@ import crypto2 from "node:crypto";
 import fs2 from "node:fs";
 import path2 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+function syncDir(dir) {
+  if (process.platform === "win32") return;
+  try {
+    const fd = fs2.openSync(dir, "r");
+    try {
+      fs2.fsyncSync(fd);
+    } finally {
+      fs2.closeSync(fd);
+    }
+  } catch {
+  }
+}
 function writeFileAtomic(file, data, opts = {}) {
-  fs2.mkdirSync(path2.dirname(path2.resolve(file)), { recursive: true });
+  const dir = path2.dirname(path2.resolve(file));
+  fs2.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
-    fs2.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.sync) {
+      const fd = fs2.openSync(tmp, "wx", opts.mode);
+      try {
+        fs2.writeFileSync(fd, data);
+        fs2.fsyncSync(fd);
+      } finally {
+        fs2.closeSync(fd);
+      }
+    } else {
+      fs2.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    }
     if (opts.mode !== void 0) fs2.chmodSync(tmp, opts.mode);
     fs2.renameSync(tmp, file);
   } catch (e) {
@@ -167,6 +190,7 @@ function writeFileAtomic(file, data, opts = {}) {
     }
     throw e;
   }
+  if (opts.sync) syncDir(dir);
 }
 
 // bridge/src/errmsg.ts
@@ -6653,7 +6677,7 @@ function applyRename(s, d) {
       plans: touched.map((p) => ({ file: path15.basename(p.file), before: readText(p.file) ?? "" }))
     };
     const saveJournal = () => {
-      writeFileAtomic(journal, JSON.stringify(jdoc, null, 2) + "\n");
+      writeFileAtomic(journal, JSON.stringify(jdoc, null, 2) + "\n", { sync: true });
     };
     saveJournal();
     journaled = true;

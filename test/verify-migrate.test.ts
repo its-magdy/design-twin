@@ -308,6 +308,17 @@ for (const [when, at] of [["after 3 of the moves", (a: { moved: number; plansWri
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
+  const p = project();
+  const synced: number[] = [];
+  const realFsync = fs.fsyncSync;
+  fs.fsyncSync = (fd: number): void => { synced.push(fd); realFsync(fd); };
+  let r: MigrateResult;
+  try { r = run(p, true).r; } finally { fs.fsyncSync = realFsync; }
+  check(`the journal is synced to disk: before the first move and before the plan's write (got ${synced.length} fsync(s); done ${JSON.stringify(r.done)})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && synced.length >= 2);
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
   // run B reads run A's journal, then waits for the status locks while A finishes and removes it: B rolls nothing back
   const p = project();
   const verify = path.join(p.root, "design/verify");

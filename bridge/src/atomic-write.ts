@@ -3,9 +3,10 @@
 //
 // rename(2) replaces the destination atomically on POSIX, so a run killed mid-write (Ctrl-C, OOM) leaves the
 // PREVIOUS file whole instead of a truncated one every later reader fails on. The tmp file sits in the target's
-// own directory so the rename never crosses a filesystem. There is no fsync: these files are re-creatable
-// exports, plans and reports, and the guarantee wanted is "never half a file after a killed process", which
-// rename gives; surviving a power cut would cost a sync per write on hundreds of layer files.
+// own directory so the rename never crosses a filesystem. There is no fsync by default: these files are
+// re-creatable exports, plans and reports, and the guarantee wanted is "never half a file after a killed process",
+// which rename gives; surviving a power cut would cost a sync per write on hundreds of layer files. A file that has
+// to outlive a power cut as well (a migration's journal) passes `sync`.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,20 +15,39 @@ import path from "node:path";
  *  share a tmp name, and a stale tmp from a killed run is never reused. */
 export const tmpSuffix = (): string => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 
+/** The directory's entries flushed to disk (a rename into it, made durable). Not on Windows, where a directory
+ *  cannot be opened for it; a filesystem that refuses it keeps the rename as it is. */
+function syncDir(dir: string): void {
+  if (process.platform === "win32") return;
+  try {
+    const fd = fs.openSync(dir, "r");
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  } catch { /* no directory fsync here: the rename stands, only its durability is the filesystem's */ }
+}
+
 /** Writes `data` to `file` atomically: a reader sees the old file or the new one, never half of either. The parent
  *  directory is created when missing. On any error the tmp file is removed, the old file is left as it was and the
  *  error is rethrown. `mode`: the new file's permission bits (a secret passes 0o600) — applied to the tmp file
- *  with open(2)'s mode AND chmod, because the umask masks the first. Without `mode` the umask default applies. */
-export function writeFileAtomic(file: string, data: string | Uint8Array, opts: { mode?: number } = {}): void {
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+ *  with open(2)'s mode AND chmod, because the umask masks the first. Without `mode` the umask default applies.
+ *  `sync`: the bytes are fsynced before the rename and the directory after it, so the new file survives a power
+ *  cut too. */
+export function writeFileAtomic(file: string, data: string | Uint8Array, opts: { mode?: number; sync?: boolean } = {}): void {
+  const dir = path.dirname(path.resolve(file));
+  fs.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     // "wx": exclusive create — never follows a symlink planted at the tmp name
-    fs.writeFileSync(tmp, data, { flag: "wx", ...(opts.mode === undefined ? {} : { mode: opts.mode }) });
+    if (opts.sync) {
+      const fd = fs.openSync(tmp, "wx", opts.mode);
+      try { fs.writeFileSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    } else {
+      fs.writeFileSync(tmp, data, { flag: "wx", ...(opts.mode === undefined ? {} : { mode: opts.mode }) });
+    }
     if (opts.mode !== undefined) fs.chmodSync(tmp, opts.mode);
     fs.renameSync(tmp, file);
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
     throw e;
   }
+  if (opts.sync) syncDir(dir);
 }
