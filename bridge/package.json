@@ -15,57 +15,34 @@
     "figma-plugin",
     "cli"
   ],
-  "type": "commonjs",
+  "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=24.2"
   },
   "bin": {
-    "dtwin": "./figma-pull.js"
+    "dtwin": "./dist/figma-pull.js"
   },
   "files": [
-    "figma-pull.js",
-    "figma-mcp.mjs",
-    "init.js",
-    "verbs.js",
-    "doctor.js",
-    "daemon.js",
-    "design-system-layout.js",
-    "errmsg.js",
-    "library-layout.js",
-    "node-id.js",
-    "pages-layout.js",
-    "variables-merge.js",
-    "project-layout.js",
-    "read-opts.js",
-    "seed-components.js",
-    "server-core.js",
-    "snapshot-meta.js",
-    "token-store.js",
-    "write-out.js",
-    "design-system-layout.d.ts",
-    "errmsg.d.ts",
-    "library-layout.d.ts",
-    "node-id.d.ts",
-    "pages-layout.d.ts",
-    "read-opts.d.ts",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "pull": "node figma-pull.js",
-    "pull:selection": "node figma-pull.js design --selection",
-    "mcp": "node figma-mcp.mjs",
+    "build": "tsc",
+    "prepack": "tsc",
     "typecheck": "tsc --noEmit",
-    "build": "node build.js"
+    "pull": "node src/figma-pull.ts",
+    "pull:selection": "node src/figma-pull.ts design --selection",
+    "mcp": "node src/figma-mcp.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "ws": "^8.21.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1",
-    "typescript": "^7.0.2",
-    "@types/node": "^26.1.1"
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2"
   }
 }

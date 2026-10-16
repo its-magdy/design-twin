@@ -5,12 +5,18 @@ how to decide what goes in it.
 
 The reason it is a recorded decision rather than a matter of taste: a build that picks a layout ad
 hoc produces something nobody can extend. The live run that prompted this file emitted a flat
-`src/{screens,components/{ui,layout,jobroles},data,lib,styles}` — two screens of one feature in a
-global `screens/`, that feature's own table and modals under `components/jobroles/` beside the
+`src/{screens,components/{ui,layout,jetroles},data,lib,styles}` — two screens of one feature in a
+global `screens/`, that feature's own table and modals under `components/jetroles/` beside the
 generic `Button`/`Field`/`Modal`, mock data and the provider global, and the generic set named by the
 builder instead of after the design system's catalog. Every individual choice was defensible. The
 sum of them meant a second feature built later would have had nothing to reuse *by design-system
 name*, and no recorded reason for the split.
+
+## Contents
+- 1. Follow what is already there
+- 2. Only on a fresh scaffold, propose
+- 3. The catalog decides shared-vs-feature, not taste (and evolving a shared component the catalog covers 0% of)
+- 4. What the plan records
 
 ## 1. Follow what is already there
 
@@ -99,7 +105,7 @@ already exists in the shared directory as a hard signal to extend, not to re-der
   "convention": "followed",
   "source": "src/features/billing",
   "shared": "src/components",
-  "features": "src/features/job-roles",
+  "features": "src/features/jet-roles",
   "notes": "no component catalog was exported, so shared-vs-feature is a judgement call here"
 }
 ```

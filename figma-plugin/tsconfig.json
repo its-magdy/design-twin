@@ -3,11 +3,24 @@
     // Figma's plugin main thread is a QuickJS-like realm: ES6 but NO browser/DOM globals.
     // "dom" is deliberately omitted — it would pull in DOM-typed console/fetch/timers that
     // conflict with the narrower ones @figma/plugin-typings declares (see index.d.ts).
-    "target": "es6",
+    // The Figma sandbox baseline used by build.ts (esbuild target es2019); matches "lib".
+    "target": "es2019",
     "lib": ["es2019"],
     "strict": true,
     "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (see ifDefined in
+    // bridge/src/json-util.ts for leaving a key off instead).
+    "exactOptionalPropertyTypes": true,
+    // `arr[i]` / `record[key]` are `T | undefined`: the element is tested before use.
+    "noUncheckedIndexedAccess": true,
+    // esbuild transpiles one file at a time; this flags type-only re-exports it can't see through.
+    "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     // Plugin API types are hosted under /@figma (not DefinitelyTyped's /@types). Load them via
     // `types` so bundler module resolution finds the scoped package — this makes the globals
@@ -17,6 +30,13 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
+    // The shared bridge modules are imported as ../../bridge/src/x.ts (esbuild inlines them; nothing
+    // here emits), and erasableSyntaxOnly keeps them Node-strippable for the bridge's own runtime.
+    "allowImportingTsExtensions": true,
+    // Type-only imports must say `import type` (oxlint consistent-type-imports enforces the same);
+    // esbuild honours this flag when it strips them, so the bundle never keeps a type-only import.
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
   "include": ["src", "figma-augment.d.ts"]

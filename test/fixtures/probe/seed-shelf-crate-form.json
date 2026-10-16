@@ -1,0 +1,72 @@
+{
+  "exportedAt": "2026-10-02T00:00:00Z",
+  "screen": "Crate Form",
+  "page": "Shelf",
+  "pageId": "80:0",
+  "nodeId": "80:60",
+  "nodes": [
+    {
+      "type": "FRAME",
+      "name": "Crate Form",
+      "id": "80:60",
+      "layout": {
+        "display": "flex",
+        "flexDirection": "column",
+        "gap": 8,
+        "padding": [
+          20,
+          20,
+          20,
+          20
+        ]
+      },
+      "box": {
+        "w": 420,
+        "h": 200,
+        "x": 1400,
+        "y": 0
+      },
+      "clip": true,
+      "fills": [
+        {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      ],
+      "radius": 8,
+      "overlay": {
+        "position": "center",
+        "closeOnClickOutside": true,
+        "background": "#00000066"
+      },
+      "children": [
+        {
+          "type": "TEXT",
+          "name": "Form Title",
+          "id": "80:61",
+          "box": {
+            "w": 200,
+            "h": 24
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#1d1d1f"
+            }
+          ],
+          "text": "Edit crate",
+          "font": {
+            "size": 16,
+            "family": "Arial",
+            "weight": "Bold",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#1d1d1f"
+          }
+        }
+      ]
+    }
+  ]
+}

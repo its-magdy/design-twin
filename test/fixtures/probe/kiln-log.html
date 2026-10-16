@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- "Kiln Log" (invented): the Firings screen 90:1, 1440x720, four firing cards 90:10..90:13. The 12c visual-diff e2e
+     (test/verify-probe-visual-e2e.test.ts) serves it under ?mode=:
+       (none)        the correct twin — the frame at the page's top-left
+       ref           what Figma renders for the reference: the frame 12 px in from the top-left of a transparent 1464x744 page,
+                     its drop shadow inside that margin (the export root's renderBox is the box grown by 12 px per side)
+       recolor       card 90:12 recoloured
+       offset-frame  the frame 200 px down a taller page (its window reaches below a 720 px viewport)
+       tabs          the app opens on another section; the Firings frame is chosen by JS state (a click on the Firings tab)
+       tall          the built frame is 80 px taller than the design (a footer strip below the design's 720 px)
+       long, long-ref  the Kiln Ledger screen 90:50, 400x5000 (reference scale 2048/5000 = 0.4096) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kiln Log</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { font-family: Helvetica, Arial, sans-serif; background: #ffffff; }
+  body.ref { background: transparent; padding: 12px; width: 1440px; }
+  body.offset { padding-top: 200px; height: 1200px; }
+  .frame { position: relative; width: 1440px; height: 720px; background: #f7f3ee; overflow: hidden; }
+  body.ref .frame { box-shadow: 0 2px 10px 2px rgba(40, 20, 10, 0.35); }
+  body.tall .frame { height: 800px; }
+  .bar { position: absolute; left: 0; top: 0; width: 1440px; height: 64px; background: #3a2e2a; }
+  .brand { position: absolute; left: 32px; top: 20px; color: #ffffff; font-size: 20px; line-height: 24px; font-weight: 700; }
+  .title { position: absolute; left: 32px; top: 96px; color: #2b211d; font-size: 28px; line-height: 36px; font-weight: 700; }
+  .card { position: absolute; top: 160px; width: 300px; height: 200px; background: #ffffff; border: 1px solid #e2d8cf; border-radius: 12px; box-sizing: border-box; }
+  .card .name { position: absolute; left: 20px; top: 20px; color: #2b211d; font-size: 18px; line-height: 24px; }
+  .card .cone { position: absolute; left: 20px; top: 140px; width: 96px; height: 32px; border-radius: 16px; background: #c8643c; color: #ffffff; font-size: 14px; line-height: 32px; text-align: center; }
+  body.recolor [data-dt-node="90:12"] { background: #2f6f8f; }
+  .foot { position: absolute; left: 32px; top: 660px; color: #6b5a52; font-size: 14px; line-height: 20px; }
+  .extra { position: absolute; left: 0; top: 720px; width: 1440px; height: 80px; background: #3a2e2a; }
+  .glazes { padding: 40px; }
+  .ledger { position: relative; width: 400px; height: 5000px; background: linear-gradient(#f7f3ee, #e9dccf); }
+  .ledger .row { position: absolute; left: 20px; width: 360px; height: 80px; background: #ffffff; border-radius: 8px; }
+  body.long-ref { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const mode = new URLSearchParams(location.search).get("mode") || "";
+  const root = document.getElementById("root");
+  const firings = () => {
+    const cards = ["Bisque 04", "Glaze 6", "Raku", "Test tiles"].map((n, i) =>
+      `<div class="card" data-dt-node="90:${10 + i}" style="left:${32 + i * 324}px"><div class="name" data-dt-node="90:${20 + i}">${n}</div><div class="cone" data-dt-node="90:${30 + i}">Cone ${[4, 6, 1, 5][i]}</div></div>`).join("");
+    return `<div class="frame" data-dt-node="90:1"><div class="bar" data-dt-node="90:2"><div class="brand" data-dt-node="90:3">Kiln Log</div></div>` +
+      `<div class="title" data-dt-node="90:4">Firings</div>${cards}<div class="foot" data-dt-node="90:5">4 firings this week</div>` +
+      (mode === "tall" ? `<div class="extra"></div>` : "") + `</div>`;
+  };
+  const ledger = () => {
+    let rows = "";
+    for (let i = 0; i < 40; i++) rows += `<div class="row" data-dt-node="90:${100 + i}" style="top:${40 + i * 120}px"></div>`;
+    return `<div class="ledger" data-dt-node="90:50">${rows}</div>`;
+  };
+  if (mode === "ref") document.body.className = "ref";
+  else if (mode === "offset-frame") document.body.className = "offset";
+  else if (mode === "recolor" || mode === "tall") document.body.className = mode;
+  else if (mode === "long-ref") document.body.className = "long-ref";
+  if (mode === "long" || mode === "long-ref") root.innerHTML = ledger();
+  else if (mode === "tabs") {
+    // the section is component state, not a URL (L-1): the Firings tab swaps the content in place
+    root.innerHTML = `<div class="glazes"><button type="button" data-tab="firings">Firings</button><p>Glaze recipes</p></div>`;
+    root.querySelector("[data-tab=firings]").addEventListener("click", () => { root.innerHTML = firings(); });
+  } else root.innerHTML = firings();
+</script>
+</body>
+</html>

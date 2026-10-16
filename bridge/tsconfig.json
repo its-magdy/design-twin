@@ -1,17 +1,32 @@
 {
   "compilerOptions": {
-    // The MCP SDK is ESM-only, so this file is ESM (built to figma-mcp.mjs). nodenext gives the
-    // correct ESM resolution + requires the .js extension on SDK subpath imports.
-    "target": "es2022",
     "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "lib": ["es2022"],
-    "types": ["node"],
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "forceConsistentCasingInFileNames": true
+    "target": "es2024",                      // pinned; Node 24 runs it natively. TS7's default floats.
+    "lib": ["es2024"],
+    "types": ["node"],                       // TS7 default is [] — must be explicit
+    "strict": true,                          // TS7 default, stated explicitly
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "exactOptionalPropertyTypes": true,      // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined`
+    "noUncheckedIndexedAccess": true,        // `arr[i]` / `record[k]` are `T | undefined` until checked
+    "rootDir": "src",                        // TS7 default is "." → would emit dist/src/*
+    "outDir": "dist",
+    "declaration": true,
+    // The npm package ships dist/ only (package.json `files`), so a map that pointed back at ../src
+    // would point at nothing on an install. inlineSources embeds the TypeScript text in each .js.map,
+    // making the maps self-contained; declarationMap is off for the same reason (a .d.ts.map has no
+    // inline option and would name the same missing ../src).
+    "sourceMap": true,
+    "inlineSources": true,
+    "erasableSyntaxOnly": true,              // reject enum / namespace / param properties before Node does
+    "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true, // "./x.ts" in source → "./x.js" in dist
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

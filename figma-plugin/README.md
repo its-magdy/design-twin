@@ -24,7 +24,7 @@ src/
   progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
   util.ts        pure helpers (hex, base64, rounding)
 figma-augment.d.ts  local typing shims for API newer than the pinned typings (empty by default)
-build.js         esbuild bundle script
+build.ts         esbuild bundle script
 ```
 
 ## Dev Mode

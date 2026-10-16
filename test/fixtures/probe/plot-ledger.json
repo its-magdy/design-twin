@@ -1,0 +1,724 @@
+{
+  "exportedAt": "2026-10-01T00:00:00Z",
+  "screen": "Beds",
+  "page": "Plots",
+  "pageId": "70:0",
+  "nodeId": "70:1",
+  "nodes": [
+    {
+      "type": "FRAME",
+      "name": "Beds",
+      "id": "70:1",
+      "box": {
+        "w": 1024,
+        "h": 640,
+        "x": 0,
+        "y": 0
+      },
+      "clip": true,
+      "fills": [
+        {
+          "type": "solid",
+          "color": "#f5f5f0"
+        }
+      ],
+      "children": [
+        {
+          "type": "FRAME",
+          "name": "Side Nav",
+          "id": "70:20",
+          "layout": {
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": 8,
+            "padding": [
+              16,
+              16,
+              16,
+              16
+            ]
+          },
+          "box": {
+            "w": 200,
+            "h": 640,
+            "x": 0,
+            "y": 0
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#2f3a2f"
+            }
+          ],
+          "children": [
+            {
+              "type": "FRAME",
+              "name": "Nav Beds",
+              "id": "70:30",
+              "box": {
+                "w": 168,
+                "h": 32
+              },
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Nav Label",
+                  "id": "70:32",
+                  "box": {
+                    "w": 40,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Beds",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Nav Harvest",
+              "id": "70:31",
+              "box": {
+                "w": 168,
+                "h": 32
+              },
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Nav Label",
+                  "id": "70:33",
+                  "box": {
+                    "w": 90,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Harvest Log",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "TEXT",
+          "name": "Page Title",
+          "id": "70:2",
+          "box": {
+            "w": 60,
+            "h": 28
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#1d1d1f"
+            }
+          ],
+          "text": "Beds",
+          "font": {
+            "size": 20,
+            "family": "Arial",
+            "weight": "Semi Bold",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#1d1d1f"
+          }
+        },
+        {
+          "type": "FRAME",
+          "name": "Bed Table",
+          "id": "70:40",
+          "box": {
+            "w": 760,
+            "h": 80
+          },
+          "layout": {
+            "display": "flex",
+            "flexDirection": "column"
+          },
+          "children": [
+            {
+              "type": "FRAME",
+              "name": "Bed Row",
+              "id": "70:41",
+              "box": {
+                "w": 760,
+                "h": 40
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#ffffff"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Bed Name",
+                  "id": "70:42",
+                  "box": {
+                    "w": 120,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#1d1d1f"
+                    }
+                  ],
+                  "text": "North Bed",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#1d1d1f"
+                  }
+                },
+                {
+                  "type": "FRAME",
+                  "name": "Edit Bed",
+                  "id": "70:44",
+                  "box": {
+                    "w": 56,
+                    "h": 28
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#3b7a3b"
+                    }
+                  ],
+                  "reactions": [
+                    {
+                      "trigger": "on_click",
+                      "actions": [
+                        {
+                          "type": "node",
+                          "destinationId": "70:60",
+                          "destination": "Bed Form",
+                          "navigation": "overlay",
+                          "transition": {
+                            "type": "dissolve",
+                            "duration": 0.2,
+                            "easing": "ease_out"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Bed Row",
+              "id": "70:52",
+              "box": {
+                "w": 760,
+                "h": 40
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#e6efe6",
+                  "tokens": {
+                    "color": "Surface/Row Hover"
+                  }
+                }
+              ],
+              "tokens": {
+                "fills": "Surface/Row Hover"
+              },
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Bed Name",
+                  "id": "70:54",
+                  "box": {
+                    "w": 120,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#1d1d1f"
+                    }
+                  ],
+                  "text": "South Bed",
+                  "font": {
+                    "size": 14,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#1d1d1f"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "FRAME",
+          "name": "Bed Actions",
+          "id": "70:56",
+          "layout": {
+            "display": "flex",
+            "flexDirection": "row",
+            "gap": 8
+          },
+          "box": {
+            "w": 760,
+            "h": 28
+          },
+          "children": [
+            {
+              "type": "FRAME",
+              "name": "Split Bed",
+              "id": "70:45",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:65",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Split",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Rename Bed",
+              "id": "70:46",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:66",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Rename",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Archive Bed",
+              "id": "70:47",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:67",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Archive",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Refresh Beds",
+              "id": "70:48",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:68",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Refresh",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Move Bed",
+              "id": "70:49",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:69",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Move",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Show Notes",
+              "id": "70:53",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:73",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Notes",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ],
+              "reactions": [
+                {
+                  "trigger": "on_click",
+                  "actions": [
+                    {
+                      "type": "node",
+                      "destinationId": "70:60",
+                      "destination": "Bed Form",
+                      "navigation": "overlay",
+                      "transition": {
+                        "type": "dissolve",
+                        "duration": 0.2,
+                        "easing": "ease_out"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "FRAME",
+              "name": "Add Bed",
+              "id": "70:50",
+              "box": {
+                "w": 96,
+                "h": 28
+              },
+              "fills": [
+                {
+                  "type": "solid",
+                  "color": "#3b7a3b"
+                }
+              ],
+              "children": [
+                {
+                  "type": "TEXT",
+                  "name": "Label",
+                  "id": "70:70",
+                  "box": {
+                    "w": 80,
+                    "h": 20
+                  },
+                  "fills": [
+                    {
+                      "type": "solid",
+                      "color": "#ffffff"
+                    }
+                  ],
+                  "text": "Add bed",
+                  "font": {
+                    "size": 13,
+                    "family": "Arial",
+                    "weight": "Regular",
+                    "lineHeight": {
+                      "value": 20,
+                      "unit": "px"
+                    },
+                    "color": "#ffffff"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
