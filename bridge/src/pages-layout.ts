@@ -433,7 +433,7 @@ const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof
 //     taken for unstamped rows only, which a stamped re-pull of their own file would otherwise never replace;
 //   - two rows of which the incoming one is unstamped are one node only when both name the same page: the same pageId
 //     and the same page name.
-// With no pageId on the incoming row the row is kept. A truthy non-object has no `.file`, so it is kept.
+// Beside an unstamped row, or for an unstamped incoming row, no pageId on the incoming row keeps the row. A truthy non-object has no `.file`, so it is kept.
 const samePage = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean =>
   !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
 const sameFigmaFile = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean => {

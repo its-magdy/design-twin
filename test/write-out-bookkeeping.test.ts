@@ -158,9 +158,10 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
     const layers = doc && typeof doc === "object" && "layers" in doc && Array.isArray(doc.layers) ? doc.layers : [];
     return layers.filter((l): l is Row => !!l && typeof l === "object");
   };
-  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string; sourceFileKey?: string; pageId?: string; page?: string } = {}): void => {
+  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string; sourceFileKey?: string; pageId?: string | null; page?: string } = {}): void => {
+    const pageId = opts.pageId === undefined ? "0:1" : opts.pageId;
     writeOut.writeScreen(dir, screenReply({
-      screenName: name, page: opts.page ?? "Page", pageId: opts.pageId ?? "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+      screenName: name, page: opts.page ?? "Page", ...(pageId === null ? {} : { pageId }), ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
       ...(opts.sourceFileKey ? { sourceFileKey: opts.sourceFileKey } : {}),
       screen: { screen: name, exportedAt: "2026-10-06T00:00:00.000Z", nodes: [{ id: "5:1", type: "FRAME", name }], manifest: { nodes: 1 } },
     }));
@@ -197,7 +198,12 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
   };
   const pair = (label: string, first: Parameters<typeof pullAs>[2], second: Parameters<typeof pullAs>[2]): number => idsOf(pairDir(label, first, second));
   t("an unstamped row is kept when another Figma file (stamped, another page) pulls the same id", () => pair("mixed-page-id", {}, { sourceFile: "Other File", pageId: "9:9" }) === 2);
-  t("…replaced when the stamped pull names the same page (pageId and name)", () => pair("mixed-same", {}, { sourceFile: "Sample File" }) === 1);
+  t("…replaced when the stamped pull has the same pageId", () => pair("mixed-same", {}, { sourceFile: "Sample File" }) === 1);
+  t("old unstamped, new stamped without a pageId: kept", () => pair("mixed-no-page-id", {}, { sourceFile: "Sample File", pageId: null }) === 2);
+  t("…also when the old row has no pageId either", () => pair("mixed-no-page-ids", { pageId: null }, { sourceFile: "Sample File", pageId: null }) === 2);
+  t("two unstamped rows, neither with a pageId: kept", () => pair("bare-no-page-ids", { pageId: null }, { pageId: null }) === 2);
+  t("old stamped, new unstamped: replaced when the pageId and the page name match", () => pair("rev-same", { sourceFile: "Sample File" }, {}) === 1);
+  t("…kept when the page is renamed (same pageId)", () => pair("rev-page-name", { sourceFile: "Sample File" }, { page: "Other Page" }) === 2);
   const renamedPage = pairDir("mixed-page-name", {}, { sourceFile: "Sample File", page: "Other Page" });
   t("legacy unstamped row → page renamed → stamped re-pull → one row, resolvable by id", () => {
     const hit = resolveScreen(renamedPage, "5:1");
