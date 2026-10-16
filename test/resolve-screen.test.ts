@@ -336,10 +336,15 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
   ok("the resolved stage is 'node id'", (() => { const r = resolveScreen(FIXTURE, "positions___7314_87192"); return r.status === "resolved" && r.stage === "node id"; })());
   ok("a dash id `7314-87192` resolves", idOf("7314-87192") === "7314:87192");
   ok("a URL-ish `?node-id=7314-87192` resolves", idOf("https://www.figma.com/design/KEY/Name?node-id=7314-87192") === "7314:87192");
-  const cli = (...a: string[]): { status: number | null; err: string } => {
+  const cli = (...a: string[]): { status: number | null; err: string; out: string } => {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8" });
-    return { status: r.status, err: r.stderr };
+    return { status: r.status, err: r.stderr, out: r.stdout };
   };
+  const byTitle = cli(FIXTURE, "Jet Roles");
+  const outLines = byTitle.out.split("\n");
+  ok(`the CLI prints the resolved line, then \`stem <Layer>__<id>\`, then the row (got ${JSON.stringify(outLines.slice(0, 3))})`,
+    byTitle.status === 0 && outLines[0] === "resolved 'Jet Roles' -> positions  (7314:87192) via indexed title" && outLines[1] === "stem positions___7314_87192"
+    && (JSON.parse(outLines.slice(2).join("\n")) as { id?: unknown }).id === "7314:87192");
   const c1 = cli(pageDir, "Jet Roles");
   ok("the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
     c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));

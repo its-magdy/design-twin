@@ -53,7 +53,7 @@ import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -324,6 +324,8 @@ function main(argv: string[]): number {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
+    // the key the screen's files are named by (pages-layout.ts screenStem): plans, verify sets, --status
+    console.log(`stem ${screenStem(res.row.name, res.row.id)}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
     return 0;
   }

@@ -308,6 +308,9 @@ function toNodeId(raw) {
 }
 
 // bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
 var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
 function nodeIdFromSafe(safeId) {
   if (!SAFE_NODE_ID_RE.test(safeId)) return null;
@@ -317,6 +320,9 @@ function nodeIdFromStem(stem) {
   const s = String(stem || "");
   const i = s.lastIndexOf("__");
   return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
 }
 
 // design-to-code/map-util.ts
@@ -553,6 +559,7 @@ function main(argv) {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
+    console.log(`stem ${screenStem(res.row.name, res.row.id)}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
     return 0;
   }
