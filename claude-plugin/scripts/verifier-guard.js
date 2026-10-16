@@ -383,8 +383,15 @@ var REASON = {
   kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, Stop-Process -Name / Get-Process \u2026 | Stop-Process, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. Close only what you opened: stop only a PID you started and recorded (`kill <pid>`) \u2014 its whole tree with `kill -- -<pgid>` (the process group you started) or its children with `pkill -P <pid>` \u2014 and reuse a dev server the user already runs (PowerShell: `Stop-Process -Id <pid>`).",
   install: "installing or reinstalling dependencies is the user's call, never the verifier's \u2014 and `npm ci`/`npm install` clear node_modules/.cache, the live status and your staged evidence with it. Write status `blocked` with the command as the detail and hand it back to the caller.",
   playwright: `installing Playwright or its browsers is the user's call (it edits the project's dependencies and downloads ~150 MB). No usable renderer (\`${scriptCmd("verify-probe")} --check\` exit 3): stop and ask the user, with the install line the probe printed and its cost.`,
-  sandbox: 'a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); otherwise write status `blocked` and hand back "blocked on permissions: done / remaining" with a narrow allow rule for the owner to add.'
+  sandbox: 'a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); otherwise write status `blocked` and hand back "blocked on permissions: done / remaining" with a narrow allow rule for the owner to add.',
+  migrate: "`verify-screen --migrate` renames verify sets and rewrites the plans in design/plan/ \u2014 the caller's call, never the verifier's. Name the legacy-named set (and its node id) in your hand-back instead."
 };
+var VERIFY_SCREEN = /(^|[\\/])verify-screen\.[cm]?[jt]s$/i;
+var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "bun", "deno", "tsx", "ts-node", "npx", "pnpx", "bunx", "yarn", "pnpm", "npm"]);
+function runsMigrate(words, p) {
+  const s = words.findIndex((w) => VERIFY_SCREEN.test(w));
+  return s >= 0 && (s === 0 || SCRIPT_RUNNERS.has(p)) && words.slice(s + 1).some((w) => w === "--migrate" || w.startsWith("--migrate="));
+}
 var playwrightInstall = (words, i) => {
   const sub = words[firstArg(words, i)] ?? "";
   return sub === "install" || sub === "install-deps";
@@ -409,6 +416,7 @@ function commandVerdict(cmd, line, depth, ps) {
   const p = prog(words[0] ?? "");
   const args = words.slice(1);
   if (!p) return null;
+  if (runsMigrate(words, p)) return REASON.migrate;
   if (SHELLS.has(p)) {
     const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) || a === "--command");
     const body = c >= 0 ? args[c + 1] === "--" ? args[c + 2] : args[c + 1] : void 0;
@@ -546,7 +554,8 @@ var USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, \u2026);",
-  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox.",
+  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
+  "verify-screen --migrate (it renames verify sets and rewrites plans).",
   "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   'A refusal is {"hookSpecificOutput":{"permissionDecision":"deny",\u2026}} on stdout; every answer exits 0.',
   "A call from any other agent, or a payload it cannot read, is allowed (the latter logged to stderr)."

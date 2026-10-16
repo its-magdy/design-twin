@@ -164,6 +164,23 @@ for (const c of PW) check(c, denied(bash(c)));
     && /reinstalling dependencies/.test(reason("npm init vite@latest")));
 }
 
+console.log("\nBash — refused (verify-screen --migrate: it renames verify sets and rewrites plans):");
+const MIGRATE: readonly string[] = [
+  "node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate", "node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate --apply",
+  "node /plugins/designtwin/scripts/verify-screen.js --dir design/verify --migrate --apply", "./verify-screen.js --migrate", "npx tsx design-to-code/verify-screen.ts --migrate",
+  "yarn node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate", "sh -c 'node /p/verify-screen.js --migrate --apply'", "node \"C:\\p\\scripts\\verify-screen.js\" --migrate=1",
+];
+for (const c of MIGRATE) check(c, denied(bash(c)));
+{
+  const d = decide(bash(MIGRATE[0] ?? ""), CTX);
+  check("the refusal says it is the caller's call and what to hand back", d !== null && "deny" in d && /caller's call/.test(d.deny) && /hand-back/.test(d.deny));
+  check("PowerShell: refused too", denied({ hook_event_name: "PreToolUse", cwd: "/proj", agent_type: AGENT, agent_id: "a1", tool_name: "PowerShell",
+    tool_input: { command: "node \"C:\\plugins\\designtwin\\scripts\\verify-screen.js\" --migrate --apply" } }));
+  check("not refused: another verify-screen mode, a mention of --migrate, another agent",
+    allowed(bash("node \"/plugins/designtwin/scripts/verify-screen.js\" --status Home__1_2 --phase done --run r1")) && allowed(bash("echo node verify-screen.js --migrate"))
+    && allowed(bash("grep -rn -- --migrate design/")) && allowed(bash("node /p/verify-screen.js --migrate", {}, "general-purpose")));
+}
+
 console.log("\nBash — dangerouslyDisableSandbox:");
 check("refused, whatever the command", denied(bash("node x.js", { dangerouslyDisableSandbox: true })) && denied(bash("ls", { dangerouslyDisableSandbox: true })));
 check("false, or absent, is a normal call", allowed(bash("node x.js", { dangerouslyDisableSandbox: false })) && allowed(bash("node x.js")));
