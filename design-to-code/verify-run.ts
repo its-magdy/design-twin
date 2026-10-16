@@ -242,10 +242,11 @@ function ownRunOpen(open: VerifyStatusV2, o: OwnRunStamp, why?: string): string 
 function abandonedWhy(o: OwnRunStamp): string {
   return processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
 }
-/** A later write of a run whose earlier write was recorded (`continues`: the probe's own run after its `measuring`) while
- *  the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as abandoned (a stopped or
- *  sleeping probe past its deadline) and started its own, which may have ended since. Nothing more is written in it, so
- *  a late probe never writes over the run that replaced it. Refused by writeStatus itself. */
+/** A later write of a run whose earlier write was recorded (`continues`: a probe's run, --run or its own, after its
+ *  `measuring`) while the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as
+ *  abandoned (a stopped or sleeping probe past its deadline) and started its own, or a newer run of the screen started
+ *  while a --run probe measured; either may have ended since. Nothing more is written in it, so a late probe never writes
+ *  over the run that replaced it. Refused by writeStatus itself. */
 export class RunReplaced extends Error {
   constructor(runId: string, by: VerifyStatusV2) {
     super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran — nothing more is written in it`);
@@ -275,8 +276,7 @@ export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId:
   return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
 }
 /** A `--status` write of run `runId` (named by --run, or the run in progress when it read the status), or a write of the
- *  probe's --run, while the status
- *  names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
+ *  probe's --run, while the status names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
  *  one left behind too), and a record of `runId` would replace it in the status and publish over it. Refused by
  *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. Another probe's
  *  own run is named as one (when and by which pid it started, and when abandonedRun says so, that its probe is gone or
@@ -294,9 +294,9 @@ export class RunNotCurrent extends Error {
   }
 }
 /** The refusal for a `--status` write, or a write of the probe's --run, of run `runId` over the status `prev`
- *  (readStatus's): null when no other v2 run is
- *  open (none, a v1 file, an ended run, `runId` itself). openRun's test without its abandoned-run exemption — only a
- *  probe's own run ends an abandoned one. The one place that sentence is built. */
+ *  (readStatus's): null when no other v2 run is open (none, a v1 file, an ended run, `runId` itself). openRun's test
+ *  without its abandoned-run exemption — only a probe's own run ends an abandoned one. The one place that sentence is
+ *  built. */
 export function notCurrentRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunNotCurrent | null {
   const open = otherOpenRun(prev, runId);
   return open ? new RunNotCurrent(base, runId, open) : null;
@@ -315,7 +315,7 @@ export interface StatusWriteHooks {
    *  one that ends the run) */
   alone?: boolean;
   abandoned?: (ended: VerifyStatusV2) => void;
-  /** the write continues a run whose earlier write was recorded (the probe's own run after its `measuring`): refused
+  /** the write continues a run whose earlier write was recorded (a probe's run, --run or its own, after its `measuring`): refused
    *  (RunReplaced) when the status now names another run, in any phase — checked before `before` */
   continues?: boolean;
   /** the write is of a run its writer names (verify-screen --status without --new-run, the probe with --run): refused (RunNotCurrent) when the
