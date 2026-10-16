@@ -2,8 +2,8 @@
 
 
 // design-to-code/resolve-screen.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -308,6 +308,9 @@ function toNodeId(raw) {
 }
 
 // bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
 var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
 function nodeIdFromSafe(safeId) {
   if (!SAFE_NODE_ID_RE.test(safeId)) return null;
@@ -317,6 +320,9 @@ function nodeIdFromStem(stem) {
   const s = String(stem || "");
   const i = s.lastIndexOf("__");
   return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
 }
 
 // design-to-code/map-util.ts
@@ -382,6 +388,72 @@ function listPlans(dir) {
   return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
+// design-to-code/verify-sets.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+var VARIANT_RE = /^[a-z0-9-]+$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => VARIANT_RE.test(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
+var RETIRED = ".expected.json.retired";
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs4.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
+    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path3.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(path3.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+}
+function setNodeId(verifyDir, name) {
+  const f = setFacts(verifyDir, name);
+  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
+  return f.expectedId ?? f.reportId;
+}
+function canonicalStemsFor(verifyDir, nodeId) {
+  const stems = /* @__PURE__ */ new Set();
+  for (const name of verifySets(verifyDir)) {
+    const p = parseSetName(name);
+    if (p && p.nodeId === nodeId) stems.add(p.stem);
+  }
+  return [...stems].sort();
+}
+function legacySetsFor(verifyDir, nodeId) {
+  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
+}
+function nodeStem(verifyDir, nodeId, layerName) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
+  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
+  const have = stems[0];
+  return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
+}
+
 // design-to-code/resolve-screen.ts
 var STEM_TAIL_RE = /(?:\.[A-Za-z0-9-]+)*$/;
 function queryIds(q) {
@@ -394,25 +466,25 @@ function queryIds(q) {
   return out;
 }
 function findExportRoot(dir) {
-  const has = (d) => fs4.existsSync(path3.join(d, "pages", "index.json"));
-  const abs = path3.resolve(dir);
-  for (let d = path3.dirname(abs); ; d = path3.dirname(d)) {
+  const has = (d) => fs5.existsSync(path4.join(d, "pages", "index.json"));
+  const abs = path4.resolve(dir);
+  for (let d = path4.dirname(abs); ; d = path4.dirname(d)) {
     if (has(d)) return d;
-    if (path3.dirname(d) === d) break;
+    if (path4.dirname(d) === d) break;
   }
   for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
-    if (has(path3.join(abs, sub))) return path3.join(abs, sub);
+    if (has(path4.join(abs, sub))) return path4.join(abs, sub);
   }
   return null;
 }
 function allRows(exportDir) {
-  const rootFile = path3.join(exportDir, "pages", "index.json");
+  const rootFile = path4.join(exportDir, "pages", "index.json");
   const root = readJsonOrNull(rootFile, isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = pd.dir ? readJsonOrNull(path3.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    const idx = pd.dir ? readJsonOrNull(path4.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
     if (idx) rows.push(...idx.layers);
   }
   return rows;
@@ -421,7 +493,7 @@ function planRows(planDir) {
   if (!planDir) return [];
   const out = [];
   for (const f of listPlans(planDir)) {
-    const doc = readJsonOrNull(path3.join(planDir, f), isPlan);
+    const doc = readJsonOrNull(path4.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
@@ -459,7 +531,7 @@ function resolveScreen(exportDir, query, opts) {
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
-  if (!fs4.existsSync(path3.join(exportDir, "pages", "index.json"))) {
+  if (!fs5.existsSync(path4.join(exportDir, "pages", "index.json"))) {
     return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
   const byId = (id) => {
@@ -467,7 +539,7 @@ function resolveScreen(exportDir, query, opts) {
     return idMatches.length === 1 ? idMatches[0] : void 0;
   };
   const typed = isNodeId(q) ? byId(q) : void 0;
-  if (typed) return { status: "resolved", row: typed, stage: "node id" };
+  if (typed) return { status: "resolved", row: typed, stage: "node id", kind: "node id" };
   const plans = planRows(options.planDir);
   const planHit = qFold ? plans.filter((p) => fold(p.screenName) === qFold || fold(p.route) === qFold) : [];
   const planIds = new Set(planHit.map((p) => p.nodeId).filter((id) => !!id));
@@ -484,7 +556,7 @@ function resolveScreen(exportDir, query, opts) {
   const unionRows = [...union.values()];
   const only = unionRows.length === 1 ? unionRows[0] : void 0;
   if (only) {
-    return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
+    return { status: "resolved", row: only.row, stage: [...only.via].join(" + "), kind: "exact" };
   }
   if (unionRows.length > 1) {
     return {
@@ -495,7 +567,7 @@ function resolveScreen(exportDir, query, opts) {
   }
   for (const id of isNodeId(q) ? [] : queryIds(q)) {
     const hit = byId(id);
-    if (hit) return { status: "resolved", row: hit, stage: "node id" };
+    if (hit) return { status: "resolved", row: hit, stage: "node id", kind: "carried id" };
   }
   for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
@@ -513,7 +585,7 @@ function resolveScreen(exportDir, query, opts) {
     }
     const compactRows = [...compact.values()];
     const one = compactRows.length === 1 ? compactRows[0] : void 0;
-    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + "), kind: "folded" };
     if (compactRows.length > 1) {
       return {
         status: "ambiguous",
@@ -553,6 +625,10 @@ function main(argv) {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
+    const k = nodeStem(fs5.existsSync(VERIFY_DIR) ? path4.resolve(VERIFY_DIR) : null, res.row.id, res.row.name);
+    console.log(`stem ${"why" in k ? screenStem(res.row.name, res.row.id) : k.stem}`);
+    if ("why" in k) console.error(`note   ${k.why}`);
+    else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} \u2014 verify-screen --migrate renames them to ${k.stem}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
     return 0;
   }

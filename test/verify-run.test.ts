@@ -234,6 +234,10 @@ await block("verify-screen --status --publish (staging):", async () => {
   safe("…and a ../ spelling of it → refused", () => "error" in VR.publishStaged(path.join(dir, "..", "verify"), dir));
   fs.unlinkSync(alias);
   fs.rmSync(path.join(stage, "Plots.report.json"));
+  fs.writeFileSync(path.join(stage, ".migrate-Plots.json"), "{}");
+  const journal = VR.publishStaged(stage, dir);
+  safe("a stage dir holding a --migrate journal (.migrate-<S>.json) → refused, nothing copied", () => "error" in journal && journal.error.includes(".migrate-Plots.json") && !fs.existsSync(path.join(dir, ".migrate-Plots.json")));
+  fs.rmSync(path.join(stage, ".migrate-Plots.json"));
   // statusRun writes the status between prepare and commit — a refused write aborts, publishing nothing
   const prep = VR.prepareStaged(stage, dir);
   const prepped = "files" in prep && fs.readFileSync(prep.tmpOf("Plots-dialog.png"), "utf8") === "changed" && fs.readFileSync(path.join(dir, "Plots-dialog.png"), "utf8") === "png bytes";

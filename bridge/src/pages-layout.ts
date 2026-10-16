@@ -94,6 +94,16 @@ export function nodeIdFromStem(stem: unknown): string | null {
   return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
 }
 
+/**
+ * The ONE stem a screen's files share, whichever pull shape wrote them: `<safe(name)>__<safe(id)>` ("layer" when the
+ * layer has no name). The id makes it unique (two frames called `Popup` are two stems) and nodeIdFromStem reads it
+ * back; the name is only for a person reading the tree. buildPageLayout's layer files and screenPaths' `base` are
+ * both this.
+ */
+export function screenStem(name: unknown, id: unknown): string {
+  return safe(name || "layer") + "__" + safe(id);
+}
+
 // --------------------------------------------------------- title / texts
 //
 // The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Jet
@@ -249,12 +259,14 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
       byPage.set(key, bucket);
       pages.push(bucket);
     }
-    const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+    const base = screenStem(l.name, l.id) + ".json";
     // layersDoc.sourceFile is stamped by write-out.ts's writeExport (from what figma-pull.ts
     // resolved the connected client to be) — carry it onto every per-layer file too, same field a
     // single-screen pull's writeScreen stamps, so doctor's exportSourceCounts() reads one field regardless
     // of which pull shape produced the screen.
     const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
+    // the index row carries the file's key too (mergeScreenIndex tells two files of one name apart by it)
+    const rowSrc = layersDoc && layersDoc.sourceFile && layersDoc.sourceFileKey ? { ...src, sourceFileKey: layersDoc.sourceFileKey } : src;
     layerFiles.push({
       path: join(bucket.dir, base),
       data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) },
@@ -267,8 +279,8 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
     // hand-built layersDoc ever runs short, the row is undefined and the entry is written without its
     // name/id, exactly as the spread of undefined always did. Object.assign (not a spread) because it
     // keeps that runtime while its typing (`{} & (Row | undefined) & …`) drops the undefined branch;
-    // same keys, same order, same values as `{ ...row, title, texts, ...src, file }`.
-    bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...src, file: join(bucket.dir, base) }));
+    // same keys, same order, same values as `{ ...row, title, texts, ...rowSrc, file }`.
+    bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...rowSrc, file: join(bucket.dir, base) }));
   });
   // `pageId` is what makes two same-named entries tellable apart by a consumer — without it the only
   // difference between them would be the disambiguating "_2" on a directory name, which is a
@@ -311,11 +323,13 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
 // distinguishable — the same reason buildPageLayout suffixes its layer files.
 export const NO_PAGE_DIR = "_unfiled";
 
-/** Where a page/node identity can sit on the single-screen result screenPaths is handed. */
+/** Where a page/node identity can sit on the single-screen result screenPaths is handed. `nodes` is the screen doc's
+ *  node list: its first node is the root, whose id stands in for a reply that carries no nodeId. */
 interface ScreenIdentity {
   page?: string;
   pageId?: string;
   nodeId?: string;
+  nodes?: ReadonlyArray<{ id?: string } | null | undefined>;
 }
 
 /**
@@ -355,8 +369,11 @@ export function screenPaths(screenDoc: ScreenPathsInput, sep: string): ScreenPat
   // An export written before the plugin emitted page identity still has to land somewhere, and
   // somewhere PREDICTABLE — a bucket named for what it is beats inventing a page that was never read.
   const dir = page ? safe(page) : NO_PAGE_DIR;
-  const nodeId = screenDoc.nodeId || (inner && inner.nodeId);
-  const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
+  // The root node's id when the reply names none: the index row (write-out.ts writeScreen) is keyed on that same id,
+  // so the file's stem and its row always name one node.
+  const root = inner && inner.nodes ? inner.nodes[0] : undefined;
+  const nodeId = screenDoc.nodeId || (inner && inner.nodeId) || (root && typeof root.id === "string" ? root.id : undefined);
+  const base = nodeId ? screenStem(screenDoc.screenName, nodeId) : safe(screenDoc.screenName || "screen");
   return {
     page: page || null,
     pageId: pageId || null,
@@ -373,7 +390,8 @@ export function screenPaths(screenDoc: ScreenPathsInput, sep: string): ScreenPat
 
 // Merge one screen's entry into a page index (or the root index's pageDirs), keyed on the FILE path —
 // which is unique per (page, name, node id) by construction, so re-pulling the same frame replaces its
-// row instead of appending a duplicate, and pulling a different frame with the same name adds one.
+// row instead of appending a duplicate, and pulling a different frame with the same name adds one — and
+// on the node id within one Figma file, so re-pulling a renamed frame replaces its old row too.
 //
 // `prev` is whatever is on disk (read back as untyped JSON — possibly written by an older version, or
 // hand-edited), so it is narrowed, never trusted: rows already there are carried through as `unknown`.
@@ -403,13 +421,38 @@ export interface MergedRootIndex {
 // elements land on the result under their indices) instead of being replaced by {}.
 const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
 
-// Keeps a previous row unless it is the one being replaced — `l && l.file !== file` in plain JS
-// (a truthy non-object has no `.file`, so it is kept).
-const notFile = (file: string) => (l: unknown): boolean => (isObjectLike(l) ? l.file !== file : !!l);
+// Keeps a previous row unless it is the one being replaced: the same file, or the same node of the same Figma file
+// under another name — a frame renamed in Figma and pulled again lands in a new file, and its old row would leave
+// two rows with one id, which a lookup by id can never resolve. Node ids repeat across Figma files, so:
+//   - two rows that both name their Figma file are one node only when they name the same one: when both carry a
+//     sourceFileKey the key decides (a file renamed in Figma keeps its key; two files can share a name), otherwise
+//     the same sourceFile (a file name);
+//   - a row without a sourceFile (pulled before rows were stamped) is replaced by a stamped pull of the same pageId,
+//     whatever the page is called now — a page renamed in Figma since keeps its id. Page ids repeat across files too
+//     (every file's first page is 0:1), so an unstamped row can be dropped for a pull of another file; that risk is
+//     taken for unstamped rows only, which a stamped re-pull of their own file would otherwise never replace;
+//   - two rows of which the incoming one is unstamped are one node only when both name the same page: the same pageId
+//     and the same page name.
+// Beside an unstamped row, or for an unstamped incoming row, no pageId on the incoming row keeps the row. A truthy non-object has no `.file`, so it is kept.
+const samePage = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean =>
+  !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+const sameFigmaFile = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
+const notSameRow = (entry: ScreenIndexRow) => (l: unknown): boolean => {
+  if (!isObjectLike(l)) return !!l;
+  if (l.file === entry.file) return false;
+  if (l.id !== entry.id) return true;
+  return !sameFigmaFile(l, entry);
+};
 
 export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {
   const base: Record<string, unknown> = isObjectLike(prev) ? prev : {};
-  const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notFile(entry.file)) : [];
+  const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notSameRow(entry)) : [];
   layers.push(entry);
   return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
 }
@@ -428,7 +471,7 @@ export function mergeRootIndex(prev: unknown, paths: ScreenPaths, layerCount: nu
   pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
   const result: MergedRootIndex = Object.assign({}, base, { pageDirs });
   if (entry) {
-    const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notFile(entry.file)) : [];
+    const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notSameRow(entry)) : [];
     layers.push(entry);
     result.layers = layers;
   }

@@ -79,6 +79,27 @@ console.log("writeFileAtomic — failures:");
   }
 }
 
+console.log("writeFileAtomic — sync:");
+{
+  const d = mk();
+  const f = path.join(d, "journal.json");
+  let syncs = 0;
+  const realFsync = fs.fsyncSync;
+  fs.fsyncSync = (fd: number): void => { syncs++; realFsync(fd); };
+  try {
+    writeFileAtomic(f, "{\"v\":1}\n");
+    const plain = syncs;
+    writeFileAtomic(f, "{\"v\":2}\n", { sync: true });
+    t(`sync: the bytes are fsynced, and the directory too off Windows; no sync without it (got ${plain}, ${syncs - plain})`,
+      () => plain === 0 && syncs === (posix ? 2 : 1) && fs.readFileSync(f, "utf8") === "{\"v\":2}\n" && fs.readdirSync(d).join() === "journal.json");
+    const blocked = path.join(d, "taken");
+    fs.mkdirSync(blocked); fs.writeFileSync(path.join(blocked, "keep"), "x");
+    let threw = false;
+    try { writeFileAtomic(blocked, "new", { sync: true, mode: 0o600 }); } catch { threw = true; }
+    t("…a failed rename with sync throws and leaves no tmp file", () => threw && tmpsIn(d).length === 0);
+  } finally { fs.fsyncSync = realFsync; }
+}
+
 console.log("writeFileAtomic — mode:");
 if (posix) {
   const d = mk();

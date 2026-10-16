@@ -141,7 +141,11 @@ console.log("recordPlan:");
   const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
   check(`edited report → "plan.verification records an older run of ${REPORT} — re-run … --compare --record-plan (the report is the verdict)"`,
     w.some((x) => x.startsWith(`plan.verification records an older run of ${REPORT} — re-run `) && x.endsWith("--compare --record-plan (the report is the verdict)")));
-  check("…a missing report is no recorded-sha warning (the status reasons say there is no report)", (() => { fs.rmSync(path.join(root, REPORT)); return verifyBuild.recordedReportWarnings(planOf(root), root).length === 0; })());
+  check("…a missing report is no recorded-sha warning, but ONE 'not on disk' warning (the record cannot be checked against it)", (() => {
+    fs.rmSync(path.join(root, REPORT));
+    const gone = verifyBuild.recordedReportWarnings(planOf(root), root);
+    return gone.length === 1 && (gone[0] ?? "").startsWith(`plan.verification.recorded names ${REPORT}, which is not on disk (renamed or deleted)`) && !/older run/.test(gone[0] ?? "");
+  })());
   check("the plan text before the record was not the plan text after (sanity)", beforeText !== text);
 }
 {

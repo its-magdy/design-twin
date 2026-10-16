@@ -664,6 +664,8 @@ export interface IndexRow {
   texts?: string[] | undefined;
   exportedAt?: string;
   sourceFile?: string;
+  /** the Figma file's key, beside its name (two files can share a name); absent when the client gave none */
+  sourceFileKey?: string;
   /** sibling <Screen>.vars.json */
   variables?: string;
   /** sibling <Screen>.assets.json */

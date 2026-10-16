@@ -6113,11 +6113,34 @@ import crypto3 from "node:crypto";
 import fs6 from "node:fs";
 import path7 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
+function syncDir(dir) {
+  if (process.platform === "win32") return;
+  try {
+    const fd = fs6.openSync(dir, "r");
+    try {
+      fs6.fsyncSync(fd);
+    } finally {
+      fs6.closeSync(fd);
+    }
+  } catch {
+  }
+}
 function writeFileAtomic(file, data, opts = {}) {
-  fs6.mkdirSync(path7.dirname(path7.resolve(file)), { recursive: true });
+  const dir = path7.dirname(path7.resolve(file));
+  fs6.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
-    fs6.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    if (opts.sync) {
+      const fd = fs6.openSync(tmp, "wx", opts.mode);
+      try {
+        fs6.writeFileSync(fd, data);
+        fs6.fsyncSync(fd);
+      } finally {
+        fs6.closeSync(fd);
+      }
+    } else {
+      fs6.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    }
     if (opts.mode !== void 0) fs6.chmodSync(tmp, opts.mode);
     fs6.renameSync(tmp, file);
   } catch (e) {
@@ -6127,6 +6150,7 @@ function writeFileAtomic(file, data, opts = {}) {
     }
     throw e;
   }
+  if (opts.sync) syncDir(dir);
 }
 
 // design-to-code/verify-run.ts

@@ -48,26 +48,26 @@ import { parseArgs } from "node:util";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { visibility } from "./plan-skeleton.ts";
-import { screenExportOf, screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
-import { canonical, isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isPageIndex, isPagesRootIndex, isProbeIdentity, isRecordV2Shaped, isReportBehaviour, isVerificationRecord, isVerifyReport, parsePlan, RECORD_KEYS, RECORD_V1_KEYS, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
+import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { isRecordV2Shaped, isVerificationRecord, parsePlan } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
-import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
-  PlanRecordCounts, PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
+  IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
+  PlanStoredStatus, PlanTokenRow, ScreenDoc,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
-import { parsePlanText, recordFacts, updatePlan, verificationFacts } from "./plan-record.ts";
+import { parsePlanText, recordedEdits, reportRecordNames, updatePlan, verificationFacts } from "./plan-record.ts";
+import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
+import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
+import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, listPlans } from "../bridge/src/project-layout.ts";
+import { parseSetName } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
@@ -397,56 +397,6 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
 // Every JSON read below (an export, its index, a verify report/expectation, a component map) is checked
 // against its doc-guards.ts guard; a lookup that finds only a broken file behaves as if it found nothing.
 
-// Stricter than project-layout's findExportDir (any export marker): the plan's screen is looked up in pages/,
-// so design/export counts only once it holds pages/ — else the pre-split design/ is tried.
-function exportDirOf(cwd: string): string {
-  const e = path.join(cwd, EXPORT_DIR);
-  return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, DESIGN_DIR); // pre-split projects
-}
-
-function indexRows(exportDir: string): IndexRow[] {
-  const root = readJsonOrNull(path.join(exportDir, "pages", "index.json"), isPagesRootIndex);
-  if (!root) return [];
-  if (root.layers) return root.layers;
-  const rows: IndexRow[] = [];
-  for (const pd of root.pageDirs) {
-    const idx = readJsonOrNull(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), isPageIndex);
-    if (idx) rows.push(...idx.layers);
-  }
-  return rows;
-}
-
-/** locateExport()'s result: the screen export a plan describes, plus what the index knows about it. */
-export interface ExportHit { file: string; doc: ScreenDoc; row: IndexRow | null; nodeId: string | null; layerName: string; sameNameRows: number }
-
-// The screen export a plan describes: its `file` header (project-relative, or relative to
-// design/export as the index writes it), else its `nodeId`, else the node id in its `screen` stem or
-// its own filename, looked up in the export index. Returns { file, doc, row } or null.
-function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
-  const exportDir = exportDirOf(cwd);
-  const tryFile = (rel: string | null | undefined): { file: string; doc: ScreenDoc } | null => {
-    if (!rel) return null;
-    for (const f of [path.resolve(cwd, rel), path.resolve(exportDir, rel)]) {
-      const doc = readJsonOrNull(f, isScreenDoc);
-      if (doc) return { file: f, doc };
-    }
-    return null;
-  };
-  let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
-  const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
-  let row: IndexRow | null = null;
-  for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
-  if (!hit && row) hit = tryFile(row.file);
-  if (!hit) return null;
-  const root: IrNode | undefined = screenRoots(hit.doc)[0];
-  const exp = screenExportOf(hit.doc);
-  const nodeId = (exp && exp.nodeId) || (root && root.id) || null;
-  const layerName = String((exp && exp.screen) || (root && root.name) || "");
-  if (!row) row = rows.find((r) => r.id === nodeId) || null;
-  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
-}
-
 // ================================================================ anchors (block 2)
 
 const anchored = (a: PlanAnchor | undefined): boolean => !!a && typeof a === "object" && (["mapModule", "file", "symbol", "omitted"] as const).some((k) => { const v = a[k]; return typeof v === "string" && !!v.trim(); });
@@ -575,98 +525,19 @@ function verificationWarnings(plan: Plan): string[] {
 // record is older than the verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
 // mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
 // (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
+// A record naming a report that is not on disk at all (renamed or deleted) cannot be compared with it, so a hand edit of
+// the record would go unseen (recordedEdits): that is a warning of its own.
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
+  if (!fs.existsSync(path.resolve(cwd, rec.report))) {
+    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
+      "legacy-named verify set, else re-run verify-screen --compare --record-plan"];
+  }
   const bytes = readRegularFile(path.resolve(cwd, rec.report));
   if (!bytes) return [];
   const now = sha256Hex(bytes);
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
-}
-
-// verification.recorded@2 is the tool's, written whole by --compare --record-plan: a key outside its closed set or a
-// value of the wrong kind (doc-guards.ts recordProblems), or — while its reportSha256 still names the report on disk —
-// anything that report decides (plan-record.ts recordFacts: verdict, headline, counts, mode, reason, renderer, the open
-// deltas, a11y; not artifacts, which depend on the disk) that is not what the report says, was edited by hand. The one
-// verification check that BLOCKS: a hand edit there would pass for the tool's record, and re-recording repairs it. It
-// also reopens a plan the hook had closed (isOpen), and --status then reads "blocked" — or "failed" when a report says
-// fail, which comes first (computeStatus). A recorded block with only the first record's keys (recorded@1) is read the
-// older way, and only what that record held is compared: verdict, headline, behaviourHeadline and counts (recordedV1Edits);
-// one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
-// isRecordV2Shaped). A recorded@1 a person added keys to that no record writes (doc-guards.ts recordV1HandKeys) blocks
-// with ONE message naming them — not one per @2 key it lacks (one holding nothing but such keys is not a record, and
-// says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks (plus one
-// per key it holds that was edited). These messages are saved in the plan (verification.hook.blocking): scripts are
-// named in words.
-const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
-const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
-// The report a record's reportSha256 still names, parsed — null when there is none to compare with: no report on disk
-// (or not a regular file), its bytes rewritten since (the sha differs: an older record, recordedReportWarnings), or not a
-// verify report.
-function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string): VerifyReport | null {
-  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
-  const bytes = readRegularFile(path.resolve(cwd, report));
-  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
-  let parsed: unknown = null;
-  try { const x: unknown = JSON.parse(bytes.toString("utf8")); parsed = x; } catch { /* unparseable: not the report the sha names */ }
-  return isVerifyReport(parsed) ? parsed : null;
-}
-// A recorded@1 block (the first record's keys only) whose reportSha256 still names the report on disk: its verdict,
-// headline, behaviourHeadline and counts that are not what that report says were edited by hand. The first writer took
-// each of them from the report as recordFacts does now — verdict and headline copied as they are (the headline is the
-// report's own text, never rebuilt), behaviourHeadline only when the report has one, counts from summary with the same
-// fallbacks (accepted from the accepted deltas, notMeasured from coverage or notMeasured[], inferred from inferred[]) —
-// so an untouched old record of that report matches, and a difference is a hand edit: it BLOCKS like the @2 compare.
-// One old record can differ untouched: the first writer hashed the file on disk, so a --compare that rewrote the same
-// report meanwhile left that run's sha beside this run's facts. The message names both causes; re-recording, which
-// rewrites the block in the current format, settles either.
-function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
-  const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
-  if (!report || typeof rec.report !== "string") return [];
-  const said = recordFacts(report, rec.report);
-  const edited: string[] = [];
-  for (const k of ["verdict", "headline", "behaviourHeadline"] as const) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
-  const counts = rec.counts;
-  if (!isJsonObject(counts)) edited.push("counts");
-  else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
-}
-function recordedEdits(plan: Plan, cwd: string): string[] {
-  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec)) return [];
-  const added = recordV1HandKeys(rec);
-  if (added.length) {
-    const named = added.map((k) => `\`${k}\``).join(", ");
-    const them = added.length > 1 ? "them" : "it";
-    // (no first-format key at all: the block is not a record, so it is not "a record with keys added")
-    if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
-      return [`verification.recorded holds only ${named}, which no record writes — remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); ` +
-        "residuals go in deviations[], anything else in notes"];
-    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes — ` +
-      `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); ` +
-      "residuals go in deviations[], anything else in notes"];
-  }
-  if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
-  const all = recordProblems(rec);
-  // (no schema, yet a key only @2 writes: the keys @2 needs and the block lacks are missing, not edited — one message)
-  const lacks = rec.schema === undefined ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === undefined) : [];
-  const edited = all.filter((k) => !lacks.includes(k));
-  if (!edited.length && isVerificationRecord(rec)) {
-    const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
-    if (report) {
-      const said = recordFacts(report, rec.report);
-      // (canonical JSON both sides — keys sorted at every depth, so an editor that reorders keys edits nothing; a key one
-      // side lacks differs from any value the other holds, null included)
-      for (const k of RECORD_FACT_KEYS) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
-      for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-    }
-  }
-  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
-  if (lacks.length) {
-    const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
-    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
-  }
-  return out;
 }
 
 // Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written
@@ -685,21 +556,6 @@ function recordedShadowWarnings(plan: Plan): string[] {
   const keys = [...(v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== undefined) : []), ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored — verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); ` +
     "remove " + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
-}
-
-/** A verify report as locateReports() summarises it for the status computation. */
-/** How locateReports() tied a report to the plan (first that matches, in this order). */
-export type ReportMatch = "name" | "nodeId" | "expectation frame" | "layer name";
-export interface ReportRef {
-  rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
-  exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
-  expectationChanged: boolean; expectationRel: string | null;
-  /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
-  waiversSha256: string | null;
-  /** report.behaviour, summarised (null = none or unreadable — a report without a behaviour section). Warnings only. */
-  behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
-  /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
-  shippedProbe: boolean;
 }
 
 // What the report's behaviour/a11y section says — WARNINGS only, never a block (not the fidelity verdict).
@@ -1324,6 +1180,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
+  warnings.push(...legacySetWarnings(plan, file, reports, exp));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
@@ -1379,62 +1236,15 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 
 // ================================================================ the verify report behind a plan
 
-// Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out), the plan's
-// own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
-// `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
-// the frame's layer name when that name is unique in the export (the older `JetRoles.report.json`
-// naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
-// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
-// incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,
-// `inputs.waivers.sha256` — the plan waivers/descopes it applied).
-// (read leniently: a malformed behaviour section is read as none — it never decides anything here)
-function behaviourRef(x: unknown): ReportRef["behaviour"] {
-  if (!isReportBehaviour(x)) return null;
-  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
-}
-function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
-  const dir = path.join(cwd, VERIFY_DIR);
-  if (!fs.existsSync(dir)) return [];
-  const e = exp === undefined ? locateExport(plan, planFile, cwd) : exp;
-  const stems = new Set([
-    plan.file ? path.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path.basename(planFile, ".json") : null,
-    plan.screen ? String(plan.screen) : null,
-  ].filter((s): s is string => !!s));
-  const nodeId = plan.nodeId || (e && e.nodeId) || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null);
-  const layer = e ? e.layerName.trim() : null;
-  const out: ReportRef[] = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
-    const abs = path.join(dir, f);
-    const r = readJsonOrNull(abs, isVerifyReport);
-    if (!r) continue;
-    const stem = f.replace(/\.report\.json$/, "");
-    let by: ReportMatch | null = null;
-    const expFile = path.join(dir, stem + ".expected.json");
-    // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
-    if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
-    // Only the expectation's frame.nodeId is read here, so only that is required of the file.
-    const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
-    if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
-    else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
-    if (!by) continue;
-    let mtimeMs = 0;
-    try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
-    // @2: which expectation the report was computed against, and whether that file still says the same
-    const want = r.inputs && r.inputs.expectationSha256;
-    let expectationChanged = false;
-    if (want && fs.existsSync(expFile)) { try { expectationChanged = sha256Hex(fs.readFileSync(expFile)) !== want; } catch { /* ignore */ } }
-    out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
-      why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
-      exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
-      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
-      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null,
-      behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
-  }
-  return out;
+// A report found for this plan under a name outside the key grammar (`<Layer>__<id>`, `<Layer>__<id>.<variant>` —
+// screen-key.ts): a nickname, or an `@320` / `-r1` variant. It is still read (locateReports matches it by content); the
+// warning names it so `verify-screen --migrate` can give it the screen's key.
+function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[], exp: ExportHit | null | undefined): string[] {
+  const nodeId = planNodeId(plan, planFile, exp ?? null);
+  return reports.flatMap((r) => {
+    const set = path.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} — run verify-screen --migrate`] : [];
+  });
 }
 
 // ================================================================ computed status
@@ -1984,10 +1794,11 @@ async function main(argv: string[]): Promise<number> {
 
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, recordedReportWarnings, recordedEdits, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
+  verificationWarnings, recordedReportWarnings, recordedEdits, reportRecordNames, legacySetWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,
 };
+export type { ExportHit, ReportMatch, ReportRef } from "./verify-locate.ts";
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const watchdog = setTimeout(() => {

@@ -319,8 +319,14 @@ console.log("verification.recorded — the tool's block:");
   check("[shape] parsePlan refuses a non-object verification.recorded, naming it", "error" in p && p.error === "is not a valid plan: `verification.recorded` must be an object");
   check("[shape] …but reads a recorded block with hand edits inside (verify-build blocks on those, and --record-plan can still repair the plan)",
     "plan" in parsePlan({ verification: { recorded: { ...REC, residuals: [], verdict: 3 } } }));
-  check("the record as written → no block, and the readers take mode/artifacts/deltas/a11y from it (no 'mode' warning, nothing missing)",
-    recordBlocks({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC }).length === 0 && problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC })).length === 0);
+  // (the one problem left is that its report is not on disk, which is a warning of its own)
+  const NOT_ON_DISK = "plan.verification.recorded names design/verify/login.report.json, which is not on disk (renamed or deleted) — the record cannot be checked against its report: " +
+    "run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan";
+  const asWritten = problems(FILES, planWith({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC }));
+  check(`the record as written → no block, and the readers take mode/artifacts/deltas/a11y from it (no 'mode' warning, nothing missing; got ${JSON.stringify(asWritten)})`,
+    recordBlocks({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC }).length === 0 && JSON.stringify(asWritten) === JSON.stringify([NOT_ON_DISK]));
+  check("[recorded report] a record whose report is on disk says nothing of it being gone",
+    !problems({ ...FILES, "design/verify/login.report.json": "{}" }, planWith({ coverage: { rendered: ["default"], notChecked: [] }, recorded: REC })).some((m) => /which is not on disk/.test(m)));
   check(`a key the tool does not write, at the top of the record or inside a row → BLOCKS naming it (got ${JSON.stringify(recordBlocks({ recorded: { ...REC, residuals: ["shadow"], deltas: [{ ...REC.deltas[0], why: "approximation" }] } }))})`,
     JSON.stringify(recordBlocks({ recorded: { ...REC, residuals: ["shadow"], deltas: [{ ...REC.deltas[0], why: "approximation" }] } })) === JSON.stringify([EDITED("residuals"), EDITED("deltas[0].why")]));
   check("a value of the wrong kind (a string count, an object deltas, an unknown mode, a missing artifacts) → BLOCKS, one message each",
@@ -1796,6 +1802,13 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   const l3 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [twinA, twinB, clean]) ?? [];
   check("one warning per other report FILE: two failing files sharing a basename → two warnings (no grouping by name)",
     l3.length === 2 && (l3[0] ?? "").startsWith("design/verify/a/Crates@320.report.json: behaviour/a11y — 4 failures") && (l3[1] ?? "").startsWith("design/verify/b/Crates@320.report.json: behaviour/a11y — 2 failures"));
+  // a report under a name outside `<Layer>__<id>` / `<Layer>__<id>.<variant>` is still read, and named for --migrate
+  const legacyW = verifyBuild.legacySetWarnings({ nodeId: "80:1" }, undefined, [narrow, clean, darkOff, earlier3, reportRef({ rel: "design/verify/Crates__80_1.report.json" }), reportRef({ rel: "design/verify/Crates__80_1.dark.report.json" })], null);
+  check(`legacy-named reports (a nickname, @320, a dotted nickname, -r1) each warn once; <Layer>__<id> and <Layer>__<id>.dark do not (got ${JSON.stringify(legacyW)})`,
+    JSON.stringify(legacyW) === JSON.stringify(["Crates@320", "Crates", "Crates.dark", "Crates-r1"].map((s) => `legacy-named verify set ${s} for node 80:1 — run verify-screen --migrate`)));
+  check("…with no node id known, it names the plan's screen",
+    JSON.stringify(verifyBuild.legacySetWarnings({}, undefined, [clean], null)) === JSON.stringify(["legacy-named verify set Crates for this plan's screen — run verify-screen --migrate"])
+    && verifyBuild.legacySetWarnings({}, path.join("design", "plan", "Crates__80_1.json"), [clean], null)[0]?.includes("node 80:1") === true);
   check("the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
 
   // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook

@@ -27,7 +27,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { check as ok, report } from "./assert.ts";
-import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths } from "../bridge/src/pages-layout.ts";
+import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths, screenStem } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
@@ -336,10 +336,37 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
   ok("the resolved stage is 'node id'", (() => { const r = resolveScreen(FIXTURE, "positions___7314_87192"); return r.status === "resolved" && r.stage === "node id"; })());
   ok("a dash id `7314-87192` resolves", idOf("7314-87192") === "7314:87192");
   ok("a URL-ish `?node-id=7314-87192` resolves", idOf("https://www.figma.com/design/KEY/Name?node-id=7314-87192") === "7314:87192");
-  const cli = (...a: string[]): { status: number | null; err: string } => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8" });
-    return { status: r.status, err: r.stderr };
+  {
+    const kindOf = (q: string): string | null => { const r = resolveScreen(FIXTURE, q); return r.status === "resolved" ? r.kind : null; };
+    ok(`each resolved result says its stage's kind: node id, exact, carried id (got ${JSON.stringify(["7314:87192", "Jet Roles", "positions___7314_87192"].map(kindOf))})`,
+      kindOf("7314:87192") === "node id" && kindOf("Jet Roles") === "exact" && kindOf("positions___7314_87192") === "carried id");
+  }
+  const cliIn = (cwd: string | undefined, ...a: string[]): { status: number | null; err: string; out: string } => {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8", cwd });
+    return { status: r.status, err: r.stderr, out: r.stdout };
   };
+  const cli = (...a: string[]): { status: number | null; err: string; out: string } => cliIn(undefined, ...a);
+  {
+    // run from a project root: the stem is the verify dir's for the node when it holds a set (design/verify), else the derived one
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-stem-"));
+    const byTitle = cliIn(proj, FIXTURE, "Jet Roles");
+    const outLines = byTitle.out.split("\n");
+    ok(`the CLI prints the resolved line, then \`stem <Layer>__<id>\`, then the row (got ${JSON.stringify(outLines.slice(0, 3))})`,
+      byTitle.status === 0 && outLines[0] === "resolved 'Jet Roles' -> positions  (7314:87192) via indexed title" && outLines[1] === "stem positions___7314_87192"
+      && (JSON.parse(outLines.slice(2).join("\n")) as { id?: unknown }).id === "7314:87192");
+    const verify = path.join(proj, "design", "verify");
+    fs.mkdirSync(verify, { recursive: true });
+    fs.writeFileSync(path.join(verify, "JetRoles.expected.json"), JSON.stringify({ frame: { nodeId: "7314:87192", name: "positions " } }));
+    const legacy = cliIn(proj, FIXTURE, "Jet Roles");
+    ok(`a legacy-named set of the node: the stem is still the derived one, and a note names the set and --migrate (got ${JSON.stringify(legacy.out.split("\n")[1])}; ${legacy.err.trim()})`,
+      legacy.out.split("\n")[1] === "stem positions___7314_87192" && /legacy-named verify set\(s\) of this node: JetRoles — verify-screen --migrate renames them to positions___7314_87192/.test(legacy.err));
+    fs.rmSync(path.join(verify, "JetRoles.expected.json"));
+    fs.writeFileSync(path.join(verify, "Jet_Roles__7314_87192.expected.json"), JSON.stringify({ frame: { nodeId: "7314:87192", name: "Jet Roles" } }));
+    const renamed = cliIn(proj, FIXTURE, "7314:87192");
+    ok(`a set already there under the node's earlier layer name keeps its stem: \`stem Jet_Roles__7314_87192\` (got ${JSON.stringify(renamed.out.split("\n")[1])})`,
+      renamed.status === 0 && renamed.out.split("\n")[1] === "stem Jet_Roles__7314_87192");
+    fs.rmSync(proj, { recursive: true, force: true });
+  }
   const c1 = cli(pageDir, "Jet Roles");
   ok("the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
     c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));
@@ -374,6 +401,16 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
     const layerStem = path.basename(must(pl.layerFiles[0], "a layer file").path, ".json");
     ok(`[stem] ${id}: screenPaths' base (${sp.base}) and the page layout's file stem (${layerStem}) both read back as ${id}`,
       nodeIdFromStem(sp.base) === id && nodeIdFromStem(layerStem) === id && nodeIdFromSafe(safe(id)) === id);
+    ok(`[stem] ${id}: both pull shapes give the same stem, screenStem's (${screenStem("Odd  name / ü_", id)})`,
+      sp.base === layerStem && layerStem === screenStem("Odd  name / ü_", id));
+  }
+  {
+    // a reply without a top-level nodeId: the root node's id names the file, as it keys the index row
+    const viaRoot = screenPaths({ screenName: "Tray", page: "P", screen: { nodes: [{ id: "4:9" }] } }, "/");
+    ok(`[stem] a reply naming no nodeId files under its root node's id (got ${viaRoot.base})`, viaRoot.base === "Tray__4_9" && viaRoot.nodeId === "4:9");
+    const bare = screenPaths({ screenName: "Tray", page: "P" }, "/");
+    ok("[stem] control: with no id anywhere the base carries none", bare.base === "Tray" && bare.nodeId === null);
+    ok("[stem] a nameless layer's stem is `layer__<id>`", screenStem(undefined, "1:2") === "layer__1_2" && screenStem("", "1:2") === "layer__1_2");
   }
   const table: Array<[string, string | null]> = [
     ["Foo__12_34", "12:34"], ["Foo____12_34", "12:34"], ["a__b__12_34", "12:34"], ["__12_34", "12:34"],

@@ -62,6 +62,7 @@ import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
+import { migrateMain } from "./verify-migrate.ts";
 
 // Defaulting `--out` to the input's own basename only helps when the caller actually uses that default.
 // An explicit `--out <nickname>` — which both the verify skill's own `<Screen>` placeholder and
@@ -225,7 +226,21 @@ function main(argv: string[]): number | Promise<number> {
     "      evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
     "      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,\n" +
     "      6 when the run cache exists but cannot be read.\n" +
-    "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).";
+    `  ${scriptCmd("verify-screen")} --migrate [--apply] [--dir design/verify]\n` +
+    "      renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> — a variant of\n" +
+    "      it to <Layer>__<id>.<slug> — with every file of the set (the live status too), and rewrites the paths a plan's\n" +
+    "      verification.recorded (report, a11y.report, artifacts), verification.a11y.report and verification.artifacts name.\n" +
+    "      A dry run unless --apply. A legacy set whose node already has its <Layer>__<id> set has its expectation retired\n" +
+    "      (<S>.expected.json.retired; its other files stay under <S>).\n" +
+    "      Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan\n" +
+    "      records with a hand-edited record or finds by its name alone with no node id of the set's (add \"nodeId\" to it).\n" +
+    "      Never rewrites a report, measured file or expectation; plans are never renamed.\n" +
+    "      A run that dies part way leaves design/verify/.migrate-<S>.json (its journal): the next --migrate reports it and does\n" +
+    "      nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes\n" +
+    "      unless written again since), then migrates.\n" +
+    "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).\n" +
+    "exit (--migrate): 0 nothing skipped · 1 a set skipped or refused, or an interrupted migration awaits its rollback (a dry run,\n" +
+    "      or --apply whose rollback could not finish) · 2 usage.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
   const OPTIONS = {
@@ -234,10 +249,17 @@ function main(argv: string[]): number | Promise<number> {
       "all-fields": { type: "boolean" },
     status: { type: "string" }, wait: { type: "string" }, phase: { type: "string" }, run: { type: "string" }, "new-run": { type: "boolean" }, detail: { type: "string" },
     dir: { type: "string" }, publish: { type: "string" }, timeout: { type: "string" }, stall: { type: "string" }, interval: { type: "string" },
-    "record-plan": { type: "boolean" },
+    "record-plan": { type: "boolean" }, migrate: { type: "boolean" }, apply: { type: "boolean" },
     help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  // --migrate renames legacy-named verify sets (verify-migrate.ts); it takes --apply and --dir only
+  if (flags.migrate) {
+    const other = Object.entries(flags).filter(([k, v]) => v !== undefined && !["migrate", "apply", "dir"].includes(k)).map(([k]) => k);
+    if (other.length || files.length) { console.error(`--migrate takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}\n` + USAGE); return 2; }
+    return migrateMain({ apply: flags.apply, dir: flags.dir });
+  }
+  if (flags.apply !== undefined) { console.error("--apply only applies to --migrate\n" + USAGE); return 2; }
   // the run's status file and the wait on it — the tools write machine time, rev and shas, never the agent
   const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"] as const;
   if (flags.status !== undefined || flags.wait !== undefined) {

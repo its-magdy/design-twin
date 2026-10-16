@@ -24,6 +24,7 @@
 //     browser install: the user's call, and `npm ci`/`npm install` clear node_modules/.cache with the
 //     live status and the staged evidence in it.
 //   - a Bash or PowerShell call with `dangerouslyDisableSandbox`: a permission denial is not a sandbox violation.
+//   - `verify-screen --migrate`: it renames verify sets and rewrites plans — the caller's call.
 // A PowerShell call (tool_name `PowerShell`, the same `command` field) is judged like a Bash one, with PowerShell's
 // quoting: `Stop-Process -Name` / `kill -Name` / `Get-Process … | Stop-Process` are pattern kills (`Stop-Process -Id <pid>`
 // stays allowed), and `pwsh -c` / `cmd /c` / `iex` bodies are read. As for Bash, the files a command writes are not read.
@@ -56,8 +57,9 @@ const HOOK_HARD_MS = 5000;
 // ================================================================ file writes
 
 // Written only by verify-screen.js / verify-probe.js, never by hand: the expectation the build is graded
-// against, the report and its markdown, the run status, and the visual diff.
-const TOOL_OWNED = /\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png)$/i;
+// against, the report and its markdown, the run status, the visual diff, and a --migrate journal (`.migrate-<S>.json`,
+// which the next --migrate --apply acts on).
+const TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png))$/i;
 const CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
 const VERIFY_DIR = ["design", "verify"];
 
@@ -93,7 +95,7 @@ export function writeVerdict(file: string, ctx: GuardCtx): string | null {
   }
   if (after(segs, VERIFY_DIR) >= 0) {
     if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
-    return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. `
+    return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. `
       + `Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) `
@@ -222,7 +224,18 @@ const REASON = {
     + `No usable renderer (\`${scriptCmd("verify-probe")} --check\` exit 3): stop and ask the user, with the install line the probe printed and its cost.`,
   sandbox: "a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); "
     + "otherwise write status `blocked` and hand back \"blocked on permissions: done / remaining\" with a narrow allow rule for the owner to add.",
+  migrate: "`verify-screen --migrate` renames verify sets and rewrites the plans in design/plan/ — the caller's call, never the verifier's. "
+    + "Name the legacy-named set (and its node id) in your hand-back instead.",
 } as const;
+
+// `verify-screen --migrate` run as a script (`node …/verify-screen.js --migrate`, `./verify-screen.js --migrate`, through a
+// runner such as npx tsx or yarn node): the script is the first word, or a word of a runner's command line.
+const VERIFY_SCREEN = /(^|[\\/])verify-screen\.[cm]?[jt]s$/i;
+const SCRIPT_RUNNERS = new Set(["node", "bun", "deno", "tsx", "ts-node", "npx", "pnpx", "bunx", "yarn", "pnpm", "npm"]);
+function runsMigrate(words: Words, p: string): boolean {
+  const s = words.findIndex((w) => VERIFY_SCREEN.test(w));
+  return s >= 0 && (s === 0 || SCRIPT_RUNNERS.has(p)) && words.slice(s + 1).some((w) => w === "--migrate" || w.startsWith("--migrate="));
+}
 
 // Is words[i…] `playwright install` (or install-deps)?
 const playwrightInstall = (words: Words, i: number): boolean => {
@@ -251,6 +264,7 @@ function commandVerdict(cmd: Words, line: string, depth: number, ps: boolean): s
   const p = prog(words[0] ?? "");
   const args = words.slice(1);
   if (!p) return null;
+  if (runsMigrate(words, p)) return REASON.migrate;
 
   if (SHELLS.has(p)) {
     const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) || a === "--command");
@@ -412,7 +426,8 @@ const USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, …);",
-  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox.",
+  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
+  "verify-screen --migrate (it renames verify sets and rewrites plans).",
   "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   "A refusal is {\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",…}} on stdout; every answer exits 0.",
   "A call from any other agent, or a payload it cannot read, is allowed (the latter logged to stderr).",

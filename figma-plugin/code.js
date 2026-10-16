@@ -36,6 +36,9 @@
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
   }
+  function screenStem(name, id) {
+    return safe(name || "layer") + "__" + safe(id);
+  }
   var shown = (c) => !!c && typeof c === "object" && !c.hidden;
   function firstByName(node, name) {
     if (!node || typeof node !== "object") return null;
@@ -130,15 +133,16 @@
         byPage.set(key, bucket);
         pages.push(bucket);
       }
-      const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+      const base = screenStem(l.name, l.id) + ".json";
       const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
+      const rowSrc = layersDoc && layersDoc.sourceFile && layersDoc.sourceFileKey ? { ...src, sourceFileKey: layersDoc.sourceFileKey } : src;
       layerFiles.push({
         path: join(bucket.dir, base),
         data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) }
       });
       const title = l.tree ? deriveTitle(l.tree) : void 0;
       const texts = l.tree ? collectTexts(l.tree) : void 0;
-      bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...src, file: join(bucket.dir, base) }));
+      bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...rowSrc, file: join(bucket.dir, base) }));
     });
     const pageDirs = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
     const meta = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });
