@@ -915,6 +915,7 @@ var RunCacheUnwritable = class extends Error {
 
 // design-to-code/plan-record.ts
 var slash = (p) => p.split(path6.sep).join("/").split("\\").join("/");
+var formatPlan = formatJsonLike;
 var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
 var reportFileText = (report) => JSON.stringify(report, null, 2) + "\n";
 function parsePlanText(raw, file) {
@@ -1459,7 +1460,7 @@ function replacedNote(doc) {
   const r = doc.replaced;
   return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
-var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
+var TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected\.json|report\.json|report\.md|status\.json|prev\.json))$/;
 function prepareStaged(stageDir, destDir) {
   let entries;
   try {
@@ -1470,7 +1471,7 @@ function prepareStaged(stageDir, destDir) {
   if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
-  if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
+  if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files and migration journals are written by verify-screen itself, never copied in` };
   fs9.mkdirSync(destDir, { recursive: true });
   const suffix = tmpSuffix();
   const tmpOf = (name) => path8.join(destDir, name) + suffix;
@@ -6057,13 +6058,42 @@ function migrate(opts) {
   const planDir = path14.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== void 0 ? path14.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs) => slash2(path14.relative(cwd, abs)) || ".";
+  const skip = (result2, set, why) => {
+    result2.skipped.push({ set, why });
+    err(`skip    ${shown(path14.join(verifyDir, set))}: ${why[0] ?? ""}`);
+    for (const w of why.slice(1)) err(`        ${w}`);
+  };
+  const first = { steps: [], done: [], skipped: [], rolledBack: [] };
+  for (const file of listJournals(verifyDir)) {
+    const j = readJournal(file);
+    if ("why" in j) {
+      skip(first, path14.basename(file), [`${shown(file)}: ${j.why} \u2014 not a journal --migrate wrote; remove it by hand`]);
+      continue;
+    }
+    const what = `an interrupted migration of ${j.set} -> ${j.to} (${j.at}) left ${shown(file)}`;
+    if (!opts.apply) {
+      skip(first, j.set, [`${what} \u2014 --migrate --apply rolls it back first (every file to its old name, every plan it rewrote to its old bytes), then migrates`]);
+      continue;
+    }
+    const { left, retry } = rollbackJournal(j, { cwd, verifyDir, planDir });
+    if (retry) {
+      skip(first, j.set, [`${what} \u2014 rolled back in part; the journal stays, so --migrate --apply tries again:`, ...left.map((x) => `  ${x}`)]);
+      continue;
+    }
+    fs15.rmSync(file, { force: true });
+    first.rolledBack.push(j.set);
+    out(`rolled back ${shown(path14.join(verifyDir, j.set))}: ${what} \u2014 every file is under its old name again`);
+    for (const x of left) err(`note  ${x}`);
+  }
+  if (first.skipped.length) {
+    err(`nothing migrated: ${first.skipped.length} interrupted migration(s) to roll back first`);
+    return first;
+  }
   const steps = planMigration({ cwd, verifyDir, planDir, exportDir });
-  const result = { steps, done: [], skipped: [] };
+  const result = { ...first, steps };
   for (const s of steps) {
     if (s.kind === "skip") {
-      result.skipped.push({ set: s.set, why: s.why });
-      err(`skip    ${shown(path14.join(verifyDir, s.set))}: ${s.why[0] ?? ""}`);
-      for (const w of s.why.slice(1)) err(`        ${w}`);
+      skip(result, s.set, s.why);
       continue;
     }
     if (s.kind === "retire") {
@@ -6074,12 +6104,9 @@ function migrate(opts) {
       for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
     }
     if (!opts.apply) continue;
-    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck });
-    if (r.why.length) {
-      result.skipped.push({ set: s.set, why: r.why });
-      err(`skip    ${shown(path14.join(verifyDir, s.set))}: ${r.why[0] ?? ""}`);
-      for (const w of r.why.slice(1)) err(`        ${w}`);
-    } else result.done.push(s.set);
+    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck, crashAt: opts.crashAt });
+    if (r.why.length) skip(result, s.set, r.why);
+    else result.done.push(s.set);
     for (const n of r.notes) err(`note  ${n}`);
   }
   const moving = steps.filter((s) => s.kind !== "skip").length;
@@ -6422,16 +6449,73 @@ function restorePlan(w, cwd) {
     try {
       const now = readText(w.file);
       if (now === w.before) return null;
-      if (now !== w.after) return `${rel} was written again after the migration rewrote it \u2014 left as it is (a path in it may name a renamed file: fix it by hand)`;
+      if (now !== w.after) return { why: `${rel} was written again after the migration rewrote it \u2014 left as it is (a path in it may name a renamed file: fix it by hand)`, final: true };
       writeFileAtomic(w.file, w.before);
       return null;
     } finally {
       lock.release();
     }
   } catch (e) {
-    return `${rel} could not be restored: ${errMsg(e)}`;
+    return { why: `${rel} could not be restored: ${errMsg(e)}`, final: false };
   }
 }
+function settle(plans, moves) {
+  const all = [...plans, ...moves.map((m) => {
+    const why = undoMove(m);
+    return why === null ? null : { why, final: false };
+  })].filter((x) => x !== null);
+  return { left: all.map((x) => x.why), retry: all.some((x) => !x.final) };
+}
+var JOURNAL_SCHEMA = "designtwin/verify-migrate-journal@1";
+var JOURNAL_RE = /^\.migrate-.+\.json$/;
+var journalFile = (verifyDir, set) => path14.join(verifyDir, `.migrate-${set}.json`);
+function listJournals(verifyDir) {
+  try {
+    return fs15.readdirSync(verifyDir).filter((f) => JOURNAL_RE.test(f)).sort().map((f) => path14.join(verifyDir, f));
+  } catch {
+    return [];
+  }
+}
+var isName = (x) => typeof x === "string" && x !== "" && x !== "." && x !== ".." && !/[\\/]/.test(x);
+function readJournal(file) {
+  let j;
+  try {
+    j = JSON.parse(fs15.readFileSync(file, "utf8"));
+  } catch (e) {
+    return { why: `unreadable (${errMsg(e)})` };
+  }
+  if (!isJsonObject(j) || j.schema !== JOURNAL_SCHEMA) return { why: `no ${JOURNAL_SCHEMA} schema` };
+  const { set, to, at, moves, live, plans } = j;
+  if (!isName(set) || !isName(to) || typeof at !== "string" || typeof live !== "boolean" || !Array.isArray(moves) || !Array.isArray(plans)) return { why: "malformed" };
+  const ms = [];
+  for (const m of moves) {
+    if (!isJsonObject(m) || !isName(m.from) || !isName(m.to) || m.tmp !== void 0 && !isName(m.tmp)) return { why: "a move that is not two file names" };
+    ms.push({ from: m.from, to: m.to, ...m.tmp !== void 0 ? { tmp: m.tmp } : {} });
+  }
+  const ps = [];
+  for (const p of plans) {
+    if (!isJsonObject(p) || !isName(p.file) || !p.file.endsWith(".json") || typeof p.before !== "string" || p.after !== void 0 && typeof p.after !== "string") return { why: "a plan entry that is not a plan file name and its bytes" };
+    ps.push({ file: p.file, before: p.before, ...p.after !== void 0 ? { after: p.after } : {} });
+  }
+  return { schema: JOURNAL_SCHEMA, set, to, at, moves: ms, live, plans: ps };
+}
+function journalMoves(j, verifyDir) {
+  const abs = (n) => path14.join(verifyDir, n);
+  const files = j.moves.map((m) => ({ from: abs(m.from), to: abs(m.to), ...m.tmp !== void 0 ? { tmp: abs(m.tmp) } : {} }));
+  return j.live ? [...files, { from: liveStatusFile(abs(j.set)), to: liveStatusFile(abs(j.to)) }] : files;
+}
+function rollbackJournal(j, d) {
+  const held = lockStatuses([path14.join(d.verifyDir, j.set), path14.join(d.verifyDir, j.to)]);
+  if ("why" in held) return { left: [held.why], retry: true };
+  try {
+    const plans = j.plans.flatMap((p) => p.after === void 0 ? [] : [restorePlan({ file: path14.join(d.planDir, p.file), before: p.before, after: p.after }, d.cwd)]);
+    return settle(plans, journalMoves(j, d.verifyDir).reverse());
+  } finally {
+    for (const l of held.locks) l.release();
+  }
+}
+var Crash = class extends Error {
+};
 function applyRetire(s, d) {
   const base = path14.join(d.verifyDir, s.set);
   const held = lockStatuses([base]);
@@ -6464,12 +6548,30 @@ function applyRename(s, d) {
   const notes = [];
   const moved = [];
   const writes = [];
-  const rollback = () => [...writes.map((w) => restorePlan(w, d.cwd)), ...[...moved].reverse().map(undoMove)].filter((x) => x !== null);
+  const journal = journalFile(d.verifyDir, s.set);
+  let journaled = false;
+  const rollback = () => {
+    const { left, retry } = settle(writes.map((w) => restorePlan(w, d.cwd)), [...moved].reverse());
+    if (journaled && !retry) fs15.rmSync(journal, { force: true });
+    keepJournal = journaled && retry;
+    return left;
+  };
+  let keepJournal = false;
+  const undone = (left) => !left.length ? "every rename undone and every plan restored" : keepJournal ? `undone in part (${path14.basename(journal)} stays: --migrate --apply tries again)` : "undone in part (see below)";
+  const crash = () => {
+    if (!d.crashAt) return;
+    try {
+      d.crashAt({ moved: moved.length, plansWritten: writes.length });
+    } catch (e) {
+      throw new Crash(errMsg(e));
+    }
+  };
   try {
     const open = openRunOf(oldBase) ?? openRunOf(newBase);
     if (open) return { why: [open], notes };
     const clash = s.files.filter((m) => !exists2(m.from) || exists2(m.to) && !sameFile(m.from, m.to));
     if (clash.length) return { why: [`the verify dir changed since it was read (${clash.map((m) => path14.basename(m.from)).join(", ")}) \u2014 run --migrate again`], notes };
+    if (exists2(journal)) return { why: [`${path14.basename(journal)} already exists \u2014 run --migrate again (it rolls that migration back first)`], notes };
     const plans = readPlans(d.planDir, d.cwd);
     const nameMap = new Map(s.files.map((m) => [path14.basename(m.from), path14.basename(m.to)]));
     const touched = plans.filter((p) => rewriteRefs(p.plan, (ref) => {
@@ -6487,17 +6589,33 @@ function applyRename(s, d) {
     }).map((p) => p.file));
     const moves = s.files.filter((m) => m.from !== m.to).map((m) => m.from.toLowerCase() === m.to.toLowerCase() || sameFile(m.from, m.to) ? { ...m, tmp: m.from + tmpSuffix() } : m);
     const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
-    if (exists2(liveOld) && !exists2(liveNew)) moves.push({ from: liveOld, to: liveNew });
+    const live = exists2(liveOld) && !exists2(liveNew);
+    const jdoc = {
+      schema: JOURNAL_SCHEMA,
+      set: s.set,
+      to: s.to,
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      live,
+      moves: moves.map((m) => ({ from: path14.basename(m.from), to: path14.basename(m.to), ...m.tmp !== void 0 ? { tmp: path14.basename(m.tmp) } : {} })),
+      plans: touched.map((p) => ({ file: path14.basename(p.file), before: readText(p.file) ?? "" }))
+    };
+    const saveJournal = () => {
+      writeFileAtomic(journal, JSON.stringify(jdoc, null, 2) + "\n");
+    };
+    saveJournal();
+    journaled = true;
+    if (live) moves.push({ from: liveOld, to: liveNew });
     for (const m of moves) {
       moved.push(m);
       doMove(m);
+      crash();
     }
-    for (const p of touched) {
+    touched.forEach((p, i) => {
+      const entry = jdoc.plans[i];
       const w = {};
       let fields = [];
       updatePlan(p.file, (raw) => {
         if (raw === null) throw new Error(`${p.rel} disappeared`);
-        w.before = raw;
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
@@ -6507,13 +6625,20 @@ function applyRename(s, d) {
           return n !== null && nn !== void 0 ? respell(ref, n, nn) : null;
         }, true);
         if (restamp && hook) hook.planHash = planHash(plan);
+        const after = formatPlan(plan, raw);
+        w.before = raw;
+        w.after = after;
+        if (entry) {
+          entry.before = raw;
+          entry.after = after;
+          saveJournal();
+        }
         return plan;
-      }, { afterWrite: () => {
-        w.after = fs15.readFileSync(p.file, "utf8");
-      } });
+      });
       if (w.before !== void 0 && w.after !== void 0) writes.push({ file: p.file, before: w.before, after: w.after });
       if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) \u2014 rewritten to the renamed report`);
-    }
+      crash();
+    });
     const problems = [];
     for (const p of touched) {
       const plan = parsePlanText(fs15.readFileSync(p.file, "utf8"), p.rel);
@@ -6528,12 +6653,14 @@ function applyRename(s, d) {
     }
     if (problems.length) {
       const left = rollback();
-      return { why: [`the plans failed the check after the move \u2014 ${left.length ? "undone in part (see below)" : "every rename undone and every plan restored"}:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
+      return { why: [`the plans failed the check after the move \u2014 ${undone(left)}:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
     }
+    fs15.rmSync(journal, { force: true });
     return { why: [], notes };
   } catch (e) {
+    if (e instanceof Crash) throw e;
     const left = rollback();
-    return { why: [`the move failed (${errMsg(e)}) \u2014 ${left.length ? "undone in part:" : "every rename undone and every plan restored"}`, ...left.map((x) => `  ${x}`)], notes: [] };
+    return { why: [`the move failed (${errMsg(e)}) \u2014 ${undone(left)}${left.length ? ":" : ""}`, ...left.map((x) => `  ${x}`)], notes: [] };
   } finally {
     for (const l of held.locks) l.release();
   }
@@ -6680,6 +6807,9 @@ function main(argv) {
       Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
       records with a hand-edited record or finds by its name alone with no node id of the set's (add "nodeId" to it).
       Never rewrites a report, measured file or expectation; plans are never renamed.
+      A run that dies part way leaves design/verify/.migrate-<S>.json (its journal): the next --migrate reports it and does
+      nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes
+      unless written again since), then migrates.
 exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).
 exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused \xB7 2 usage.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {

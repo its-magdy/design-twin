@@ -264,7 +264,42 @@ console.log("\nthe post-check fails → every rename undone and the plan's bytes
   const why = r.skipped[0]?.why ?? [];
   check(`a plan written again after the migration's rewrite is NOT restored over: the newer bytes stay, and it is said (got ${JSON.stringify(why)})`,
     p.planText() === newer && /undone in part/.test(why[0] ?? "") && why.some((w) => /design\/plan\/Crates\.json was written again after the migration rewrote it — left as it is/.test(w)));
-  check("…the files are still renamed back", JSON.stringify(p.ls()) === JSON.stringify(before));
+  check("…the files are still renamed back, and no journal is left (no retry can settle a newer write)", JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
+console.log("\na run that dies part way leaves a journal; the next --apply rolls it back first:");
+for (const [when, at] of [["after 3 of the moves", (a: { moved: number; plansWritten: number }) => a.moved === 3], ["after every move and the plan's rewrite", (a: { moved: number; plansWritten: number }) => a.plansWritten === 1]] as const) {
+  const p = project();
+  const verify = path.join(p.root, "design/verify");
+  const liveOld = liveStatusFile(path.join(verify, "Crates")), liveNew = liveStatusFile(path.join(verify, "Crates__80_1"));
+  fs.mkdirSync(path.dirname(liveOld), { recursive: true });
+  fs.writeFileSync(liveOld, JSON.stringify({ schema: STATUS_SCHEMA, screen: "Crates", runId: "r0", rev: 3, phase: "done", detail: "", at: "2026-10-02T01:00:00Z", by: "agent" }));
+  const snap = (): string => JSON.stringify({ files: p.ls().map((f) => [f, sha256(fs.readFileSync(path.join(verify, f)))]), plan: p.planText(), live: [fs.existsSync(liveOld), fs.existsSync(liveNew)] });
+  const original = snap();
+  let crashed = "";
+  try { run(p, true, { crashAt: (a) => { if (at(a)) throw new Error("killed"); } }); } catch (e) { crashed = e instanceof Error ? e.message : String(e); }
+  const journal = path.join(verify, ".migrate-Crates.json");
+  check(`${when}: the run dies (got ${JSON.stringify(crashed)}), its journal is left, the disk half way`, crashed === "killed" && fs.existsSync(journal) && snap() !== original);
+  const half = snap();
+  const dry = run(p, false);
+  check(`…a dry run reports it, plans nothing, writes nothing (got ${JSON.stringify(dry.r.skipped.map((s) => s.why[0]))})`,
+    dry.r.steps.length === 0 && dry.r.skipped.length === 1 && /an interrupted migration of Crates -> Crates__80_1 .* left design\/verify\/\.migrate-Crates\.json — --migrate --apply rolls it back first/.test(dry.r.skipped[0]?.why[0] ?? "") && snap() === half);
+  const back = run(p, true, { postCheck: () => ["held here, to see the rolled-back disk"] });
+  check(`…--apply rolls it back first, and the journal is gone (got rolledBack ${JSON.stringify(back.r.rolledBack)}; ${back.out.find((l) => l.startsWith("rolled back")) ?? "no 'rolled back' line"})`,
+    JSON.stringify(back.r.rolledBack) === JSON.stringify(["Crates"]) && !fs.existsSync(journal));
+  check("…every file, its bytes, the plan's bytes and the live status are exactly as before the first run", snap() === original);
+  const again = run(p, true);
+  check(`…and a clean --apply then migrates it (got ${JSON.stringify(again.r.done)})`, JSON.stringify(again.r.done) === JSON.stringify(["Crates"]) && fs.existsSync(liveNew) && p.ls().includes("Crates__80_1.report.json"));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project();
+  p.put("design/verify/.migrate-Other.json", { schema: "designtwin/verify-migrate-journal@1", set: "Other", to: "Other__1_1", at: NOW, live: false, moves: [{ from: "../../package.json", to: "x" }], plans: [] });
+  const before = p.ls();
+  const { r } = run(p, true);
+  check(`a journal naming a path outside the verify dir is refused, nothing moved (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    r.skipped.length === 1 && /not a journal --migrate wrote/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before) && fs.existsSync(path.join(p.root, "package.json")));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 

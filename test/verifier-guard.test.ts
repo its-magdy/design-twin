@@ -63,6 +63,7 @@ const WRITE_NO: readonly string[] = [
   "/proj/.claude/settings.json", "/proj/design/plan/home.json", "/proj/design/export/Home__1_2.json", "/proj/design/tokens.json",
   "/proj/design/verify/Home__1_2.expected.json", "/proj/design/verify/Home__1_2.expected.prev.json", "/proj/design/verify/Home__1_2.report.json",
   "/proj/design/verify/Home__1_2.report.md", "/proj/design/verify/Home__1_2.status.json", "/proj/design/verify/Home__1_2.diff.png",
+  "/proj/design/verify/.migrate-Home.json", // a --migrate journal: the next --migrate --apply acts on it
   "/proj/design/verify/../../src/App.tsx", "/proj/node_modules/.cache/designtwin-verify/../../../src/App.tsx",
   "/proj/node_modules/.cache/other-tool/x.js", "/proj/node_modules/designtwin-verify/x.js", "/proj/node_modules/.cache/designtwin-verify",
   "/tmp/drive.cjs", "/proj/designtwin-verify/x.ts", "/proj/src/designtwin-verify/x.ts", "/proj/design/verify",

@@ -413,8 +413,9 @@ export function replacedNote(doc: VerifyStatusV2): string | null {
 }
 
 // Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
-// --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
-const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
+// --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too; --migrate writes
+// its journal as .migrate-<S>.json, which the next --migrate --apply acts on).
+const TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected\.json|report\.json|report\.md|status\.json|prev\.json))$/;
 /**
  * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>-<random>`
  * IN `destDir` — so the copy may cross filesystems (EXDEV) and the later rename is still atomic; a copy that fails
@@ -430,7 +431,7 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
   if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
   const owned = files.filter((f) => TOOL_OWNED.test(f));
-  if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files are written by verify-screen itself, never copied in` };
+  if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files and migration journals are written by verify-screen itself, never copied in` };
   fs.mkdirSync(destDir, { recursive: true });
   const suffix = tmpSuffix(); // one per publish: every copy shares it, so tmpOf(name) is stable between prepare and commit
   const tmpOf = (name: string): string => path.join(destDir, name) + suffix;

@@ -57,8 +57,9 @@ const HOOK_HARD_MS = 5000;
 // ================================================================ file writes
 
 // Written only by verify-screen.js / verify-probe.js, never by hand: the expectation the build is graded
-// against, the report and its markdown, the run status, and the visual diff.
-const TOOL_OWNED = /\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png)$/i;
+// against, the report and its markdown, the run status, the visual diff, and a --migrate journal (`.migrate-<S>.json`,
+// which the next --migrate --apply acts on).
+const TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png))$/i;
 const CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
 const VERIFY_DIR = ["design", "verify"];
 
@@ -94,7 +95,7 @@ export function writeVerdict(file: string, ctx: GuardCtx): string | null {
   }
   if (after(segs, VERIFY_DIR) >= 0) {
     if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
-    return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. `
+    return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. `
       + `Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) `

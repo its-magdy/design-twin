@@ -192,7 +192,7 @@ function isMainFallback(metaUrl) {
 var VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
 var HOOK_WAIT_MS = 1e3;
 var HOOK_HARD_MS = 5e3;
-var TOOL_OWNED = /\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png)$/i;
+var TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png))$/i;
 var CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
 var VERIFY_DIR = ["design", "verify"];
 function segments(p, cwd) {
@@ -221,7 +221,7 @@ function writeVerdict(file, ctx) {
   }
   if (after(segs, VERIFY_DIR) >= 0) {
     if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
-    return `${file} is the verify tools' own (the expectation, report, status and diff), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
+    return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. Put a scratch script in node_modules/.cache/designtwin-verify/scratch/, and report a defect in the build as a measurement or a note \u2014 never fix it.`;
 }
