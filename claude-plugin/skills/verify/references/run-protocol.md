@@ -35,7 +35,9 @@ Use the run id you were given. Only when you were given none does your first cal
 gets its own new run id. A run that ended (`done`, `failed`, `blocked`) takes no more writes, with or without
 `--run <id>` — `--status` and the probe's `--run` both refuse them (exit 2). Nor does `--status` (without
 `--new-run`) or the probe's `--run` write your run while the status names ANOTHER run that has not ended (exit 2,
-nothing written, naming it and how to wait for it or end it): a recovery command or a probe run late never writes over
+nothing written, naming it and how to wait for it or end it — a probe's own run is named as one, with when and by
+which pid it started and whether that probe is gone or past its deadline: nobody waits for it, so the line gives only
+the command that ends it, for when no probe is running): a recovery command or a probe run late never writes over
 a run started since while that run is open — the probe checks before it starts and again at every status write, so a
 run that opens while the page is measured gets no files from it either (once that run has ended, the record replaces
 it — measure again rather than record an old run after another one). If the id you were given has already

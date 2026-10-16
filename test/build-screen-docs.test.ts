@@ -168,7 +168,8 @@ console.log("verify docs (run integrity + agent safety):");
     && !/waits out its `--timeout`/.test(skill + verifySkill)
     && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Screen>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
   check("--status without --new-run, and the probe's --run, write no run over ANOTHER run that has not ended, the probe at its start and at every status write (the run protocol, the verifier)",
-    /Nor does `--status` \(without `--new-run`\) or the probe's `--run` write your run while the status names ANOTHER run that has not ended \(exit 2, nothing written, naming it and how to wait for it or end it\)/.test(verifySkill)
+    /Nor does `--status` \(without `--new-run`\) or the probe's `--run` write your run while the status names ANOTHER run that has not ended \(exit 2, nothing written, naming it and how to wait for it or end it — /.test(verifySkill)
+    && /a probe's own run is named as one, with when and by which pid it started and whether that probe is gone or past its deadline: nobody waits for it, so the line gives only the command that ends it, for when no probe is running\)/.test(verifySkill)
     && /the probe checks before it starts and again at every status write, so a run that opens while the page is measured gets no files from it either/.test(verifySkill)
     && /With `--run` it refuses \(exit 2, nothing written\) a run that has ended, and writes nothing while the status names ANOTHER run that has not ended/.test(verifier));
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",

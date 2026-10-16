@@ -208,17 +208,31 @@ export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): Run
  *  as one (its pid could not be found gone: another host, or the pid runs) — nobody waits for that. */
 export class RunOpen extends Error {
   constructor(base: string, open: VerifyStatusV2) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
-    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const { waitIt, endIt } = runCommands(base, open);
     const o = open.ownRun;
     super(o
-      ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) — ` +
+      ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} — ` +
         `a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}`
       : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
-        `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) ` +
+        `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) ` +
         `or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
+}
+/** The commands a refusal names for the open run `open`: wait for it, and end it `failed`. */
+function runCommands(base: string, open: VerifyStatusV2): { waitIt: string; endIt: string } {
+  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+/** How a refusal names another probe's own run that is open: when and by which process it started — nobody waits for
+ *  that. `why`: the probe that started it is gone or past the run's deadline (abandonedRun), said after it. */
+function ownRunOpen(open: VerifyStatusV2, o: OwnRunStamp, why?: string): string {
+  return `is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase})` +
+    (why !== undefined ? `, but the probe that started it ${why}` : "");
+}
+/** Why a probe's own run counts as abandoned: its probe's pid is gone, else the run is past its deadline. */
+function abandonedWhy(o: OwnRunStamp): string {
+  return processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
 }
 /** A later write of a run whose earlier write was recorded (`continues`: the probe's own run after its `measuring`) while
  *  the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as abandoned (a stopped or
@@ -256,13 +270,18 @@ export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId:
  *  probe's --run, while the status
  *  names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
  *  one left behind too), and a record of `runId` would replace it in the status and publish over it. Refused by
- *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. */
+ *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. Another probe's
+ *  own run is named as one (when and by which pid it started, and when abandonedRun says so, that its probe is gone or
+ *  past its deadline) — nobody waits for that: if no probe is running, it is ended. */
 export class RunNotCurrent extends Error {
   constructor(base: string, runId: string, open: VerifyStatusV2) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
-    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
-      `nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ` +
-      `end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    const { waitIt, endIt } = runCommands(base, open);
+    const o = open.ownRun;
+    super(o
+      ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : undefined)} — ` +
+        `nothing is written; if no probe is running, end it: ${endIt}`
+      : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
+        `nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
 }
@@ -330,9 +349,8 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
       const o = left.ownRun;
-      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
       const endDoc: VerifyStatusV2 = { ...left, rev: left.rev + 1, phase: "failed", at: new Date().toISOString(), by: "verify-probe",
-        detail: `abandoned — the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe` };
+        detail: `abandoned — the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${abandonedWhy(o)}; ended by the next probe` };
       put(endDoc);
       hooks.abandoned?.(endDoc);
     }
