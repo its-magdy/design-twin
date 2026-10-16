@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-screen.ts
-import fs12 from "node:fs";
-import path11 from "node:path";
+import fs15 from "node:fs";
+import path15 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -15,6 +15,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 // bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
 function isRecord(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -659,6 +662,9 @@ function recordV2OnlyKeys(rec) {
 function isRecordV2Shaped(rec) {
   return rec.schema !== void 0 || recordV2OnlyKeys(rec).length > 0;
 }
+function recordV1HandKeys(rec) {
+  return isRecordV2Shaped(rec) ? [] : Object.keys(rec).filter((k) => !RECORD_KEYS.includes(k));
+}
 function recordProblems(rec) {
   const out = recClosed(rec, "", RECORD_FIELDS);
   if (isJsonObject(rec.counts)) out.push(...recClosed(rec.counts, "counts.", RECORD_COUNTS));
@@ -723,10 +729,29 @@ var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
 var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
 var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
 var SNAPSHOT_DIR = path4.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
 var slashed = (p) => p.split(path4.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs5.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs5.existsSync(path4.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path4.join(cwd, EXPORT_DIR);
+  const legacy2 = path4.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
 function listPlans(dir) {
   if (!fs5.existsSync(dir)) return [];
   return fs5.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
@@ -763,6 +788,26 @@ function readJson(file, guard) {
   }
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
   return { doc: parsed };
+}
+function readRegularFile(file) {
+  try {
+    if (!fs6.statSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  let fd;
+  try {
+    fd = fs6.openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    return fs6.fstatSync(fd).isFile() ? fs6.readFileSync(fd) : null;
+  } catch {
+    return null;
+  } finally {
+    fs6.closeSync(fd);
+  }
 }
 function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
@@ -962,7 +1007,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
     };
     const reportAt = rel(reportRel);
     if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify/<Screen>)`);
-    const exists2 = (p) => {
+    const exists3 = (p) => {
       try {
         return fs8.statSync(path6.resolve(cwd, p)).isFile();
       } catch {
@@ -972,7 +1017,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
     const artifacts = [];
     const outside = [];
     const addArtifact = (p) => {
-      if (!p || !exists2(p)) return;
+      if (!p || !exists3(p)) return;
       const r = rel(p);
       if (r === null) {
         if (!outside.includes(slash(p))) outside.push(slash(p));
@@ -1671,6 +1716,9 @@ function isMainFallback(metaUrl) {
 }
 
 // bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
 var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
 function nodeIdFromSafe(safeId) {
   if (!SAFE_NODE_ID_RE.test(safeId)) return null;
@@ -1680,6 +1728,9 @@ function nodeIdFromStem(stem) {
   const s = String(stem || "");
   const i = s.lastIndexOf("__");
   return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
 }
 
 // design-to-code/verify-shared.ts
@@ -1941,12 +1992,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path12, parent, depth) {
+  (function go(node, parentHidden, path16, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path12, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path16, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path12 ? path12 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path16 ? path16 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -4277,8 +4328,8 @@ function componentEvidence(cx) {
 function sharedShellOf(cx, g) {
   const { expectation, hiddenSet, specs, matchKind, anchors, folded } = cx;
   const { untaggedInstanceSets } = g;
-  const visibleInstances = (expectation.instances || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
-  const instanceById = new Map(visibleInstances.map((i) => [String(i.nodeId), i]));
+  const visibleInstances2 = (expectation.instances || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const instanceById = new Map(visibleInstances2.map((i) => [String(i.nodeId), i]));
   const outermostOf = (id) => {
     const outer = id.startsWith("I") && id.includes(";") ? id.slice(1, id.indexOf(";")) : id;
     return instanceById.has(outer) ? outer : null;
@@ -5471,12 +5522,1076 @@ var withUnit = (v, unit) => {
   return unit && !t.endsWith(unit) ? t + unit : t;
 };
 
+// design-to-code/verify-migrate.ts
+import fs14 from "node:fs";
+import path14 from "node:path";
+
+// design-to-code/resolve-screen.ts
+import fs12 from "node:fs";
+import path11 from "node:path";
+
+// bridge/src/node-id.ts
+var ID = "[A-Za-z0-9%:;_-]+";
+var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+function decode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch (e) {
+    return s;
+  }
+}
+var COLON_ID_RE = /^I?\d+:\d+(?:[;:]\d+:\d+)*$/;
+function isNodeId(s) {
+  return COLON_ID_RE.test(s);
+}
+function normalizeNodeId(raw) {
+  if (!raw) return void 0;
+  const s = decode(String(raw).trim()).replace(/-/g, ":");
+  return COLON_ID_RE.test(s) || /^\d+$/.test(s) ? s : void 0;
+}
+function parseNodeId(input) {
+  if (!input) return void 0;
+  const s = String(input).trim();
+  try {
+    const nid = new URL(s).searchParams.get("node-id");
+    if (nid) return normalizeNodeId(nid);
+  } catch (e) {
+  }
+  const m = s.match(NODE_ID_RE);
+  if (m) return normalizeNodeId(m[1]);
+  return normalizeNodeId(s);
+}
+function toNodeId(raw) {
+  return parseNodeId(raw) || (raw == null ? "" : String(raw));
+}
+
+// design-to-code/resolve-screen.ts
+var STEM_TAIL_RE = /(?:\.[A-Za-z0-9-]+)*$/;
+function queryIds(q) {
+  const out = [];
+  const base = q.split(/[\\/]/).pop() ?? q;
+  const carried = nodeIdFromStem(base.replace(STEM_TAIL_RE, ""));
+  if (carried) out.push(carried);
+  const t = toNodeId(q);
+  if (t !== q && isNodeId(t)) out.push(t);
+  return out;
+}
+function findExportRoot(dir) {
+  const has = (d) => fs12.existsSync(path11.join(d, "pages", "index.json"));
+  const abs = path11.resolve(dir);
+  for (let d = path11.dirname(abs); ; d = path11.dirname(d)) {
+    if (has(d)) return d;
+    if (path11.dirname(d) === d) break;
+  }
+  for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
+    if (has(path11.join(abs, sub))) return path11.join(abs, sub);
+  }
+  return null;
+}
+function allRows(exportDir) {
+  const rootFile = path11.join(exportDir, "pages", "index.json");
+  const root = readJsonOrNull(rootFile, isPagesRootIndex);
+  if (!root) return [];
+  if (root.layers) return root.layers;
+  const rows = [];
+  for (const pd of root.pageDirs) {
+    const idx = pd.dir ? readJsonOrNull(path11.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    if (idx) rows.push(...idx.layers);
+  }
+  return rows;
+}
+function planRows(planDir) {
+  if (!planDir) return [];
+  const out = [];
+  for (const f of listPlans(planDir)) {
+    const doc = readJsonOrNull(path11.join(planDir, f), isPlan);
+    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
+  }
+  return out;
+}
+function describe2(row, matchedVia) {
+  const out = {
+    name: row.name,
+    id: row.id,
+    title: row.title || null,
+    ...ifDefined("w", row.w),
+    ...ifDefined("h", row.h),
+    ...ifDefined("nodes", row.nodes),
+    reference: row.reference || null,
+    screenshot: row.id ? `dtwin screenshot ${row.id}` : null
+  };
+  if (matchedVia && matchedVia.length) out.matchedVia = matchedVia;
+  return out;
+}
+var fold = (s) => String(s || "").trim().toLowerCase();
+var foldCompact = (s) => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
+var FILE_TAIL_RE = /(?:\.(?:measured|expected|vars))?\.json$|\.png$/i;
+var PATH_DIR_RE = /^design[\\/]|[\\/](?:plan|verify|export)[\\/]/i;
+function compactKeys(q) {
+  const keys = [];
+  const asPath = FILE_TAIL_RE.test(q) || PATH_DIR_RE.test(q);
+  for (const cand of asPath ? [q, q.split(/[\\/]/).pop() ?? q] : [q]) {
+    const k = foldCompact(cand.trim().replace(FILE_TAIL_RE, ""));
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
+function resolveScreen(exportDir, query, opts) {
+  const options = opts || {};
+  const rows = allRows(exportDir);
+  const q = String(query || "").trim();
+  const qFold = fold(q);
+  const noTitles = rows.length > 0 && !rows.some((r) => r.title);
+  if (!fs12.existsSync(path11.join(exportDir, "pages", "index.json"))) {
+    return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
+  }
+  const byId = (id) => {
+    const idMatches = rows.filter((r) => r.id === id);
+    return idMatches.length === 1 ? idMatches[0] : void 0;
+  };
+  const typed = isNodeId(q) ? byId(q) : void 0;
+  if (typed) return { status: "resolved", row: typed, stage: "node id" };
+  const plans = planRows(options.planDir);
+  const planHit = qFold ? plans.filter((p) => fold(p.screenName) === qFold || fold(p.route) === qFold) : [];
+  const planIds = new Set(planHit.map((p) => p.nodeId).filter((id) => !!id));
+  const union = /* @__PURE__ */ new Map();
+  const join = (row, via) => {
+    const key = row.id || row.file || JSON.stringify(row);
+    getOrInit(union, key, () => ({ row, via: /* @__PURE__ */ new Set() })).via.add(via);
+  };
+  for (const r of rows) {
+    if (fold(r.name) === qFold) join(r, "exact layer name");
+    if (r.title && fold(r.title) === qFold) join(r, "indexed title");
+    if (planIds.has(r.id)) join(r, "plan screenName/route");
+  }
+  const unionRows = [...union.values()];
+  const only = unionRows.length === 1 ? unionRows[0] : void 0;
+  if (only) {
+    return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
+  }
+  if (unionRows.length > 1) {
+    return {
+      status: "ambiguous",
+      stage: "exact match (layer name / title / plan header)",
+      candidates: unionRows.map((u) => describe2(u.row, [...u.via]))
+    };
+  }
+  for (const id of isNodeId(q) ? [] : queryIds(q)) {
+    const hit = byId(id);
+    if (hit) return { status: "resolved", row: hit, stage: "node id" };
+  }
+  for (const qCompact of compactKeys(q)) {
+    const planCompactIds = new Set(
+      plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id) => !!id)
+    );
+    const compact = /* @__PURE__ */ new Map();
+    const joinCompact = (row, via) => {
+      const key = row.id || row.file || JSON.stringify(row);
+      getOrInit(compact, key, () => ({ row, via: /* @__PURE__ */ new Set() })).via.add(via);
+    };
+    for (const r of rows) {
+      if (foldCompact(r.name) === qCompact) joinCompact(r, "layer name ignoring spaces");
+      if (r.title && foldCompact(r.title) === qCompact) joinCompact(r, "indexed title ignoring spaces");
+      if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
+    }
+    const compactRows = [...compact.values()];
+    const one = compactRows.length === 1 ? compactRows[0] : void 0;
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (compactRows.length > 1) {
+      return {
+        status: "ambiguous",
+        stage: "whitespace-insensitive match (layer name / title / plan header)",
+        candidates: compactRows.map((u) => describe2(u.row, [...u.via]))
+      };
+    }
+  }
+  const textMatches = rows.filter(
+    (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))
+  );
+  if (textMatches.length) {
+    return Object.assign(
+      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe2(r)) },
+      noTitles ? { noTitles: true } : null
+    );
+  }
+  return Object.assign({ status: "not-found", candidates: rows.map((r) => describe2(r)) }, noTitles ? { noTitles: true } : null);
+}
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/screen-key.ts
+import fs13 from "node:fs";
+import path12 from "node:path";
+var VARIANT_RE = /^[a-z0-9-]+$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => VARIANT_RE.test(s);
+function variantSlug(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function formatSetName(stem, variant) {
+  if (variant === void 0 || variant === null) return stem;
+  if (!isVariantSlug(variant)) throw new Error(`variant '${variant}' is not a slug ([a-z0-9-]+)`);
+  return `${stem}.${variant}`;
+}
+var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
+var RETIRED = ".expected.json.retired";
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs13.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
+    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path12.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(path12.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+}
+function setNodeId(verifyDir, name) {
+  const f = setFacts(verifyDir, name);
+  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
+  return f.expectedId ?? f.reportId;
+}
+function canonicalStemsFor(verifyDir, nodeId) {
+  const stems = /* @__PURE__ */ new Set();
+  for (const name of verifySets(verifyDir)) {
+    const p = parseSetName(name);
+    if (p && p.nodeId === nodeId) stems.add(p.stem);
+  }
+  return [...stems].sort();
+}
+function legacySetsFor(verifyDir, nodeId) {
+  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
+}
+var FOLD_STAGE = /ignoring spaces/;
+var FILE_TAIL_RE2 = /\.(?:expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
+function screenKey(query, opts = {}) {
+  const q = String(query ?? "").trim();
+  const verifyDir = opts.verifyDir ?? null;
+  const stemsOf = (id) => verifyDir ? canonicalStemsFor(verifyDir, id) : [];
+  const legacyOf = (id) => verifyDir ? legacySetsFor(verifyDir, id) : [];
+  const exportDir = opts.exportDir ?? null;
+  if (exportDir && fs13.existsSync(path12.join(exportDir, "pages", "index.json"))) {
+    const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
+    if (r.status !== "resolved") {
+      const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage \u2014 pass the node id` : r.status === "needs-confirmation" ? `'${q}' matched only by text search \u2014 pass the node id` : `'${q}' matches no screen in ${exportDir}`;
+      return { status: "unresolved", why, candidates: r.candidates };
+    }
+    if (FOLD_STAGE.test(r.stage)) {
+      return { status: "unresolved", why: `'${q}' matches ${r.row.name} (${r.row.id}) only ignoring spaces, "-" and "_" \u2014 pass the node id or the exact name`, candidates: [] };
+    }
+    const id = r.row.id;
+    const stems = stemsOf(id);
+    if (stems.length > 1) return { status: "unresolved", why: `node ${id} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one`, candidates: [] };
+    const have = stems[0];
+    return { status: "resolved", nodeId: id, stem: have ?? screenStem(r.row.name, id), via: r.stage, name: r.row.name, existing: have !== void 0, legacy: legacyOf(id) };
+  }
+  const lit = (q.split(/[\\/]/).pop() ?? q).replace(FILE_TAIL_RE2, "");
+  const fromStem = STEM_RE.test(lit) ? nodeIdFromStem(lit) : null;
+  if (fromStem !== null) {
+    const others = [...stemsOf(fromStem).filter((s) => s !== lit), ...legacyOf(fromStem)];
+    if (others.length) return { status: "unresolved", why: `node ${fromStem} already has a verify set under another name (${others.join(", ")}) \u2014 pass that name, or run verify-screen --migrate`, candidates: [] };
+    return { status: "resolved", nodeId: fromStem, stem: lit, via: "canonical stem", name: null, existing: stemsOf(fromStem).includes(lit), legacy: [] };
+  }
+  if (isNodeId(q)) {
+    const stems = stemsOf(q);
+    const only = stems.length === 1 ? stems[0] : void 0;
+    if (only !== void 0) return { status: "resolved", nodeId: q, stem: only, via: "node id (existing verify set)", name: null, existing: true, legacy: legacyOf(q) };
+    return { status: "unresolved", why: stems.length > 1 ? `node ${q} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` : `no export index to name node ${q} by \u2014 pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
+  }
+  return { status: "unresolved", why: `no export index to resolve '${q}' against \u2014 pass the stem (<Layer>__<id>), or the export dir`, candidates: [] };
+}
+
+// design-to-code/verify-build.ts
+import path13 from "node:path";
+
+// design-to-code/map-validate.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path16, message) => errors.push({ path: path16, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
+// bridge/src/library-layout.ts
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+
+// design-to-code/cross-check.ts
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/audit.ts
+var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
+var PLATFORMS = Object.keys(TOUCH_MIN);
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/plan-skeleton.ts
+var USAGE = [
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
+  "",
+  "  Emits the build-screen plan skeleton for one screen, derived from the export:",
+  "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
+  "    components[]  every VISIBLE instance (key/setKey/name/props + catalog match / codeconnect mapping)",
+  "    anchors{}     every VISIBLE node id, mapModule empty \u2014 fill it on sections and instances",
+  "    anchorsSuggested[]  the few anchors worth filling first (the screen frame, root sections, outermost instances, repeated lists)",
+  "    hidden[]      roots of hidden subtrees (hidden: true or a hidden ancestor) \u2014 never built, never anchored",
+  "    screenName / nodeId / file / route   the header every skill resolves a plan by",
+  "",
+  "  You fill in: codeToken, mapModule, verdict, decision, route, deviations[] (and files[], architecture,",
+  "  verification as you build).",
+  "",
+  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json). A missing",
+  "                       directory is allowed (single-screen pull): values then come from the screen's",
+  "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
+  "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
+  "                       overwritten: every field you filled is kept.",
+  "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
+  "                       codeconnect.local.json in the current directory, when present).",
+  "  --route <route>      the app route this screen will live at (else left null for you to fill).",
+  "  --seed-from <plan>   a sibling screen's plan (repeatable; the first that has an answer wins). A row still",
+  "                       empty here takes that plan's answer when it is the SAME thing: a token with the same",
+  "                       key (or, both keyless, the same Figma name) AND the same value \u2192 codeToken/verdict/",
+  "                       decision; a component with the same setKey (else key) \u2192 mapModule/verdict/decision.",
+  "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` \u2014 review them."
+].join("\n");
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/verify-build.ts
+var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
+var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
+function reportRecordNames(report, reportSha256, cwd) {
+  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
+  const bytes = readRegularFile(path13.resolve(cwd, report));
+  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
+  let parsed = null;
+  try {
+    const x = JSON.parse(bytes.toString("utf8"));
+    parsed = x;
+  } catch {
+  }
+  return isVerifyReport(parsed) ? parsed : null;
+}
+function recordedV1Edits(rec, cwd) {
+  const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+  if (!report || typeof rec.report !== "string") return [];
+  const said = recordFacts(report, rec.report);
+  const edited = [];
+  for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+  const counts = rec.counts;
+  if (!isJsonObject(counts)) edited.push("counts");
+  else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
+  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) \u2014 re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+}
+function recordedEdits(plan, cwd) {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
+  if (!isJsonObject(rec)) return [];
+  const added = recordV1HandKeys(rec);
+  if (added.length) {
+    const named = added.map((k) => `\`${k}\``).join(", ");
+    const them = added.length > 1 ? "them" : "it";
+    if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
+      return [`verification.recorded holds only ${named}, which no record writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes`];
+    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes`];
+  }
+  if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
+  const all = recordProblems(rec);
+  const lacks = rec.schema === void 0 ? all.filter((k) => RECORD_KEYS.includes(k) && rec[k] === void 0) : [];
+  const edited = all.filter((k) => !lacks.includes(k));
+  if (!edited.length && isVerificationRecord(rec)) {
+    const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
+    if (report) {
+      const said = recordFacts(report, rec.report);
+      for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+      for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
+    }
+  }
+  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  if (lacks.length) {
+    const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
+    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  }
+  return out;
+}
+var NO_WAIVERS = waiversHash(null);
+var LINE_CHUNK = 1 << 20;
+var USAGE2 = [
+  `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
+  `       ${scriptCmd("verify-build")} <plan.json>\u2026        check these plans now (no stdin read)`,
+  `       ${scriptCmd("verify-build")} --status [<plan.json>\u2026] [--json]   print each plan's computed status (all of design/plan/ by default); never writes`,
+  "",
+  "Blocks (exit 2) on: a raw colour the plan resolved to a token, in a source file of files[] (comments,",
+  "prose strings and .svg/.json/non-source files are not scanned); a visible design node with no anchor",
+  "(itself or an ancestor) in anchors{}; on web profiles, no data-dt-node tag in any plan's files[]",
+  '(opt out: "tagging": {"off": true, "reason": "\u2026"}); and a hand edit of verification.recorded, the block',
+  "verify-screen --compare --record-plan writes whole (a key it does not write, a value of the wrong kind, or a",
+  "verdict, count, mode, delta, \u2026 the report it names \u2014 same sha256 \u2014 does not say; re-run --compare --record-plan",
+  "or restore the block; residuals go in deviations[]). Everything else is a warning (exit 0). Beside a recorded",
+  "block, the keys it holds at verification's top level (mode, artifacts, deltas, a11y, \u2026) and a hand",
+  "headline/verdict are ignored.",
+  'A Claude Code hook payload (it has hook_event_name) gets a block as {"decision":"block","reason":\u2026} on stdout',
+  "and exit 0 instead \u2014 a native exit 2 under PowerShell reaches Claude Code as 1, which would not block.",
+  "Hook mode checks the plans the stopping agent's own tool calls wrote (Write/Edit, plan-skeleton --out) and the",
+  "plan that alone lists a file it wrote (Write/Edit); an agent that claims none checks nothing. A screen-builder's",
+  "SubagentStop that claims none blocks once instead, naming the open plans: the builder runs verify-build <plan.json>",
+  "on the plan it built and names it in its report (or says it built none); its next stop (stop_hook_active) passes,",
+  "as does a builder whose transcript already holds that request or holds no tool call. A plan the agent wrote that",
+  "cannot be read blocks (another unreadable plan is a warning, and so is one whose raw JSON says status abandoned or awaiting-user).",
+  "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
+  "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
+  "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
+  "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
+  "  3. pending      the hook has not checked this version of the plan (no hook record, or the plan changed since)",
+  "  4. blocked      the Stop hook's last check blocked, or it passed and verification.recorded was edited by hand",
+  "                  since (its next check blocks on that)",
+  "  5. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
+  "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
+  "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
+  "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
+  "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
+  `     A stored "verified" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's`,
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted); a hand",
+  "     edit of verification.recorded reopens the plan all the same.",
+  "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
+  "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
+].join("\n");
+if (false) {
+  const watchdog = setTimeout(() => {
+    console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s while ${phase} \u2014 nothing was blocked; re-run \`${scriptCmd("verify-build")} <plan.json>\` to check the plan directly`);
+    process.exit(1);
+  }, HOOK_TIMEOUT_MS());
+  watchdog.unref();
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  }, (e) => {
+    console.error(`verify-build: ${e instanceof Error && e.stack || String(e)}`);
+    process.exitCode = 1;
+  });
+}
+
+// design-to-code/verify-migrate.ts
+var slash2 = (p) => p.split(path14.sep).join("/");
+var exists2 = (p) => fs14.existsSync(p);
+function sameFile(a, b) {
+  try {
+    const x = fs14.statSync(a), y = fs14.statSync(b);
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
+  }
+}
+function openRunOf(base) {
+  const st = readStatus(base);
+  return st && st !== "v1" && !TERMINAL_PHASES.includes(st.phase) ? `run ${st.runId} of ${path14.basename(base)} is open (phase ${st.phase}, ${st.at}) \u2014 wait for it to end, then --migrate` : null;
+}
+function rewriteRefs(plan, map, write2) {
+  const changed = [];
+  const v = plan.verification;
+  if (!isJsonObject(v)) return changed;
+  const one = (o, key, field) => {
+    const ref = o[key];
+    if (typeof ref !== "string") return;
+    const to = map(ref);
+    if (to === null) return;
+    if (write2) o[key] = to;
+    if (!changed.includes(field)) changed.push(field);
+  };
+  const rec = v.recorded;
+  if (isJsonObject(rec)) {
+    one(rec, "report", "verification.recorded.report");
+    if (isJsonObject(rec.a11y)) one(rec.a11y, "report", "verification.recorded.a11y.report");
+    const arts = rec.artifacts;
+    if (Array.isArray(arts)) arts.forEach((a, i) => {
+      if (typeof a !== "string") return;
+      const to = map(a);
+      if (to === null) return;
+      if (write2) arts[i] = to;
+      if (!changed.includes("verification.recorded.artifacts")) changed.push("verification.recorded.artifacts");
+    });
+  }
+  if (isJsonObject(v.a11y)) one(v.a11y, "report", "verification.a11y.report");
+  return changed;
+}
+function recordedReport(plan) {
+  const v = plan.verification;
+  const rec = isJsonObject(v) ? v.recorded : void 0;
+  return isJsonObject(rec) && typeof rec.report === "string" && rec.report ? { report: rec.report, sha: rec.reportSha256 } : null;
+}
+function migrate(opts) {
+  const out = opts.out ?? ((l) => {
+    console.log(l);
+  });
+  const err = opts.err ?? ((l) => {
+    console.error(l);
+  });
+  const cwd = path14.resolve(opts.cwd);
+  const verifyDir = path14.resolve(cwd, opts.verifyDir);
+  const planDir = path14.resolve(cwd, opts.planDir ?? PLAN_DIR);
+  const exportDir = opts.exportDir !== void 0 ? path14.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
+  const shown = (abs) => slash2(path14.relative(cwd, abs)) || ".";
+  const steps = planMigration({ cwd, verifyDir, planDir, exportDir });
+  const result = { steps, done: [], skipped: [] };
+  for (const s of steps) {
+    if (s.kind === "skip") {
+      result.skipped.push({ set: s.set, why: s.why });
+      err(`skip    ${shown(path14.join(verifyDir, s.set))}: ${s.why[0] ?? ""}`);
+      for (const w of s.why.slice(1)) err(`        ${w}`);
+      continue;
+    }
+    if (s.kind === "retire") {
+      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path14.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path14.join(verifyDir, s.canonical))})`);
+    } else {
+      out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path14.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
+      for (const f of s.files) out(`  rename  ${path14.basename(f.from)} -> ${path14.basename(f.to)}`);
+      for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
+    }
+    if (!opts.apply) continue;
+    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck });
+    if (r.why.length) {
+      result.skipped.push({ set: s.set, why: r.why });
+      err(`skip    ${shown(path14.join(verifyDir, s.set))}: ${r.why[0] ?? ""}`);
+      for (const w of r.why.slice(1)) err(`        ${w}`);
+    } else result.done.push(s.set);
+    for (const n of r.notes) err(`note  ${n}`);
+  }
+  const moving = steps.filter((s) => s.kind !== "skip").length;
+  if (!steps.length) err(`nothing to migrate: every verify set in ${shown(verifyDir)} is named <Layer>__<id> or <Layer>__<id>.<variant>`);
+  else if (!opts.apply) err(`dry run \u2014 nothing written: ${moving} set(s) to migrate or retire, ${result.skipped.length} skipped; pass --apply to do it`);
+  else err(`${result.done.length} set(s) migrated or retired, ${result.skipped.length} skipped`);
+  return result;
+}
+function readPlans(planDir, cwd) {
+  const out = [];
+  for (const f of listPlans(planDir)) {
+    const file = path14.join(planDir, f);
+    try {
+      out.push({ file, rel: slash2(path14.relative(cwd, file)), plan: parsePlanText(fs14.readFileSync(file, "utf8"), file) });
+    } catch {
+    }
+  }
+  return out;
+}
+function namedFile(ref, planFile, d) {
+  for (const abs of [path14.resolve(d.cwd, ref), path14.resolve(path14.dirname(planFile), ref)]) {
+    if (path14.dirname(abs) === d.verifyDir) return path14.basename(abs);
+  }
+  return /[\\/]/.test(ref) ? null : ref;
+}
+var respell = (ref, from, to) => ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to;
+function planBlocks(p, names, d) {
+  const edits = recordedEdits(p.plan, d.cwd);
+  if (edits.length) return [`${p.rel} has a hand-edited record \u2014 fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  const rec = recordedReport(p.plan);
+  if (rec) {
+    const name = namedFile(rec.report, p.file, d);
+    if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+    }
+  }
+  return [];
+}
+function planMigration(d) {
+  const sets = allSets(d.verifyDir);
+  if (!sets.length) return [];
+  const names = sets.map((s) => s.name).sort((a, b) => b.length - a.length);
+  const filesOf = /* @__PURE__ */ new Map();
+  for (const e of fs14.readdirSync(d.verifyDir, { withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const owner = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    if (owner !== void 0) filesOf.set(owner, [...filesOf.get(owner) ?? [], e.name]);
+  }
+  const live = sets.filter((s) => !s.retired).map((s) => s.name);
+  const legacy2 = live.filter((n) => parseSetName(n) === null);
+  if (!legacy2.length) return [];
+  const steps = [];
+  const hasIndex = exists2(path14.join(d.exportDir, "pages", "index.json"));
+  const byId = /* @__PURE__ */ new Map();
+  for (const name of legacy2) {
+    const f = setFacts(d.verifyDir, name);
+    if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) {
+      steps.push({ kind: "skip", set: name, why: [`its expectation is of node ${f.expectedId}, its report of node ${f.reportId} \u2014 retire the stale one by hand`] });
+      continue;
+    }
+    let id = f.expectedId ?? f.reportId;
+    if (id === null) {
+      const k = screenKey(name, { exportDir: d.exportDir, planDir: d.planDir });
+      if (k.status !== "resolved") {
+        steps.push({ kind: "skip", set: name, why: [`no node id: its expectation and report name none, and the name gives none (${k.why})`] });
+        continue;
+      }
+      id = k.nodeId;
+    }
+    byId.set(id, [...byId.get(id) ?? [], name]);
+  }
+  const plans = readPlans(d.planDir, d.cwd);
+  const taken = new Set(sets.map((s) => s.name));
+  for (const [id, group] of byId) {
+    const stems = canonicalStemsFor(d.verifyDir, id);
+    if (stems.length > 1) {
+      for (const name of group) steps.push({ kind: "skip", set: name, why: [`node ${id} has ${stems.length} grammar-named verify sets (${stems.join(", ")}) \u2014 keep one, then --migrate`] });
+      continue;
+    }
+    let target = stems[0];
+    if (target === void 0) {
+      const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
+      const first = group[0] ?? "";
+      const f = setFacts(d.verifyDir, first);
+      const name = row && row.status === "resolved" ? row.row.name : f.expectedName ?? f.reportScreen ?? first;
+      target = screenStem(name, id);
+    }
+    const T = target;
+    const baseExists = live.includes(T);
+    const parentOf = /* @__PURE__ */ new Map();
+    for (const name of group) {
+      const cands = /* @__PURE__ */ new Set([T, ...stems, ...group.filter((g) => g !== name)]);
+      for (let i = 1; i < name.length; i++) {
+        const p = name.slice(0, i);
+        if (".@-".includes(name[i] ?? "") && /^[A-Za-z0-9_]+$/.test(p) && nodeIdFromStem(p) === id) cands.add(p);
+      }
+      let best;
+      for (const c of cands) if (name.length > c.length + 1 && name.startsWith(c) && ".@-".includes(name[c.length] ?? "") && (best === void 0 || c.length > best.length)) best = c;
+      if (best !== void 0) parentOf.set(name, best);
+    }
+    const slugOf = (name) => {
+      const p = parentOf.get(name);
+      if (p === void 0) return "";
+      const own = variantSlug(name.slice(p.length + 1));
+      const up = group.includes(p) ? slugOf(p) : "";
+      return up && own ? `${up}-${own}` : up || own;
+    };
+    const roots = group.filter((n) => !parentOf.has(n));
+    const rootOf = (name) => {
+      let n = name;
+      for (let p = parentOf.get(n); p !== void 0 && group.includes(p); p = parentOf.get(n)) n = p;
+      return n;
+    };
+    const wanted = /* @__PURE__ */ new Map();
+    const plannedTo = /* @__PURE__ */ new Map();
+    for (const name of group) {
+      if (roots.length > 1 && roots.includes(rootOf(name))) continue;
+      const isRoot = !parentOf.has(name);
+      const slug = slugOf(name);
+      if (!isRoot && !slug) {
+        steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug ([a-z0-9-]+) can keep \u2014 rename it by hand`] });
+        continue;
+      }
+      const to = isRoot ? T : formatSetName(T, slug);
+      plannedTo.set(name, to);
+      wanted.set(to, [...wanted.get(to) ?? [], name]);
+    }
+    if (roots.length > 1) {
+      const why = `${roots.length} legacy sets of node ${id} extend no other name (${roots.join(", ")}) \u2014 which one is the screen is your call: retire the others (mv <S>.expected.json <S>.expected.json.retired), then --migrate`;
+      for (const name of group) if (roots.includes(rootOf(name))) steps.push({ kind: "skip", set: name, why: [why] });
+    }
+    for (const [name, to] of plannedTo) {
+      const rivals = wanted.get(to) ?? [];
+      if (rivals.length > 1) {
+        steps.push({ kind: "skip", set: name, why: [`${rivals.join(" and ")} would both become ${to} \u2014 retire one by hand`] });
+        continue;
+      }
+      const open = openRunOf(path14.join(d.verifyDir, name)) ?? openRunOf(path14.join(d.verifyDir, to));
+      if (open) {
+        steps.push({ kind: "skip", set: name, why: [open] });
+        continue;
+      }
+      const files = (filesOf.get(name) ?? []).sort();
+      const report = name + ".report.json";
+      if (to === T && baseExists) {
+        const recording = plans.filter((p) => {
+          const r = recordedReport(p.plan);
+          return r !== null && namedFile(r.report, p.file, d) === report;
+        }).map((p) => p.rel);
+        if (recording.length) {
+          steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and ${recording.join(", ")} still record${recording.length === 1 ? "s" : ""} ${report} \u2014 re-run verify-screen --compare --record-plan on ${T}, then --migrate`] });
+          continue;
+        }
+        const from = path14.join(d.verifyDir, name + ".expected.json");
+        if (!exists2(from)) {
+          steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and this set has no expectation to retire \u2014 move its files aside by hand`] });
+          continue;
+        }
+        const retired = from + ".retired";
+        if (exists2(retired)) {
+          steps.push({ kind: "skip", set: name, why: [`${path14.basename(retired)} already exists \u2014 refusing to replace it`] });
+          continue;
+        }
+        steps.push({ kind: "retire", set: name, nodeId: id, canonical: T, file: { from, to: retired } });
+        continue;
+      }
+      if (taken.has(to)) {
+        steps.push({ kind: "skip", set: name, why: [`${to} already exists in the verify dir \u2014 refusing to merge two sets; retire one by hand`] });
+        continue;
+      }
+      const moves = files.map((f) => ({ from: path14.join(d.verifyDir, f), to: path14.join(d.verifyDir, to + f.slice(name.length)) }));
+      const clash = moves.filter((m) => exists2(m.to) && !sameFile(m.from, m.to)).map((m) => path14.basename(m.to));
+      if (clash.length) {
+        steps.push({ kind: "skip", set: name, why: [`refusing to replace ${clash.join(", ")}`] });
+        continue;
+      }
+      const nameMap = new Map(files.map((f) => [f, to + f.slice(name.length)]));
+      const edits = [];
+      const blocks = [];
+      for (const p of plans) {
+        const used = /* @__PURE__ */ new Map();
+        rewriteRefs(p.plan, (ref) => {
+          const n = namedFile(ref, p.file, d);
+          const nn = n === null ? void 0 : nameMap.get(n);
+          if (n !== null && nn !== void 0) used.set(n, nn);
+          return null;
+        }, false);
+        if (!used.size) continue;
+        blocks.push(...planBlocks(p, nameMap, d));
+        edits.push({ file: p.file, rel: p.rel, names: used });
+      }
+      if (blocks.length) {
+        steps.push({ kind: "skip", set: name, why: blocks });
+        continue;
+      }
+      steps.push({ kind: "rename", set: name, to, nodeId: id, files: moves, plans: edits });
+      taken.add(to);
+    }
+  }
+  const order = new Map(legacy2.map((n, i) => [n, i]));
+  return steps.sort((a, b) => (order.get(a.set) ?? 0) - (order.get(b.set) ?? 0));
+}
+var STATUS_LOCK2 = { waitMs: 15e3 };
+function lockStatuses(bases) {
+  const locks = [];
+  const taken = [];
+  for (const file of [...new Set(bases.map(lockFileOfStatus))].sort()) {
+    if (taken.some((t) => t.toLowerCase() === file.toLowerCase() && sameFile(t, file))) continue;
+    try {
+      locks.push(acquireFileLock(file, STATUS_LOCK2));
+      taken.push(file);
+    } catch (e) {
+      for (const l of locks) l.release();
+      return { why: `the status lock ${file} could not be taken: ${errMsg(e)}` };
+    }
+  }
+  return { locks };
+}
+function applyRetire(s, d) {
+  const base = path14.join(d.verifyDir, s.set);
+  const held = lockStatuses([base]);
+  if ("why" in held) return { why: [held.why], notes: [] };
+  try {
+    const open = openRunOf(base);
+    if (open) return { why: [open], notes: [] };
+    const report = s.set + ".report.json";
+    const recording = readPlans(d.planDir, d.cwd).filter((p) => {
+      const r = recordedReport(p.plan);
+      return r !== null && namedFile(r.report, p.file, d) === report;
+    });
+    if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} \u2014 re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
+    if (exists2(s.file.to)) return { why: [`${path14.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
+    fs14.renameSync(s.file.from, s.file.to);
+    return { why: [], notes: [] };
+  } catch (e) {
+    return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
+  } finally {
+    for (const l of held.locks) l.release();
+  }
+}
+function applyRename(s, d) {
+  const oldBase = path14.join(d.verifyDir, s.set), newBase = path14.join(d.verifyDir, s.to);
+  const held = lockStatuses([oldBase, newBase]);
+  if ("why" in held) return { why: [held.why], notes: [] };
+  const notes = [];
+  const moved = [];
+  const restore = /* @__PURE__ */ new Map();
+  const rollback = () => {
+    const left = [];
+    for (const [file, raw] of restore) {
+      try {
+        const lock = acquireFileLock(planLockFile(file));
+        try {
+          writeFileAtomic(file, raw);
+        } finally {
+          lock.release();
+        }
+      } catch (e) {
+        left.push(`${slash2(path14.relative(d.cwd, file))} could not be restored: ${errMsg(e)}`);
+      }
+    }
+    for (const m of [...moved].reverse()) {
+      try {
+        fs14.renameSync(m.to, m.from);
+      } catch (e) {
+        left.push(`${path14.basename(m.to)} could not be renamed back to ${path14.basename(m.from)}: ${errMsg(e)}`);
+      }
+    }
+    return left;
+  };
+  try {
+    const open = openRunOf(oldBase) ?? openRunOf(newBase);
+    if (open) return { why: [open], notes };
+    const clash = s.files.filter((m) => !exists2(m.from) || exists2(m.to) && !sameFile(m.from, m.to));
+    if (clash.length) return { why: [`the verify dir changed since it was read (${clash.map((m) => path14.basename(m.from)).join(", ")}) \u2014 run --migrate again`], notes };
+    const plans = readPlans(d.planDir, d.cwd);
+    const nameMap = new Map(s.files.map((m) => [path14.basename(m.from), path14.basename(m.to)]));
+    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref) => {
+      const n = namedFile(ref, p.file, d);
+      return n !== null && nameMap.has(n) ? "" : null;
+    }, false).length > 0);
+    const blocks = touched.flatMap((p) => planBlocks(p, nameMap, d));
+    if (blocks.length) return { why: blocks, notes };
+    const hadRecord = new Set(touched.filter((p) => {
+      const r = recordedReport(p.plan);
+      return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null;
+    }).map((p) => p.file));
+    for (const m of s.files) {
+      if (m.from === m.to) continue;
+      if (sameFile(m.from, m.to) || m.from.toLowerCase() === m.to.toLowerCase()) {
+        const tmp = m.from + tmpSuffix();
+        fs14.renameSync(m.from, tmp);
+        try {
+          fs14.renameSync(tmp, m.to);
+        } catch (e) {
+          fs14.renameSync(tmp, m.from);
+          throw e;
+        }
+      } else {
+        if (exists2(m.to)) throw new Error(`${path14.basename(m.to)} appeared during the move`);
+        fs14.renameSync(m.from, m.to);
+      }
+      moved.push(m);
+    }
+    const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
+    if (exists2(liveOld) && !exists2(liveNew)) {
+      fs14.renameSync(liveOld, liveNew);
+      moved.push({ from: liveOld, to: liveNew });
+    }
+    for (const p of touched) {
+      restore.set(p.file, fs14.readFileSync(p.file, "utf8"));
+      let fields = [];
+      updatePlan(p.file, (raw) => {
+        if (raw === null) throw new Error(`${p.rel} disappeared`);
+        const plan = parsePlanText(raw, p.rel);
+        const hook = plan.verification && plan.verification.hook;
+        const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
+        fields = rewriteRefs(plan, (ref) => {
+          const n = namedFile(ref, p.file, d);
+          const nn = n === null ? void 0 : nameMap.get(n);
+          return n !== null && nn !== void 0 ? respell(ref, n, nn) : null;
+        }, true);
+        if (restamp && hook) hook.planHash = planHash(plan);
+        return plan;
+      });
+      if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) \u2014 rewritten to the renamed report`);
+    }
+    const problems = [];
+    for (const p of touched) {
+      const plan = parsePlanText(fs14.readFileSync(p.file, "utf8"), p.rel);
+      for (const e of recordedEdits(plan, d.cwd)) problems.push(`${p.rel}: ${e}`);
+      const r = recordedReport(plan);
+      if (hadRecord.has(p.file) && (r === null || reportRecordNames(r.report, r.sha, d.cwd) === null)) problems.push(`${p.rel}: verification.recorded no longer names its report`);
+      if (d.postCheck) for (const x of d.postCheck(p.file, plan)) problems.push(`${p.rel}: ${x}`);
+    }
+    if (problems.length) {
+      const left = rollback();
+      return { why: [`the plans failed the check after the move \u2014 every rename undone and every plan restored:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
+    }
+    return { why: [], notes };
+  } catch (e) {
+    const left = rollback();
+    return { why: [`the move failed (${errMsg(e)}) \u2014 ${left.length ? "undone in part:" : "every rename undone and every plan restored"}`, ...left.map((x) => `  ${x}`)], notes: [] };
+  } finally {
+    for (const l of held.locks) l.release();
+  }
+}
+function migrateMain(f) {
+  const cwd = process.cwd();
+  const verifyDir = path14.resolve(cwd, f.dir ?? VERIFY_DIR);
+  if (!exists2(verifyDir)) {
+    console.error(`--migrate: ${f.dir ?? VERIFY_DIR} does not exist (run from the project root, or pass --dir)`);
+    return 2;
+  }
+  const r = migrate({ cwd, verifyDir, apply: !!f.apply });
+  return r.skipped.length ? 1 : 0;
+}
+
 // design-to-code/verify-screen.ts
 var STATUS_STALL_MS = 3e5;
 function runStatusNote(base, now = Date.now()) {
   const found = readStatusAt(base);
   if (!found) return null;
-  const st = found.status, name = path11.basename(base);
+  const st = found.status, name = path15.basename(base);
   if (st === "v1") return `${found.file} is a hand-written status (no run id) \u2014 not checked`;
   const detail = st.detail ? ` (${st.detail})` : "";
   if (st.phase === "failed" && st.ownRun) return `the last run of ${name} (run ${st.runId}) was a probe's own run (no --run) that ended failed${detail} \u2014 it recorded no measured file; this expectation is safe to re-measure against`;
@@ -5488,11 +6603,11 @@ function runStatusNote(base, now = Date.now()) {
 }
 var PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs12.existsSync(dir)) return null;
-  for (const f of fs12.readdirSync(dir)) {
+  if (!nodeId || !fs15.existsSync(dir)) return null;
+  for (const f of fs15.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path11.join(dir, f);
-    if (path11.resolve(full) === path11.resolve(ownTarget)) continue;
+    const full = path15.join(dir, f);
+    if (path15.resolve(full) === path15.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
@@ -5501,11 +6616,11 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
 function plansFor(frameId, stem) {
   const hits = [];
   for (const f of listPlans(PLAN_DIR)) {
-    const p = readJsonOrNull(path11.join(PLAN_DIR, f), isPlan);
+    const p = readJsonOrNull(path15.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path11.basename(f, ".json")) === frameId);
-    const byName = path11.basename(f, ".json") === stem || p.file && path11.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path11.join(PLAN_DIR, f).split(path11.sep).join("/"), plan: p });
+    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path15.basename(f, ".json")) === frameId);
+    const byName = path15.basename(f, ".json") === stem || p.file && path15.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path15.join(PLAN_DIR, f).split(path15.sep).join("/"), plan: p });
   }
   return hits;
 }
@@ -5537,7 +6652,7 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const USAGE = `usage:
+  const USAGE3 = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
       The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
@@ -5594,9 +6709,17 @@ function main(argv) {
       evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);
       exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,
       6 when the run cache exists but cannot be read.
-exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).`;
+  ${scriptCmd("verify-screen")} --migrate [--apply] [--dir design/verify]
+      renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> \u2014 a variant of
+      it to <Layer>__<id>.<slug> \u2014 with every file of the set (the live status too), and rewrites the paths a plan's
+      verification.recorded (report, a11y.report, artifacts) and verification.a11y.report name. A dry run unless --apply.
+      A legacy set whose node already has its <Layer>__<id> set has its expectation retired (<S>.expected.json.retired).
+      Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
+      records with a hand-edited record. Never rewrites a report, measured file or expectation; plans are never renamed.
+exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).
+exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused \xB7 2 usage.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
-    console.log(USAGE);
+    console.log(USAGE3);
     return argv.length ? 0 : 2;
   }
   const OPTIONS = {
@@ -5626,70 +6749,85 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     stall: { type: "string" },
     interval: { type: "string" },
     "record-plan": { type: "boolean" },
+    migrate: { type: "boolean" },
+    apply: { type: "boolean" },
     help: { type: "boolean", short: "h" }
   };
-  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE3, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.migrate) {
+    const other = Object.entries(flags).filter(([k, v]) => v !== void 0 && !["migrate", "apply", "dir"].includes(k)).map(([k]) => k);
+    if (other.length || files.length) {
+      console.error(`--migrate takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}
+` + USAGE3);
+      return 2;
+    }
+    return migrateMain({ apply: flags.apply, dir: flags.dir });
+  }
+  if (flags.apply !== void 0) {
+    console.error("--apply only applies to --migrate\n" + USAGE3);
+    return 2;
+  }
   const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"];
   if (flags.status !== void 0 || flags.wait !== void 0) {
     if (flags.status !== void 0 && flags.wait !== void 0) {
-      console.error("pass --status or --wait, not both\n" + USAGE);
+      console.error("pass --status or --wait, not both\n" + USAGE3);
       return 2;
     }
     const other = ["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"].filter((k) => flags[k] !== void 0);
     if (other.length || files.length) {
       console.error(`--${flags.status !== void 0 ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}
-` + USAGE);
+` + USAGE3);
       return 2;
     }
     if (flags.wait !== void 0) {
       const bad2 = ["phase", "new-run", "detail", "publish", "by"].filter((k) => flags[k] !== void 0);
       if (bad2.length) {
         console.error(`--wait takes none of ${bad2.map((k) => `--${k}`).join(", ")}
-` + USAGE);
+` + USAGE3);
         return 2;
       }
-      return waitMain(flags.wait, flags, USAGE);
+      return waitMain(flags.wait, flags, USAGE3);
     }
     const bad = ["timeout", "stall", "interval"].filter((k) => flags[k] !== void 0);
     if (bad.length) {
       console.error(`--status takes none of ${bad.map((k) => `--${k}`).join(", ")}
-` + USAGE);
+` + USAGE3);
       return 2;
     }
-    return statusMain(flags.status, flags, USAGE);
+    return statusMain(flags.status, flags, USAGE3);
   }
   for (const k of runFlags) if (flags[k] !== void 0) {
     console.error(`--${k} only applies to --status / --wait
-` + USAGE);
+` + USAGE3);
     return 2;
   }
   const { interactions: interactionsFile, against: againstFile } = flags;
   const doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
   if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) {
-    console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE);
+    console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE3);
     return 2;
   }
   for (const k of ["node", "field", "group", "reason", "by", "all-fields"]) if (flags[k] !== void 0 && !doAccept) {
     console.error(`--${k} only applies to --accept
-` + USAGE);
+` + USAGE3);
     return 2;
   }
-  if (doAccept) return acceptMain(files, flags, USAGE);
+  if (doAccept) return acceptMain(files, flags, USAGE3);
   if (interactionsFile !== void 0 && !doCompare) {
-    console.error("--interactions only applies to --compare\n" + USAGE);
+    console.error("--interactions only applies to --compare\n" + USAGE3);
     return 2;
   }
   if (againstFile !== void 0 && !doCompare) {
-    console.error("--against only applies to --compare\n" + USAGE);
+    console.error("--against only applies to --compare\n" + USAGE3);
     return 2;
   }
   const recordPlanFlag = !!flags["record-plan"];
   if (recordPlanFlag && !doCompare) {
-    console.error("--record-plan only applies to --compare\n" + USAGE);
+    console.error("--record-plan only applies to --compare\n" + USAGE3);
     return 2;
   }
-  if (doExpect) return expectMain(files, flags, USAGE);
-  return compareMain(files, flags, USAGE);
+  if (doExpect) return expectMain(files, flags, USAGE3);
+  return compareMain(files, flags, USAGE3);
 }
 function write(doExpect, base, obj, md) {
   if (!base) {
@@ -5700,35 +6838,35 @@ function write(doExpect, base, obj, md) {
   if (md) writeFileAtomic(base + ".report.md", md);
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }
-function expectMain(files, flags, USAGE) {
+function expectMain(files, flags, USAGE3) {
   const { out, plan: planFlag } = flags;
   const force = !!flags.force;
   const firstFile = files[0];
   if (firstFile === void 0) {
-    console.error("--expect needs at least one screen export\n" + USAGE);
+    console.error("--expect needs at least one screen export\n" + USAGE3);
     return 2;
   }
-  const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path11.basename(f, ".json") }));
-  const indexFile = path11.join(EXPORT_DIR, "pages", "index.json");
+  const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path15.basename(f, ".json") }));
+  const indexFile = path15.join(EXPORT_DIR, "pages", "index.json");
   const idx = readJson(indexFile, isPagesRootIndex);
   if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-  const pagesDir = path11.join(EXPORT_DIR, "pages");
+  const pagesDir = path15.join(EXPORT_DIR, "pages");
   const pageRows = [];
   let dirs = [];
   try {
-    dirs = fs12.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    dirs = fs15.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch {
   }
   for (const d of dirs) {
-    const pi2 = readJson(path11.join(pagesDir, d, "index.json"), isPageIndex);
+    const pi2 = readJson(path15.join(pagesDir, d, "index.json"), isPageIndex);
     if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
   }
   const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
   const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
   const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
   const exportRoot = EXPORT_DIR;
-  const readSibling = (file) => readJsonOrNull(path11.join(exportRoot, file), isScreenDoc);
-  const outBase0 = out || path11.join(VERIFY_DIR, path11.basename(firstFile, ".json"));
+  const readSibling = (file) => readJsonOrNull(path15.join(exportRoot, file), isScreenDoc);
+  const outBase0 = out || path15.join(VERIFY_DIR, path15.basename(firstFile, ".json"));
   let flagged;
   if (planFlag !== void 0) {
     const r = readJson(planFlag, isPlan);
@@ -5736,10 +6874,10 @@ function expectMain(files, flags, USAGE) {
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    flagged = { file: planFlag.split(path11.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path15.sep).join("/"), plan: r.doc };
   }
   const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-  const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path11.basename(outBase0));
+  const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path15.basename(outBase0));
   const planForExpect = chosen.hit;
   if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
     console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
@@ -5748,12 +6886,12 @@ function expectMain(files, flags, USAGE) {
     const file = resolveInside(exportRoot, pointer);
     if (file === null) return null;
     try {
-      return fs12.readFileSync(file);
+      return fs15.readFileSync(file);
     } catch {
       return null;
     }
   };
-  const ds = readJsonOrNull(path11.join(exportRoot, "design-system.json"), isJsonObject);
+  const ds = readJsonOrNull(path15.join(exportRoot, "design-system.json"), isJsonObject);
   const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
   const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {}, readReference, colorProfile };
   const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
@@ -5764,15 +6902,15 @@ function expectMain(files, flags, USAGE) {
   }
   const outBase = outBase0;
   const target = outBase + ".expected.json";
-  const dup = findExistingExpectedFor(path11.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+  const dup = findExistingExpectedFor(path15.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
   if (dup && !force) {
     const oldBase = dup.slice(0, -".expected.json".length);
-    const dir = path11.dirname(dup), stemOld = path11.basename(oldBase);
-    const oldFiles = fs12.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path11.join(dir, f));
-    const canonical3 = path11.join(path11.dirname(target), path11.basename(firstFile, ".json"));
+    const dir = path15.dirname(dup), stemOld = path15.basename(oldBase);
+    const oldFiles = fs15.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path15.join(dir, f));
+    const canonical3 = path15.join(path15.dirname(target), path15.basename(firstFile, ".json"));
     const oldStatus = runStatusNote(oldBase);
     if (oldStatus) console.error(`note  ${oldStatus}`);
-    if (stemOld === path11.basename(canonical3)) {
+    if (stemOld === path15.basename(canonical3)) {
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
       );
@@ -5781,14 +6919,14 @@ function expectMain(files, flags, USAGE) {
     console.error(
       `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
        existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
-       the canonical name for this screen is '${path11.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
-       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path11.resolve(target) === path11.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
+       the canonical name for this screen is '${path15.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
+       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path15.resolve(target) === path15.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
        Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
     );
     return 1;
   }
   const next = JSON.stringify(exp, null, 2) + "\n";
-  const prev = fs12.existsSync(target) ? fs12.readFileSync(target, "utf8") : null;
+  const prev = fs15.existsSync(target) ? fs15.readFileSync(target, "utf8") : null;
   const h = sha256Hex(next);
   let prevContent = null;
   try {
@@ -5810,7 +6948,7 @@ function expectMain(files, flags, USAGE) {
   } else if (prev !== null) {
     const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
     console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
-    const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs12.existsSync(f));
+    const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs15.existsSync(f));
     if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
   }
   const hc = exp.counts.hidden;
@@ -5821,13 +6959,13 @@ function expectMain(files, flags, USAGE) {
   if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
   return 0;
 }
-function compareMain(files, flags, USAGE) {
-  const sha = (file) => sha256Hex(fs12.readFileSync(file));
+function compareMain(files, flags, USAGE3) {
+  const sha = (file) => sha256Hex(fs15.readFileSync(file));
   const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
   const recordPlanFlag = !!flags["record-plan"];
   const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) {
-    console.error("--compare needs <expected.json> <measured.json>\n" + USAGE);
+    console.error("--compare needs <expected.json> <measured.json>\n" + USAGE3);
     return 2;
   }
   const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
@@ -5862,8 +7000,8 @@ function compareMain(files, flags, USAGE) {
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists2 = !!p && fs12.existsSync(p);
-    return { ...ifDefined("path", p), exists: exists2, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists2 ? sha(p) : void 0) };
+    const exists3 = !!p && fs15.existsSync(p);
+    return { ...ifDefined("path", p), exists: exists3, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists3 ? sha(p) : void 0) };
   });
   let code;
   let planHit;
@@ -5876,11 +7014,11 @@ function compareMain(files, flags, USAGE) {
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    flagged = { file: planFlag.split(path11.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path15.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path11.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path15.basename(expFile, ".json").replace(/\.expected$/, "");
     const chosen = choosePlan(flagged, frameId, stem);
     const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
@@ -5919,7 +7057,7 @@ function compareMain(files, flags, USAGE) {
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path11.join(VERIFY_DIR, path11.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path15.join(VERIFY_DIR, path15.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -5935,17 +7073,17 @@ function compareMain(files, flags, USAGE) {
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
   const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path11.join(path11.dirname(expFile), path11.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path11.resolve(probeBase) !== path11.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path15.join(path15.dirname(expFile), path15.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path15.resolve(probeBase) !== path15.resolve(measuredBase) ? readStatusAt(probeBase) : null);
   const statusOpt = found ? { status: {
-    file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path11.basename(found.file) : `${path11.basename(found.file)} (live, ${found.file})`,
+    file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path15.basename(found.file) : `${path15.basename(found.file)} (live, ${found.file})`,
     status: found.status
   } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
-    const beside = path11.join(path11.dirname(measuredFile), path11.basename(vd));
-    visualDiff = fs12.existsSync(vd) ? { path: vd, exists: true } : fs12.existsSync(beside) ? { path: beside.split(path11.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const beside = path15.join(path15.dirname(measuredFile), path15.basename(vd));
+    visualDiff = fs15.existsSync(vd) ? { path: vd, exists: true } : fs15.existsSync(beside) ? { path: beside.split(path15.sep).join("/"), exists: true } : { path: vd, exists: false };
   }
   const rep = compare(expectation, measured, {
     ...statusOpt,
@@ -5978,12 +7116,12 @@ function compareMain(files, flags, USAGE) {
   if (recordPlanFlag && planHit) {
     const realOf = (p) => {
       try {
-        return fs12.realpathSync(p);
+        return fs15.realpathSync(p);
       } catch {
         return p;
       }
     };
-    const reportRel = path11.relative(realOf(process.cwd()), realOf(path11.resolve(compareBase + ".report.json"))).split(path11.sep).join("/");
+    const reportRel = path15.relative(realOf(process.cwd()), realOf(path15.resolve(compareBase + ".report.json"))).split(path15.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -5995,28 +7133,28 @@ function compareMain(files, flags, USAGE) {
   }
   return isPassingVerdict(rep.verdict) ? 0 : 1;
 }
-function acceptMain(files, flags, USAGE) {
+function acceptMain(files, flags, USAGE3) {
   const reportFile = files[0];
   if (!reportFile || files.length > 1) {
-    console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE);
+    console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE3);
     return 2;
   }
   if (flags.node === void 0 === (flags.group === void 0)) {
-    console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE);
+    console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE3);
     return 2;
   }
   if ((flags.field !== void 0 || flags["all-fields"]) && flags.group !== void 0) {
-    console.error("--field / --all-fields go with --node, not --group\n" + USAGE);
+    console.error("--field / --all-fields go with --node, not --group\n" + USAGE3);
     return 2;
   }
   if (flags.node !== void 0 && flags.field === void 0 === !flags["all-fields"]) {
-    console.error('--accept --node needs exactly one of --field "<label>" / --all-fields\n' + USAGE);
+    console.error('--accept --node needs exactly one of --field "<label>" / --all-fields\n' + USAGE3);
     return 2;
   }
   const reason = (flags.reason || "").trim(), by = (flags.by || "").trim();
   if (!reason || !by) {
     console.error(`--accept needs ${!reason ? '--reason "<why this deviation is intended>"' : ""}${!reason && !by ? " and " : ""}${!by ? '--by "<who decided>"' : ""} \u2014 a waiver without a reason and a decider is not recorded
-` + USAGE);
+` + USAGE3);
     return 2;
   }
   const r = readJson(reportFile, isVerifyReport);
@@ -6035,9 +7173,9 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path11.basename(reportFile, ".json").replace(/\.report$/, "");
+  const stem = path15.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
-  let planFile = flags.plan ?? (recorded && fs12.existsSync(recorded) ? recorded : void 0);
+  let planFile = flags.plan ?? (recorded && fs15.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
     const hits = plansFor(report.nodeId, stem);
     const only = hits.length === 1 ? hits[0] : void 0;

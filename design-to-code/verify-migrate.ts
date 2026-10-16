@@ -1,0 +1,471 @@
+// verify-migrate.ts — `verify-screen --migrate [--apply] [--dir design/verify]`: renames the legacy-named verify sets
+// in a verify dir to the canonical key (screen-key.ts): `<Layer>__<id>`, and a variant to `<Layer>__<id>.<slug>`.
+//
+// A dry run unless --apply: it prints what it would do, writes nothing. Per legacy set (a set whose name is not
+// `<stem>` / `<stem>.<slug>`, not retired):
+//   - its node id: the expectation's frame, else the report's nodeId (the two disagreeing: skipped), else the set's name
+//     resolved exactly (screenKey: node id, exact name/title/plan header, a carried id); none or several: skipped;
+//   - its new name: the node's existing grammar-named stem (several: skipped), else screenStem(the indexed layer name —
+//     else the expectation's frame name, the report's screen, the set's own name —, id). A set whose name extends another
+//     set of the same node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant: `<stem>.<slug>`. Two sets of one node that
+//     extend nothing are skipped (which one is the screen is a person's call);
+//   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
+//     every reader skips) — unless a plan's verification.recorded names the legacy report (re-record first: skipped);
+//   - else every file of the set (`<S>.*`, `<S>-*`; a file of a longer set name belongs to that set) is renamed, a
+//     case-only rename through a temp name. Refused when a new name is taken. Bytes a sha256 binds (the expectation,
+//     measured file, report, evidence) are never rewritten — only file names change;
+//   - a plan that names the set's files is rewritten under its lock: verification.recorded.report, .a11y.report and
+//     .artifacts together (recordFacts makes a11y.report the report path, so changing one alone reads as a hand edit),
+//     and the hand-owned verification.a11y.report (said in a note). Never screen/file/nodeId (planHash covers them). The
+//     hook's record is re-stamped only when it matched the plan under the older formula (legacyPlanHash), as
+//     --record-plan does. Before anything moves: a plan whose record was edited by hand (verify-build recordedEdits), or
+//     whose reportSha256 no longer names the report on disk (a rename would hide that), skips the set;
+//   - a set with an open run (status v2 not ended), under its name or the new one, is skipped. Both status locks are held
+//     from the last checks to the end, so no status write lands in between; the live status moves with the set;
+//   - after the move every plan written is checked again (recordedEdits == [] and its record names its report); on a
+//     failure every rename is undone and every plan's bytes restored.
+// Not migrated: plans (never renamed), audit files, design/.sync snapshots, design/changes.
+// Exit: 0 nothing skipped, 1 a set skipped or refused (each says why), 2 usage.
+import fs from "node:fs";
+import path from "node:path";
+import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
+import { acquireFileLock } from "../bridge/src/file-lock.ts";
+import type { HeldLock } from "../bridge/src/file-lock.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
+import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
+import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
+import { legacyPlanHash, planHash } from "./content-hash.ts";
+import { parsePlanText, updatePlan } from "./plan-record.ts";
+import { planLockFile } from "./run-cache.ts";
+import { resolveScreen } from "./resolve-screen.ts";
+import { allSets, canonicalStemsFor, formatSetName, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
+import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
+import { recordedEdits, reportRecordNames } from "./verify-build.ts";
+import { isJsonObject } from "./types.ts";
+import type { Plan } from "./types.ts";
+
+/** One file renamed: absolute paths. */
+export interface FileMove { from: string; to: string }
+/** A plan that names a set's files: its path (absolute, and as shown) and the file names it names, old → new. */
+export interface PlanEdit { file: string; rel: string; names: Map<string, string> }
+export type MigrateStep =
+  | { kind: "rename"; set: string; to: string; nodeId: string; files: FileMove[]; plans: PlanEdit[] }
+  | { kind: "retire"; set: string; nodeId: string; canonical: string; file: FileMove }
+  | { kind: "skip"; set: string; why: string[] };
+
+export interface MigrateOpts {
+  /** the project root: plan paths are relative to it */
+  cwd: string;
+  /** the verify dir (absolute, or relative to cwd) */
+  verifyDir: string;
+  /** default <cwd>/design/plan */
+  planDir?: string;
+  /** default the project's export dir (findExportDir) */
+  exportDir?: string;
+  apply: boolean;
+  /** where the steps are printed (default stdout) and the notes and skips (default stderr) */
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+  /** more post-checks of a plan after the move (tests inject a failure here): problems, [] when none */
+  postCheck?: (planFile: string, plan: Plan) => string[];
+}
+export interface MigrateResult { steps: MigrateStep[]; done: string[]; skipped: Array<{ set: string; why: string[] }> }
+
+const slash = (p: string): string => p.split(path.sep).join("/");
+const exists = (p: string): boolean => fs.existsSync(p);
+/** Two paths are one file (a case-only rename on a case-insensitive disk). */
+function sameFile(a: string, b: string): boolean {
+  try { const x = fs.statSync(a), y = fs.statSync(b); return x.dev === y.dev && x.ino === y.ino; } catch { return false; }
+}
+/** A status of `base` that names a run still open (v2, not ended), or null. */
+function openRunOf(base: string): string | null {
+  const st = readStatus(base);
+  return st && st !== "v1" && !TERMINAL_PHASES.includes(st.phase) ? `run ${st.runId} of ${path.basename(base)} is open (phase ${st.phase}, ${st.at}) — wait for it to end, then --migrate` : null;
+}
+
+// ---------------------------------------------------------------- the paths a plan names
+
+type RefField = "verification.recorded.report" | "verification.recorded.a11y.report" | "verification.recorded.artifacts" | "verification.a11y.report";
+/** Every path in the plan's verification that may name a verify file — `map` gives each one's new spelling (null: not
+ *  one of the set's files). With `write`, the plan is changed in place. The fields changed, in order. */
+function rewriteRefs(plan: Plan, map: (ref: string) => string | null, write: boolean): RefField[] {
+  const changed: RefField[] = [];
+  const v: unknown = plan.verification;
+  if (!isJsonObject(v)) return changed;
+  const one = (o: Record<string, unknown>, key: string, field: RefField): void => {
+    const ref = o[key];
+    if (typeof ref !== "string") return;
+    const to = map(ref);
+    if (to === null) return;
+    if (write) o[key] = to;
+    if (!changed.includes(field)) changed.push(field);
+  };
+  const rec = v.recorded;
+  if (isJsonObject(rec)) {
+    one(rec, "report", "verification.recorded.report");
+    if (isJsonObject(rec.a11y)) one(rec.a11y, "report", "verification.recorded.a11y.report");
+    const arts = rec.artifacts;
+    if (Array.isArray(arts)) arts.forEach((a, i) => {
+      if (typeof a !== "string") return;
+      const to = map(a);
+      if (to === null) return;
+      if (write) arts[i] = to;
+      if (!changed.includes("verification.recorded.artifacts")) changed.push("verification.recorded.artifacts");
+    });
+  }
+  if (isJsonObject(v.a11y)) one(v.a11y, "report", "verification.a11y.report");
+  return changed;
+}
+
+/** The recorded report path of a plan, when it has a record naming one. */
+function recordedReport(plan: Plan): { report: string; sha: unknown } | null {
+  const v: unknown = plan.verification;
+  const rec = isJsonObject(v) ? v.recorded : undefined;
+  return isJsonObject(rec) && typeof rec.report === "string" && rec.report ? { report: rec.report, sha: rec.reportSha256 } : null;
+}
+
+// ---------------------------------------------------------------- the migration
+
+interface PlanText { file: string; rel: string; plan: Plan }
+
+export function migrate(opts: MigrateOpts): MigrateResult {
+  const out = opts.out ?? ((l: string) => { console.log(l); });
+  const err = opts.err ?? ((l: string) => { console.error(l); });
+  const cwd = path.resolve(opts.cwd);
+  const verifyDir = path.resolve(cwd, opts.verifyDir);
+  const planDir = path.resolve(cwd, opts.planDir ?? PLAN_DIR);
+  const exportDir = opts.exportDir !== undefined ? path.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
+  const shown = (abs: string): string => slash(path.relative(cwd, abs)) || ".";
+  const steps = planMigration({ cwd, verifyDir, planDir, exportDir });
+  const result: MigrateResult = { steps, done: [], skipped: [] };
+
+  for (const s of steps) {
+    if (s.kind === "skip") {
+      result.skipped.push({ set: s.set, why: s.why });
+      err(`skip    ${shown(path.join(verifyDir, s.set))}: ${s.why[0] ?? ""}`);
+      for (const w of s.why.slice(1)) err(`        ${w}`);
+      continue;
+    }
+    if (s.kind === "retire") {
+      out(`${opts.apply ? "retire " : "would retire"}  ${shown(s.file.from)} -> ${path.basename(s.file.to)} (node ${s.nodeId} already has ${shown(path.join(verifyDir, s.canonical))})`);
+    } else {
+      out(`${opts.apply ? "migrate" : "would migrate"} ${shown(path.join(verifyDir, s.set))} -> ${s.to} (node ${s.nodeId}): ${s.files.length} file(s)`);
+      for (const f of s.files) out(`  rename  ${path.basename(f.from)} -> ${path.basename(f.to)}`);
+      for (const p of s.plans) out(`  plan    ${p.rel}: ${[...p.names].map(([a, b]) => `${a} -> ${b}`).join(", ")}`);
+    }
+    if (!opts.apply) continue;
+    const r = s.kind === "retire" ? applyRetire(s, { cwd, verifyDir, planDir }) : applyRename(s, { cwd, verifyDir, planDir, postCheck: opts.postCheck });
+    if (r.why.length) {
+      result.skipped.push({ set: s.set, why: r.why });
+      err(`skip    ${shown(path.join(verifyDir, s.set))}: ${r.why[0] ?? ""}`);
+      for (const w of r.why.slice(1)) err(`        ${w}`);
+    } else result.done.push(s.set);
+    for (const n of r.notes) err(`note  ${n}`);
+  }
+  const moving = steps.filter((s) => s.kind !== "skip").length;
+  if (!steps.length) err(`nothing to migrate: every verify set in ${shown(verifyDir)} is named <Layer>__<id> or <Layer>__<id>.<variant>`);
+  else if (!opts.apply) err(`dry run — nothing written: ${moving} set(s) to migrate or retire, ${result.skipped.length} skipped; pass --apply to do it`);
+  else err(`${result.done.length} set(s) migrated or retired, ${result.skipped.length} skipped`);
+  return result;
+}
+
+interface Dirs { cwd: string; verifyDir: string; planDir: string; exportDir: string }
+
+/** Every plan in the plan dir that parses (one that does not names nothing the migration could rewrite). */
+function readPlans(planDir: string, cwd: string): PlanText[] {
+  const out: PlanText[] = [];
+  for (const f of listPlans(planDir)) {
+    const file = path.join(planDir, f);
+    try { out.push({ file, rel: slash(path.relative(cwd, file)), plan: parsePlanText(fs.readFileSync(file, "utf8"), file) }); } catch { /* not a plan */ }
+  }
+  return out;
+}
+
+/** The verify file a plan's path names — project-relative or absolute, relative to the plan file, or a bare file name —
+ *  as its file name in the verify dir; null for any other path. */
+function namedFile(ref: string, planFile: string, d: { cwd: string; verifyDir: string }): string | null {
+  for (const abs of [path.resolve(d.cwd, ref), path.resolve(path.dirname(planFile), ref)]) {
+    if (path.dirname(abs) === d.verifyDir) return path.basename(abs);
+  }
+  return /[\\/]/.test(ref) ? null : ref;
+}
+/** `ref` with its file name `from` replaced by `to`, spelt as it was (its directory part kept). */
+const respell = (ref: string, from: string, to: string): string => (ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to);
+
+/** Why a plan cannot be rewritten for a move (its record edited by hand, or naming a report its sha no longer names). */
+function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: string; verifyDir: string }): string[] {
+  const edits = recordedEdits(p.plan, d.cwd);
+  if (edits.length) return [`${p.rel} has a hand-edited record — fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  const rec = recordedReport(p.plan);
+  if (rec) {
+    const name = namedFile(rec.report, p.file, d);
+    if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+    }
+  }
+  return [];
+}
+
+/** What --migrate would do, computed from the disk now (nothing written). */
+export function planMigration(d: Dirs): MigrateStep[] {
+  const sets = allSets(d.verifyDir);
+  if (!sets.length) return [];
+  // each file of the dir belongs to the LONGEST set name it starts with, followed by "." or "-" (retired sets count:
+  // their files are theirs)
+  const names = sets.map((s) => s.name).sort((a, b) => b.length - a.length);
+  const filesOf = new Map<string, string[]>();
+  for (const e of fs.readdirSync(d.verifyDir, { withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const owner = names.find((n) => e.name.startsWith(n + ".") || e.name.startsWith(n + "-"));
+    if (owner !== undefined) filesOf.set(owner, [...(filesOf.get(owner) ?? []), e.name]);
+  }
+  const live = sets.filter((s) => !s.retired).map((s) => s.name);
+  const legacy = live.filter((n) => parseSetName(n) === null);
+  if (!legacy.length) return [];
+  const steps: MigrateStep[] = [];
+  const hasIndex = exists(path.join(d.exportDir, "pages", "index.json"));
+
+  // node id of each legacy set
+  const byId = new Map<string, string[]>();
+  for (const name of legacy) {
+    const f = setFacts(d.verifyDir, name);
+    if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) {
+      steps.push({ kind: "skip", set: name, why: [`its expectation is of node ${f.expectedId}, its report of node ${f.reportId} — retire the stale one by hand`] });
+      continue;
+    }
+    let id = f.expectedId ?? f.reportId;
+    if (id === null) {
+      const k = screenKey(name, { exportDir: d.exportDir, planDir: d.planDir });
+      if (k.status !== "resolved") { steps.push({ kind: "skip", set: name, why: [`no node id: its expectation and report name none, and the name gives none (${k.why})`] }); continue; }
+      id = k.nodeId;
+    }
+    byId.set(id, [...(byId.get(id) ?? []), name]);
+  }
+
+  const plans = readPlans(d.planDir, d.cwd);
+  const taken = new Set<string>(sets.map((s) => s.name));
+  for (const [id, group] of byId) {
+    const stems = canonicalStemsFor(d.verifyDir, id);
+    if (stems.length > 1) {
+      for (const name of group) steps.push({ kind: "skip", set: name, why: [`node ${id} has ${stems.length} grammar-named verify sets (${stems.join(", ")}) — keep one, then --migrate`] });
+      continue;
+    }
+    // the stem: the node's existing one, else from its layer name (the index, else what the set's files say, else the set's name)
+    let target = stems[0];
+    if (target === undefined) {
+      const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
+      const first = group[0] ?? "";
+      const f = setFacts(d.verifyDir, first);
+      const name = row && row.status === "resolved" ? row.row.name : f.expectedName ?? f.reportScreen ?? first;
+      target = screenStem(name, id);
+    }
+    const T = target;
+    const baseExists = live.includes(T);
+    // a set that extends another name of the node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant of it
+    const parentOf = new Map<string, string>();
+    for (const name of group) {
+      const cands = new Set<string>([T, ...stems, ...group.filter((g) => g !== name)]);
+      for (let i = 1; i < name.length; i++) {
+        const p = name.slice(0, i);
+        if (".@-".includes(name[i] ?? "") && /^[A-Za-z0-9_]+$/.test(p) && nodeIdFromStem(p) === id) cands.add(p);
+      }
+      let best: string | undefined;
+      for (const c of cands) if (name.length > c.length + 1 && name.startsWith(c) && ".@-".includes(name[c.length] ?? "") && (best === undefined || c.length > best.length)) best = c;
+      if (best !== undefined) parentOf.set(name, best);
+    }
+    const slugOf = (name: string): string => {
+      const p = parentOf.get(name);
+      if (p === undefined) return "";
+      const own = variantSlug(name.slice(p.length + 1));
+      const up = group.includes(p) ? slugOf(p) : "";
+      return up && own ? `${up}-${own}` : up || own;
+    };
+    const roots = group.filter((n) => !parentOf.has(n));
+    const rootOf = (name: string): string => { let n = name; for (let p = parentOf.get(n); p !== undefined && group.includes(p); p = parentOf.get(n)) n = p; return n; };
+    const wanted = new Map<string, string[]>(); // new name -> the legacy sets that want it
+    const plannedTo = new Map<string, string>();
+    for (const name of group) {
+      if (roots.length > 1 && roots.includes(rootOf(name))) continue;
+      const isRoot = !parentOf.has(name);
+      const slug = slugOf(name);
+      if (!isRoot && !slug) { steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug ([a-z0-9-]+) can keep — rename it by hand`] }); continue; }
+      const to = isRoot ? T : formatSetName(T, slug);
+      plannedTo.set(name, to);
+      wanted.set(to, [...(wanted.get(to) ?? []), name]);
+    }
+    if (roots.length > 1) {
+      const why = `${roots.length} legacy sets of node ${id} extend no other name (${roots.join(", ")}) — which one is the screen is your call: retire the others ` +
+        `(mv <S>.expected.json <S>.expected.json.retired), then --migrate`;
+      for (const name of group) if (roots.includes(rootOf(name))) steps.push({ kind: "skip", set: name, why: [why] });
+    }
+    for (const [name, to] of plannedTo) {
+      const rivals = wanted.get(to) ?? [];
+      if (rivals.length > 1) { steps.push({ kind: "skip", set: name, why: [`${rivals.join(" and ")} would both become ${to} — retire one by hand`] }); continue; }
+      const open = openRunOf(path.join(d.verifyDir, name)) ?? openRunOf(path.join(d.verifyDir, to));
+      if (open) { steps.push({ kind: "skip", set: name, why: [open] }); continue; }
+      const files = (filesOf.get(name) ?? []).sort();
+      const report = name + ".report.json";
+      if (to === T && baseExists) {
+        // the node's canonical set is there: this one is history — unless a plan still records its report
+        const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, p.file, d) === report; }).map((p) => p.rel);
+        if (recording.length) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and ${recording.join(", ")} still record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${T}, then --migrate`] }); continue; }
+        const from = path.join(d.verifyDir, name + ".expected.json");
+        if (!exists(from)) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and this set has no expectation to retire — move its files aside by hand`] }); continue; }
+        const retired = from + ".retired";
+        if (exists(retired)) { steps.push({ kind: "skip", set: name, why: [`${path.basename(retired)} already exists — refusing to replace it`] }); continue; }
+        steps.push({ kind: "retire", set: name, nodeId: id, canonical: T, file: { from, to: retired } });
+        continue;
+      }
+      if (taken.has(to)) { steps.push({ kind: "skip", set: name, why: [`${to} already exists in the verify dir — refusing to merge two sets; retire one by hand`] }); continue; }
+      const moves: FileMove[] = files.map((f) => ({ from: path.join(d.verifyDir, f), to: path.join(d.verifyDir, to + f.slice(name.length)) }));
+      const clash = moves.filter((m) => exists(m.to) && !sameFile(m.from, m.to)).map((m) => path.basename(m.to));
+      if (clash.length) { steps.push({ kind: "skip", set: name, why: [`refusing to replace ${clash.join(", ")}`] }); continue; }
+      const nameMap = new Map(files.map((f) => [f, to + f.slice(name.length)] as const));
+      const edits: PlanEdit[] = [];
+      const blocks: string[] = [];
+      for (const p of plans) {
+        const used = new Map<string, string>();
+        rewriteRefs(p.plan, (ref) => { const n = namedFile(ref, p.file, d); const nn = n === null ? undefined : nameMap.get(n); if (n !== null && nn !== undefined) used.set(n, nn); return null; }, false);
+        if (!used.size) continue;
+        blocks.push(...planBlocks(p, nameMap, d));
+        edits.push({ file: p.file, rel: p.rel, names: used });
+      }
+      if (blocks.length) { steps.push({ kind: "skip", set: name, why: blocks }); continue; }
+      steps.push({ kind: "rename", set: name, to, nodeId: id, files: moves, plans: edits });
+      taken.add(to);
+    }
+  }
+  const order = new Map(legacy.map((n, i) => [n, i] as const));
+  return steps.sort((a, b) => (order.get(a.set) ?? 0) - (order.get(b.set) ?? 0));
+}
+
+// ---------------------------------------------------------------- applying one step
+
+const STATUS_LOCK = { waitMs: 15_000 };
+/** The status locks of `bases`, taken in one order (two migrations never wait on each other), or why not. Two names
+ *  that differ only in case are one lock file on a case-insensitive disk: the second is then the first, already held. */
+function lockStatuses(bases: string[]): { locks: HeldLock[] } | { why: string } {
+  const locks: HeldLock[] = [];
+  const taken: string[] = [];
+  for (const file of [...new Set(bases.map(lockFileOfStatus))].sort()) {
+    if (taken.some((t) => t.toLowerCase() === file.toLowerCase() && sameFile(t, file))) continue;
+    try { locks.push(acquireFileLock(file, STATUS_LOCK)); taken.push(file); } catch (e) {
+      for (const l of locks) l.release();
+      return { why: `the status lock ${file} could not be taken: ${errMsg(e)}` };
+    }
+  }
+  return { locks };
+}
+
+function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: string; verifyDir: string; planDir: string }): { why: string[]; notes: string[] } {
+  const base = path.join(d.verifyDir, s.set);
+  const held = lockStatuses([base]);
+  if ("why" in held) return { why: [held.why], notes: [] };
+  try {
+    const open = openRunOf(base);
+    if (open) return { why: [open], notes: [] };
+    const report = s.set + ".report.json";
+    const recording = readPlans(d.planDir, d.cwd).filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, p.file, d) === report; });
+    if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
+    if (exists(s.file.to)) return { why: [`${path.basename(s.file.to)} already exists — refusing to replace it`], notes: [] };
+    fs.renameSync(s.file.from, s.file.to);
+    return { why: [], notes: [] };
+  } catch (e) {
+    return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
+  } finally { for (const l of held.locks) l.release(); }
+}
+
+function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: string; verifyDir: string; planDir: string; postCheck?: ((planFile: string, plan: Plan) => string[]) | undefined }): { why: string[]; notes: string[] } {
+  const oldBase = path.join(d.verifyDir, s.set), newBase = path.join(d.verifyDir, s.to);
+  const held = lockStatuses([oldBase, newBase]);
+  if ("why" in held) return { why: [held.why], notes: [] };
+  const notes: string[] = [];
+  const moved: FileMove[] = [];
+  const restore = new Map<string, string>(); // plan file -> its bytes before
+  const rollback = (): string[] => {
+    const left: string[] = [];
+    for (const [file, raw] of restore) {
+      try {
+        const lock = acquireFileLock(planLockFile(file));
+        try { writeFileAtomic(file, raw); } finally { lock.release(); }
+      } catch (e) { left.push(`${slash(path.relative(d.cwd, file))} could not be restored: ${errMsg(e)}`); }
+    }
+    for (const m of [...moved].reverse()) {
+      try { fs.renameSync(m.to, m.from); } catch (e) { left.push(`${path.basename(m.to)} could not be renamed back to ${path.basename(m.from)}: ${errMsg(e)}`); }
+    }
+    return left;
+  };
+  try {
+    // the checks again, now that no status write can land: an open run, a name taken since, the plans as they are now
+    const open = openRunOf(oldBase) ?? openRunOf(newBase);
+    if (open) return { why: [open], notes };
+    const clash = s.files.filter((m) => !exists(m.from) || (exists(m.to) && !sameFile(m.from, m.to)));
+    if (clash.length) return { why: [`the verify dir changed since it was read (${clash.map((m) => path.basename(m.from)).join(", ")}) — run --migrate again`], notes };
+    const plans = readPlans(d.planDir, d.cwd);
+    const nameMap = new Map(s.files.map((m) => [path.basename(m.from), path.basename(m.to)] as const));
+    const touched = plans.filter((p) => rewriteRefs(p.plan, (ref) => { const n = namedFile(ref, p.file, d); return n !== null && nameMap.has(n) ? "" : null; }, false).length > 0);
+    const blocks = touched.flatMap((p) => planBlocks(p, nameMap, d));
+    if (blocks.length) return { why: blocks, notes };
+    const hadRecord = new Set(touched.filter((p) => { const r = recordedReport(p.plan); return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null; }).map((p) => p.file));
+
+    // the files: a case-only rename goes through a temp name
+    for (const m of s.files) {
+      if (m.from === m.to) continue;
+      if (sameFile(m.from, m.to) || m.from.toLowerCase() === m.to.toLowerCase()) {
+        const tmp = m.from + tmpSuffix();
+        fs.renameSync(m.from, tmp);
+        try { fs.renameSync(tmp, m.to); } catch (e) { fs.renameSync(tmp, m.from); throw e; }
+      } else {
+        if (exists(m.to)) throw new Error(`${path.basename(m.to)} appeared during the move`);
+        fs.renameSync(m.from, m.to);
+      }
+      moved.push(m);
+    }
+    // the live status (in the run cache) moves with the set when the new name has none
+    const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
+    if (exists(liveOld) && !exists(liveNew)) { fs.renameSync(liveOld, liveNew); moved.push({ from: liveOld, to: liveNew }); }
+
+    // the plans: every path naming a moved file, together, under the plan's lock
+    for (const p of touched) {
+      restore.set(p.file, fs.readFileSync(p.file, "utf8"));
+      let fields: RefField[] = [];
+      updatePlan(p.file, (raw) => {
+        if (raw === null) throw new Error(`${p.rel} disappeared`);
+        const plan = parsePlanText(raw, p.rel);
+        const hook = plan.verification && plan.verification.hook;
+        const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
+        fields = rewriteRefs(plan, (ref) => { const n = namedFile(ref, p.file, d); const nn = n === null ? undefined : nameMap.get(n); return n !== null && nn !== undefined ? respell(ref, n, nn) : null; }, true);
+        if (restamp && hook) hook.planHash = planHash(plan);
+        return plan;
+      });
+      if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) — rewritten to the renamed report`);
+    }
+
+    // the post-check: every plan written reads as untouched, and a record still names its report
+    const problems: string[] = [];
+    for (const p of touched) {
+      const plan = parsePlanText(fs.readFileSync(p.file, "utf8"), p.rel);
+      for (const e of recordedEdits(plan, d.cwd)) problems.push(`${p.rel}: ${e}`);
+      const r = recordedReport(plan);
+      if (hadRecord.has(p.file) && (r === null || reportRecordNames(r.report, r.sha, d.cwd) === null)) problems.push(`${p.rel}: verification.recorded no longer names its report`);
+      if (d.postCheck) for (const x of d.postCheck(p.file, plan)) problems.push(`${p.rel}: ${x}`);
+    }
+    if (problems.length) {
+      const left = rollback();
+      return { why: [`the plans failed the check after the move — every rename undone and every plan restored:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
+    }
+    return { why: [], notes };
+  } catch (e) {
+    const left = rollback();
+    return { why: [`the move failed (${errMsg(e)}) — ${left.length ? "undone in part:" : "every rename undone and every plan restored"}`, ...left.map((x) => `  ${x}`)], notes: [] };
+  } finally { for (const l of held.locks) l.release(); }
+}
+
+/** `verify-screen --migrate [--apply] [--dir design/verify]`, from the project root. */
+export function migrateMain(f: { apply?: boolean | undefined; dir?: string | undefined }): number {
+  const cwd = process.cwd();
+  const verifyDir = path.resolve(cwd, f.dir ?? VERIFY_DIR);
+  if (!exists(verifyDir)) { console.error(`--migrate: ${f.dir ?? VERIFY_DIR} does not exist (run from the project root, or pass --dir)`); return 2; }
+  const r = migrate({ cwd, verifyDir, apply: !!f.apply });
+  return r.skipped.length ? 1 : 0;
+}
