@@ -1732,11 +1732,15 @@ function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null |
 // raw JSON because parsePlan, which fails on such a plan, never gets as far as the status.
 function ownBadPlans(bad: readonly BadPlan[], scan: TranscriptScan | undefined, cwd: string): BadPlan[] {
   if (!scan) return [];
-  const closed = (b: BadPlan): boolean => {
-    const doc = readJsonOrNull(b.file, anyJson);
-    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
-  };
-  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b); });
+  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b); });
+}
+
+// The closed status ("abandoned", "awaiting-user") the raw JSON of an unreadable plan holds, or null when it holds none.
+function closedStatusOf(b: BadPlan): string | null {
+  const doc = readJsonOrNull(b.file, anyJson);
+  if (!isJsonObject(doc) || typeof doc.status !== "string") return null;
+  const s = doc.status.trim().toLowerCase();
+  return /^(abandoned|awaiting-user)$/.test(s) ? s : null;
 }
 
 // ================================================================ CLI
@@ -1849,7 +1853,11 @@ async function main(argv: string[]): Promise<number> {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
-    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
+    // An unreadable plan whose raw JSON holds a closed status is given up on, as the Stop hook treats it: skipped, not unreadable
+    for (const b of bad) {
+      const closed = closedStatusOf(b);
+      console.error(closed ? `verify-build: ${b.file} is "${closed}" — skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+    }
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
     // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
     const rows = plans.map((p) => {

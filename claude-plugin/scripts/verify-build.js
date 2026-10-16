@@ -2995,14 +2995,16 @@ function ownPlans(open, input, all, cwd) {
 }
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
-  const closed = (b) => {
-    const doc = readJsonOrNull(b.file, anyJson);
-    return isJsonObject(doc) && typeof doc.status === "string" && /^(abandoned|awaiting-user)$/.test(doc.status.trim().toLowerCase());
-  };
   return bad.filter((b) => {
     const rel = path8.relative(cwd, path8.resolve(b.file));
-    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closed(b);
+    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b);
   });
+}
+function closedStatusOf(b) {
+  const doc = readJsonOrNull(b.file, anyJson);
+  if (!isJsonObject(doc) || typeof doc.status !== "string") return null;
+  const s = doc.status.trim().toLowerCase();
+  return /^(abandoned|awaiting-user)$/.test(s) ? s : null;
 }
 var USAGE2 = [
   `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
@@ -3114,7 +3116,10 @@ async function main(argv) {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path8.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
-    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
+    for (const b of bad) {
+      const closed = closedStatusOf(b);
+      console.error(closed ? `verify-build: ${b.file} is "${closed}" \u2014 skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+    }
     const show = (f) => {
       const r = path8.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;

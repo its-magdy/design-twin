@@ -1556,6 +1556,18 @@ console.log("field-test fixes:");
         return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("you wrote this plan and it cannot be read");
       });
     })());
+    check("--status names an unreadable plan whose raw JSON says a closed status as skipped, not as 'cannot read plan'; an open one stays unreadable", (() => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-status-closed-"));
+      fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
+      const file = path.join(root, "design", "plan", "broken.json");
+      fs.writeFileSync(file, JSON.stringify({ status: " Abandoned ", tokens: "none" }));
+      const closed = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
+      fs.writeFileSync(file, JSON.stringify({ status: "pending", tokens: "none" }));
+      const open = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
+      return closed.status === 0 && closed.stderr.includes("broken.json is \"abandoned\" — skipped (the file is not a valid plan: `tokens` must be an array)")
+        && !closed.stderr.includes("cannot read plan")
+        && open.status === 0 && open.stderr.includes("cannot read plan ") && open.stderr.includes("broken.json: is not a valid plan: `tokens` must be an array");
+    })());
     check("an unreadable plan blocking beside a plan whose check blocks keeps the generic status line, now with 'or move it out of design/plan/'", (() => {
       const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
       fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN);
