@@ -1891,6 +1891,9 @@ async function main(argv: string[]): Promise<number> {
   // PowerShell (Windows without Git Bash runs shell-form hooks there) a native exit 2 reaches Claude Code as 1, a
   // non-blocking error, so the gate would never block. The reason is everything printed to stderr, which exit 2 delivered.
   const asDecision = typeof input.hook_event_name === "string";
+  // A subagent (a screen-builder's SubagentStop) cannot ask the user: it hands the question back to the session that delegated it
+  const thenAsk = input.hook_event_name === "SubagentStop"
+    ? "then put the question in your report to the session that delegated this build" : "then ask the user";
   const said: string[] = [];
   const say = (s: string): void => { console.error(s); said.push(s); };
   const all: Array<{ p: PlanFile; cwd: string }> = [];
@@ -1921,7 +1924,7 @@ async function main(argv: string[]): Promise<number> {
     for (const b of badOwn) {
       const rel = path.relative(cwd, b.file);
       blockedOut.push(`# ${path.basename(b.file)}`, `  - ${rel} ${b.error} — you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. `
-        + "A plan you will not finish: set \"status\" to \"abandoned\" (or \"awaiting-user\", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/");
+        + `A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     // An agent that claims none of the open plans checks nothing — unless it broke a plan of its own (blocked above).
@@ -1970,7 +1973,7 @@ async function main(argv: string[]): Promise<number> {
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed — do not report this screen as done until these are resolved");
     // Setting a status closes a plan the hook can read; an unreadable plan has its own way out, stated in its item.
-    if (checkBlocked) say("(a plan that will not be finished: set its status to \"abandoned\", or move it out of design/plan/; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
+    if (checkBlocked) say(`(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${thenAsk}):\n`);
     else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;

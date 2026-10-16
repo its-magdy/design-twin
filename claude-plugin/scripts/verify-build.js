@@ -3155,6 +3155,7 @@ async function main(argv) {
     if (input.stop_hook_active) return 0;
   }
   const asDecision = typeof input.hook_event_name === "string";
+  const thenAsk = input.hook_event_name === "SubagentStop" ? "then put the question in your report to the session that delegated this build" : "then ask the user";
   const said = [];
   const say = (s) => {
     console.error(s);
@@ -3188,7 +3189,7 @@ async function main(argv) {
     for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path8.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
       const rel = path8.relative(cwd, b.file);
-      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/`);
+      blockedOut.push(`# ${path8.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
@@ -3220,7 +3221,8 @@ async function main(argv) {
   for (const l of lines) say(l);
   if (blockedOut.length) {
     say("\nverify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    if (checkBlocked) say('(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n');
+    if (checkBlocked) say(`(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${thenAsk}):
+`);
     else say("");
     say(blockedOut.join("\n"));
     if (!asDecision) return 2;

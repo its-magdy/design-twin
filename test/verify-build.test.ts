@@ -1472,6 +1472,7 @@ console.log("field-test fixes:");
       const r = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b1", agent_type: "designtwin:screen-builder", agent_transcript_path: t });
       const out: unknown = JSON.parse(r.stdout.trim() || "null");
       return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && !/without claiming/.test(out.reason) && /login\.json: hook BLOCKED/.test(out.reason)
+        && out.reason.includes("\"awaiting-user\", then put the question in your report to the session that delegated this build):") && !out.reason.includes("then ask the user")
         && planOf(root).verification?.hook?.result === "blocked" && !planAt(root, "settings").verification?.hook;
     })());
     // A builder's SubagentStop over a transcript of the given lines (two open plans, neither claimed by default).
@@ -1523,14 +1524,18 @@ console.log("field-test fixes:");
     })());
     const BROKEN = JSON.stringify({ status: "pending", tokens: "none" });
     // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
-    const brokenItem = `${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — you wrote this plan and it cannot be read, so it was NOT checked; `
+    // a subagent cannot ask the user, so its item has it report the question back; the main session's asks the user
+    const ASK_USER = "then ask the user", ASK_DELEGATOR = "then put the question in your report to the session that delegated this build";
+    const brokenItemFor = (thenAsk: string): string => `${path.join("design", "plan", "broken.json")} is not a valid plan: \`tokens\` must be an array — you wrote this plan and it cannot be read, so it was NOT checked; `
       + `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled), then run ${scriptCmd("verify-build")} ${path.join("design", "plan", "broken.json")}. `
-      + "A plan you will not finish: set \"status\" to \"abandoned\" (or \"awaiting-user\", for a build paused on a question for the user, then ask) in the file, which must be valid JSON, or move it out of design/plan/";
+      + `A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`;
+    const brokenItem = brokenItemFor(ASK_USER);
     const FAILED = "verify-build: build-screen check failed — do not report this screen as done until these are resolved";
-    check("a builder that Write-s an unreadable plan claims it: a block naming the plan, its error, the fix and the way out — not the no-claim request, not the generic status line; the other plans untouched", (() => {
+    check("a builder that Write-s an unreadable plan claims it: a block naming the plan, its error, the fix and the way out (the question reported back, not asked) — not the no-claim request, not the generic status line; the other plans untouched", (() => {
       const { r, out, untouched } = builderStop(() => [toolUse("Write", { file_path: "design/plan/broken.json", content: BROKEN })], (root) => fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN));
       return r.status === 0 && untouched && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string"
-        && out.reason.endsWith(`${FAILED}\n\n# broken.json\n  - ${brokenItem}`) && !out.reason.includes("without claiming") && !out.reason.includes("warning: ") && !out.reason.includes("set its status to");
+        && out.reason.endsWith(`${FAILED}\n\n# broken.json\n  - ${brokenItemFor(ASK_DELEGATOR)}`) && !out.reason.includes("without claiming") && !out.reason.includes("warning: ") && !out.reason.includes("set its status to")
+        && !out.reason.includes(ASK_USER);
     })());
     // a plan whose raw JSON holds a closed status is given up on: parsePlan fails on it before the status is read
     for (const status of ["abandoned", " Awaiting-User "]) {
@@ -1576,7 +1581,7 @@ console.log("field-test fixes:");
       const r = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
       const out: unknown = JSON.parse(r.stdout.trim() || "null");
       return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("# login.json\n") && out.reason.includes(`# broken.json\n  - ${brokenItem}`)
-        && out.reason.includes(`${FAILED}\n(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", then ask):\n\n#`);
+        && out.reason.includes(`${FAILED}\n(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${ASK_USER}):\n\n#`);
     })());
     check("…and so does the main session's Stop, with no other open plan; an unreadable plan nobody wrote stays a warning (exit 0, no stdout)", (() => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-broken-"));
