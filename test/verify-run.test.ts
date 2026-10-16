@@ -913,6 +913,61 @@ await block("verify-probe --run current:", async () => {
   safe("--run run-old3 over run-new3, which has ended (done) → taken: exit 3, the attempt counted in run-old3 (measuring rev 2, probeFailures 1)",
     () => p4.status === 3 && st4 !== null && st4 !== "v1" && st4.runId === "run-old3" && st4.phase === "measuring" && st4.rev === 2 && st4.probeFailures === 1);
   if (p4.status !== 3) console.log(p4.stderr);
+  safe("…its status names the run it replaced (replaced {run-new3, done}, carried to the attempt write), and the probe prints one note line saying so", () =>
+    st4 !== null && st4 !== "v1" && st4.replaced?.runId === "run-new3" && st4.replaced.phase === "done"
+      && p4.stderr.split("\n").filter((l) => l.startsWith("note  run run-old3 replaced run run-new3 (ended at done, ")).length === 1);
+});
+
+// a record of a run its writer names (`current`) over ANOTHER run that has ended replaces it — and says so: `replaced`
+console.log("writeStatus current over an ended run — `replaced`:");
+await block("writeStatus replaced:", async () => {
+  const { dir, base, live, cli } = project();
+  const yDoc = VR.writeStatus(base, { runId: "run-y", phase: "done", by: "agent" });
+  const xDoc = VR.writeStatus(base, { runId: "run-x", phase: "measured", by: "agent" }, { current: true });
+  safe("a `current` write of run-x over run-y, which has ended (done) → rev 1 of run-x with replaced {runId run-y, phase done, at = run-y's last write}", () =>
+    xDoc.rev === 1 && JSON.stringify(xDoc.replaced) === JSON.stringify({ runId: "run-y", phase: "done", at: yDoc.at }) && JSON.stringify(readStatusFile(live)?.replaced) === JSON.stringify(xDoc.replaced));
+  safe("replacedNote: one line naming both runs, the replaced run's phase and time", () =>
+    VR.replacedNote(xDoc) === `note  run run-x replaced run run-y (ended at done, ${yDoc.at}) in the live status — recorded as \`replaced\` in run run-x's status`);
+  const x2 = VR.writeStatus(base, { runId: "run-x", phase: "driving", by: "agent" }, { current: true });
+  const x3 = VR.writeStatus(base, { runId: "run-x", phase: "driving", by: "orchestrator" });
+  safe("…carried forward within the run (rev 2, rev 3 without `current`), and no note for those writes", () =>
+    x2.rev === 2 && x2.replaced?.runId === "run-y" && x3.rev === 3 && x3.replaced?.runId === "run-y" && VR.replacedNote(x2) === null && VR.replacedNote(x3) === null);
+  VR.writeStatus(base, { runId: "run-x", phase: "failed", by: "agent" });
+  const fresh = VR.writeStatus(base, { runId: "run-n", phase: "queued", by: "orchestrator" });
+  safe("a --new-run style write (no `current`) over an ended run → no replaced: it starts a new run normally", () => fresh.rev === 1 && fresh.replaced === undefined && VR.replacedNote(fresh) === null);
+  VR.writeStatus(base, { runId: "run-n", phase: "failed", by: "orchestrator" });
+  const ownDoc = VR.writeStatus(base, { runId: "run-own", phase: "measuring", by: "verify-probe" }, { alone: true });
+  safe("a probe's own run (`alone`) over an ended run → no replaced", () => ownDoc.rev === 1 && ownDoc.replaced === undefined);
+  fs.rmSync(live);
+  const none = VR.writeStatus(base, { runId: "run-z", phase: "queued", by: "agent" }, { current: true });
+  safe("a `current` write over no status → no replaced", () => none.rev === 1 && none.replaced === undefined);
+  fs.rmSync(live);
+  fs.writeFileSync(base + ".status.json", JSON.stringify({ screen: "Plots", phase: "done", detail: "by hand", at: "2026-09-29T19:22:52Z" }));
+  const overV1 = VR.writeStatus(base, { runId: "run-z", phase: "queued", by: "agent" }, { current: true });
+  safe("…over an older hand-written (v1) status → no replaced", () => overV1.rev === 1 && overV1.replaced === undefined);
+  fs.rmSync(base + ".status.json");
+
+  // a malformed replaced is dropped on read, never the whole status
+  const parsed: unknown = JSON.parse(fs.readFileSync(live, "utf8"));
+  fs.writeFileSync(live, JSON.stringify({ ...(isJsonObject(parsed) ? parsed : {}), replaced: { runId: 7, phase: "done" } }, null, 2) + "\n");
+  const bad = VR.readStatus(base);
+  safe("a live status with a malformed replaced → read as v2 without it (not 'no status'); isVerifyStatusV2 refuses the malformed one", () =>
+    bad !== null && bad !== "v1" && bad.runId === "run-z" && bad.replaced === undefined && !VR.isVerifyStatusV2({ ...bad, replaced: { runId: 7, phase: "done" } }));
+
+  // the CLI: --status --run over a run that ended prints the note, and the durable copy `done` publishes keeps replaced
+  VR.writeStatus(base, { runId: "run-z", phase: "blocked", by: "agent", detail: "blocked on permissions" });
+  const zAt = readStatusFile(live)?.at ?? "";
+  const late = cli("--status", "Plots", "--phase", "driving", "--run", "run-late");
+  safe("verify-screen --status --run run-late over run-z, which has ended (blocked) → exit 0, rev 1, one note line naming run-z", () =>
+    late.status === 0 && late.stdout.trim() === "run run-late rev 1"
+      && late.stderr.split("\n").filter((l) => l === `note  run run-late replaced run run-z (ended at blocked, ${zAt}) in the live status — recorded as \`replaced\` in run run-late's status`).length === 1);
+  const again = cli("--status", "Plots", "--phase", "driving", "--run", "run-late");
+  safe("…its next write (rev 2) prints no note", () => again.status === 0 && !/^note {2}run run-late replaced/m.test(again.stderr));
+  fs.writeFileSync(path.join(dir, "Plots.measured.json"), measuredFor(dir, { runId: "run-late" }));
+  const done = cli("--status", "Plots", "--phase", "done", "--run", "run-late");
+  const durable = readStatusFile(path.join(dir, "Plots.status.json"));
+  safe("…its `done` publishes design/verify/Plots.status.json with replaced {run-z, blocked} (a run id, phase and time — kept)", () =>
+    done.status === 0 && durable?.runId === "run-late" && durable.replaced?.runId === "run-z" && durable.replaced.phase === "blocked" && durable.replaced.at === zAt);
 });
 
 // No --run: the probe starts a run of its own and ends it — never beside another open run, never reopening an ended one

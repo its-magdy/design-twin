@@ -172,6 +172,9 @@ console.log("verify docs (run integrity + agent safety):");
     && /a probe's own run is named as one, with when and by which pid it started and whether that probe is gone or past its deadline: nobody waits for it, so the line gives only the command that ends it, for when no probe is running\)/.test(verifySkill)
     && /the probe checks before it starts and again at every status write, so a run that opens while the page is measured gets no files from it either/.test(verifySkill)
     && /With `--run` it refuses \(exit 2, nothing written\) a run that has ended, and writes nothing while the status names ANOTHER run that has not ended/.test(verifier));
+  check("a record over another run that has ended replaces it and says so: a note line and `replaced` in the status (the run protocol)",
+    /once that run has ended, the record replaces it and says so — a `note {2}run <id> replaced run <other> \(ended at <phase>, <time>\)` line, and `replaced` in your run's status/.test(verifySkill)
+    && /and `replaced` \(`runId`, `phase`, `at`\) when its record replaced another run that had ended/.test(verifySkill));
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
     /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
     && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)

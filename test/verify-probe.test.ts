@@ -818,7 +818,8 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   t("--help: a --run is refused (exit 2) while the status names ANOTHER run that has not ended, at its start and while the page is measured", () =>
     /A --run that\s+already ended \(done\/failed\/blocked\), or while the status names ANOTHER run that has not ended/.test(help.stdout)
     && /a run that ends, or beside which another run\s+opens \(its own run: or that is replaced\), while the page is measured gets no files and no status write \(exit 2 both ways\)/.test(help.stdout)
-    && /\(--run\) the run already ended \/ ended while the probe ran \/ the status names another run\s+that has not ended/.test(help.stdout));
+    && /\(--run\) the run already ended \/ ended while the probe ran \/ the status names another run\s+that has not ended/.test(help.stdout)
+    && /over another run that has ENDED it is written,\s+with a `note {2}run <id> replaced run <other> …` line and replaced in the status/.test(help.stdout));
   // --max-time beyond setTimeout's 32-bit bound (it would fire at once, and the own run's deadline would not be a date)
   const hugeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"], { encoding: "utf8" });
   const edgeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"], { encoding: "utf8" });

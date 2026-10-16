@@ -71,7 +71,7 @@ import { CLOSE_STEP_CAP_MS, KILL_STEP_CAP_MS, behaviourBudget, runBehaviour } fr
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
-import { RunCacheUnwritable, RunEnded, RunNotCurrent, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, notCurrentRun, openRun, probeAttemptNote, publishStatus, readStatus, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
+import { RunCacheUnwritable, RunEnded, RunNotCurrent, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, notCurrentRun, openRun, probeAttemptNote, publishStatus, readStatus, replacedNote, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
 import { LockBusy, LockLost, thisProcess } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run.ts";
@@ -1188,7 +1188,8 @@ const USAGE =
   "      (after an exit 3, once the user has fixed the renderer), the second ends the run `failed` — the probe writes it (a\n" +
   "      `status run <id> …` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that\n" +
   "      already ended (done/failed/blocked), or while the status names ANOTHER run that has not ended (a newer run of the screen —\n" +
-  "      a stale verifier never writes over it), is refused before anything starts, and a run that ends, or beside which another run\n" +
+  "      a stale verifier never writes over it), is refused before anything starts (over another run that has ENDED it is written,\n" +
+  "      with a `note  run <id> replaced run <other> …` line and replaced in the status), and a run that ends, or beside which another run\n" +
   "      opens (its own run: or that is replaced), while the page is measured gets no files and no status write (exit 2 both ways).\n" +
   "      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring —\n" +
@@ -1554,8 +1555,14 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   // run continues it — refused once the status names another run (it was replaced: this probe was late)
   let measuringRecorded = false;
   const status = (w: StatusWrite, hooks: Pick<StatusWriteHooks, "before" | "after"> = {}): "ok" | "refused" | "over" => {
-    // --run: the verifier's run, written only while the status names no other run that has not ended (`current`)
-    try { writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned, ...(measuringRecorded ? { continues: true } : {}) } : { current: true }) }); return "ok"; } catch (e) {
+    // --run: the verifier's run, written only while the status names no other run that has not ended (`current`); one
+    // written over another run that has ended says so (replacedNote)
+    try {
+      const doc = writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned, ...(measuringRecorded ? { continues: true } : {}) } : { current: true }) });
+      const note = replacedNote(doc);
+      if (note !== null) console.error(note);
+      return "ok";
+    } catch (e) {
       if (e instanceof RunEnded) { console.error(`verify-probe: ${e.message} — it ended while this probe ran; its status is left as it is`); own.disarm(); return "over"; }
       if (e instanceof RunOpen) { console.error(`verify-probe: ${e.message} — it opened while this probe ran; nothing is written`); own.disarm(); return "over"; }
       if (e instanceof RunNotCurrent) { console.error(`verify-probe: ${e.message} — it opened while this probe ran`); own.disarm(); return "over"; }

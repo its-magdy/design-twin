@@ -213,7 +213,9 @@ function main(argv: string[]): number | Promise<number> {
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
     "      stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run),\n" +
     "      and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it; a probe's own run is named as\n" +
-    "      one — when and by which pid it started, whether that probe is gone — with only the command that ends it). `done` checks first — refuses (exit 1)\n" +
+    "      one — when and by which pid it started, whether that probe is gone — with only the command that ends it). Over another run that\n" +
+    "      has ended it is written and says so: a `note  run <id> replaced run <other> …` line, and replaced {runId, phase, at} in the\n" +
+    "      status (carried through the run, kept in the published copy). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
     "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
     "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +

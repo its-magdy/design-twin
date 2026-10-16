@@ -6129,9 +6129,10 @@ var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x)
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
 var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -6157,9 +6158,9 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0)) {
-    const { ownRun, probeFailures, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {} };
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
     if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
@@ -6277,6 +6278,7 @@ function writeStatus(base, p, hooks = {}) {
     const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
     const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
     const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
+    const over = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -6291,7 +6293,8 @@ function writeStatus(base, p, hooks = {}) {
       ...pick("evidenceSha256"),
       ...published !== void 0 ? { published } : {},
       ...ownRun !== void 0 ? { ownRun } : {},
-      ...failures !== void 0 ? { probeFailures: failures } : {}
+      ...failures !== void 0 ? { probeFailures: failures } : {},
+      ...over !== void 0 ? { replaced: over } : {}
     };
     put(doc);
     hooks.after?.(doc);
@@ -6303,6 +6306,10 @@ function writeStatus(base, p, hooks = {}) {
 function publishStatus(base, doc) {
   const { ownRun: _private, ...durable } = doc;
   writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
+}
+function replacedNote(doc) {
+  const r = doc.replaced;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) in the live status \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
 // bridge/src/is-main.ts
@@ -7226,7 +7233,8 @@ var USAGE = `usage:
       (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a
       \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that
       already ended (done/failed/blocked), or while the status names ANOTHER run that has not ended (a newer run of the screen \u2014
-      a stale verifier never writes over it), is refused before anything starts, and a run that ends, or beside which another run
+      a stale verifier never writes over it), is refused before anything starts (over another run that has ENDED it is written,
+      with a \`note  run <id> replaced run <other> \u2026\` line and replaced in the status), and a run that ends, or beside which another run
       opens (its own run: or that is replaced), while the page is measured gets no files and no status write (exit 2 both ways).
       --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
       --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
@@ -7531,7 +7539,9 @@ ${USAGE}`);
   let measuringRecorded = false;
   const status = (w, hooks = {}) => {
     try {
-      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned, ...measuringRecorded ? { continues: true } : {} } : { current: true } });
+      const doc = writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned, ...measuringRecorded ? { continues: true } : {} } : { current: true } });
+      const note = replacedNote(doc);
+      if (note !== null) console.error(note);
       return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {

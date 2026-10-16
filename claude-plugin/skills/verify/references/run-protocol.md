@@ -40,7 +40,8 @@ which pid it started and whether that probe is gone or past its deadline: nobody
 the command that ends it, for when no probe is running): a recovery command or a probe run late never writes over
 a run started since while that run is open — the probe checks before it starts and again at every status write, so a
 run that opens while the page is measured gets no files from it either (once that run has ended, the record replaces
-it — measure again rather than record an old run after another one). If the id you were given has already
+it and says so — a `note  run <id> replaced run <other> (ended at <phase>, <time>)` line, and `replaced` in your
+run's status — measure again rather than record an old run after another one). If the id you were given has already
 ended, start a new run with `--new-run` and say so. Always give the probe your `--run <id>`: without it the probe
 starts a run of its own (build-screen's own loop) and ends it itself, and it refuses (exit 2, nothing started) while
 another run of the screen is open — so a builder's probe never writes over a verifier's files mid-run.
@@ -52,7 +53,8 @@ emulator up, test harness compiled. On web the probe writes `measuring` and `mea
 `--run <id>`. `measured` and `done` check the file: `<Screen>.measured.json` must exist and name the current
 expectation (on native, write it before sending `measured`). Write `failed` with the reason when you give up, so
 the last phase is never left hanging. The status (`designtwin/verify-status@2`) holds `runId`, `rev`, `phase`,
-`detail`, `at` and the shas of the expectation, measured and evidence files.
+`detail`, `at` and the shas of the expectation, measured and evidence files — and `replaced` (`runId`, `phase`, `at`)
+when its record replaced another run that had ended.
 
 ## Waiting on a run
 
