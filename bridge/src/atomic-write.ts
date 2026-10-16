@@ -6,7 +6,9 @@
 // own directory so the rename never crosses a filesystem. There is no fsync by default: these files are
 // re-creatable exports, plans and reports, and the guarantee wanted is "never half a file after a killed process",
 // which rename gives; surviving a power cut would cost a sync per write on hundreds of layer files. A file that has
-// to outlive a power cut as well (a migration's journal) passes `sync`.
+// to outlive a power cut as well (a migration's journal) passes `sync`. `sync` is fsync(2), which hands the bytes to
+// the drive: on macOS that does not flush the drive's own write cache (only fcntl F_FULLFSYNC does), so there it
+// survives a crash of the OS, and a power cut only as far as the drive's cache does.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,7 +32,7 @@ function syncDir(dir: string): void {
  *  error is rethrown. `mode`: the new file's permission bits (a secret passes 0o600) — applied to the tmp file
  *  with open(2)'s mode AND chmod, because the umask masks the first. Without `mode` the umask default applies.
  *  `sync`: the bytes are fsynced before the rename and the directory after it, so the new file survives a power
- *  cut too. */
+ *  cut too (on macOS, only as far as the drive's write cache does: see the note above). */
 export function writeFileAtomic(file: string, data: string | Uint8Array, opts: { mode?: number; sync?: boolean } = {}): void {
   const dir = path.dirname(path.resolve(file));
   fs.mkdirSync(dir, { recursive: true });

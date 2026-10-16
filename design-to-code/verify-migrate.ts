@@ -192,8 +192,8 @@ export function migrate(opts: MigrateOpts): MigrateResult {
     for (const root of roots) { const rel = path.relative(root, abs); if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return slash(rel); }
     return slash(abs);
   };
-  const link =opts.link ?? fs.linkSync;
-  const skip =(result: MigrateResult, set: string, why: string[]): void => {
+  const link = opts.link ?? fs.linkSync;
+  const skip = (result: MigrateResult, set: string, why: string[]): void => {
     result.skipped.push({ set, why });
     err(`skip    ${shown(path.join(verifyDir, set))}: ${why[0] ?? ""}`);
     for (const w of why.slice(1)) err(`        ${w}`);
