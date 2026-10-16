@@ -67,7 +67,7 @@ import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, listPlans } from "../bridge/src/project-layout.ts";
-import { parseSetName } from "./screen-key.ts";
+import { parseSetName } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";

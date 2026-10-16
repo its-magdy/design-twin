@@ -336,15 +336,37 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
   ok("the resolved stage is 'node id'", (() => { const r = resolveScreen(FIXTURE, "positions___7314_87192"); return r.status === "resolved" && r.stage === "node id"; })());
   ok("a dash id `7314-87192` resolves", idOf("7314-87192") === "7314:87192");
   ok("a URL-ish `?node-id=7314-87192` resolves", idOf("https://www.figma.com/design/KEY/Name?node-id=7314-87192") === "7314:87192");
-  const cli = (...a: string[]): { status: number | null; err: string; out: string } => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8" });
+  {
+    const kindOf = (q: string): string | null => { const r = resolveScreen(FIXTURE, q); return r.status === "resolved" ? r.kind : null; };
+    ok(`each resolved result says its stage's kind: node id, exact, carried id (got ${JSON.stringify(["7314:87192", "Jet Roles", "positions___7314_87192"].map(kindOf))})`,
+      kindOf("7314:87192") === "node id" && kindOf("Jet Roles") === "exact" && kindOf("positions___7314_87192") === "carried id");
+  }
+  const cliIn = (cwd: string | undefined, ...a: string[]): { status: number | null; err: string; out: string } => {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8", cwd });
     return { status: r.status, err: r.stderr, out: r.stdout };
   };
-  const byTitle = cli(FIXTURE, "Jet Roles");
-  const outLines = byTitle.out.split("\n");
-  ok(`the CLI prints the resolved line, then \`stem <Layer>__<id>\`, then the row (got ${JSON.stringify(outLines.slice(0, 3))})`,
-    byTitle.status === 0 && outLines[0] === "resolved 'Jet Roles' -> positions  (7314:87192) via indexed title" && outLines[1] === "stem positions___7314_87192"
-    && (JSON.parse(outLines.slice(2).join("\n")) as { id?: unknown }).id === "7314:87192");
+  const cli = (...a: string[]): { status: number | null; err: string; out: string } => cliIn(undefined, ...a);
+  {
+    // run from a project root: the stem is the verify dir's for the node when it holds a set (design/verify), else the derived one
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-stem-"));
+    const byTitle = cliIn(proj, FIXTURE, "Jet Roles");
+    const outLines = byTitle.out.split("\n");
+    ok(`the CLI prints the resolved line, then \`stem <Layer>__<id>\`, then the row (got ${JSON.stringify(outLines.slice(0, 3))})`,
+      byTitle.status === 0 && outLines[0] === "resolved 'Jet Roles' -> positions  (7314:87192) via indexed title" && outLines[1] === "stem positions___7314_87192"
+      && (JSON.parse(outLines.slice(2).join("\n")) as { id?: unknown }).id === "7314:87192");
+    const verify = path.join(proj, "design", "verify");
+    fs.mkdirSync(verify, { recursive: true });
+    fs.writeFileSync(path.join(verify, "JetRoles.expected.json"), JSON.stringify({ frame: { nodeId: "7314:87192", name: "positions " } }));
+    const legacy = cliIn(proj, FIXTURE, "Jet Roles");
+    ok(`a legacy-named set of the node: the stem is still the derived one, and a note names the set and --migrate (got ${JSON.stringify(legacy.out.split("\n")[1])}; ${legacy.err.trim()})`,
+      legacy.out.split("\n")[1] === "stem positions___7314_87192" && /legacy-named verify set\(s\) of this node: JetRoles — verify-screen --migrate renames them to positions___7314_87192/.test(legacy.err));
+    fs.rmSync(path.join(verify, "JetRoles.expected.json"));
+    fs.writeFileSync(path.join(verify, "Jet_Roles__7314_87192.expected.json"), JSON.stringify({ frame: { nodeId: "7314:87192", name: "Jet Roles" } }));
+    const renamed = cliIn(proj, FIXTURE, "7314:87192");
+    ok(`a set already there under the node's earlier layer name keeps its stem: \`stem Jet_Roles__7314_87192\` (got ${JSON.stringify(renamed.out.split("\n")[1])})`,
+      renamed.status === 0 && renamed.out.split("\n")[1] === "stem Jet_Roles__7314_87192");
+    fs.rmSync(proj, { recursive: true, force: true });
+  }
   const c1 = cli(pageDir, "Jet Roles");
   ok("the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
     c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));

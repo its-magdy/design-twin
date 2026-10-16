@@ -1628,14 +1628,7 @@ function locateReports(plan, planFile, cwd, exp) {
   return out;
 }
 
-// bridge/src/node-id.ts
-var ID = "[A-Za-z0-9%:;_-]+";
-var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
-
-// design-to-code/resolve-screen.ts
-if (false) process.exitCode = main(process.argv.slice(2));
-
-// design-to-code/screen-key.ts
+// design-to-code/verify-sets.ts
 var VARIANT_RE = /^[a-z0-9-]+$/;
 var STEM_RE = /^[A-Za-z0-9_]+$/;
 var isVariantSlug = (s) => VARIANT_RE.test(s);

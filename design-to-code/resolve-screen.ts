@@ -48,7 +48,7 @@
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 import fs from "node:fs";
 import path from "node:path";
-import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts";
+import type { IndexRow, ResolveScreenResult, ResolveStageKind, ScreenCandidate } from "./types.ts";
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -57,7 +57,8 @@ import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { EXPORT_DIR, EXPORT_SUBDIR, listPlans } from "../bridge/src/project-layout.ts";
+import { EXPORT_DIR, EXPORT_SUBDIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
+import { nodeStem } from "./verify-sets.ts";
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
 // doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
@@ -210,7 +211,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     return idMatches.length === 1 ? idMatches[0] : undefined;
   };
   const typed = isNodeId(q) ? byId(q) : undefined;
-  if (typed) return { status: "resolved", row: typed, stage: "node id" };
+  if (typed) return { status: "resolved", row: typed, stage: "node id", kind: "node id" };
 
   // Stages 2–4, evaluated TOGETHER as one union: a row joins the pool if it matches on
   // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
@@ -234,7 +235,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   const unionRows = [...union.values()];
   const only = unionRows.length === 1 ? unionRows[0] : undefined;
   if (only) {
-    return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
+    return { status: "resolved", row: only.row, stage: [...only.via].join(" + "), kind: "exact" };
   }
   if (unionRows.length > 1) {
     return {
@@ -249,7 +250,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   // not whichever row has id 1:2.
   for (const id of isNodeId(q) ? [] : queryIds(q)) {
     const hit = byId(id);
-    if (hit) return { status: "resolved", row: hit, stage: "node id" };
+    if (hit) return { status: "resolved", row: hit, stage: "node id", kind: "carried id" };
   }
 
   // Stage 4c: the same three fields, ignoring whitespace, "-", "_" and case. Nothing exact matched (or carried an
@@ -272,7 +273,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     }
     const compactRows = [...compact.values()];
     const one = compactRows.length === 1 ? compactRows[0] : undefined;
-    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + ") };
+    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + "), kind: "folded" };
     if (compactRows.length > 1) {
       return {
         status: "ambiguous",
@@ -301,6 +302,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
 }
 
 export { resolveScreen, allRows, planRows, describe };
+export type { ResolveStageKind };
 
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
@@ -324,8 +326,13 @@ function main(argv: string[]): number {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
-    // the key the screen's files are named by (pages-layout.ts screenStem): plans, verify sets, --status
-    console.log(`stem ${screenStem(res.row.name, res.row.id)}`);
+    // the key the screen's files are named by, as screen-key.ts screenKey names it (verify-sets.ts nodeStem): plans,
+    // verify sets, --status. A verify set already in design/verify for the node keeps its stem, so after a rename in
+    // Figma this names the existing set.
+    const k = nodeStem(fs.existsSync(VERIFY_DIR) ? path.resolve(VERIFY_DIR) : null, res.row.id, res.row.name);
+    console.log(`stem ${"why" in k ? screenStem(res.row.name, res.row.id) : k.stem}`);
+    if ("why" in k) console.error(`note   ${k.why}`);
+    else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} — verify-screen --migrate renames them to ${k.stem}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
     return 0;
   }

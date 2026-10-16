@@ -5,128 +5,25 @@
 // exists: a set already in the verify dir for the node keeps its name (existingStem), so a frame renamed in Figma never
 // forks a second set — and its run cache key and status lock stay the same files.
 //
-// A verify set is the files that share one name in the verify dir (`<name>.expected.json`, `.report.json`,
-// `.measured.json`, `.report.md`, `.status.json`, `<name>.png`, `<name>-diff.png`, …). Its name is the stem, or the stem
-// and a variant: `<stem>.<slug>` (a dark theme, a narrow width), slug [a-z0-9-]+. A stem is safe() output and the id
-// after its last "__", so it never holds a "." — the part before the first "." is always the stem. Any other name (a
-// nickname, `<Screen>@320`, `<Screen>-r1`) is legacy: `verify-screen --migrate` renames it (verify-migrate.ts).
+// A verify set is the files that share one name in the verify dir: its name is the stem, or `<stem>.<slug>` for a
+// variant; any other name is legacy. That grammar and the verify dir's sets are verify-sets.ts (re-exported here).
 //
 // screenKey resolves a query to (node id, stem) through resolve-screen's exact stages only — node id (1), the exact
 // union of layer name / title / plan header (2–4) and an id the query carries (4b). A whitespace-insensitive (4c) or a
 // text-search (5) hit never names a set: a writer that took one could write a screen's evidence under another screen.
 import fs from "node:fs";
 import path from "node:path";
-import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { isNodeId } from "../bridge/src/node-id.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { readJsonOrNull } from "./read-json.ts";
-import { isJsonObject } from "./types.ts";
+import { STEM_RE, canonicalStemsFor, legacySetsFor, nodeStem } from "./verify-sets.ts";
 import type { ScreenCandidate } from "./types.ts";
 
-/** A variant slug: what follows the stem's "." in a set name. */
-const VARIANT_RE = /^[a-z0-9-]+$/;
-/** A stem: safe() output only (letters, digits, "_"). */
-const STEM_RE = /^[A-Za-z0-9_]+$/;
-
-export const isVariantSlug = (s: string): boolean => VARIANT_RE.test(s);
-
-/** Text → a variant slug: lower case, every run of other characters one "-", none at either end ("" when nothing is left). */
-export function variantSlug(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-/** A set name read by the grammar: its stem, the node id the stem carries, and its variant (null for the base set). */
-export interface SetName { stem: string; nodeId: string; variant: string | null }
-
-/** `<stem>` or `<stem>.<slug>` → its parts; null for any other name (a legacy one). */
-export function parseSetName(name: string): SetName | null {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
-}
-
-/** The set name of a stem and an optional variant slug (throws on a slug outside the grammar). */
-export function formatSetName(stem: string, variant?: string | null): string {
-  if (variant === undefined || variant === null) return stem;
-  if (!isVariantSlug(variant)) throw new Error(`variant '${variant}' is not a slug ([a-z0-9-]+)`);
-  return `${stem}.${variant}`;
-}
-
-/** The node id a set name's stem carries — nodeIdFromStem on the part before the first "." — or null. */
-export function nodeIdFromSetName(name: string): string | null {
-  const dot = name.indexOf(".");
-  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
-}
-
-// ---------------------------------------------------------------- the verify dir's sets
-
-/** The files whose names give a set its name. */
-const SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-const RETIRED = ".expected.json.retired";
-
-/** Every set name in `verifyDir` (top level), sorted, with whether it is retired — its expectation moved aside as
- *  `<name>.expected.json.retired` and none in its place: history, never a live set. */
-export function allSets(verifyDir: string): Array<{ name: string; retired: boolean }> {
-  let files: string[];
-  try { files = fs.readdirSync(verifyDir); } catch { return []; }
-  const have = new Set(files);
-  const names = new Set<string>();
-  for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
-  }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
-}
-
-/** The live (not retired) set names in `verifyDir`. */
-export function verifySets(verifyDir: string): string[] {
-  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
-}
-
-/** What a set's own files say about its node: the expectation's frame (`nodeId`, `name`) and the report's `nodeId` /
- *  `screen`. Each null when that file is absent or says nothing. */
-export interface SetFacts { expectedId: string | null; expectedName: string | null; reportId: string | null; reportScreen: string | null }
-export function setFacts(verifyDir: string, name: string): SetFacts {
-  const str = (x: unknown): string | null => (typeof x === "string" && x ? x : null);
-  const exp = readJsonOrNull(path.join(verifyDir, name + ".expected.json"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path.join(verifyDir, name + ".report.json"), isJsonObject);
-  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
-}
-
-/** The node id a set is of, from its own files: the expectation's frame, else the report; null when neither names one
- *  or when they name two. */
-export function setNodeId(verifyDir: string, name: string): string | null {
-  const f = setFacts(verifyDir, name);
-  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
-  return f.expectedId ?? f.reportId;
-}
-
-/** The stems of the grammar-named sets (base or variant) in `verifyDir` that carry `nodeId`, sorted. */
-export function canonicalStemsFor(verifyDir: string, nodeId: string): string[] {
-  const stems = new Set<string>();
-  for (const name of verifySets(verifyDir)) {
-    const p = parseSetName(name);
-    if (p && p.nodeId === nodeId) stems.add(p.stem);
-  }
-  return [...stems].sort();
-}
-
-/** The stem the verify dir already names `nodeId` by — the ONE grammar-named set's stem — or null (none, or several). */
-export function existingStem(verifyDir: string, nodeId: string): string | null {
-  const stems = canonicalStemsFor(verifyDir, nodeId);
-  return stems.length === 1 ? stems[0] ?? null : null;
-}
-
-/** The legacy-named live sets in `verifyDir` whose own files say they are of `nodeId` (setNodeId), sorted. */
-export function legacySetsFor(verifyDir: string, nodeId: string): string[] {
-  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
-}
+export {
+  allSets, canonicalStemsFor, existingStem, formatSetName, isVariantSlug, legacySetsFor, nodeIdFromSetName, nodeStem, parseSetName, setFacts, setNodeId,
+  variantSlug, verifySets,
+} from "./verify-sets.ts";
+export type { SetFacts, SetName } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- query → key
 
@@ -150,8 +47,6 @@ export type ScreenKey =
     }
   | { status: "unresolved"; why: string; candidates: ScreenCandidate[] };
 
-/** A whitespace-insensitive (4c) stage — resolveScreen's stage names for it all say so. */
-const FOLD_STAGE = /ignoring spaces/;
 /** A file tail a stem may be passed with (an artefact or export file name). */
 const FILE_TAIL_RE = /\.(?:expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
 
@@ -177,14 +72,12 @@ export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
         : `'${q}' matches no screen in ${exportDir}`;
       return { status: "unresolved", why, candidates: r.candidates };
     }
-    if (FOLD_STAGE.test(r.stage)) {
+    if (r.kind === "folded") {
       return { status: "unresolved", why: `'${q}' matches ${r.row.name} (${r.row.id}) only ignoring spaces, "-" and "_" — pass the node id or the exact name`, candidates: [] };
     }
-    const id = r.row.id;
-    const stems = stemsOf(id);
-    if (stems.length > 1) return { status: "unresolved", why: `node ${id} has ${stems.length} verify sets under different names (${stems.join(", ")}) — keep one`, candidates: [] };
-    const have = stems[0];
-    return { status: "resolved", nodeId: id, stem: have ?? screenStem(r.row.name, id), via: r.stage, name: r.row.name, existing: have !== undefined, legacy: legacyOf(id) };
+    const k = nodeStem(verifyDir, r.row.id, r.row.name);
+    if ("why" in k) return { status: "unresolved", why: k.why, candidates: [] };
+    return { status: "resolved", nodeId: r.row.id, stem: k.stem, via: r.stage, name: r.row.name, existing: k.existing, legacy: k.legacy };
   }
   // no export index: only what names its node by itself
   const lit = (q.split(/[\\/]/).pop() ?? q).replace(FILE_TAIL_RE, "");
