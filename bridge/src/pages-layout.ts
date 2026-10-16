@@ -424,22 +424,30 @@ const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof
 // Keeps a previous row unless it is the one being replaced: the same file, or the same node of the same Figma file
 // under another name — a frame renamed in Figma and pulled again lands in a new file, and its old row would leave
 // two rows with one id, which a lookup by id can never resolve. Node ids repeat across Figma files, so:
-//   - two rows that both name their Figma file are one node only when they name the same one: the same sourceFile (a
-//     file name), and the same sourceFileKey when both carry one (two files can share a name);
-//   - a row without a sourceFile (pulled before rows were stamped), beside a stamped row or another unstamped one, is
-//     that node only when both name the same page: the same pageId and the same page name. With no pageId the row is
-//     kept — an unstamped row of one file is never dropped for a pull of another.
-// A truthy non-object has no `.file`, so it is kept.
+//   - two rows that both name their Figma file are one node only when they name the same one: when both carry a
+//     sourceFileKey the key decides (a file renamed in Figma keeps its key; two files can share a name), otherwise
+//     the same sourceFile (a file name);
+//   - a row without a sourceFile (pulled before rows were stamped) is replaced by a stamped pull of the same pageId,
+//     whatever the page is called now — a page renamed in Figma since keeps its id. Page ids repeat across files too
+//     (every file's first page is 0:1), so an unstamped row can be dropped for a pull of another file; that risk is
+//     taken for unstamped rows only, which a stamped re-pull of their own file would otherwise never replace;
+//   - two rows of which the incoming one is unstamped are one node only when both name the same page: the same pageId
+//     and the same page name.
+// With no pageId on the incoming row the row is kept. A truthy non-object has no `.file`, so it is kept.
 const samePage = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean =>
   !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+const sameFigmaFile = (l: Record<string, unknown>, entry: ScreenIndexRow): boolean => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
 const notSameRow = (entry: ScreenIndexRow) => (l: unknown): boolean => {
   if (!isObjectLike(l)) return !!l;
   if (l.file === entry.file) return false;
   if (l.id !== entry.id) return true;
-  const sameFigmaFile = l.sourceFile && entry.sourceFile
-    ? l.sourceFile === entry.sourceFile && (!l.sourceFileKey || !entry.sourceFileKey || l.sourceFileKey === entry.sourceFileKey)
-    : samePage(l, entry);
-  return !sameFigmaFile;
+  return !sameFigmaFile(l, entry);
 };
 
 export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {

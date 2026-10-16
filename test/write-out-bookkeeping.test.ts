@@ -183,27 +183,38 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
   pullAs(ren, "Tray Other", { nodeId: "5:1", sourceFile: "Other File" });
   t("the same node id from another Figma file (another name, so another file) is another row", () => rowsOf(ren, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length === 2);
 
-  // a row pulled before rows were stamped with their Figma file: ids repeat across files (page ids too: every file's
-  // first page is 0:1), so beside a stamped or an unstamped row it is the same node only when both name the same page —
-  // its pageId and its name
+  // a row pulled before rows were stamped with their Figma file: a stamped pull replaces it on the pageId alone (a page
+  // renamed in Figma keeps its id); beside an unstamped pull it is the same node only when both name the same page —
+  // its pageId and its name (ids repeat across files, page ids too: every file's first page is 0:1)
   const idsOf = (dir: string): number => rowsOf(dir, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length;
   const dirs: string[] = [];
-  const pair = (label: string, first: Parameters<typeof pullAs>[2], second: Parameters<typeof pullAs>[2]): number => {
+  const pairDir = (label: string, first: Parameters<typeof pullAs>[2], second: Parameters<typeof pullAs>[2]): string => {
     const d = tmp("stem-" + label);
     dirs.push(d);
     pullAs(d, "Tray", { nodeId: "5:1", ...first });
     pullAs(d, "Tray Panel", { nodeId: "5:1", ...second });
-    return idsOf(d);
+    return d;
   };
+  const pair = (label: string, first: Parameters<typeof pullAs>[2], second: Parameters<typeof pullAs>[2]): number => idsOf(pairDir(label, first, second));
   t("an unstamped row is kept when another Figma file (stamped, another page) pulls the same id", () => pair("mixed-page-id", {}, { sourceFile: "Other File", pageId: "9:9" }) === 2);
-  t("…kept when the stamped pull names the same pageId but another page name", () => pair("mixed-page-name", {}, { sourceFile: "Other File", page: "Other Page" }) === 2);
   t("…replaced when the stamped pull names the same page (pageId and name)", () => pair("mixed-same", {}, { sourceFile: "Sample File" }) === 1);
+  const renamedPage = pairDir("mixed-page-name", {}, { sourceFile: "Sample File", page: "Other Page" });
+  t("legacy unstamped row → page renamed → stamped re-pull → one row, resolvable by id", () => {
+    const hit = resolveScreen(renamedPage, "5:1");
+    return idsOf(renamedPage) === 1 && hit.status === "resolved" && hit.row.name === "Tray Panel" && hit.row.page === "Other Page";
+  });
   t("two unstamped rows of another pageId: kept", () => pair("bare-page-id", {}, { pageId: "9:9" }) === 2);
   t("…of the same pageId and another page name: kept", () => pair("bare-page-name", {}, { page: "Other Page" }) === 2);
   t("…of the same page (pageId and name): replaced", () => pair("bare-same", {}, {}) === 1);
-  // both stamped: the same file name is one Figma file only when the keys, where both have one, agree
+  // both stamped: when both carry a key the key decides, otherwise the file name
   t("two stamped rows of one file name and two keys: kept (two files that share a name)", () => pair("key-differs", { sourceFile: "Sample File", sourceFileKey: "k1" }, { sourceFile: "Sample File", sourceFileKey: "k2" }) === 2);
+  t("…of two file names and one key: replaced (a file renamed in Figma), and resolvable by id", () => {
+    const d = pairDir("key-renamed", { sourceFile: "Sample File", sourceFileKey: "k1" }, { sourceFile: "Renamed File", sourceFileKey: "k1" });
+    const hit = resolveScreen(d, "5:1");
+    return idsOf(d) === 1 && hit.status === "resolved" && hit.row.name === "Tray Panel";
+  });
   t("…of one file name and one key: replaced", () => pair("key-same", { sourceFile: "Sample File", sourceFileKey: "k1" }, { sourceFile: "Sample File", sourceFileKey: "k1" }) === 1);
+  t("…of two file names, a key on one side only: kept", () => pair("key-one-names", { sourceFile: "Sample File" }, { sourceFile: "Other File", sourceFileKey: "k1" }) === 2);
   t("…of one file name, a key on one side only: replaced", () => pair("key-one", { sourceFile: "Sample File" }, { sourceFile: "Sample File", sourceFileKey: "k1" }) === 1);
   const keyed = dirs[dirs.length - 1];
   t("a stamped row carries the file's key beside its name", () => keyed !== undefined && rowsOf(keyed, path.join("pages", "index.json")).some((r) => r.sourceFile === "Sample File" && r.sourceFileKey === "k1"));
