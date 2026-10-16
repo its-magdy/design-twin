@@ -6338,7 +6338,7 @@ function planMigration(d) {
           continue;
         }
         const retired = from + ".retired";
-        if (exists2(retired)) {
+        if (exists2(retired) && !sameFile(from, retired)) {
           steps.push({ kind: "skip", set: name, why: [`${path15.basename(retired)} already exists \u2014 refusing to replace it`] });
           continue;
         }
@@ -6581,7 +6581,11 @@ function applyRetire(s, d) {
     if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} \u2014 re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
-    if (exists2(s.file.to)) return { why: [`${path15.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
+    if (exists2(s.file.to)) {
+      if (!sameFile(s.file.from, s.file.to)) return { why: [`${path15.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
+      fs16.unlinkSync(s.file.from);
+      return { why: [], notes: [`${path15.basename(s.file.from)} and ${path15.basename(s.file.to)} were one file (a retire that was interrupted) \u2014 finished`] };
+    }
     moveNoReplace(s.file.from, s.file.to, d.link);
     return { why: [], notes: [] };
   } catch (e) {

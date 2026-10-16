@@ -441,6 +441,19 @@ console.log("\na legacy set beside its node's canonical set is retired:");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
+  // a retire killed between its link and its unlink: the expectation under both names, one file
+  const p = project("Crates", { record: false });
+  writeSet(p.put, "Crates__80_1");
+  const from = path.join(p.root, "design/verify/Crates.expected.json");
+  fs.linkSync(from, from + ".retired");
+  const { r, err } = run(p, true);
+  check(`an interrupted retire is finished, not refused (got done ${JSON.stringify(r.done)}, skipped ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates"]) && !fs.existsSync(from) && fs.readFileSync(from + ".retired", "utf8") === expText
+    && err.some((l) => /Crates\.expected\.json and Crates\.expected\.json\.retired were one file \(a retire that was interrupted\) — finished/.test(l)));
+  check("…and a second run has nothing to do", run(p, true).r.steps.length === 0);
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
   const p = project();
   writeSet(p.put, "Crates__80_1");
   const { r } = run(p, true);

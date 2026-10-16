@@ -430,7 +430,8 @@ export function planMigration(d: Dirs): MigrateStep[] {
         const from = path.join(d.verifyDir, name + ".expected.json");
         if (!exists(from)) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and this set has no expectation to retire — move its files aside by hand`] }); continue; }
         const retired = from + ".retired";
-        if (exists(retired)) { steps.push({ kind: "skip", set: name, why: [`${path.basename(retired)} already exists — refusing to replace it`] }); continue; }
+        // one file under both names is a retire killed between its link and its unlink: applyRetire finishes it
+        if (exists(retired) && !sameFile(from, retired)) { steps.push({ kind: "skip", set: name, why: [`${path.basename(retired)} already exists — refusing to replace it`] }); continue; }
         steps.push({ kind: "retire", set: name, nodeId: id, canonical: T, file: { from, to: retired } });
         continue;
       }
@@ -653,7 +654,12 @@ function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: ApplyDirs):
     if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
-    if (exists(s.file.to)) return { why: [`${path.basename(s.file.to)} already exists — refusing to replace it`], notes: [] };
+    if (exists(s.file.to)) {
+      if (!sameFile(s.file.from, s.file.to)) return { why: [`${path.basename(s.file.to)} already exists — refusing to replace it`], notes: [] };
+      // linked, not yet unlinked: a retire killed between its two steps, finished here
+      fs.unlinkSync(s.file.from);
+      return { why: [], notes: [`${path.basename(s.file.from)} and ${path.basename(s.file.to)} were one file (a retire that was interrupted) — finished`] };
+    }
     moveNoReplace(s.file.from, s.file.to, d.link);
     return { why: [], notes: [] };
   } catch (e) {
