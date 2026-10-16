@@ -68,6 +68,7 @@ import { parsePlanText, recordFacts, updatePlan, verificationFacts } from "./pla
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { DESIGN_DIR, EXPORT_DIR, LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
+import { parseSetName } from "./screen-key.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
@@ -575,9 +576,15 @@ function verificationWarnings(plan: Plan): string[] {
 // record is older than the verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
 // mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
 // (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
+// A record naming a report that is not on disk at all (renamed or deleted) cannot be compared with it, so a hand edit of
+// the record would go unseen (recordedEdits): that is a warning of its own.
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
+  if (!fs.existsSync(path.resolve(cwd, rec.report))) {
+    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
+      "legacy-named verify set, else re-run verify-screen --compare --record-plan"];
+  }
   const bytes = readRegularFile(path.resolve(cwd, rec.report));
   if (!bytes) return [];
   const now = sha256Hex(bytes);
@@ -1324,6 +1331,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
+  warnings.push(...legacySetWarnings(plan, file, reports, exp));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
@@ -1435,6 +1443,17 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
       behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;
+}
+
+// A report found for this plan under a name outside the key grammar (`<Layer>__<id>`, `<Layer>__<id>.<variant>` —
+// screen-key.ts): a nickname, or an `@320` / `-r1` variant. It is still read (locateReports matches it by content); the
+// warning names it so `verify-screen --migrate` can give it the screen's key.
+function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[], exp: ExportHit | null | undefined): string[] {
+  const nodeId = plan.nodeId || (exp && exp.nodeId) || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null);
+  return reports.flatMap((r) => {
+    const set = path.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} — run verify-screen --migrate`] : [];
+  });
 }
 
 // ================================================================ computed status
@@ -1984,7 +2003,7 @@ async function main(argv: string[]): Promise<number> {
 
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, recordedReportWarnings, recordedEdits, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
+  verificationWarnings, recordedReportWarnings, recordedEdits, reportRecordNames, legacySetWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,
 };

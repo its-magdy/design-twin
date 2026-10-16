@@ -1452,6 +1452,28 @@ function visibility(doc) {
 }
 if (false) process.exitCode = main(process.argv.slice(2));
 
+// bridge/src/node-id.ts
+var ID = "[A-Za-z0-9%:;_-]+";
+var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+
+// design-to-code/resolve-screen.ts
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/screen-key.ts
+var VARIANT_RE = /^[a-z0-9-]+$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => VARIANT_RE.test(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+
 // design-to-code/hook-input.ts
 import fs10 from "node:fs";
 function parseHookPayload(raw) {
@@ -2048,6 +2070,9 @@ function verificationWarnings(plan) {
 function recordedReportWarnings(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
+  if (!fs11.existsSync(path8.resolve(cwd, rec.report))) {
+    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
+  }
   const bytes = readRegularFile(path8.resolve(cwd, rec.report));
   if (!bytes) return [];
   const now = sha256Hex(bytes);
@@ -2664,6 +2689,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
+  warnings.push(...legacySetWarnings(plan, file, reports, exp));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
@@ -2771,6 +2797,13 @@ function locateReports(plan, planFile, cwd, exp) {
     });
   }
   return out;
+}
+function legacySetWarnings(plan, planFile, reports, exp) {
+  const nodeId = plan.nodeId || exp && exp.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path8.basename(planFile, ".json")) : null);
+  return reports.flatMap((r) => {
+    const set = path8.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
+  });
 }
 var NO_WAIVERS = waiversHash(null);
 var waiversChanged = (r, now) => (r.waiversSha256 || NO_WAIVERS) !== now;
@@ -3263,6 +3296,7 @@ export {
   isOpen,
   isSourceFile,
   isStale2 as isStale,
+  legacySetWarnings,
   locateExport,
   locateReports,
   main,
@@ -3274,6 +3308,7 @@ export {
   recordedEdits,
   recordedReportWarnings,
   recordedShadowWarnings,
+  reportRecordNames,
   scanText,
   transcriptActions,
   validatePlanHeader,
