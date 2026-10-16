@@ -105,9 +105,10 @@ export interface MigrateResult {
 
 const slash = (p: string): string => p.split(path.sep).join("/");
 const exists = (p: string): boolean => fs.existsSync(p);
-/** Two paths are one file (a case-only rename on a case-insensitive disk). */
+/** Two paths are one file (a case-only rename on a case-insensitive disk). The ids are read as bigints: a 64-bit file
+ *  id (NTFS) loses its low bits as a Number, and two files could then compare equal. */
 function sameFile(a: string, b: string): boolean {
-  try { const x = fs.statSync(a), y = fs.statSync(b); return x.dev === y.dev && x.ino === y.ino; } catch { return false; }
+  try { const x = fs.statSync(a, { bigint: true }), y = fs.statSync(b, { bigint: true }); return x.dev === y.dev && x.ino === y.ino; } catch { return false; }
 }
 /** A status of `base` that names a run still open (v2, not ended), or null. */
 function openRunOf(base: string): string | null {

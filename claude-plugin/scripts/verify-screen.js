@@ -6010,7 +6010,7 @@ var slash2 = (p) => p.split(path15.sep).join("/");
 var exists2 = (p) => fs16.existsSync(p);
 function sameFile(a, b) {
   try {
-    const x = fs16.statSync(a), y = fs16.statSync(b);
+    const x = fs16.statSync(a, { bigint: true }), y = fs16.statSync(b, { bigint: true });
     return x.dev === y.dev && x.ino === y.ino;
   } catch {
     return false;
