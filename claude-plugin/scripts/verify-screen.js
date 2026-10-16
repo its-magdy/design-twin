@@ -6086,15 +6086,20 @@ function migrate(opts) {
       skip(first, j.set, [`${what} \u2014 --migrate --apply rolls it back first (every file to its old name, every plan it rewrote to its old bytes), then migrates`]);
       continue;
     }
-    const { left, retry } = rollbackJournal(j, { cwd, verifyDir, planDir });
-    if (retry) {
-      skip(first, j.set, [`${what} \u2014 rolled back in part; the journal stays, so --migrate --apply tries again:`, ...left.map((x) => `  ${x}`)]);
+    opts.journalRead?.(file);
+    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir });
+    if ("gone" in rb) {
+      err(`note  ${shown(file)} is gone: the migration of ${j.set} -> ${j.to} ended while its status locks were awaited \u2014 nothing to roll back`);
       continue;
     }
-    fs16.rmSync(file, { force: true });
+    const now = `an interrupted migration of ${rb.j.set} -> ${rb.j.to} (${rb.j.at}) left ${shown(file)}`;
+    if (rb.retry) {
+      skip(first, j.set, [`${now} \u2014 rolled back in part; the journal stays, so --migrate --apply tries again:`, ...rb.left.map((x) => `  ${x}`)]);
+      continue;
+    }
     first.rolledBack.push(j.set);
-    out(`rolled back ${shown(path15.join(verifyDir, j.set))}: ${what} \u2014 every file is under its old name again`);
-    for (const x of left) err(`note  ${x}`);
+    out(`rolled back ${shown(path15.join(verifyDir, j.set))}: ${now} \u2014 every file is under its old name again`);
+    for (const x of rb.left) err(`note  ${x}`);
   }
   if (first.skipped.length) {
     err(`nothing migrated: ${first.skipped.length} interrupted migration(s) to roll back first`);
@@ -6533,12 +6538,18 @@ function journalMoves(j, verifyDir) {
   const files = j.moves.map((m) => ({ from: abs(m.from), to: abs(m.to), ...m.tmp !== void 0 ? { tmp: abs(m.tmp) } : {} }));
   return j.live ? [...files, { from: liveStatusFile(abs(j.set)), to: liveStatusFile(abs(j.to)) }] : files;
 }
-function rollbackJournal(j, d) {
-  const held = lockStatuses([path15.join(d.verifyDir, j.set), path15.join(d.verifyDir, j.to)]);
-  if ("why" in held) return { left: [held.why], retry: true };
+function rollbackJournal(file, read2, d) {
+  const held = lockStatuses([path15.join(d.verifyDir, read2.set), path15.join(d.verifyDir, read2.to)]);
+  if ("why" in held) return { j: read2, left: [held.why], retry: true };
   try {
+    if (!exists2(file)) return { gone: true };
+    const j = readJournal(file);
+    if ("why" in j) return { j: read2, left: [`${path15.basename(file)} is ${j.why} now \u2014 run --migrate again`], retry: true };
+    if (j.set !== read2.set || j.to !== read2.to) return { j: read2, left: [`${path15.basename(file)} names another migration now (${j.set} -> ${j.to}) \u2014 run --migrate again`], retry: true };
     const plans = j.plans.flatMap((p) => p.after === void 0 ? [] : [restorePlan({ file: path15.join(d.planDir, p.file), before: p.before, after: p.after }, d.cwd)]);
-    return settle(plans, journalMoves(j, d.verifyDir).reverse());
+    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse());
+    if (!retry) fs16.rmSync(file, { force: true });
+    return { j, left, retry };
   } finally {
     for (const l of held.locks) l.release();
   }

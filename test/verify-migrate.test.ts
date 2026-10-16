@@ -297,8 +297,24 @@ for (const [when, at] of [["after 3 of the moves", (a: { moved: number; plansWri
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
+  // run B reads run A's journal, then waits for the status locks while A finishes and removes it: B rolls nothing back
   const p = project();
-  p.put("design/verify/.migrate-Other.json", { schema: "designtwin/verify-migrate-journal@1", set: "Other", to: "Other__1_1", at: NOW, live: false, moves: [{ from: "../../package.json", to: "x" }], plans: [] });
+  const verify = path.join(p.root, "design/verify");
+  const journal = path.join(verify, ".migrate-Crates.json");
+  let seen = "";
+  const a = run(p, true, { crashAt: (x) => { if (x.plansWritten === 1) seen = fs.readFileSync(journal, "utf8"); } });
+  const done = { ls: p.ls(), plan: p.planText() };
+  check(`setup: run A migrates the set, its journal (read before its end) is gone (got ${JSON.stringify(a.r.done)})`, JSON.stringify(a.r.done) === JSON.stringify(["Crates"]) && seen !== "" && !fs.existsSync(journal));
+  fs.writeFileSync(journal, seen);
+  const b = run(p, true, { journalRead: (f) => { fs.rmSync(f); } });
+  check(`a journal removed between its read and the locks is not rolled back (got rolledBack ${JSON.stringify(b.r.rolledBack)}; ${b.err.join(" | ")})`,
+    b.r.rolledBack.length === 0 && b.r.skipped.length === 0 && !b.out.some((l) => l.startsWith("rolled back")) && b.err.some((l) => /\.migrate-Crates\.json is gone: .* nothing to roll back/.test(l)));
+  check("…A's migration stands: every file under its new name, the plan as A wrote it", JSON.stringify(p.ls()) === JSON.stringify(done.ls) && p.planText() === done.plan);
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project();
+  p.put("design/verify/.migrate-Other.json",{ schema: "designtwin/verify-migrate-journal@1", set: "Other", to: "Other__1_1", at: NOW, live: false, moves: [{ from: "../../package.json", to: "x" }], plans: [] });
   const before = p.ls();
   const { r } = run(p, true);
   check(`a journal naming a path outside the verify dir is refused, nothing moved (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,

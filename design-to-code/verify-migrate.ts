@@ -96,6 +96,9 @@ export interface MigrateOpts {
   /** tests only: called after each move and each plan write of a rename; a throw from it stands for the process dying
    *  there — it propagates at once, with no rollback, and the journal stays (as a killed run leaves it) */
   crashAt?: (at: { moved: number; plansWritten: number }) => void;
+  /** tests only: called after a journal is read, before its rollback takes the status locks — where the run that wrote
+   *  it may still finish and remove it */
+  journalRead?: (file: string) => void;
 }
 export interface MigrateResult {
   steps: MigrateStep[]; done: string[]; skipped: Array<{ set: string; why: string[] }>;
@@ -188,12 +191,14 @@ export function migrate(opts: MigrateOpts): MigrateResult {
     if ("why" in j) { skip(first, path.basename(file), [`${shown(file)}: ${j.why} — not a journal --migrate wrote; remove it by hand`]); continue; }
     const what = `an interrupted migration of ${j.set} -> ${j.to} (${j.at}) left ${shown(file)}`;
     if (!opts.apply) { skip(first, j.set, [`${what} — --migrate --apply rolls it back first (every file to its old name, every plan it rewrote to its old bytes), then migrates`]); continue; }
-    const { left, retry } = rollbackJournal(j, { cwd, verifyDir, planDir });
-    if (retry) { skip(first, j.set, [`${what} — rolled back in part; the journal stays, so --migrate --apply tries again:`, ...left.map((x) => `  ${x}`)]); continue; }
-    fs.rmSync(file, { force: true });
+    opts.journalRead?.(file);
+    const rb = rollbackJournal(file, j, { cwd, verifyDir, planDir });
+    if ("gone" in rb) { err(`note  ${shown(file)} is gone: the migration of ${j.set} -> ${j.to} ended while its status locks were awaited — nothing to roll back`); continue; }
+    const now = `an interrupted migration of ${rb.j.set} -> ${rb.j.to} (${rb.j.at}) left ${shown(file)}`;
+    if (rb.retry) { skip(first, j.set, [`${now} — rolled back in part; the journal stays, so --migrate --apply tries again:`, ...rb.left.map((x) => `  ${x}`)]); continue; }
     first.rolledBack.push(j.set);
-    out(`rolled back ${shown(path.join(verifyDir, j.set))}: ${what} — every file is under its old name again`);
-    for (const x of left) err(`note  ${x}`);
+    out(`rolled back ${shown(path.join(verifyDir, j.set))}: ${now} — every file is under its old name again`);
+    for (const x of rb.left) err(`note  ${x}`);
   }
   if (first.skipped.length) { err(`nothing migrated: ${first.skipped.length} interrupted migration(s) to roll back first`); return first; }
 
@@ -590,14 +595,23 @@ function journalMoves(j: Journal, verifyDir: string): FileMove[] {
   const files: FileMove[] = j.moves.map((m) => ({ from: abs(m.from), to: abs(m.to), ...(m.tmp !== undefined ? { tmp: abs(m.tmp) } : {}) }));
   return j.live ? [...files, { from: liveStatusFile(abs(j.set)), to: liveStatusFile(abs(j.to)) }] : files;
 }
-/** An interrupted rename undone from its journal, under both status locks: every plan it wrote put back (only while it
- *  holds what the rename wrote), every move undone from whatever state it reached. What could not be (settle). */
-function rollbackJournal(j: Journal, d: { cwd: string; verifyDir: string; planDir: string }): { left: string[]; retry: boolean } {
-  const held = lockStatuses([path.join(d.verifyDir, j.set), path.join(d.verifyDir, j.to)]);
-  if ("why" in held) return { left: [held.why], retry: true };
+/** An interrupted rename undone from its journal `file`, under both status locks: every plan it wrote put back (only
+ *  while it holds what the rename wrote), every move undone from whatever state it reached, and the journal removed once
+ *  nothing is left a retry could settle. The journal is read again under the locks — `read` came before them, and the
+ *  run that wrote it may have finished meanwhile: no journal then is nothing to roll back (`gone`). The journal rolled
+ *  back, and what could not be (settle). */
+function rollbackJournal(file: string, read: Journal, d: { cwd: string; verifyDir: string; planDir: string }): { gone: true } | { j: Journal; left: string[]; retry: boolean } {
+  const held = lockStatuses([path.join(d.verifyDir, read.set), path.join(d.verifyDir, read.to)]);
+  if ("why" in held) return { j: read, left: [held.why], retry: true };
   try {
+    if (!exists(file)) return { gone: true };
+    const j = readJournal(file);
+    if ("why" in j) return { j: read, left: [`${path.basename(file)} is ${j.why} now — run --migrate again`], retry: true };
+    if (j.set !== read.set || j.to !== read.to) return { j: read, left: [`${path.basename(file)} names another migration now (${j.set} -> ${j.to}) — run --migrate again`], retry: true };
     const plans = j.plans.flatMap((p) => (p.after === undefined ? [] : [restorePlan({ file: path.join(d.planDir, p.file), before: p.before, after: p.after }, d.cwd)]));
-    return settle(plans, journalMoves(j, d.verifyDir).reverse());
+    const { left, retry } = settle(plans, journalMoves(j, d.verifyDir).reverse());
+    if (!retry) fs.rmSync(file, { force: true });
+    return { j, left, retry };
   } finally { for (const l of held.locks) l.release(); }
 }
 
