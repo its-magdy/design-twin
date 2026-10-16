@@ -564,7 +564,7 @@ function listJournals(verifyDir: string): string[] {
 const isName = (x: unknown): x is string => typeof x === "string" && x !== "" && x !== "." && x !== ".." && !/[\\/]/.test(x);
 function readJournal(file: string): Journal | { why: string } {
   let j: unknown;
-  try { j = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return { why: `unreadable (${errMsg(e)})` }; }
+  try { const x: unknown = JSON.parse(fs.readFileSync(file, "utf8")); j = x; } catch (e) { return { why: `unreadable (${errMsg(e)})` }; }
   if (!isJsonObject(j) || j.schema !== JOURNAL_SCHEMA) return { why: `no ${JOURNAL_SCHEMA} schema` };
   const { set, to, at, moves, live, plans } = j;
   if (!isName(set) || !isName(to) || typeof at !== "string" || typeof live !== "boolean" || !Array.isArray(moves) || !Array.isArray(plans)) return { why: "malformed" };

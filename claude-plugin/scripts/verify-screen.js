@@ -6507,7 +6507,8 @@ var isName = (x) => typeof x === "string" && x !== "" && x !== "." && x !== ".."
 function readJournal(file) {
   let j;
   try {
-    j = JSON.parse(fs16.readFileSync(file, "utf8"));
+    const x = JSON.parse(fs16.readFileSync(file, "utf8"));
+    j = x;
   } catch (e) {
     return { why: `unreadable (${errMsg(e)})` };
   }
