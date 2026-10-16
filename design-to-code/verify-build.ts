@@ -1853,12 +1853,12 @@ async function main(argv: string[]): Promise<number> {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
+    const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
     // An unreadable plan whose raw JSON holds a closed status is given up on, as the Stop hook treats it: skipped, not unreadable
     for (const b of bad) {
       const closed = closedStatusOf(b);
-      console.error(closed ? `verify-build: ${b.file} is "${closed}" — skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+      console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" — skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
     }
-    const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
     // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
     const rows = plans.map((p) => {
       const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });

@@ -1569,7 +1569,7 @@ console.log("field-test fixes:");
       const closed = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
       fs.writeFileSync(file, JSON.stringify({ status: "pending", tokens: "none" }));
       const open = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
-      return closed.status === 0 && closed.stderr.includes("broken.json is \"abandoned\" — skipped (the file is not a valid plan: `tokens` must be an array)")
+      return closed.status === 0 && closed.stderr.includes(`verify-build: ${path.join("design", "plan", "broken.json")} is "abandoned" — skipped (the file is not a valid plan: \`tokens\` must be an array)`)
         && !closed.stderr.includes("cannot read plan")
         && open.status === 0 && open.stderr.includes("cannot read plan ") && open.stderr.includes("broken.json: is not a valid plan: `tokens` must be an array");
     })());

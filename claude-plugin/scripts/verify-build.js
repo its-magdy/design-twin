@@ -3116,14 +3116,14 @@ async function main(argv) {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path8.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
-    for (const b of bad) {
-      const closed = closedStatusOf(b);
-      console.error(closed ? `verify-build: ${b.file} is "${closed}" \u2014 skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
-    }
     const show = (f) => {
       const r = path8.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
+    for (const b of bad) {
+      const closed = closedStatusOf(b);
+      console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" \u2014 skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
+    }
     const rows = plans.map((p) => {
       const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
       const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
