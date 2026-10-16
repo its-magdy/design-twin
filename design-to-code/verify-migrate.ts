@@ -62,7 +62,7 @@ import { nodeIdFromStem, safe, screenStem } from "../bridge/src/pages-layout.ts"
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
-import { planLockFile } from "./run-cache.ts";
+import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
 import { allSets, canonicalStemsFor, formatSetName, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
@@ -185,9 +185,9 @@ export function migrate(opts: MigrateOpts): MigrateResult {
   const planDir = path.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== undefined ? path.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs: string): string => slash(path.relative(cwd, abs)) || ".";
-  /** A path relative to the project (its own spelling or its real path, as the run cache names it), or absolute when it
-   *  is outside (a run cache in the OS temp dir). */
-  const roots = [cwd, ((): string => { try { return fs.realpathSync(cwd); } catch { return cwd; } })()];
+  /** A path relative to the project (its own spelling or its path as the run cache spells it: realpathSync.native, the long
+   *  name in the on-disk case), or absolute when it is outside (a run cache in the OS temp dir). */
+  const roots = [cwd, canonical(cwd)];
   const shownAnywhere = (abs: string): string => {
     for (const root of roots) { const rel = path.relative(root, abs); if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return slash(rel); }
     return slash(abs);

@@ -6093,13 +6093,7 @@ function migrate(opts) {
   const planDir = path15.resolve(cwd, opts.planDir ?? PLAN_DIR);
   const exportDir = opts.exportDir !== void 0 ? path15.resolve(cwd, opts.exportDir) : findExportDir(cwd).dir;
   const shown = (abs) => slash2(path15.relative(cwd, abs)) || ".";
-  const roots = [cwd, (() => {
-    try {
-      return fs16.realpathSync(cwd);
-    } catch {
-      return cwd;
-    }
-  })()];
+  const roots = [cwd, canonical2(cwd)];
   const shownAnywhere = (abs) => {
     for (const root of roots) {
       const rel = path15.relative(root, abs);
