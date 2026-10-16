@@ -1186,11 +1186,12 @@ const USAGE =
   "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed. With --run an\n" +
   "      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run\n" +
   "      (after an exit 3, once the user has fixed the renderer), the second ends the run `failed` — the probe writes it (a\n" +
-  "      `status run <id> …` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that\n" +
-  "      already ended (done/failed/blocked), or while the status names ANOTHER run that has not ended (a newer run of the screen —\n" +
-  "      a stale verifier never writes over it), is refused before anything starts (over another run that has ENDED it is written,\n" +
-  "      with a `note  run <id> replaced run <other> …` line and replaced in the status), and a run that ends, or beside which another run\n" +
-  "      opens (its own run: or that is replaced), while the page is measured gets no files and no status write (exit 2 both ways).\n" +
+  "      `status run <id> …` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run\n" +
+  "      is refused before anything starts when it already ended (done/failed/blocked), or while the status names ANOTHER run that\n" +
+  "      has not ended (a newer run of the screen — a stale verifier never writes over it); over another run that has ENDED its\n" +
+  "      first write is taken, with a `note  run <id> replaced run <other> …` line and replaced in the status. A run that ends,\n" +
+  "      beside which another run opens, or that another run replaces (one that started — and maybe ended — after its measuring\n" +
+  "      write) while the page is measured gets no files and no status write (exit 2 every way).\n" +
   "      --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).\n" +
   "      --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring —\n" +
   "      by default the frame's tag [data-dt-node=\"<frame id>\"] (expectation.frame.nodeId), so a page that is not the screen\n" +
@@ -1224,7 +1225,7 @@ const USAGE =
   `  ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage, or (--run) the run already ended / ended while the probe ran / the status names another run\n" +
-  "      that has not ended, or (no --run) another run of the\n" +
+  "      that has not ended / another run replaced it while the probe ran, or (no --run) another run of the\n" +
   "      screen is open, or replaced its own — also instead of a 3 or 4 · 3\n" +
   "      renderer unavailable (ask the user to install; never installed here; with --run, re-run once in the run after they\n" +
   "      do) · 4 the page kept navigating / reloaded twice\n" +
@@ -1551,14 +1552,16 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   const refusal: { by: StatusRefusal } = { by: "cache" };
   // its own run: another probe's own run left open by a probe that is gone is ended `failed` by this run's first write
   const abandoned = (d: VerifyStatusV2): void => { console.error(`note  run ${d.runId} — ${d.detail}`); };
-  // set once the `measuring` write is recorded (read by `ended`, which runs before it too): every later write of its own
-  // run continues it — refused once the status names another run (it was replaced: this probe was late)
+  // set once the `measuring` write is recorded (read by `ended`, which runs before it too): every later write of the
+  // run (--run or its own) continues it — refused once the status names another run in any phase (it was replaced:
+  // this probe was late)
   let measuringRecorded = false;
   const status = (w: StatusWrite, hooks: Pick<StatusWriteHooks, "before" | "after"> = {}): "ok" | "refused" | "over" => {
-    // --run: the verifier's run, written only while the status names no other run that has not ended (`current`); one
-    // written over another run that has ended says so (replacedNote)
+    // --run: the verifier's run, written only while the status names no other run that has not ended (`current`); its
+    // first write over another run that has ended says so (replacedNote), and every later one continues the run — a
+    // newer run that started and ended meanwhile is never written over
     try {
-      const doc = writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned, ...(measuringRecorded ? { continues: true } : {}) } : { current: true }) });
+      const doc = writeStatus(statusBase, w, { ...hooks, ...(ownRun ? { alone: true, abandoned } : { current: true }), ...(measuringRecorded ? { continues: true } : {}) });
       const note = replacedNote(doc);
       if (note !== null) console.error(note);
       return "ok";
@@ -1831,8 +1834,9 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     behaviour,
   };
   // Every file of this measurement, written (or an earlier run's removed) in one step: inside the `measured` (own run:
-  // `done`) status write's lock after its ended-run and other-run checks (`current`; own run: open-run), so a run ended,
-  // or another opened beside it, while the page was measured gets none. Returns the measured file's sha for that record; `written` says it got that far.
+  // `done`) status write's lock after its ended-run and other-run checks (`current`, then `continues`; own run: open-run,
+  // then `continues`), so a run ended, another opened beside it, or one that replaced it while the page was measured gets
+  // none. Returns the measured file's sha for that record; `written` says it got that far.
   let written = false, statusRefused = false;
   const writeFiles = (): Pick<StatusWrite, "measuredSha256"> => {
     try {
@@ -1873,11 +1877,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   if (wrote === "refused") {
     // the measured file stays when the status write is refused: the run's status still says measuring, so say what
     // records it. Refused before the files (the lock itself): checked without the lock for an ended run or another run
-    // that has not ended (own run: a status naming another run once its `measuring` was recorded — it was replaced —,
-    // else another open run), then written
+    // that has not ended, then — once its `measuring` was recorded — a status naming another run in any phase (it was
+    // replaced; own run: that alone, else another open run), then written
     statusRefused = true;
     const now = written ? null : readStatus(statusBase);
-    const endedNow = written ? null : !ownRun ? endedRun(now, runId) ?? notCurrentRun(statusBase, now, runId) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
+    const endedNow = written ? null : !ownRun ? endedRun(now, runId) ?? notCurrentRun(statusBase, now, runId) ?? (measuringRecorded ? replacedRun(now, runId) : null)
+      : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
     if (endedNow) { console.error(`verify-probe: ${endedNow.message}`); return 2; }
     if (!written) writeFiles();
   }

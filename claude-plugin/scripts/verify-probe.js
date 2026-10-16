@@ -7231,11 +7231,12 @@ var USAGE = `usage:
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
       exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run
       (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a
-      \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that
-      already ended (done/failed/blocked), or while the status names ANOTHER run that has not ended (a newer run of the screen \u2014
-      a stale verifier never writes over it), is refused before anything starts (over another run that has ENDED it is written,
-      with a \`note  run <id> replaced run <other> \u2026\` line and replaced in the status), and a run that ends, or beside which another run
-      opens (its own run: or that is replaced), while the page is measured gets no files and no status write (exit 2 both ways).
+      \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run
+      is refused before anything starts when it already ended (done/failed/blocked), or while the status names ANOTHER run that
+      has not ended (a newer run of the screen \u2014 a stale verifier never writes over it); over another run that has ENDED its
+      first write is taken, with a \`note  run <id> replaced run <other> \u2026\` line and replaced in the status. A run that ends,
+      beside which another run opens, or that another run replaces (one that started \u2014 and maybe ended \u2014 after its measuring
+      write) while the page is measured gets no files and no status write (exit 2 every way).
       --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
       --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
       by default the frame's tag [data-dt-node="<frame id>"] (expectation.frame.nodeId), so a page that is not the screen
@@ -7269,7 +7270,7 @@ var USAGE = `usage:
   ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran / the status names another run
-      that has not ended, or (no --run) another run of the
+      that has not ended / another run replaced it while the probe ran, or (no --run) another run of the
       screen is open, or replaced its own \u2014 also instead of a 3 or 4 \xB7 3
       renderer unavailable (ask the user to install; never installed here; with --run, re-run once in the run after they
       do) \xB7 4 the page kept navigating / reloaded twice
@@ -7539,7 +7540,7 @@ ${USAGE}`);
   let measuringRecorded = false;
   const status = (w, hooks = {}) => {
     try {
-      const doc = writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned, ...measuringRecorded ? { continues: true } : {} } : { current: true } });
+      const doc = writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned } : { current: true }, ...measuringRecorded ? { continues: true } : {} });
       const note = replacedNote(doc);
       if (note !== null) console.error(note);
       return "ok";
@@ -7892,7 +7893,7 @@ ${USAGE}`);
   if (wrote === "refused") {
     statusRefused = true;
     const now = written ? null : readStatus(statusBase);
-    const endedNow = written ? null : !ownRun ? endedRun(now, runId) ?? notCurrentRun(statusBase, now, runId) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
+    const endedNow = written ? null : !ownRun ? endedRun(now, runId) ?? notCurrentRun(statusBase, now, runId) ?? (measuringRecorded ? replacedRun(now, runId) : null) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
     if (endedNow) {
       console.error(`verify-probe: ${endedNow.message}`);
       return 2;

@@ -39,9 +39,11 @@ nothing written, naming it and how to wait for it or end it — a probe's own ru
 which pid it started and whether that probe is gone or past its deadline: nobody waits for it, so the line gives only
 the command that ends it, for when no probe is running): a recovery command or a probe run late never writes over
 a run started since while that run is open — the probe checks before it starts and again at every status write, so a
-run that opens while the page is measured gets no files from it either (once that run has ended, the record replaces
-it and says so — a `note  run <id> replaced run <other> (ended at <phase>, <time>)` line, and `replaced` in your
-run's status — measure again rather than record an old run after another one). If the id you were given has already
+run that opens while the page is measured gets no files from it either, nor does a newer run that started and ended
+meanwhile: once its `measuring` is recorded, the probe writes nothing more while the status names any other run, in
+any phase (exit 2, nothing written). Over a run that had already ended, a `--status` record or the probe's first write
+replaces it and says so — a `note  run <id> replaced run <other> (ended at <phase>, <time>)` line, and `replaced` in
+your run's status — measure again rather than record an old run after another one. If the id you were given has already
 ended, start a new run with `--new-run` and say so. Always give the probe your `--run <id>`: without it the probe
 starts a run of its own (build-screen's own loop) and ends it itself, and it refuses (exit 2, nothing started) while
 another run of the screen is open — so a builder's probe never writes over a verifier's files mid-run.
@@ -185,7 +187,7 @@ run stays open at `measuring`: once the user has fixed the renderer the run resu
 An orchestrator's `--wait <Screen> --run <id>` may end meanwhile in exit 5 `stalled` (the status has not changed for
 `--stall`): that is the user's answer pending, not a hang — relay the question if it has not reached the user, and
 `--wait` again with the same `--run <id>` once they have answered; never start a new run over it. A run id is one pass: a probe that succeeds in between
-does not reset the count. If the run ended meanwhile, or another run opened since, the probe leaves the status as it
+does not reset the count. If the run ended meanwhile, or another run opened (or opened and ended) since, the probe leaves the status as it
 is and exits 2 (the attempt is not counted), like a probe of a run that had already ended; without `--run` its own run ends `failed` at the first exit 3/4 and the re-run is a
 new run. When the status write that counts an attempt is refused (the run cache is not writable, or another writer
 held its lock), the probe prints `status run <id> not counted — …` with the command that ends the run: re-run once

@@ -412,6 +412,47 @@ else {
   if (rA6.status !== 2 || leftA6.length) console.log(`${rA6.stderr}\n  left: ${leftA6.join(", ")}`);
   writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-18", phase: "failed", by: "orchestrator", detail: "test over" });
 }
+// --run, and ANOTHER run starts AND ends (done, its measured file written) while the page is measured: once its
+// `measuring` is recorded the probe continues its run — the `measured` write is refused (RunReplaced): exit 2, the newer
+// run's file and status kept
+const stageA7 = path.join(tmp, "stageA7", "Staff");
+const newerA7 = "{\"runId\":\"run-e2e-20\"}\n";
+onPage = () => {
+  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-20", phase: "queued", by: "orchestrator" });
+  fs.mkdirSync(path.dirname(stageA7), { recursive: true });
+  fs.writeFileSync(stageA7 + ".measured.json", newerA7);
+  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-20", phase: "done", by: "agent", detail: "verified" });
+};
+const rA7 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA7, "--project", ROOT, "--run", "run-e2e-19"]);
+onPage = null;
+const stA7 = readStatus(liveFile);
+const leftA7 = fs.existsSync(path.dirname(stageA7)) ? fs.readdirSync(path.dirname(stageA7)) : [];
+check("--run, another run started and ended while the page is measured → exit 2, the newer run's measured file byte-identical and nothing else in --out's directory, its done status unchanged, no note over it, no next step",
+  rA7.status === 2 && leftA7.length === 1 && fs.readFileSync(stageA7 + ".measured.json", "utf8") === newerA7 && stA7?.runId === "run-e2e-20" && stA7.phase === "done" && stA7.rev === 2
+  && rA7.stderr.includes("run run-e2e-19 was replaced by run run-e2e-20 (done) while this probe ran — nothing more is written in it")
+  && !/^note {2}run run-e2e-19 replaced run run-e2e-20/m.test(rA7.stderr) && !/^next /m.test(rA7.stderr));
+if (rA7.status !== 2 || leftA7.length !== 1) console.log(`${rA7.stderr}\n  left: ${leftA7.join(", ")}`);
+// …and its `measured` write refused by the run cache (read-only) too: the refused path finds the status naming the newer
+// run and writes no files (exit 2)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused --run write after a newer run ended — ${NO_READONLY_DIRS})`);
+else {
+  const stageA8 = path.join(tmp, "stageA8", "Staff");
+  const cacheA8 = path.dirname(liveFile);
+  onPage = () => {
+    writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-22", phase: "queued", by: "orchestrator" });
+    writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-22", phase: "done", by: "agent", detail: "verified" });
+    fs.chmodSync(cacheA8, 0o555);
+  };
+  const rA8 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA8, "--project", ROOT, "--run", "run-e2e-21"]);
+  onPage = null;
+  fs.chmodSync(cacheA8, 0o755);
+  const stA8 = readStatus(liveFile);
+  const leftA8 = fs.existsSync(path.dirname(stageA8)) ? fs.readdirSync(path.dirname(stageA8)) : [];
+  check("--run, another run started and ended while measuring, its `measured` write refused (read-only run cache) → exit 2, no files in --out's directory, the newer run's done status kept, no next step",
+    rA8.status === 2 && leftA8.length === 0 && stA8?.runId === "run-e2e-22" && stA8.phase === "done"
+    && rA8.stderr.includes("run run-e2e-21 was replaced by run run-e2e-22 (done) while this probe ran") && !/^next /m.test(rA8.stderr));
+  if (rA8.status !== 2 || leftA8.length) console.log(`${rA8.stderr}\n  left: ${leftA8.join(", ")}`);
+}
 
 // no --run, and a verifier's run is started (--new-run) while the page is measured: the probe's own run never writes over
 // it — exit 2, no files, the new run's status kept

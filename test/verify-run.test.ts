@@ -916,6 +916,17 @@ await block("verify-probe --run current:", async () => {
   safe("…its status names the run it replaced (replaced {run-new3, done}, carried to the attempt write), and the probe prints one note line saying so", () =>
     st4 !== null && st4 !== "v1" && st4.replaced?.runId === "run-new3" && st4.replaced.phase === "done"
       && p4.stderr.split("\n").filter((l) => l.startsWith("note  run run-old3 replaced run run-new3 (ended at done, ")).length === 1);
+
+  // run-new4 is queued AND ends after the `measuring` write, before the exit-3 failed-attempt write: once its `measuring`
+  // is recorded, a --run continues its run — never written over a newer run, open or ended
+  VR.writeStatus(base, { runId: "run-old3", phase: "failed", by: "orchestrator" });
+  cli("--status", "Plots", "--phase", "renderer-ready", "--run", "run-old4");
+  const ended4 = JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots", runId: "run-new4", rev: 2, phase: "done", detail: "", at: new Date().toISOString(), by: "agent" }, null, 2) + "\n";
+  const p5 = probe("run-old4", { DT_TEST_ON: "launch", DT_TEST_DOC: ended4 });
+  safe("…run-new4 started and ended (done) after the `measuring` write → the exit-3 attempt write is refused: exit 2, not 3, 'was replaced by run run-new4 (done) while this probe ran'; run-new4's status byte-identical; no attempt line, no note, no files",
+    () => p5.status === 2 && p5.stderr.includes("verify-probe: run run-old4 was replaced by run run-new4 (done) while this probe ran — nothing more is written in it")
+      && fs.readFileSync(live, "utf8") === ended4 && !/failed probe attempt|^status run |^note {2}run run-old4 replaced/m.test(p5.stderr) && noFiles());
+  if (p5.status !== 2) console.log(p5.stderr);
 });
 
 // a record of a run its writer names (`current`) over ANOTHER run that has ended replaces it — and says so: `replaced`
