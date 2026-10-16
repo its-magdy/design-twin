@@ -843,6 +843,65 @@ await block("verify-probe --run ended:", async () => {
     && p.stderr.includes("run run-pb already ended at blocked (blocked on a login wall) — start a new run with --new-run") && JSON.stringify(VR.readStatus(base)) === before);
 });
 
+// A stale verifier's probe --run never writes over a NEWER run of the screen that has not ended (`current`), at its start
+// or when that run opens while it runs; over a run that has ended it still writes (fast — a fake Playwright opens the run)
+console.log("verify-probe --run — never over another run that has not ended:");
+await block("verify-probe --run current:", async () => {
+  const { dir, base, live, cli } = project();
+  const PROBE_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
+  const d = mk("dt-run-fakepw-cur-");
+  fs.writeFileSync(path.join(d, "package.json"), "{}");
+  const pw = path.join(d, "node_modules", "playwright");
+  fs.mkdirSync(pw, { recursive: true });
+  fs.writeFileSync(path.join(pw, "package.json"), JSON.stringify({ name: "playwright", version: "1.60.0", main: "index.js" }));
+  // DT_TEST_ON=load: the doc lands when the probe resolves Playwright (after its start check, before its `measuring`
+  // write); =launch: when chromium launches (after `measuring`, before the exit-3 attempt write). Launch always fails: exit 3
+  fs.writeFileSync(path.join(pw, "index.js"), "const fs = require('fs'); const put = (at) => { if (process.env.DT_TEST_ON === at) fs.writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); };\n" +
+    "put('load'); module.exports = { chromium: { launch() { put('launch'); throw new Error('fake'); } } };\n");
+  const probe = (run: string, env: Record<string, string> = {}): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } =>
+    spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d, "--run", run],
+      { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, ...env } });
+  const noFiles = (): boolean => !fs.existsSync(path.join(dir, "Plots.measured.json")) && !fs.existsSync(path.join(dir, "Plots.png")) && !fs.existsSync(path.join(dir, "Plots.status.json"));
+  const queuedDoc = (runId: string): string => JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots", runId, rev: 1, phase: "queued", detail: "", at: new Date().toISOString(), by: "orchestrator" }, null, 2) + "\n";
+
+  // at its start: an orchestrator queued run-new after the verifier of run-old was handed its id
+  cli("--status", "Plots", "--phase", "queued", "--run", "run-new", "--by", "orchestrator");
+  const newDoc = fs.readFileSync(live, "utf8");
+  const p1 = probe("run-old");
+  safe("--run run-old while the status names run-new, open → exit 2 before anything starts: 'run run-old is not the current run of Plots: run run-new is open (…)'; run-new's status byte-identical; no files",
+    () => p1.status === 2 && p1.stderr.startsWith("verify-probe: run run-old is not the current run of Plots: run run-new is open (phase queued, rev 1, by orchestrator, ")
+      && !/renderer unavailable|chromium did not launch/.test(p1.stderr) && fs.readFileSync(live, "utf8") === newDoc && noFiles());
+  if (p1.status !== 2) console.log(p1.stderr);
+
+  // run-new opens between the probe's start check (run-old is the status's run) and its `measuring` write
+  VR.writeStatus(base, { runId: "run-new", phase: "failed", by: "orchestrator" });
+  cli("--status", "Plots", "--phase", "renderer-ready", "--run", "run-old");
+  const opened = queuedDoc("run-new2");
+  const p2 = probe("run-old", { DT_TEST_ON: "load", DT_TEST_DOC: opened });
+  safe("…run-new2 opens after the start check, before the `measuring` write → that write is refused under the lock: exit 2, not 3; run-new2's status byte-identical; no files",
+    () => p2.status === 2 && p2.stderr.includes("verify-probe: run run-old is not the current run of Plots: run run-new2 is open (phase queued, rev 1, by orchestrator, ")
+      && p2.stderr.includes("— it opened while this probe ran") && fs.readFileSync(live, "utf8") === opened && noFiles());
+  if (p2.status !== 2) console.log(p2.stderr);
+
+  // run-new3 opens after the `measuring` write, before the exit-3 failed-attempt write
+  VR.writeStatus(base, { runId: "run-new2", phase: "failed", by: "orchestrator" });
+  cli("--status", "Plots", "--phase", "renderer-ready", "--run", "run-old2");
+  const opened3 = queuedDoc("run-new3");
+  const p3 = probe("run-old2", { DT_TEST_ON: "launch", DT_TEST_DOC: opened3 });
+  safe("…run-new3 opens after the `measuring` write → the exit-3 attempt write is refused (never counted over run-new3): exit 2, not 3; run-new3's status byte-identical; no attempt line",
+    () => p3.status === 2 && p3.stderr.includes("verify-probe: run run-old2 is not the current run of Plots: run run-new3 is open (phase queued, rev 1, by orchestrator, ")
+      && fs.readFileSync(live, "utf8") === opened3 && !/failed probe attempt|^status run /m.test(p3.stderr) && noFiles());
+  if (p3.status !== 2) console.log(p3.stderr);
+
+  // over a run that has ENDED, a --run is still taken (the `current` contract): its failed attempt is counted
+  VR.writeStatus(base, { runId: "run-new3", phase: "done", by: "agent" });
+  const p4 = probe("run-old3");
+  const st4 = VR.readStatus(base);
+  safe("--run run-old3 over run-new3, which has ended (done) → taken: exit 3, the attempt counted in run-old3 (measuring rev 2, probeFailures 1)",
+    () => p4.status === 3 && st4 !== null && st4 !== "v1" && st4.runId === "run-old3" && st4.phase === "measuring" && st4.rev === 2 && st4.probeFailures === 1);
+  if (p4.status !== 3) console.log(p4.stderr);
+});
+
 // No --run: the probe starts a run of its own and ends it — never beside another open run, never reopening an ended one
 console.log("verify-probe without --run — a run of its own:");
 await block("verify-probe own run:", async () => {

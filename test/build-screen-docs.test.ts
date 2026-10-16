@@ -167,8 +167,10 @@ console.log("verify docs (run integrity + agent safety):");
     && /then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on `--timeout`/.test(verifySkill)
     && !/waits out its `--timeout`/.test(skill + verifySkill)
     && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Screen>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
-  check("--status without --new-run writes no run over ANOTHER run that has not ended (the run protocol)",
-    /Nor does `--status` \(without `--new-run`\) write your run while the status names ANOTHER run that has not ended \(exit 2, naming it and how to wait for it or end it\)/.test(verifySkill));
+  check("--status without --new-run, and the probe's --run, write no run over ANOTHER run that has not ended, the probe at its start and at every status write (the run protocol, the verifier)",
+    /Nor does `--status` \(without `--new-run`\) or the probe's `--run` write your run while the status names ANOTHER run that has not ended \(exit 2, nothing written, naming it and how to wait for it or end it\)/.test(verifySkill)
+    && /the probe checks before it starts and again at every status write, so a run that opens while the page is measured gets no files from it either/.test(verifySkill)
+    && /With `--run` it refuses \(exit 2, nothing written\) a run that has ended, and writes nothing while the status names ANOTHER run that has not ended/.test(verifier));
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
     /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
     && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)

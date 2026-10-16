@@ -252,7 +252,8 @@ export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId:
   const open = otherOpenRun(prev, runId);
   return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
 }
-/** A `--status` write of run `runId` (named by --run, or the run in progress when it read the status) while the status
+/** A `--status` write of run `runId` (named by --run, or the run in progress when it read the status), or a write of the
+ *  probe's --run, while the status
  *  names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
  *  one left behind too), and a record of `runId` would replace it in the status and publish over it. Refused by
  *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. */
@@ -289,7 +290,7 @@ export interface StatusWriteHooks {
   /** the write continues a run whose earlier write was recorded (the probe's own run after its `measuring`): refused
    *  (RunReplaced) when the status now names another run, in any phase — checked before `before` */
   continues?: boolean;
-  /** the write is of a run its writer names (verify-screen --status without --new-run): refused (RunNotCurrent) when the
+  /** the write is of a run its writer names (verify-screen --status without --new-run, the probe with --run): refused (RunNotCurrent) when the
    *  status names another run that has not ended, an abandoned one included — checked with the ended-run check, before
    *  `before`. An ended run or no status takes it (the record of a measured file after the status's run ended) */
   current?: boolean;

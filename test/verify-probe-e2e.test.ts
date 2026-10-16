@@ -342,6 +342,8 @@ check("after close: status `measured` rev 2 by verify-probe, measuredSha256 = sh
   st8?.phase === "measured" && st8.rev === 2 && st8.by === "verify-probe" && st8.runId === "run-e2e-1" && fs.existsSync(stage + ".measured.json")
   && st8.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(stage + ".measured.json")).digest("hex") && m8?.runId === "run-e2e-1");
 check("the status is the verify dir's (live, run cache), not in the --out staging dir, and not in design/verify until done; no tmp files left", !fs.existsSync(stage + ".status.json") && treeState(projDir) === treeBefore && fs.existsSync(path.dirname(stage)) && !fs.readdirSync(path.dirname(stage)).some((f) => f.includes(".tmp-")));
+// each later --run below is a run of its own: a --run is written only while the status names no other run that has not ended
+writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-1", phase: "failed", by: "orchestrator", detail: "test over" });
 
 // The two refused-write blocks make a directory read-only with chmod; on Windows that refuses nothing.
 const NO_READONLY_DIRS = process.platform === "win32" ? "mode bits do not make a directory read-only on Windows — chmod 0o555 / 0o000 refuses nothing" : null;
@@ -363,6 +365,7 @@ else {
   if (r10.status !== 0) console.log(r10.stderr);
   check("…the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
     /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
+  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-10", phase: "failed", by: "orchestrator", detail: "test over" });
 }
 
 // the orchestrator ends the run while the page is measured → the probe writes no files, exits 2,
@@ -377,6 +380,38 @@ check("a run ended while the page is measured → exit 2, nothing in --out's dir
   rA1.status === 2 && leftA1.length === 0 && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
   && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr) && !fs.existsSync(lockFileOfStatus(path.join(vdir, "Staff"))));
 if (rA1.status !== 2 || leftA1.length) console.log(`${rA1.stderr}\n  left: ${leftA1.join(", ")}`);
+
+// --run, and ANOTHER run is queued (--new-run) while the page is measured: a stale verifier's probe never writes over the
+// newer run — its `measured` write is refused (`current`): exit 2, no files, the newer run's status kept
+const stageA5 = path.join(tmp, "stageA5", "Staff");
+onPage = () => writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-16", phase: "queued", by: "orchestrator" });
+const rA5 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA5, "--project", ROOT, "--run", "run-e2e-15"]);
+onPage = null;
+const stA5 = readStatus(liveFile);
+const leftA5 = fs.existsSync(path.dirname(stageA5)) ? fs.readdirSync(path.dirname(stageA5)) : [];
+check("--run, another run opened while the page is measured → exit 2, nothing in --out's directory, that run's queued status unchanged, no next step",
+  rA5.status === 2 && leftA5.length === 0 && stA5?.runId === "run-e2e-16" && stA5.phase === "queued" && stA5.rev === 1
+  && rA5.stderr.includes("run run-e2e-15 is not the current run of Staff: run run-e2e-16 is open (phase queued, rev 1, by orchestrator, ") && !/^next /m.test(rA5.stderr));
+if (rA5.status !== 2 || leftA5.length) console.log(`${rA5.stderr}\n  left: ${leftA5.join(", ")}`);
+writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-16", phase: "failed", by: "orchestrator", detail: "test over" });
+// …and its `measured` write refused by the run cache (read-only) too: the refused path finds the newer open run and
+// writes no files (exit 2)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused --run write beside a newer run — ${NO_READONLY_DIRS})`);
+else {
+  const stageA6 = path.join(tmp, "stageA6", "Staff");
+  const cacheA6 = path.dirname(liveFile);
+  onPage = () => { writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-18", phase: "queued", by: "orchestrator" }); fs.chmodSync(cacheA6, 0o555); };
+  const rA6 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA6, "--project", ROOT, "--run", "run-e2e-17"]);
+  onPage = null;
+  fs.chmodSync(cacheA6, 0o755);
+  const stA6 = readStatus(liveFile);
+  const leftA6 = fs.existsSync(path.dirname(stageA6)) ? fs.readdirSync(path.dirname(stageA6)) : [];
+  check("--run, another run opened while measuring, its `measured` write refused (read-only run cache) → exit 2, no files in --out's directory, the newer run's queued status kept, no next step",
+    rA6.status === 2 && leftA6.length === 0 && stA6?.runId === "run-e2e-18" && stA6.phase === "queued"
+    && rA6.stderr.includes("run run-e2e-17 is not the current run of Staff: run run-e2e-18 is open (phase queued, ") && !/^next /m.test(rA6.stderr));
+  if (rA6.status !== 2 || leftA6.length) console.log(`${rA6.stderr}\n  left: ${leftA6.join(", ")}`);
+  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-18", phase: "failed", by: "orchestrator", detail: "test over" });
+}
 
 // no --run, and a verifier's run is started (--new-run) while the page is measured: the probe's own run never writes over
 // it — exit 2, no files, the new run's status kept
