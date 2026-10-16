@@ -498,6 +498,9 @@ function undoMove(m: FileMove): string | null {
   try {
     if (m.tmp !== undefined && listed(m.tmp)) {
       if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist — keep one by hand`;
+      // linked to the new name, the temp name not yet unlinked: the new name goes first (on a case-insensitive disk it
+      // is the old name in another case, and a link to the old name would find it taken)
+      if (listed(m.to) && sameFile(m.tmp, m.to)) fs.unlinkSync(m.to);
       moveNoReplace(m.tmp, m.from);
       return null;
     }

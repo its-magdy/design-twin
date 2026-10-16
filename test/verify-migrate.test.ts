@@ -353,6 +353,27 @@ for (const [legacy, to] of [["Crates@320", "Crates__80_1.320"], ["Crates.dark", 
     JSON.stringify(r.done) === JSON.stringify(["Plots__1_1.Dark"]) && ls.includes("Plots__1_1.dark.expected.json") && ls.includes("Plots__1_1.dark-diff.png") && !ls.some((f) => f.includes(".Dark")) && !ls.some((f) => /\.tmp-/.test(f)));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
+{
+  // a case-only rename killed between its link (temp name -> new name) and its unlink (temp name): the temp name and the
+  // new name are one file, the old name is gone (on a case-insensitive disk the new name IS the old name in another case)
+  const p = project("Plots__1_1.Dark", { record: false });
+  const verify = path.join(p.root, "design/verify");
+  fs.writeFileSync(path.join(verify, "Plots__1_1.Dark.expected.json"), JSON.stringify({ frame: { nodeId: "1:1", name: "Plots" } }));
+  fs.writeFileSync(path.join(verify, "Plots__1_1.Dark.report.json"), JSON.stringify({ nodeId: "1:1" }));
+  const files = p.ls();
+  const moves = files.map((f) => ({ from: f, to: f.replace(".Dark", ".dark"), tmp: f + ".tmp-1-0a0b0c0d" }));
+  const first = must(moves[0], "a move");
+  fs.renameSync(path.join(verify, first.from), path.join(verify, first.tmp));
+  fs.linkSync(path.join(verify, first.tmp), path.join(verify, first.to));
+  p.put("design/verify/.migrate-Plots__1_1.Dark.json", { schema: "designtwin/verify-migrate-journal@1", set: "Plots__1_1.Dark", to: "Plots__1_1.dark", at: NOW, live: false, moves, plans: [] });
+  const { r, err } = run(p, true);
+  const ls = p.ls();
+  check(`killed between the link and the unlink of a case-only move: --apply rolls it back, then migrates (got rolledBack ${JSON.stringify(r.rolledBack)}, done ${JSON.stringify(r.done)}; ${err.join(" | ")})`,
+    JSON.stringify(r.rolledBack) === JSON.stringify(["Plots__1_1.Dark"]) && JSON.stringify(r.done) === JSON.stringify(["Plots__1_1.Dark"]));
+  check(`…every file under its new name once, no temp name, no journal (got ${JSON.stringify(ls)})`,
+    JSON.stringify(ls) === JSON.stringify(files.map((f) => f.replace(".Dark", ".dark")).sort()) && !fs.existsSync(path.join(verify, ".migrate-Plots__1_1.Dark.json")));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
 
 console.log("\na legacy set beside its node's canonical set is retired:");
 {

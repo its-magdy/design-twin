@@ -6434,6 +6434,7 @@ function undoMove(m) {
   try {
     if (m.tmp !== void 0 && listed(m.tmp)) {
       if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
+      if (listed(m.to) && sameFile(m.tmp, m.to)) fs16.unlinkSync(m.to);
       moveNoReplace(m.tmp, m.from);
       return null;
     }
