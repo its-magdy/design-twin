@@ -268,6 +268,31 @@ console.log("\nvariants: legacy `<S>@320` / `<S>.dark` → `<stem>.<slug>`; a ca
     ["Crates__80_1", "Crates__80_1.320", "Crates__80_1.dark"].every((s) => SET_FILES.every((x) => ls.includes(`${s}.${x}`)) && ls.includes(`${s}-diff.png`)) && !ls.some((f) => f.startsWith("Crates.") || f.startsWith("Crates@")));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
+for (const [legacy, to] of [["Crates@320", "Crates__80_1.320"], ["Crates.dark", "Crates__80_1.dark"]] as const) {
+  const p = project("Crates__80_1", { record: false });
+  writeSet(p.put, legacy);
+  const { r, err } = run(p, true);
+  const ls = p.ls();
+  check(`beside the canonical base, a lone legacy ${legacy} (the layer name + a suffix) is its variant ${to}, never retired (got ${JSON.stringify(r.steps.map((s) => s.kind === "rename" ? `${s.set} -> ${s.to}` : `${s.kind} ${s.set}`))}; ${err.join(" | ")})`,
+    JSON.stringify(r.done) === JSON.stringify([legacy]) && ls.includes(`${to}.expected.json`) && ls.includes(`${to}.report.json`)
+    && !ls.some((f) => f.endsWith(".retired")) && ls.includes("Crates__80_1.expected.json"));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project("Crates.dark", { record: false });
+  const { r } = run(p, true);
+  const ls = p.ls();
+  check(`a lone Crates.dark with no base keeps its variant: Crates__80_1.dark (got ${JSON.stringify(ls)})`,
+    JSON.stringify(r.done) === JSON.stringify(["Crates.dark"]) && ls.includes("Crates__80_1.dark.expected.json") && !ls.includes("Crates__80_1.expected.json"));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project("Boxes@320", { record: false });
+  const { r } = run(p, false);
+  const s = r.steps[0];
+  check(`a name whose prefix is not the layer name is a nickname: Boxes@320 becomes the base (got ${s?.kind === "rename" ? s.to : JSON.stringify(s)})`, s?.kind === "rename" && s.to === "Crates__80_1");
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
 {
   const p = project("Plots__1_1.Dark", { record: false });
   fs.writeFileSync(path.join(p.root, "design/verify/Plots__1_1.Dark.expected.json"), JSON.stringify({ frame: { nodeId: "1:1", name: "Plots" } }));

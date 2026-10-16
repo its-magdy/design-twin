@@ -6174,17 +6174,18 @@ function planMigration(d) {
       for (const name of group) steps.push({ kind: "skip", set: name, why: [`node ${id} has ${stems.length} grammar-named verify sets (${stems.join(", ")}) \u2014 keep one, then --migrate`] });
       continue;
     }
-    let target = stems[0];
-    if (target === void 0) {
-      const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
-      const first = group[0] ?? "";
-      const f = setFacts(d.verifyDir, first);
-      const name = row && row.status === "resolved" ? row.row.name : f.expectedName ?? f.reportScreen ?? first;
-      target = screenStem(name, id);
-    }
-    const T = target;
+    const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
+    const indexed = row && row.status === "resolved" ? row.row.name : null;
+    const layerOf = (name) => {
+      if (indexed !== null) return indexed;
+      const f = setFacts(d.verifyDir, name);
+      return f.expectedName ?? f.reportScreen;
+    };
+    const first = group[0] ?? "";
+    const T = stems[0] ?? screenStem(layerOf(first) ?? first, id);
     const baseExists = live.includes(T);
     const parentOf = /* @__PURE__ */ new Map();
+    const cutOf = /* @__PURE__ */ new Map();
     for (const name of group) {
       const cands = /* @__PURE__ */ new Set([T, ...stems, ...group.filter((g) => g !== name)]);
       for (let i = 1; i < name.length; i++) {
@@ -6193,12 +6194,25 @@ function planMigration(d) {
       }
       let best;
       for (const c of cands) if (name.length > c.length + 1 && name.startsWith(c) && ".@-".includes(name[c.length] ?? "") && (best === void 0 || c.length > best.length)) best = c;
-      if (best !== void 0) parentOf.set(name, best);
+      if (best !== void 0) {
+        parentOf.set(name, best);
+        cutOf.set(name, best.length + 1);
+        continue;
+      }
+      const layer = layerOf(name);
+      if (layer === null) continue;
+      for (let i = 1; i < name.length - 1; i++) {
+        if (".@".includes(name[i] ?? "") && safe(name.slice(0, i)) === safe(layer)) {
+          parentOf.set(name, T);
+          cutOf.set(name, i + 1);
+          break;
+        }
+      }
     }
     const slugOf = (name) => {
       const p = parentOf.get(name);
       if (p === void 0) return "";
-      const own = variantSlug(name.slice(p.length + 1));
+      const own = variantSlug(name.slice(cutOf.get(name) ?? p.length + 1));
       const up = group.includes(p) ? slugOf(p) : "";
       return up && own ? `${up}-${own}` : up || own;
     };

@@ -7,8 +7,11 @@
 //     resolved exactly (screenKey: node id, exact name/title/plan header, a carried id); none or several: skipped;
 //   - its new name: the node's existing grammar-named stem (several: skipped), else screenStem(the indexed layer name —
 //     else the expectation's frame name, the report's screen, the set's own name —, id). A set whose name extends another
-//     set of the same node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant: `<stem>.<slug>`. Two sets of one node that
-//     extend nothing are skipped (which one is the screen is a person's call);
+//     set of the same node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant: `<stem>.<slug>`. So is a set named for the
+//     layer itself and a suffix after "." or "@" (`<X>.dark`, `<X>@320`, safe(X) the layer name's safe(): the index's,
+//     else the expectation's frame name, else the report's screen) — with or without a base set beside it, it is never
+//     retired and never becomes the base; "-" is not read this way (layer names hold dashes). Any other name is the
+//     base (a nickname). Two sets of one node that extend nothing are skipped (which one is the screen is a person's call);
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
 //     every reader skips) — unless a plan's verification.recorded names the legacy report (re-record first: skipped);
 //   - else every file of the set (`<S>.*`, `<S>-*`; a file of a longer set name belongs to that set) is renamed, a
@@ -37,7 +40,7 @@ import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { acquireFileLock } from "../bridge/src/file-lock.ts";
 import type { HeldLock } from "../bridge/src/file-lock.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
-import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem, safe, screenStem } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
@@ -280,19 +283,18 @@ export function planMigration(d: Dirs): MigrateStep[] {
       for (const name of group) steps.push({ kind: "skip", set: name, why: [`node ${id} has ${stems.length} grammar-named verify sets (${stems.join(", ")}) — keep one, then --migrate`] });
       continue;
     }
-    // the stem: the node's existing one, else from its layer name (the index, else what the set's files say, else the set's name)
-    let target = stems[0];
-    if (target === undefined) {
-      const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
-      const first = group[0] ?? "";
-      const f = setFacts(d.verifyDir, first);
-      const name = row && row.status === "resolved" ? row.row.name : f.expectedName ?? f.reportScreen ?? first;
-      target = screenStem(name, id);
-    }
-    const T = target;
+    // the node's layer name: the index's, else (per set) what the set's files say
+    const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
+    const indexed = row && row.status === "resolved" ? row.row.name : null;
+    const layerOf = (name: string): string | null => { if (indexed !== null) return indexed; const f = setFacts(d.verifyDir, name); return f.expectedName ?? f.reportScreen; };
+    // the stem: the node's existing one, else from its layer name (else the set's own name)
+    const first = group[0] ?? "";
+    const T = stems[0] ?? screenStem(layerOf(first) ?? first, id);
     const baseExists = live.includes(T);
-    // a set that extends another name of the node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant of it
+    // a set that extends another name of the node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant of it; `cut` is where its
+    // own part starts (after the "." / "@" / "-")
     const parentOf = new Map<string, string>();
+    const cutOf = new Map<string, number>();
     for (const name of group) {
       const cands = new Set<string>([T, ...stems, ...group.filter((g) => g !== name)]);
       for (let i = 1; i < name.length; i++) {
@@ -301,12 +303,19 @@ export function planMigration(d: Dirs): MigrateStep[] {
       }
       let best: string | undefined;
       for (const c of cands) if (name.length > c.length + 1 && name.startsWith(c) && ".@-".includes(name[c.length] ?? "") && (best === undefined || c.length > best.length)) best = c;
-      if (best !== undefined) parentOf.set(name, best);
+      if (best !== undefined) { parentOf.set(name, best); cutOf.set(name, best.length + 1); continue; }
+      // `<Layer>.<x>` / `<Layer>@<x>` — the layer name (as safe() spells it) and a suffix — is a variant of the screen
+      // itself, never its base: `Crates.dark`, `Crates@320`. "-" is not read this way: layer names hold dashes.
+      const layer = layerOf(name);
+      if (layer === null) continue;
+      for (let i = 1; i < name.length - 1; i++) {
+        if (".@".includes(name[i] ?? "") && safe(name.slice(0, i)) === safe(layer)) { parentOf.set(name, T); cutOf.set(name, i + 1); break; }
+      }
     }
     const slugOf = (name: string): string => {
       const p = parentOf.get(name);
       if (p === undefined) return "";
-      const own = variantSlug(name.slice(p.length + 1));
+      const own = variantSlug(name.slice(cutOf.get(name) ?? p.length + 1));
       const up = group.includes(p) ? slugOf(p) : "";
       return up && own ? `${up}-${own}` : up || own;
     };
