@@ -523,6 +523,12 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     const look = await VP.screenTagsNow(hung, root, 50);
     const lookMs = Date.now() - t0;
     t("[ready] screenTagsNow on a page that never answers → null within its bound (50 ms), never a hang", () => look === null && lookMs < 1_000);
+    const t2 = Date.now();
+    const tok = await VP.docTokenWithin(hung, 50);
+    const tokMs = Date.now() - t2;
+    const answered = await VP.docTokenWithin({ evaluate: async (): Promise<unknown> => "doc7", isClosed: () => false }, 50);
+    t("[ready] docTokenWithin (the document token read after the frame's wait ran out) on a page that never answers → null (no token) within its bound (50 ms); a page that answers → its token", () =>
+      tok === null && tokMs < 1_000 && answered === "doc7");
     const t1 = Date.now();
     const waited = await VP.waitForScreenTags(hung, root, 200).then(() => "met", (e: unknown) => (e instanceof Error ? e.name : "?"));
     const waitMs = Date.now() - t1;
@@ -557,14 +563,15 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   // finds a visible match there; `foreign` — all the own tags show, inside another screen's tagged root of the frame's
   // size; `untagged-dialog` — a screen + dialog expectation whose screen shows all its root's tags and none of the
   // dialog's (closed); `selector-error` — the frame's wait throws a selector error, not a timeout, on a page that shows
-  // every own tag. The measurement itself finds nothing (no candidates), so a page that gets past the wait is written
+  // every own tag; `hung` — the frame's tag never shows, and from the end of that wait on the page answers no
+  // page.evaluate (a hung main thread). The measurement itself finds nothing (no candidates), so a page that gets past the wait is written
   // with every node not measured.
   const READY_PW = `const S = process.env.DT_STUB_SCENARIO || "";
 const FRAME = '[data-dt-node="1:1"]', VIS = " >> visible=true";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 class TimeoutError extends Error { constructor(m) { super(m); this.name = "TimeoutError"; } }
 function newPage() {
-  let doc = 1;
+  let doc = 1, hung = false;
   const frame = {};
   const visible = (sel) => {
     const vis = sel.endsWith(VIS), base = vis ? sel.slice(0, -VIS.length) : sel;
@@ -585,6 +592,7 @@ function newPage() {
     url: () => (doc === 1 ? "http://127.0.0.1:1/screen" : "http://127.0.0.1:1/login"), goto: async () => null,
     screenshot: async () => Buffer.from("not a png"),
     evaluate: async (fn, arg) => {
+      if (hung) return new Promise(() => {});
       if (fn === "window.__dtProbeDoc || ''") return "doc" + doc;
       if (typeof fn === "function" && fn.name === "screenTags") return screenTags(arg);
       if (fn === "document.readyState") return "complete";
@@ -600,6 +608,7 @@ function newPage() {
         if (S === "redirect" && doc === 1) setTimeout(() => { doc = 2; }, 20);
         if (S === "selector-error") throw new Error("locator.waitFor: Unexpected token \\"=\\" while parsing css selector");
         for (const end = Date.now() + o.timeout; Date.now() < end; await sleep(10)) if (visible(sel)) return;
+        if (S === "hung") hung = true;
         throw new TimeoutError("locator.waitFor: Timeout " + o.timeout + "ms exceeded.");
       } }),
     }),
@@ -653,6 +662,12 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   t("[ready] the frame's wait failing with a selector error (not a timeout) never takes the untagged-root way out, even on a page that shows every own tag: exit 4, no count, nothing written", () =>
     selectorError.status === 4 && selectorError.stderr.includes("verify-probe: --ready '[data-dt-node=\"1:1\"]' never became visible: locator.waitFor: Unexpected token")
     && !fs.existsSync(measuredFile));
+  const hungStart = Date.now();
+  const hungRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"],
+    { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "hung" } });
+  const hungMs = Date.now() - hungStart;
+  t(`[ready] a page that stops answering when the frame's wait runs out → exit 4 'did not answer within 2s when its tags were counted' within seconds (the document token and the look are both bounded), never held to --max-time (took ${hungMs} ms)`, () =>
+    hungRun.status === 4 && hungRun.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)") && hungMs < 15_000 && !fs.existsSync(measuredFile));
   // a screen + dialog export: the dialog root (closed at load) has more nodes than the screen root
   const panelExp = path.join(readyProj, "design", "verify", "Panel.expected.json");
   fs.writeFileSync(panelExp, JSON.stringify(buildExpectation([{ label: "Panel", doc: screenExport([

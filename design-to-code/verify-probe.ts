@@ -336,12 +336,20 @@ interface NavLog {
 }
 
 /** The current document's token (INIT_SCRIPT) — null while a navigation has no document to evaluate in. */
-async function docTokenOrNull(page: Page): Promise<string | null> {
+async function docTokenOrNull(page: Pick<Page, "evaluate" | "isClosed">): Promise<string | null> {
   try { const v: unknown = await page.evaluate("window.__dtProbeDoc || ''"); return String(v); } catch (e) {
     if (errorKind(e, page) === "gone") throw gone(e);
     if (errorKind(e) === "navigated") return null;
     throw e;
   }
+}
+
+/** The current document's token as docTokenOrNull reads it, or null when the page does not answer within `capMs` (a
+ *  hung main thread never answers a page.evaluate) — the same as a navigation with no document to evaluate in. */
+export async function docTokenWithin(page: Pick<Page, "evaluate" | "isClosed">, capMs: number): Promise<string | null> {
+  const read = docTokenOrNull(page);
+  read.catch(() => undefined); // a page gone after the race ended is the next call's to find
+  return Promise.race([read, sleep(Math.max(1, capMs), null, { ref: false })]);
 }
 
 /** What settle() found: a note for the measured file (or null), and the token of the document it saw quiet (the
@@ -501,7 +509,7 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
           if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
           // remembered for THIS document (the token it has now): no later settle waits for its load again
-          const now = await docTokenOrNull(page);
+          const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
           if (now !== null && now !== "" && (token === null || now === token)) {
             token = now;
             log.loadTimedOut.set(now, loadNote);
@@ -525,7 +533,8 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
-      const now = await docTokenOrNull(page);
+      // bounded like the look below: a page that does not answer has no token to tell documents apart by
+      const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
       if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
       // the document the wait ran on is still the current one (an empty token tells no documents apart)
       const sameDocument = token !== null && token !== "" && now === token;

@@ -6532,6 +6532,11 @@ async function docTokenOrNull(page) {
     throw e;
   }
 }
+async function docTokenWithin(page, capMs) {
+  const read2 = docTokenOrNull(page);
+  read2.catch(() => void 0);
+  return Promise.race([read2, sleep5(Math.max(1, capMs), null, { ref: false })]);
+}
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
 var screenTagsMet = (s, total) => takesForScreen(s.shown, total) && s.foreign === null;
@@ -6631,7 +6636,7 @@ async function settle(page, log, ready, timeout, root) {
           if (errorKind(e, page) === "gone") throw gone(e);
           if (errorKind(e) === "navigated") throw e;
           loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
-          const now = await docTokenOrNull(page);
+          const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
           if (now !== null && now !== "" && (token === null || now === token)) {
             token = now;
             log.loadTimedOut.set(now, loadNote);
@@ -6650,7 +6655,7 @@ async function settle(page, log, ready, timeout, root) {
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(e, page) === "gone") throw gone(e);
-      const now = await docTokenOrNull(page);
+      const now = await docTokenWithin(page, SCREEN_LOOK_CAP_MS);
       if (now !== null && token !== null && now !== token) {
         await newDocument();
         continue;
@@ -7950,6 +7955,7 @@ export {
   buildFrom,
   closeCapped,
   defaultReadyMissed,
+  docTokenWithin,
   driveOutcome,
   errorKind,
   foreignRootHint,
