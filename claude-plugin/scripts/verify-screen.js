@@ -97,14 +97,14 @@ function mapModules(plan) {
   return out;
 }
 function planCodeFiles(plan, cwd) {
-  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
-  const seen = new Set(listed.map((f) => path.posix.normalize(f.trim().split("\\").join("/"))));
+  const listed2 = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed2.map((f) => path.posix.normalize(f.trim().split("\\").join("/"))));
   const extra = /* @__PURE__ */ new Set();
   for (const m of mapModules(plan)) {
     const rel = mappedModulePath(m, cwd);
     if (rel !== null && !seen.has(rel)) extra.add(rel);
   }
-  return [...listed, ...[...extra].sort()];
+  return [...listed2, ...[...extra].sort()];
 }
 function planCodeSkipped(plan, cwd) {
   const out = /* @__PURE__ */ new Set();
@@ -6333,6 +6333,105 @@ function lockStatuses(bases) {
   }
   return { locks };
 }
+var NO_HARD_LINKS = /* @__PURE__ */ new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EMLINK"]);
+function moveNoReplace(from, to) {
+  try {
+    fs15.linkSync(from, to);
+  } catch (e) {
+    const code = errCode(e);
+    const noLinks = code !== void 0 && NO_HARD_LINKS.has(code);
+    if (code === "EEXIST" || noLinks && exists2(to)) throw new Error(`${path14.basename(to)} appeared during the move \u2014 refusing to replace it`);
+    if (!noLinks) throw e;
+    fs15.renameSync(from, to);
+    return;
+  }
+  try {
+    fs15.unlinkSync(from);
+  } catch (e) {
+    try {
+      fs15.unlinkSync(to);
+    } catch {
+    }
+    throw e;
+  }
+}
+function doMove(m) {
+  if (m.tmp === void 0) {
+    moveNoReplace(m.from, m.to);
+    return;
+  }
+  fs15.renameSync(m.from, m.tmp);
+  try {
+    moveNoReplace(m.tmp, m.to);
+  } catch (e) {
+    fs15.renameSync(m.tmp, m.from);
+    throw e;
+  }
+}
+function listed(p) {
+  try {
+    return fs15.readdirSync(path14.dirname(p)).includes(path14.basename(p));
+  } catch {
+    return false;
+  }
+}
+function undoMove(m) {
+  const name = path14.basename;
+  try {
+    if (m.tmp !== void 0 && listed(m.tmp)) {
+      if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
+      moveNoReplace(m.tmp, m.from);
+      return null;
+    }
+    const atFrom = listed(m.from), atTo = listed(m.to);
+    if (atFrom && atTo) {
+      if (!sameFile(m.from, m.to)) return `${name(m.from)} and ${name(m.to)} both exist \u2014 keep one by hand`;
+      fs15.unlinkSync(m.to);
+      return null;
+    }
+    if (atFrom) return null;
+    if (!atTo) return `${name(m.from)} is gone and ${name(m.to)} is not there \u2014 restore it by hand`;
+    if (m.from.toLowerCase() !== m.to.toLowerCase()) {
+      moveNoReplace(m.to, m.from);
+      return null;
+    }
+    const tmp = m.to + tmpSuffix();
+    fs15.renameSync(m.to, tmp);
+    try {
+      moveNoReplace(tmp, m.from);
+    } catch (e) {
+      fs15.renameSync(tmp, m.to);
+      throw e;
+    }
+    return null;
+  } catch (e) {
+    return `${name(m.to)} could not be renamed back to ${name(m.from)}: ${errMsg(e)}`;
+  }
+}
+var readText = (file) => {
+  try {
+    return fs15.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+function restorePlan(w, cwd) {
+  const rel = slash2(path14.relative(cwd, w.file));
+  try {
+    const lock = acquireFileLock(planLockFile(w.file));
+    try {
+      const now = readText(w.file);
+      if (now === w.before) return null;
+      if (now !== w.after) return `${rel} was written again after the migration rewrote it \u2014 left as it is (a path in it may name a renamed file: fix it by hand)`;
+      writeFileAtomic(w.file, w.before);
+      return null;
+    } finally {
+      lock.release();
+    }
+  } catch (e) {
+    return `${rel} could not be restored: ${errMsg(e)}`;
+  }
+}
 function applyRetire(s, d) {
   const base = path14.join(d.verifyDir, s.set);
   const held = lockStatuses([base]);
@@ -6350,7 +6449,7 @@ function applyRetire(s, d) {
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
     if (exists2(s.file.to)) return { why: [`${path14.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
-    fs15.renameSync(s.file.from, s.file.to);
+    moveNoReplace(s.file.from, s.file.to);
     return { why: [], notes: [] };
   } catch (e) {
     return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
@@ -6364,30 +6463,8 @@ function applyRename(s, d) {
   if ("why" in held) return { why: [held.why], notes: [] };
   const notes = [];
   const moved = [];
-  const restore = /* @__PURE__ */ new Map();
-  const rollback = () => {
-    const left = [];
-    for (const [file, raw] of restore) {
-      try {
-        const lock = acquireFileLock(planLockFile(file));
-        try {
-          writeFileAtomic(file, raw);
-        } finally {
-          lock.release();
-        }
-      } catch (e) {
-        left.push(`${slash2(path14.relative(d.cwd, file))} could not be restored: ${errMsg(e)}`);
-      }
-    }
-    for (const m of [...moved].reverse()) {
-      try {
-        fs15.renameSync(m.to, m.from);
-      } catch (e) {
-        left.push(`${path14.basename(m.to)} could not be renamed back to ${path14.basename(m.from)}: ${errMsg(e)}`);
-      }
-    }
-    return left;
-  };
+  const writes = [];
+  const rollback = () => [...writes.map((w) => restorePlan(w, d.cwd)), ...[...moved].reverse().map(undoMove)].filter((x) => x !== null);
   try {
     const open = openRunOf(oldBase) ?? openRunOf(newBase);
     if (open) return { why: [open], notes };
@@ -6408,33 +6485,19 @@ function applyRename(s, d) {
       const r = recordedReport(p.plan);
       return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null;
     }).map((p) => p.file));
-    for (const m of s.files) {
-      if (m.from === m.to) continue;
-      if (sameFile(m.from, m.to) || m.from.toLowerCase() === m.to.toLowerCase()) {
-        const tmp = m.from + tmpSuffix();
-        fs15.renameSync(m.from, tmp);
-        try {
-          fs15.renameSync(tmp, m.to);
-        } catch (e) {
-          fs15.renameSync(tmp, m.from);
-          throw e;
-        }
-      } else {
-        if (exists2(m.to)) throw new Error(`${path14.basename(m.to)} appeared during the move`);
-        fs15.renameSync(m.from, m.to);
-      }
-      moved.push(m);
-    }
+    const moves = s.files.filter((m) => m.from !== m.to).map((m) => m.from.toLowerCase() === m.to.toLowerCase() || sameFile(m.from, m.to) ? { ...m, tmp: m.from + tmpSuffix() } : m);
     const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
-    if (exists2(liveOld) && !exists2(liveNew)) {
-      fs15.renameSync(liveOld, liveNew);
-      moved.push({ from: liveOld, to: liveNew });
+    if (exists2(liveOld) && !exists2(liveNew)) moves.push({ from: liveOld, to: liveNew });
+    for (const m of moves) {
+      moved.push(m);
+      doMove(m);
     }
     for (const p of touched) {
-      restore.set(p.file, fs15.readFileSync(p.file, "utf8"));
+      const w = {};
       let fields = [];
       updatePlan(p.file, (raw) => {
         if (raw === null) throw new Error(`${p.rel} disappeared`);
+        w.before = raw;
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
@@ -6445,7 +6508,10 @@ function applyRename(s, d) {
         }, true);
         if (restamp && hook) hook.planHash = planHash(plan);
         return plan;
-      });
+      }, { afterWrite: () => {
+        w.after = fs15.readFileSync(p.file, "utf8");
+      } });
+      if (w.before !== void 0 && w.after !== void 0) writes.push({ file: p.file, before: w.before, after: w.after });
       if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) \u2014 rewritten to the renamed report`);
     }
     const problems = [];
@@ -6462,7 +6528,7 @@ function applyRename(s, d) {
     }
     if (problems.length) {
       const left = rollback();
-      return { why: [`the plans failed the check after the move \u2014 every rename undone and every plan restored:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
+      return { why: [`the plans failed the check after the move \u2014 ${left.length ? "undone in part (see below)" : "every rename undone and every plan restored"}:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
     }
     return { why: [], notes };
   } catch (e) {

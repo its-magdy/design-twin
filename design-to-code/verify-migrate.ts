@@ -15,7 +15,9 @@
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
 //     every reader skips) — unless a plan's verification.recorded names the legacy report (re-record first: skipped);
 //   - else every file of the set (`<S>.*`, `<S>-*`; a file of a longer set name belongs to that set) is renamed, a
-//     case-only rename through a temp name. Refused when a new name is taken. Bytes a sha256 binds (the expectation,
+//     case-only rename through a temp name. Refused when a new name is taken; each move is a hard link then an unlink
+//     (link refuses an existing name), so a name taken meanwhile is never replaced (a disk without hard links: a rename
+//     after an existence check, under the status locks). Bytes a sha256 binds (the expectation,
 //     measured file, report, evidence) are never rewritten — only file names change;
 //   - a plan that names the set's files is rewritten under its lock: verification.recorded.report, .a11y.report and
 //     .artifacts together (recordFacts makes a11y.report the report path, so changing one alone reads as a hand edit),
@@ -31,7 +33,8 @@
 //     from the last checks to the end, so no status write lands in between; the live status moves with the set;
 //   - after the move every plan written is checked again (recordedEdits == [] and its record names its report), and
 //     every plan that found the set's report must find the renamed one; on a failure every rename is undone and every
-//     plan's bytes restored.
+//     plan restored — a plan only while it still holds the bytes the migration wrote (read under its lock): one written
+//     again since is left as it is, and said.
 // Not migrated: plans (never renamed), audit files, design/.sync snapshots, design/changes.
 // Exit: 0 nothing skipped, 1 a set skipped or refused (each says why), 2 usage.
 import fs from "node:fs";
@@ -39,7 +42,7 @@ import path from "node:path";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { acquireFileLock } from "../bridge/src/file-lock.ts";
 import type { HeldLock } from "../bridge/src/file-lock.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { errCode, errMsg } from "../bridge/src/errmsg.ts";
 import { nodeIdFromStem, safe, screenStem } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
@@ -54,8 +57,9 @@ import { getOrInit } from "./map-util.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
 
-/** One file renamed: absolute paths. */
-export interface FileMove { from: string; to: string }
+/** One file renamed: absolute paths, and the temp name a case-only rename goes through (`from` and `to` one name on a
+ *  case-insensitive disk). */
+export interface FileMove { from: string; to: string; tmp?: string }
 /** A plan that names a set's files: its path (absolute, and as shown) and the file names it names, old → new. */
 export interface PlanEdit { file: string; rel: string; names: Map<string, string> }
 export type MigrateStep =
@@ -399,6 +403,82 @@ function lockStatuses(bases: string[]): { locks: HeldLock[] } | { why: string } 
   return { locks };
 }
 
+// ---------------------------------------------------------------- moving files, never over another
+
+/** Link errors that mean the disk has no hard links (FAT/exFAT, some network shares). */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EMLINK"]);
+/** `from` renamed to `to`, never replacing a file there: a hard link (which refuses an existing name), then the old name
+ *  unlinked. A disk without hard links gets a rename after an existence check instead — the status locks are held, so
+ *  no verify tool writes either name in between. */
+function moveNoReplace(from: string, to: string): void {
+  try { fs.linkSync(from, to); } catch (e) {
+    const code = errCode(e);
+    const noLinks = code !== undefined && NO_HARD_LINKS.has(code);
+    if (code === "EEXIST" || (noLinks && exists(to))) throw new Error(`${path.basename(to)} appeared during the move — refusing to replace it`);
+    if (!noLinks) throw e;
+    fs.renameSync(from, to);
+    return;
+  }
+  try { fs.unlinkSync(from); } catch (e) {
+    try { fs.unlinkSync(to); } catch { /* both names stay: undoMove reads one file under two names as "linked, not unlinked" */ }
+    throw e;
+  }
+}
+/** A move: a case-only one (`from` and `to` one name on a case-insensitive disk) goes through its temp name. */
+function doMove(m: FileMove): void {
+  if (m.tmp === undefined) { moveNoReplace(m.from, m.to); return; }
+  fs.renameSync(m.from, m.tmp);
+  try { moveNoReplace(m.tmp, m.to); } catch (e) { fs.renameSync(m.tmp, m.from); throw e; }
+}
+/** Is `p`'s own name, case and all, in its directory? (existsSync answers for any spelling on a case-insensitive disk.) */
+function listed(p: string): boolean {
+  try { return fs.readdirSync(path.dirname(p)).includes(path.basename(p)); } catch { return false; }
+}
+/** One move undone from whatever state it reached — not begun, inside its temp name, linked but not yet unlinked, done:
+ *  null, or why it could not be. */
+function undoMove(m: FileMove): string | null {
+  const name = path.basename;
+  try {
+    if (m.tmp !== undefined && listed(m.tmp)) {
+      if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist — keep one by hand`;
+      moveNoReplace(m.tmp, m.from);
+      return null;
+    }
+    const atFrom = listed(m.from), atTo = listed(m.to);
+    if (atFrom && atTo) {
+      if (!sameFile(m.from, m.to)) return `${name(m.from)} and ${name(m.to)} both exist — keep one by hand`;
+      fs.unlinkSync(m.to); // linked, not yet unlinked
+      return null;
+    }
+    if (atFrom) return null; // never moved, or already back
+    if (!atTo) return `${name(m.from)} is gone and ${name(m.to)} is not there — restore it by hand`;
+    if (m.from.toLowerCase() !== m.to.toLowerCase()) { moveNoReplace(m.to, m.from); return null; }
+    const tmp = m.to + tmpSuffix();
+    fs.renameSync(m.to, tmp);
+    try { moveNoReplace(tmp, m.from); } catch (e) { fs.renameSync(tmp, m.to); throw e; }
+    return null;
+  } catch (e) { return `${name(m.to)} could not be renamed back to ${name(m.from)}: ${errMsg(e)}`; }
+}
+
+/** A plan this migration rewrote: the bytes it replaced and the bytes it wrote, both read under the plan's lock. */
+interface PlanWrite { file: string; before: string; after: string }
+const readText = (file: string): string | null => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } };
+/** A plan put back as it was — only while it still holds the bytes this migration wrote: a newer write is kept, and
+ *  said. Null, or why not. */
+function restorePlan(w: PlanWrite, cwd: string): string | null {
+  const rel = slash(path.relative(cwd, w.file));
+  try {
+    const lock = acquireFileLock(planLockFile(w.file));
+    try {
+      const now = readText(w.file);
+      if (now === w.before) return null;
+      if (now !== w.after) return `${rel} was written again after the migration rewrote it — left as it is (a path in it may name a renamed file: fix it by hand)`;
+      writeFileAtomic(w.file, w.before);
+      return null;
+    } finally { lock.release(); }
+  } catch (e) { return `${rel} could not be restored: ${errMsg(e)}`; }
+}
+
 function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: string; verifyDir: string; planDir: string }): { why: string[]; notes: string[] } {
   const base = path.join(d.verifyDir, s.set);
   const held = lockStatuses([base]);
@@ -413,7 +493,7 @@ function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: { cwd: stri
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
     if (exists(s.file.to)) return { why: [`${path.basename(s.file.to)} already exists — refusing to replace it`], notes: [] };
-    fs.renameSync(s.file.from, s.file.to);
+    moveNoReplace(s.file.from, s.file.to);
     return { why: [], notes: [] };
   } catch (e) {
     return { why: [`retiring failed: ${errMsg(e)}`], notes: [] };
@@ -425,21 +505,9 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
   const held = lockStatuses([oldBase, newBase]);
   if ("why" in held) return { why: [held.why], notes: [] };
   const notes: string[] = [];
-  const moved: FileMove[] = [];
-  const restore = new Map<string, string>(); // plan file -> its bytes before
-  const rollback = (): string[] => {
-    const left: string[] = [];
-    for (const [file, raw] of restore) {
-      try {
-        const lock = acquireFileLock(planLockFile(file));
-        try { writeFileAtomic(file, raw); } finally { lock.release(); }
-      } catch (e) { left.push(`${slash(path.relative(d.cwd, file))} could not be restored: ${errMsg(e)}`); }
-    }
-    for (const m of [...moved].reverse()) {
-      try { fs.renameSync(m.to, m.from); } catch (e) { left.push(`${path.basename(m.to)} could not be renamed back to ${path.basename(m.from)}: ${errMsg(e)}`); }
-    }
-    return left;
-  };
+  const moved: FileMove[] = []; // every move begun, in order
+  const writes: PlanWrite[] = []; // every plan rewritten
+  const rollback = (): string[] => [...writes.map((w) => restorePlan(w, d.cwd)), ...[...moved].reverse().map(undoMove)].filter((x): x is string => x !== null);
   try {
     // the checks again, now that no status write can land: an open run, a name taken since, the plans as they are now
     const open = openRunOf(oldBase) ?? openRunOf(newBase);
@@ -457,36 +525,29 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
     const newReportRel = slash(path.relative(d.cwd, newBase + ".report.json"));
     const hadRecord = new Set(touched.filter((p) => { const r = recordedReport(p.plan); return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null; }).map((p) => p.file));
 
-    // the files: a case-only rename goes through a temp name
-    for (const m of s.files) {
-      if (m.from === m.to) continue;
-      if (sameFile(m.from, m.to) || m.from.toLowerCase() === m.to.toLowerCase()) {
-        const tmp = m.from + tmpSuffix();
-        fs.renameSync(m.from, tmp);
-        try { fs.renameSync(tmp, m.to); } catch (e) { fs.renameSync(tmp, m.from); throw e; }
-      } else {
-        if (exists(m.to)) throw new Error(`${path.basename(m.to)} appeared during the move`);
-        fs.renameSync(m.from, m.to);
-      }
-      moved.push(m);
-    }
-    // the live status (in the run cache) moves with the set when the new name has none
+    // the files (a case-only rename through a temp name), and the live status in the run cache when the new name has none
+    const moves: FileMove[] = s.files.filter((m) => m.from !== m.to)
+      .map((m) => (m.from.toLowerCase() === m.to.toLowerCase() || sameFile(m.from, m.to) ? { ...m, tmp: m.from + tmpSuffix() } : m));
     const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
-    if (exists(liveOld) && !exists(liveNew)) { fs.renameSync(liveOld, liveNew); moved.push({ from: liveOld, to: liveNew }); }
+    if (exists(liveOld) && !exists(liveNew)) moves.push({ from: liveOld, to: liveNew });
+    for (const m of moves) { moved.push(m); doMove(m); }
 
-    // the plans: every path naming a moved file, together, under the plan's lock
+    // the plans: every path naming a moved file, together, under the plan's lock; the bytes replaced and written are
+    // read under that lock, so a rollback restores a plan only while it holds what this wrote
     for (const p of touched) {
-      restore.set(p.file, fs.readFileSync(p.file, "utf8"));
+      const w: { before?: string; after?: string } = {};
       let fields: RefField[] = [];
       updatePlan(p.file, (raw) => {
         if (raw === null) throw new Error(`${p.rel} disappeared`);
+        w.before = raw;
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
         const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
         fields = rewriteRefs(plan, (ref) => { const n = namedFile(ref, p.file, d); const nn = n === null ? undefined : nameMap.get(n); return n !== null && nn !== undefined ? respell(ref, n, nn) : null; }, true);
         if (restamp && hook) hook.planHash = planHash(plan);
         return plan;
-      });
+      }, { afterWrite: () => { w.after = fs.readFileSync(p.file, "utf8"); } });
+      if (w.before !== undefined && w.after !== undefined) writes.push({ file: p.file, before: w.before, after: w.after });
       if (fields.includes("verification.a11y.report")) notes.push(`${p.rel}: verification.a11y.report is yours (hand-written) — rewritten to the renamed report`);
     }
 
@@ -505,7 +566,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: { cwd: stri
     }
     if (problems.length) {
       const left = rollback();
-      return { why: [`the plans failed the check after the move — every rename undone and every plan restored:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
+      return { why: [`the plans failed the check after the move — ${left.length ? "undone in part (see below)" : "every rename undone and every plan restored"}:`, ...problems.map((x) => `  ${x}`), ...left.map((x) => `  ${x}`)], notes: [] };
     }
     return { why: [], notes };
   } catch (e) {

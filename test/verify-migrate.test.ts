@@ -256,6 +256,18 @@ console.log("\nthe post-check fails → every rename undone and the plan's bytes
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
+{
+  const p = project();
+  const before = p.ls();
+  const newer = p.planText().replace('"status": "pending"', '"status": "awaiting-user"');
+  const { r } = run(p, true, { postCheck: (file) => { fs.writeFileSync(file, newer); return ["injected failure"]; } });
+  const why = r.skipped[0]?.why ?? [];
+  check(`a plan written again after the migration's rewrite is NOT restored over: the newer bytes stay, and it is said (got ${JSON.stringify(why)})`,
+    p.planText() === newer && /undone in part/.test(why[0] ?? "") && why.some((w) => /design\/plan\/Crates\.json was written again after the migration rewrote it — left as it is/.test(w)));
+  check("…the files are still renamed back", JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
 console.log("\nvariants: legacy `<S>@320` / `<S>.dark` → `<stem>.<slug>`; a case-only rename:");
 {
   const p = project();
