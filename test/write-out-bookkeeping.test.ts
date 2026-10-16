@@ -157,9 +157,9 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
     const layers = doc && typeof doc === "object" && "layers" in doc && Array.isArray(doc.layers) ? doc.layers : [];
     return layers.filter((l): l is Row => !!l && typeof l === "object");
   };
-  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string } = {}): void => {
+  const pullAs = (dir: string, name: string, opts: { nodeId?: string; sourceFile?: string; pageId?: string } = {}): void => {
     writeOut.writeScreen(dir, screenReply({
-      screenName: name, page: "Page", pageId: "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
+      screenName: name, page: "Page", pageId: opts.pageId ?? "0:1", ...(opts.nodeId ? { nodeId: opts.nodeId } : {}), ...(opts.sourceFile ? { sourceFile: opts.sourceFile } : {}),
       screen: { screen: name, exportedAt: "2026-10-06T00:00:00.000Z", nodes: [{ id: "5:1", type: "FRAME", name }], manifest: { nodes: 1 } },
     }));
   };
@@ -180,7 +180,23 @@ console.log("\na screen's stem and its index row name one node, and a frame rena
   t("…so a lookup by the node id resolves it", () => byId.status === "resolved" && byId.row.name === "Tray Panel");
   pullAs(ren, "Tray Other", { nodeId: "5:1", sourceFile: "Other File" });
   t("the same node id from another Figma file (another name, so another file) is another row", () => rowsOf(ren, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length === 2);
-  for (const d of [noId, ren]) fs.rmSync(d, { recursive: true, force: true });
+
+  // a row pulled before rows were stamped with their Figma file: ids repeat across files, so it is the same node only
+  // when the incoming row is unstamped too, or names the same page
+  const idsOf = (dir: string): number => rowsOf(dir, path.join("pages", "index.json")).filter((r) => r.id === "5:1").length;
+  const old = tmp("stem-unstamped");
+  pullAs(old, "Tray", { nodeId: "5:1" });
+  pullAs(old, "Tray Other", { nodeId: "5:1", sourceFile: "Other File", pageId: "9:9" });
+  t("an unstamped row is kept when another Figma file (stamped, another page) pulls the same id", () => idsOf(old) === 2);
+  const samePage = tmp("stem-unstamped-page");
+  pullAs(samePage, "Tray", { nodeId: "5:1" });
+  pullAs(samePage, "Tray Panel", { nodeId: "5:1", sourceFile: "Sample File" });
+  t("…replaced when the stamped pull names the same page", () => idsOf(samePage) === 1);
+  const bothBare = tmp("stem-unstamped-both");
+  pullAs(bothBare, "Tray", { nodeId: "5:1" });
+  pullAs(bothBare, "Tray Panel", { nodeId: "5:1", pageId: "9:9" });
+  t("…and replaced when the incoming row is unstamped too", () => idsOf(bothBare) === 1);
+  for (const d of [noId, ren, old, samePage, bothBare]) fs.rmSync(d, { recursive: true, force: true });
 }
 
 report();

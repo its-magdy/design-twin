@@ -421,13 +421,19 @@ const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof
 
 // Keeps a previous row unless it is the one being replaced: the same file, or the same node of the same Figma file
 // under another name — a frame renamed in Figma and pulled again lands in a new file, and its old row would leave
-// two rows with one id, which a lookup by id can never resolve. A row or an entry without a sourceFile (pulled
-// before it was stamped) matches every Figma file. A truthy non-object has no `.file`, so it is kept.
+// two rows with one id, which a lookup by id can never resolve. Node ids repeat across Figma files, so a row without a
+// sourceFile (pulled before it was stamped) is that node only when the other side is unstamped too, or names the same
+// page (pageId): an unstamped row of one file is never dropped for a pull of another. A truthy non-object has no
+// `.file`, so it is kept.
 const notSameRow = (entry: ScreenIndexRow) => (l: unknown): boolean => {
   if (!isObjectLike(l)) return !!l;
   if (l.file === entry.file) return false;
-  const sameFile = !l.sourceFile || !entry.sourceFile || l.sourceFile === entry.sourceFile;
-  return !(l.id === entry.id && sameFile);
+  if (l.id !== entry.id) return true;
+  const stamped = !!l.sourceFile, entryStamped = !!entry.sourceFile;
+  const sameFigmaFile = stamped && entryStamped ? l.sourceFile === entry.sourceFile
+    : !stamped && !entryStamped ? true
+    : !!entry.pageId && l.pageId === entry.pageId;
+  return !sameFigmaFile;
 };
 
 export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {
