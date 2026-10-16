@@ -369,7 +369,7 @@ export function screenPaths(screenDoc: ScreenPathsInput, sep: string): ScreenPat
   const dir = page ? safe(page) : NO_PAGE_DIR;
   // The root node's id when the reply names none: the index row (write-out.ts writeScreen) is keyed on that same id,
   // so the file's stem and its row always name one node.
-  const root = inner && Array.isArray(inner.nodes) ? inner.nodes[0] : undefined;
+  const root = inner && inner.nodes ? inner.nodes[0] : undefined;
   const nodeId = screenDoc.nodeId || (inner && inner.nodeId) || (root && typeof root.id === "string" ? root.id : undefined);
   const base = nodeId ? screenStem(screenDoc.screenName, nodeId) : safe(screenDoc.screenName || "screen");
   return {
@@ -422,7 +422,7 @@ const isObjectLike = (x: unknown): x is Record<string, unknown> => !!x && typeof
 // Keeps a previous row unless it is the one being replaced: the same file, or the same node of the same Figma file
 // under another name — a frame renamed in Figma and pulled again lands in a new file, and its old row would leave
 // two rows with one id, which a lookup by id can never resolve. A row or an entry without a sourceFile (pulled
-// before it was stamped) is the same file as any. A truthy non-object has no `.file`, so it is kept.
+// before it was stamped) matches every Figma file. A truthy non-object has no `.file`, so it is kept.
 const notSameRow = (entry: ScreenIndexRow) => (l: unknown): boolean => {
   if (!isObjectLike(l)) return !!l;
   if (l.file === entry.file) return false;
