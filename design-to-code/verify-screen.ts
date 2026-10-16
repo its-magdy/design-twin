@@ -232,7 +232,8 @@ function main(argv: string[]): number | Promise<number> {
     "      verification.recorded (report, a11y.report, artifacts) and verification.a11y.report name. A dry run unless --apply.\n" +
     "      A legacy set whose node already has its <Layer>__<id> set has its expectation retired (<S>.expected.json.retired).\n" +
     "      Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan\n" +
-    "      records with a hand-edited record. Never rewrites a report, measured file or expectation; plans are never renamed.\n" +
+    "      records with a hand-edited record or finds by its name alone with no node id of the set's (add \"nodeId\" to it).\n" +
+    "      Never rewrites a report, measured file or expectation; plans are never renamed.\n" +
     "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).\n" +
     "exit (--migrate): 0 nothing skipped · 1 a set skipped or refused · 2 usage.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }

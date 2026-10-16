@@ -200,6 +200,50 @@ console.log("\nrefusals leave the disk as it was:");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
+console.log("\na plan that finds the set's report by its name alone keeps the status it had:");
+/** The plan rewritten as one with no record that finds `Crates.report.json` by its own file name: static-only by hand,
+ *  closed by the hook (a pass), with `nodeId` only when given. */
+function byNamePlan(p: Project, nodeId?: string): void {
+  const plan: Plan = { status: "pending", screenName: "Crates", ...(nodeId ? { nodeId } : {}), verification: { mode: "static-only", reason: "no renderer on this machine" } };
+  must(plan.verification, "verification").hook = { result: "pass", checkedAt: NOW, blocking: [], warnings: 0, planHash: planHash(plan), files: {} };
+  fs.writeFileSync(path.join(p.root, REL), JSON.stringify(plan, null, 2) + "\n");
+}
+const statusOf = (p: Project) => { const st = computeStatus(p.plan(), { cwd: p.root, planFile: path.join(p.root, REL) }); return { status: st.status, reasons: st.reasons, reports: st.reports.map((r) => r.rel) }; };
+{
+  const p = project("Crates", { record: false });
+  byNamePlan(p);
+  const before = statusOf(p), ls = p.ls(), planBefore = p.planText();
+  const { r } = run(p, true);
+  check(`setup: the plan finds the failing report by its name (got ${before.status}: ${JSON.stringify(before.reports)})`, before.status === "failed" && JSON.stringify(before.reports) === JSON.stringify(["design/verify/Crates.report.json"]));
+  check(`no node id in the plan: the set is skipped, saying to add it (got ${JSON.stringify(r.skipped)})`,
+    r.skipped.length === 1 && r.skipped[0]?.why[0] === 'design/plan/Crates.json finds this set only by its name — add `"nodeId": "80:1"` to it, then --migrate');
+  check("…nothing renamed, the plan untouched", JSON.stringify(p.ls()) === JSON.stringify(ls) && p.planText() === planBefore);
+  const after = statusOf(p);
+  check(`…and computeStatus is the same as before (got ${after.status})`, JSON.stringify(after) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project("Crates", { record: false });
+  byNamePlan(p, "80:1");
+  const before = statusOf(p);
+  const { r, err } = run(p, true);
+  const after = statusOf(p);
+  const renamed = (x: typeof before) => JSON.stringify(x).replaceAll("design/verify/Crates.report.json", "design/verify/Crates__80_1.report.json");
+  check(`with the node id: migrated (got ${JSON.stringify(r.done)}; ${err.join(" | ")})`, JSON.stringify(r.done) === JSON.stringify(["Crates"]));
+  check(`…computeStatus is identical before and after, the report found under its new name (before ${before.status}: ${JSON.stringify(before.reports)}; after ${after.status}: ${JSON.stringify(after.reports)})`,
+    before.status === "failed" && renamed(before) === JSON.stringify(after));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  const p = project("Crates", { record: false });
+  writeSet(p.put, "Crates__80_1");
+  byNamePlan(p);
+  const { r } = run(p, true);
+  check(`retiring: a plan that finds the legacy set by its name alone skips it too (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    r.skipped.length === 1 && /finds this set only by its name/.test(r.skipped[0]?.why[0] ?? "") && fs.existsSync(path.join(p.root, "design/verify/Crates.expected.json")));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
 console.log("\nthe post-check fails → every rename undone and the plan's bytes restored:");
 {
   const p = project();
