@@ -778,19 +778,21 @@ function screenTags(a) {
     h[mine.by].push(el);
   }
   const own = /* @__PURE__ */ new Map();
+  let ambiguous = 0;
   for (const [id, h] of hits) {
     const els = h.tag.length ? h.tag : h.path.length === 1 ? h.path : h.alias.length === 1 ? h.alias : null;
     if (els !== null) own.set(id, els);
+    else ambiguous++;
   }
   const shown = own.size;
   for (const { id, el } of foreign) {
     const r = el.getBoundingClientRect();
-    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, ambiguous, foreign: { id, by: "size", encloses: 0 } };
     let encloses = 0;
     for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
-    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+    if (shown > 0 && encloses * 2 > shown) return { shown, ambiguous, foreign: { id, by: "encloses", encloses } };
   }
-  return { shown, foreign: null };
+  return { shown, ambiguous, foreign: null };
 }
 function focusInfo(path10) {
   const el = document.querySelector(path10);
@@ -6586,7 +6588,8 @@ function screenTagsWhy(s, total) {
   if (f !== null) {
     return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
   }
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half)`;
+  const amb = s.ambiguous ?? 0;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} on several elements each, by another screen's ids, which do not count \u2014 tag them with their own ids` : ""})`;
 }
 function settleMiss(s) {
   if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";

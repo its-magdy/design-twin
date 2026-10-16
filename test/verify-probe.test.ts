@@ -692,7 +692,11 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     VP.screenTagsWhy({ shown: 1, foreign: null }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
     && VP.screenTagsWhy({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === " (the page shows 1 of the expectation's 6 own tags — fewer than half)"
     && VP.refusingRoot({ shown: 1, foreign: { id: "7:1", by: "size", encloses: 0 } }, 6) === null
-    && VP.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");  t("[ready] foreignRootHint names the element, says the probe reached another screen, where to look (with/without --steps) and the fix for a wrapper of this screen", () =>
+    && VP.screenTagsWhy({ shown: 4, foreign: { id: "7:1", by: "encloses", encloses: 3 } }, 6) === " (another screen's tagged root is on the page: a visible element tagged data-dt-node=\"7:1\", an id this expectation does not name, encloses 3 of the 4 own tags the page shows)");
+  t("[ready] screenTagsWhy: own nodes carried only ambiguously (an alias or component path on several elements each) are named beside the count, with the fix; none → the plain count", () =>
+    VP.screenTagsWhy({ shown: 3, ambiguous: 7, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half; +7 on several elements each, by another screen's ids, which do not count — tag them with their own ids)"
+    && VP.screenTagsWhy({ shown: 3, ambiguous: 0, foreign: null }, 10) === " (the page shows 3 of the expectation's 10 own tags — fewer than half)");
+  t("[ready] foreignRootHint names the element, says the probe reached another screen, where to look (with/without --steps) and the fix for a wrapper of this screen", () =>
     VP.foreignRootHint("[data-dt-node=\"1:1\"]", { id: "7:1", by: "encloses", encloses: 3 }, true) === "[data-dt-node=\"1:1\"] is the default --ready (the frame's tag), and the page shows another screen's tagged root " +
       "(data-dt-node=\"7:1\" encloses most of this screen's visible tags): the probe reached another screen — check the --steps plan's navigate list; if that element is a wrapper of this screen tagged " +
       "with another id, tag this screen's root data-dt-node=\"1:1\" or pass --ready <root selector>"
@@ -769,8 +773,8 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     // the measurement's rule for a tag that is not the node's own: exactly one visible element, several are ambiguous
     const oneRule = { ids: ["1:2", "I1:5;3:4", "1:3"], known: ["1:1", "1:2", "I1:5;3:4", "1:3", "8:2", "8:3"], alias: { "8:2": "1:2", "8:3": "1:2" }, frame };
     const twoEach = look(el(null, 1440, 900, [el("8:2", 100, 20), el("8:3", 100, 20), el("I8:5;3:4", 100, 20), el("I9:5;3:4", 100, 20), el("1:3", 100, 20), el("1:3", 100, 20)]), oneRule);
-    t("[ready] screenTags: an own node whose aliases tag 2 visible elements, or whose component path tags 2, is not shown (ambiguous, as the measurement reads it); its own tag on 2 still is (1 of 3)", () =>
-      twoEach.shown === 1 && twoEach.foreign === null);
+    t("[ready] screenTags: an own node whose aliases tag 2 visible elements, or whose component path tags 2, is not shown (ambiguous, as the measurement reads it, and counted as ambiguous: 2); its own tag on 2 still is (1 of 3)", () =>
+      twoEach.shown === 1 && twoEach.ambiguous === 2 && twoEach.foreign === null);
     const oneEach = look(el(null, 1440, 900, [el("8:2", 100, 20), el("8:3", 100, 20, [], {}, false), el("I8:5;3:4", 100, 20), el("I9:5;3:4", 0, 0), el("1:3", 100, 20)]), oneRule);
     t("[ready] …an alias or a component path on one visible element (the other copy hidden) is shown (3 of 3)", () => oneEach.shown === 3);
   }

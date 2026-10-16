@@ -407,15 +407,18 @@ export async function waitForScreenTags(page: Pick<Page, "evaluate" | "isClosed"
 /** The other screen's tagged root that refused a page, if any: only on a page that shows enough of the own tags (fewer
  *  is the reason on its own). */
 export const refusingRoot = (s: ScreenTags, total: number): ForeignRoot | null => (takesForScreen(s.shown, total) ? s.foreign : null);
-/** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half, else
- *  another screen's tagged root. */
+/** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half (and
+ *  how many more it carries ambiguously, by another screen's ids on several elements each), else another screen's
+ *  tagged root. */
 export function screenTagsWhy(s: ScreenTags, total: number): string {
   const f = refusingRoot(s, total);
   if (f !== null) {
     return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ` +
       `${f.by === "size" ? "has the frame's size (±2 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
   }
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half)`;
+  const amb = s.ambiguous ?? 0;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half${amb > 0
+    ? `; +${amb} on several elements each, by another screen's ids, which do not count — tag them with their own ids` : ""})`;
 }
 
 /** What settle() does when its load / fonts / --ready wait threw on a document that is still the current one (a

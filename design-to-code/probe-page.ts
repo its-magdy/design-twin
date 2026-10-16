@@ -661,7 +661,9 @@ export interface ScreenTagsInput { ids: string[]; known: string[]; alias: Record
 /** A visible element tagged with an id the expectation does not name that looks like another screen's root: it has the
  *  frame's size (±2 px), or it encloses most of the visible own tags (`encloses` of them). */
 export interface ForeignRoot { id: string; by: "size" | "encloses"; encloses: number }
-export interface ScreenTags { shown: number; foreign: ForeignRoot | null }
+/** `shown`: the own nodes the page shows; `ambiguous`: the ones not shown whose alias or component path is on several
+ *  visible elements each (absent: none counted). */
+export interface ScreenTags { shown: number; ambiguous?: number; foreign: ForeignRoot | null }
 /** How far a page whose frame tag is missing looks like the screen: how many of `ids` tag at least one visible element,
  *  and another screen's tagged root on it, if any (ForeignRoot). An own node shows by its own tag, or as the
  *  measurement matches a shared shell kept from another screen: by a tag that is one of its aliases (tag-alias), or
@@ -718,21 +720,27 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
     h[mine.by].push(el);
   }
   // As the measurement matches: an own tag on any visible element shows the node; an alias or a component path only on
-  // exactly one visible element (several are ambiguous, and the measurement does not measure the node)
+  // exactly one visible element (several are ambiguous, and the measurement does not measure the node). Where this count
+  // and the matcher (probe-match.ts chooseMatch) still differ, the count is the lenient one: an own tag only on hidden
+  // elements is "hidden" to the matcher, while here an alias or path copy can still show the node; the matcher's path
+  // bucket holds every tag the expectation does not name, here a tag that is an alias is counted as the alias only; and a
+  // component path or alias shared by several own nodes shows only the first of them here.
   const own = new Map<string, PageElement[]>();
+  let ambiguous = 0;
   for (const [id, h] of hits) {
     const els = h.tag.length ? h.tag : h.path.length === 1 ? h.path : h.alias.length === 1 ? h.alias : null;
     if (els !== null) own.set(id, els);
+    else ambiguous++;
   }
   const shown = own.size;
   for (const { id, el } of foreign) {
     const r = el.getBoundingClientRect();
-    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, foreign: { id, by: "size", encloses: 0 } };
+    if (a.frame !== null && Math.abs(r.width - a.frame.w) <= 2 && Math.abs(r.height - a.frame.h) <= 2) return { shown, ambiguous, foreign: { id, by: "size", encloses: 0 } };
     let encloses = 0;
     for (const els of own.values()) if (els.some((o) => o !== el && el.contains(o))) encloses++;
-    if (shown > 0 && encloses * 2 > shown) return { shown, foreign: { id, by: "encloses", encloses } };
+    if (shown > 0 && encloses * 2 > shown) return { shown, ambiguous, foreign: { id, by: "encloses", encloses } };
   }
-  return { shown, foreign: null };
+  return { shown, ambiguous, foreign: null };
 }
 /** Whether the element at `path` has focus, and whether it matches :focus-visible. SELF-CONTAINED. */
 export function focusInfo(path: string): { focused: boolean; focusVisible: boolean } {
