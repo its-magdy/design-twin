@@ -130,7 +130,11 @@ rules and which page loads are a step's own). Rebuild a preview or static
 build before measuring it. The probe writes `design/verify/<Screen>.measured.json` and `<Screen>.png`, including
 `expectationSha256`, the probe's identity, `matchedBy` per node, `notMeasured` and the hover/focus states of every
 spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured` status itself. Always pass your
-`--run <id>`: without it the probe starts a run of its own, and refuses (exit 2) beside yours. Rules:
+`--run <id>`: without it the probe starts a run of its own, and refuses (exit 2) beside yours. With `--run` it refuses
+(exit 2, nothing written) a run that has ended, and writes nothing while the status names ANOTHER run that has not
+ended — a newer run of the screen started since you were handed your id (or one that started, and ended, while it
+measured: `was replaced by run …`): stop and report it with the line the probe printed, and never write over that run.
+Rules:
 
 - **Never write your own probe, and never edit, patch or rewrite `measured.json`.** Its sha is the probe's
   identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run.

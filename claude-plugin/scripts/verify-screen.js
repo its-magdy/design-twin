@@ -1169,9 +1169,10 @@ var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x)
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
 var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -1205,9 +1206,9 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0)) {
-    const { ownRun, probeFailures, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {} };
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
     if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
@@ -1234,13 +1235,22 @@ function endedRun(prev, runId) {
 }
 var RunOpen = class extends Error {
   constructor(base, open) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const { waitIt, endIt } = runCommands(base, open);
     const o = open.ownRun;
-    super(o ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${endIt})`);
+    super(o ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 };
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function ownRunOpen(open, o, why) {
+  return `is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase})` + (why !== void 0 ? `, but the probe that started it ${why}` : "");
+}
+function abandonedWhy(o) {
+  return processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
+}
 var RunReplaced = class extends Error {
   constructor(runId, by) {
     super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran \u2014 nothing more is written in it`);
@@ -1262,8 +1272,9 @@ function openRun(base, prev, runId) {
 }
 var RunNotCurrent = class extends Error {
   constructor(base, runId, open) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    const { waitIt, endIt } = runCommands(base, open);
+    const o = open.ownRun;
+    super(o ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : void 0)} \u2014 nothing is written; if no probe is running, end it: ${endIt}` : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
 };
@@ -1292,14 +1303,13 @@ function writeStatus(base, p, hooks = {}) {
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
       const o = left.ownRun;
-      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
       const endDoc = {
         ...left,
         rev: left.rev + 1,
         phase: "failed",
         at: (/* @__PURE__ */ new Date()).toISOString(),
         by: "verify-probe",
-        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe`
+        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${abandonedWhy(o)}; ended by the next probe`
       };
       put(endDoc);
       hooks.abandoned?.(endDoc);
@@ -1316,6 +1326,7 @@ function writeStatus(base, p, hooks = {}) {
     const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
     const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
     const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
+    const over = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -1330,7 +1341,8 @@ function writeStatus(base, p, hooks = {}) {
       ...pick("evidenceSha256"),
       ...published !== void 0 ? { published } : {},
       ...ownRun !== void 0 ? { ownRun } : {},
-      ...failures !== void 0 ? { probeFailures: failures } : {}
+      ...failures !== void 0 ? { probeFailures: failures } : {},
+      ...over !== void 0 ? { replaced: over } : {}
     };
     put(doc);
     hooks.after?.(doc);
@@ -1342,6 +1354,10 @@ function writeStatus(base, p, hooks = {}) {
 function publishStatus(base, doc) {
   const { ownRun: _private, ...durable } = doc;
   writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
+}
+function replacedNote(doc) {
+  const r = doc.replaced;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 function prepareStaged(stageDir, destDir) {
@@ -1520,6 +1536,8 @@ function statusRun(screen, f, usage) {
     prep?.abort();
     throw e;
   }
+  const note = replacedNote(doc);
+  if (note !== null) console.error(note);
   if (prep) console.error(`published ${prep.files.length} file(s) from ${f.publish} into ${dir}${prep.files.length ? `: ${prep.files.join(", ")}` : ""}`);
   const stage = stageDirOf(base, runId);
   if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs9.mkdirSync(stage, { recursive: true }));
@@ -5563,7 +5581,10 @@ function main(argv) {
       commands, with no package.json or Yarn PnP) \u2014 <dir> resolves against the cwd \u2014 outside every dev-server
       watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
       stage dir (stderr). A run that has ended (done/failed/blocked) takes no more writes, with or without --run (exit 2: start a --new-run),
-      and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it). \`done\` checks first \u2014 refuses (exit 1)
+      and without --new-run nothing is written while ANOTHER run is open (exit 2: wait for it or end it; a probe's own run is named as
+      one \u2014 when and by which pid it started, whether that probe is gone or past its deadline \u2014 with only the command that ends
+      it). Over another run that has ended it is written and says so: a \`note  run <id> replaced run <other> \u2026\` line, and
+      replaced {runId, phase, at} in the status (carried through the run, kept in the published copy). \`done\` checks first \u2014 refuses (exit 1)
       a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
       not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
       .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every

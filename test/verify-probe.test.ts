@@ -815,6 +815,11 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     && /One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\s+probe's pid and host and a deadline \(start \+ --max-time \+ 120 s\): the next probe without --run ends it `failed` once\s+that pid is gone \(same machine\) or, on any host, the deadline has passed, and goes on; before the deadline it refuses\s+when it cannot tell \(another host, or the pid runs\)/.test(help.stdout)
     && /A probe that finds its own run replaced by such a later one\s+\(it was stopped or slept past its deadline\) writes nothing more \(exit 2; 128\+n after a stop signal, 1 after an\s+error\)/.test(help.stdout)
     && !/never stays open/.test(help.stdout));
+  t("--help: a --run is refused (exit 2) while the status names ANOTHER run that has not ended, at its start and while the page is measured; replaced meanwhile → no files", () =>
+    /A --run\s+is refused before anything starts when it already ended \(done\/failed\/blocked\), or while the status names ANOTHER run that\s+has not ended/.test(help.stdout)
+    && /A run that ends,\s+beside which another run opens, or that another run replaces \(one that started — and maybe ended — after its measuring\s+write\) while the page is measured gets no files and no status write \(exit 2 every way\)/.test(help.stdout)
+    && /\(--run\) the run already ended \/ ended while the probe ran \/ the status names another run\s+that has not ended \/ another run replaced it while the probe ran/.test(help.stdout)
+    && /over another run that has ENDED its\s+first write is taken, with a `note {2}run <id> replaced run <other> …` line and replaced in the status/.test(help.stdout));
   // --max-time beyond setTimeout's 32-bit bound (it would fire at once, and the own run's deadline would not be a date)
   const hugeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"], { encoding: "utf8" });
   const edgeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"], { encoding: "utf8" });

@@ -6129,9 +6129,10 @@ var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x)
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
 var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
@@ -6157,9 +6158,9 @@ function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
   if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0)) {
-    const { ownRun, probeFailures, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {} };
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
     if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
@@ -6186,13 +6187,22 @@ function endedRun(prev, runId) {
 }
 var RunOpen = class extends Error {
   constructor(base, open) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    const endIt = `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}`;
+    const { waitIt, endIt } = runCommands(base, open);
     const o = open.ownRun;
-    super(o ? `run ${open.runId} of ${open.screen} is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, ends it (${endIt})`);
+    super(o ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 };
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function ownRunOpen(open, o, why) {
+  return `is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase})` + (why !== void 0 ? `, but the probe that started it ${why}` : "");
+}
+function abandonedWhy(o) {
+  return processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
+}
 var RunReplaced = class extends Error {
   constructor(runId, by) {
     super(`run ${runId} was replaced by run ${by.runId} (${by.phase}) while this probe ran \u2014 nothing more is written in it`);
@@ -6214,8 +6224,9 @@ function openRun(base, prev, runId) {
 }
 var RunNotCurrent = class extends Error {
   constructor(base, runId, open) {
-    const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-    super(`run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${vs} --wait ${S} --run ${id} --dir ${dir}) or, only if nobody is running it any more, end it (${vs} --status ${S} --phase failed --run ${id} --dir ${dir})`);
+    const { waitIt, endIt } = runCommands(base, open);
+    const o = open.ownRun;
+    super(o ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : void 0)} \u2014 nothing is written; if no probe is running, end it: ${endIt}` : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
 };
@@ -6244,14 +6255,13 @@ function writeStatus(base, p, hooks = {}) {
     const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
     if (left?.ownRun) {
       const o = left.ownRun;
-      const why = processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
       const endDoc = {
         ...left,
         rev: left.rev + 1,
         phase: "failed",
         at: (/* @__PURE__ */ new Date()).toISOString(),
         by: "verify-probe",
-        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${why}; ended by the next probe`
+        detail: `abandoned \u2014 the probe that started it (pid ${o.pid} on ${o.host}, ${o.startedAt}) ${abandonedWhy(o)}; ended by the next probe`
       };
       put(endDoc);
       hooks.abandoned?.(endDoc);
@@ -6268,6 +6278,7 @@ function writeStatus(base, p, hooks = {}) {
     const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
     const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
     const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
+    const over = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path8.basename(base),
@@ -6282,7 +6293,8 @@ function writeStatus(base, p, hooks = {}) {
       ...pick("evidenceSha256"),
       ...published !== void 0 ? { published } : {},
       ...ownRun !== void 0 ? { ownRun } : {},
-      ...failures !== void 0 ? { probeFailures: failures } : {}
+      ...failures !== void 0 ? { probeFailures: failures } : {},
+      ...over !== void 0 ? { replaced: over } : {}
     };
     put(doc);
     hooks.after?.(doc);
@@ -6294,6 +6306,10 @@ function writeStatus(base, p, hooks = {}) {
 function publishStatus(base, doc) {
   const { ownRun: _private, ...durable } = doc;
   writeFileAtomic(statusFile(base), JSON.stringify(durable, null, 2) + "\n");
+}
+function replacedNote(doc) {
+  const r = doc.replaced;
+  return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
 // bridge/src/is-main.ts
@@ -7215,9 +7231,12 @@ var USAGE = `usage:
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
       exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run
       (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a
-      \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run that
-      already ended (done/failed/blocked) is refused before anything starts, and a run that
-      ends (or, its own run, another run that opens or replaces it) while the page is measured gets no files (exit 2 both ways).
+      \`status run <id> \u2026\` line on stderr says which; an attempt the run cache would not count says how to end the run). A --run
+      is refused before anything starts when it already ended (done/failed/blocked), or while the status names ANOTHER run that
+      has not ended (a newer run of the screen \u2014 a stale verifier never writes over it); over another run that has ENDED its
+      first write is taken, with a \`note  run <id> replaced run <other> \u2026\` line and replaced in the status. A run that ends,
+      beside which another run opens, or that another run replaces (one that started \u2014 and maybe ended \u2014 after its measuring
+      write) while the page is measured gets no files and no status write (exit 2 every way).
       --max-time bounds the whole run (default 180000 ms, at most 2147483647): past it the browser is closed and nothing is written (exit 4).
       --ready: after every page load (and the steps) the probe waits for this selector to be visible before measuring \u2014
       by default the frame's tag [data-dt-node="<frame id>"] (expectation.frame.nodeId), so a page that is not the screen
@@ -7250,7 +7269,8 @@ var USAGE = `usage:
       file \u2192 exit 3. measured.probe.browser.executable says "custom"; the path is printed, never written to a file.
   ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
-exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran, or (no --run) another run of the
+exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the probe ran / the status names another run
+      that has not ended / another run replaced it while the probe ran, or (no --run) another run of the
       screen is open, or replaced its own \u2014 also instead of a 3 or 4 \xB7 3
       renderer unavailable (ask the user to install; never installed here; with --run, re-run once in the run after they
       do) \xB7 4 the page kept navigating / reloaded twice
@@ -7507,7 +7527,8 @@ ${USAGE}`);
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const runId = f.check || !statusBase ? void 0 : f.run ?? newRunId();
   const ownRun = runId !== void 0 && f.run === void 0;
-  const refusedAtStart = runId === void 0 ? null : ownRun ? openRun(statusBase, readStatus(statusBase), runId) : endedRun(readStatus(statusBase), runId);
+  const startStatus = runId === void 0 ? null : readStatus(statusBase);
+  const refusedAtStart = runId === void 0 ? null : ownRun ? openRun(statusBase, startStatus, runId) : endedRun(startStatus, runId) ?? notCurrentRun(statusBase, startStatus, runId);
   if (refusedAtStart) {
     console.error(`verify-probe: ${refusedAtStart.message}`);
     return 2;
@@ -7519,7 +7540,9 @@ ${USAGE}`);
   let measuringRecorded = false;
   const status = (w, hooks = {}) => {
     try {
-      writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned, ...measuringRecorded ? { continues: true } : {} } : {} });
+      const doc = writeStatus(statusBase, w, { ...hooks, ...ownRun ? { alone: true, abandoned } : { current: true }, ...measuringRecorded ? { continues: true } : {} });
+      const note = replacedNote(doc);
+      if (note !== null) console.error(note);
       return "ok";
     } catch (e) {
       if (e instanceof RunEnded) {
@@ -7528,7 +7551,12 @@ ${USAGE}`);
         return "over";
       }
       if (e instanceof RunOpen) {
-        console.error(`verify-probe: ${e.message} \u2014 it opened while this probe ran; nothing is written`);
+        console.error(`verify-probe: another run opened while this probe ran; nothing is written \u2014 ${e.message}`);
+        own.disarm();
+        return "over";
+      }
+      if (e instanceof RunNotCurrent) {
+        console.error(`verify-probe: another run opened while this probe ran \u2014 ${e.message}`);
         own.disarm();
         return "over";
       }
@@ -7865,7 +7893,7 @@ ${USAGE}`);
   if (wrote === "refused") {
     statusRefused = true;
     const now = written ? null : readStatus(statusBase);
-    const endedNow = written ? null : !ownRun ? endedRun(now, runId) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
+    const endedNow = written ? null : !ownRun ? endedRun(now, runId) ?? notCurrentRun(statusBase, now, runId) ?? (measuringRecorded ? replacedRun(now, runId) : null) : measuringRecorded ? replacedRun(now, runId) : openRun(statusBase, now, runId);
     if (endedNow) {
       console.error(`verify-probe: ${endedNow.message}`);
       return 2;
