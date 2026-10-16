@@ -35,12 +35,11 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
-import { parsePlanText, updatePlan } from "./plan-record.ts";
+import { parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
 import { planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
 import { allSets, canonicalStemsFor, formatSetName, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
-import { recordedEdits, reportRecordNames } from "./verify-build.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
 
