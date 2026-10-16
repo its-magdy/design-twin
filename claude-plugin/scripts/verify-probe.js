@@ -6589,7 +6589,7 @@ function screenTagsWhy(s, total) {
     return ` (another screen's tagged root is on the page: a visible element tagged data-dt-node="${f.id}", an id this expectation does not name, ${f.by === "size" ? "has the frame's size (\xB12 px)" : `encloses ${f.encloses} of the ${s.shown} own tags the page shows`})`;
   }
   const amb = s.ambiguous ?? 0;
-  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} on several elements each, by another screen's ids, which do not count \u2014 tag them with their own ids` : ""})`;
+  return ` (the page shows ${s.shown} of the expectation's ${total} own tags \u2014 fewer than half${amb > 0 ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, which do not count \u2014 tag them with their own ids` : ""})`;
 }
 function settleMiss(s) {
   if (s.readyWait && !s.navigated && s.sameDocument) return "unreachable";

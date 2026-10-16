@@ -408,8 +408,8 @@ export async function waitForScreenTags(page: Pick<Page, "evaluate" | "isClosed"
  *  is the reason on its own). */
 export const refusingRoot = (s: ScreenTags, total: number): ForeignRoot | null => (takesForScreen(s.shown, total) ? s.foreign : null);
 /** The parenthesis of a default --ready miss: what the page showed of the expectation's own tags — fewer than half (and
- *  how many more it carries ambiguously, by another screen's ids on several elements each), else another screen's
- *  tagged root. */
+ *  how many more it carries only ambiguously: by ids this expectation does not name — an alias or the same component
+ *  path — on several elements each), else another screen's tagged root. */
 export function screenTagsWhy(s: ScreenTags, total: number): string {
   const f = refusingRoot(s, total);
   if (f !== null) {
@@ -418,7 +418,8 @@ export function screenTagsWhy(s: ScreenTags, total: number): string {
   }
   const amb = s.ambiguous ?? 0;
   return ` (the page shows ${s.shown} of the expectation's ${total} own tags — fewer than half${amb > 0
-    ? `; +${amb} on several elements each, by another screen's ids, which do not count — tag them with their own ids` : ""})`;
+    ? `; +${amb} carried only by ids this expectation does not name (an alias or the same component path), on several elements each, ` +
+      "which do not count — tag them with their own ids" : ""})`;
 }
 
 /** What settle() does when its load / fonts / --ready wait threw on a document that is still the current one (a
