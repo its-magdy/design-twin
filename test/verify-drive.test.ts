@@ -177,7 +177,11 @@ console.log("the CLI: --plan at --expect, and the plan found in design/plan/:");
   fs.rmSync(path.join(cwd, "design/verify"), { recursive: true, force: true });
   const two = cli("--expect", shot);
   const e3 = readExp();
-  safe("two plans describe the frame → a note, nothing merged", () => two.status === 0 && !!e3 && e3.planInteractions === undefined && /2 plans in design\/plan\/ describe this frame/.test(two.stderr));
+  safe(`[plans] two plans of the frame's node → exit 2 naming both, no expectation written (got ${two.status}: ${two.stderr.trim()})`, () =>
+    two.status === 2 && e3 === null && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry\.json, design\/plan\/Pantry__1_1\.json\) — keep one, or pass --plan/m.test(two.stderr));
+  const twoFlag = cli("--expect", shot, "--plan", planFile);
+  safe("[plans] …--plan wins over them, with a note naming the other", () => twoFlag.status === 0 && readExp()?.planInteractions?.plan === planFile
+    && /note {2}using design\/plan\/Pantry__1_1\.json \(--plan\); design\/plan\/ also describes node 1:1 in design\/plan\/Pantry\.json/.test(twoFlag.stderr));
   const badPlan = put("design/plan/broken.json", { interactions: { nodeId: "2:5" } });
   const bad = cli("--expect", shot, "--plan", badPlan);
   safe("--plan naming a plan whose interactions is not a list → exit 2 (not a plan)", () => bad.status === 2 && /is not a plan/.test(bad.stderr));
@@ -344,8 +348,9 @@ console.log("the steps vocabulary and the reach record:");
 // ---------------------------------------------------------------- one plan rule, guards, steps, page notes
 console.log("one plan rule, guards, steps, page notes:");
 {
-  // two plans describe the frame — the current one (lists files[], declares interactions) and an old one. --expect
-  // and --compare must pick the SAME plan, or the interactions hash never agrees and every run stays incomplete.
+  // two plans of the frame's node — the current one (lists files[], declares interactions) and an old one: a data error
+  // (no files[] tie-break picks one). Keep one; --expect and --compare then pick the SAME plan, or the interactions hash
+  // never agrees and every run stays incomplete.
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-drive-m3-"));
   const put = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof v === "string" ? v : JSON.stringify(v, null, 2)); return rel; };
@@ -357,11 +362,15 @@ console.log("one plan rule, guards, steps, page notes:");
   put("design/plan/Pantry__1_1.json", current);
   put("design/plan/Pantry_old.json", { schema: "designtwin/plan@2", screen: "Pantry-old", nodeId: "1:1" });
   const cli = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
-  const ex = cli("--expect", shot);
+  const ex0 = cli("--expect", shot);
   const expRel = "design/verify/Pantry__1_1.expected.json";
+  safe(`[plans] two plans, one lists files[]: no tie-break — --expect exits 2 naming both, nothing written (got ${ex0.status})`, () =>
+    ex0.status === 2 && /2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_old\.json\)/.test(ex0.stderr) && !fs.existsSync(path.join(cwd, expRel)));
+  fs.rmSync(path.join(cwd, "design/plan/Pantry_old.json"));
+  const ex = cli("--expect", shot);
   const e = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
-  safe("two plans, one lists files[]: --expect merges that plan's interactions (the one --compare picks) and says so", () =>
-    ex.status === 0 && e?.planInteractions?.plan === "design/plan/Pantry__1_1.json" && e.planInteractions.merged === 1 && /using design\/plan\/Pantry__1_1\.json, the only one listing files\[\]/.test(ex.stderr));
+  safe("…the old one removed: --expect merges the one plan's interactions (the one --compare picks)", () =>
+    ex.status === 0 && e?.planInteractions?.plan === "design/plan/Pantry__1_1.json" && e.planInteractions.merged === 1);
   const shaOf = (rel: string): string => crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, rel))).digest("hex");
   const rows = [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")];
   const meas = (ee: NonNullable<typeof e>): string => put("design/verify/Pantry__1_1.measured.json", { measuredAt: "2026-10-01T01:00:00Z", renderer: "playwright-chromium", viewport: "1280x800", expectationSha256: shaOf(expRel), nodes: (ee.nodes ?? []).map(echo), interactions: rows });
@@ -374,8 +383,8 @@ console.log("one plan rule, guards, steps, page notes:");
     put("design/plan/Pantry__1_1.json", PLAN([{ ...REMOVE_ROW, destinationId: "3:2" }], { files: ["src/pantry.tsx"] }));
     cli("--compare", expRel, meas(e));
     const rep2 = readRep();
-    safe("…the plan's rows edited → the reason names the plan to pass: 're-run --expect --plan design/plan/Pantry__1_1.json'", () =>
-      !!rep2 && (rep2.why || []).some((w) => /changed since --expect .*re-run --expect --plan design\/plan\/Pantry__1_1\.json/.test(w)));
+    safe("…the plan's rows edited → 're-run --expect' (the frame's one plan: no --plan to name)", () =>
+      !!rep2 && (rep2.why || []).some((w) => /changed since --expect \(design\/plan\/Pantry__1_1\.json: .*re-run --expect$/.test(w)));
   }
   fs.rmSync(cwd, { recursive: true, force: true });
   const plan = PLAN([REMOVE_ROW]);
@@ -469,9 +478,9 @@ console.log("one plan rule, guards, steps, page notes:");
   const e = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
   const shaOf = (rel: string): string => crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, rel))).digest("hex");
   const measRel = e ? put("design/verify/Pantry__1_1.measured.json", { measuredAt: "2026-10-01T01:00:00Z", renderer: "playwright-chromium", viewport: "1280x800", expectationSha256: shaOf(expRel), nodes: (e.nodes ?? []).map(echo), interactions: [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")] }) : "";
-  const run = (...a: string[]): { rep: VerifyReport | null; stderr: string } => {
+  const run = (...a: string[]): { rep: VerifyReport | null; stderr: string; status: number | null } => {
     const c = cli("--compare", expRel, measRel, ...a);
-    return { rep: readJsonOrNull(path.join(cwd, "design/verify/Pantry__1_1.report.json"), isVerifyReport), stderr: c.stderr };
+    return { rep: readJsonOrNull(path.join(cwd, "design/verify/Pantry__1_1.report.json"), isVerifyReport), stderr: c.stderr, status: c.status };
   };
   const why = (r: VerifyReport | null): string[] => (r?.why || []).filter((w) => /interactions\[\]/.test(w));
   const notes = (r: VerifyReport | null): string[] => (r?.probe && typeof r.probe === "object" && "inputNotes" in r.probe && Array.isArray(r.probe.inputNotes) ? r.probe.inputNotes.filter((n): n is string => typeof n === "string") : []);
@@ -501,9 +510,11 @@ console.log("one plan rule, guards, steps, page notes:");
   safe("--plan <another> with the recorded plan gone → no 'drop --plan' advice (nothing to fall back to)", () =>
     why(r6.rep).length === 1 && why(r6.rep).every((w) => w.includes(`${MINE}'s, which no longer exists`) && w.endsWith("re-run --expect --plan design/plan/Pantry__1_1.json")));
   put("design/plan/Pantry_v2.json", PLAN([REMOVE_ROW], { screen: "Pantry", files: ["src/pantry.tsx"] }));
+  const repBefore = fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8");
   const r7 = run();
-  safe("recorded plan gone + several plans with files[] (none chosen) → not checked, the note says to pass --plan", () =>
-    !!r7.rep && why(r7.rep).length === 0 && notes(r7.rep).some((n) => n.includes(`${MINE}, which no longer exists, and no single plan describes this frame now — not checked; pass --compare … --plan <plan.json>`)));
+  safe(`[plans] recorded plan gone + two plans of the node (none chosen) → exit 2 naming both, no report written (got ${r7.status})`, () =>
+    r7.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_v2\.json\) — keep one, or pass --plan/m.test(r7.stderr)
+    && fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8") === repBefore);
   fs.renameSync(path.join(cwd, "scratch/moved-plan.json"), path.join(cwd, MINE));
   const r8 = run();
   safe("recorded plan back + several plans with files[] → the recorded one is used, no reason", () =>

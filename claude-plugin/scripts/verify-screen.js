@@ -5148,7 +5148,7 @@ function planInteractionsCheck(cx) {
   const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : void 0;
   const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
   const otherPlan = recordedPi !== void 0 && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
-  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "files" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
+  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
   const gone = opts.recordedPlanGone || null;
   const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
   const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) \u2014 re-run --expect${rerunPlanArg}` : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}\u2026; --expect merged ${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}\u2026) \u2014 re-run --expect --plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}` : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 if that plan moved, re-run --compare \u2026 --plan <its path now>; otherwise re-run --expect \u2026 --plan <the plan you intend> (--plan ${planNow.file} to adopt this one)` : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 re-run --expect${rerunPlanArg}`;
@@ -6846,24 +6846,29 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
   }
   return null;
 }
-function plansFor(frameId, stem) {
+function plansForNode(nodeId) {
   const hits = [];
+  const idless = [];
   for (const f of listPlans(PLAN_DIR)) {
     const p = readJsonOrNull(path16.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path16.basename(f, ".json")) === frameId);
-    const byName = path16.basename(f, ".json") === stem || p.file && path16.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path16.join(PLAN_DIR, f).split(path16.sep).join("/"), plan: p });
+    const file = path16.join(PLAN_DIR, f).split(path16.sep).join("/");
+    const id = p.nodeId || nodeIdFromStem(path16.basename(f, ".json"));
+    if (!id) idless.push(file);
+    else if (nodeId !== void 0 && id === nodeId) hits.push({ file, plan: p });
   }
-  return hits;
+  return { hits, idless };
 }
-function choosePlan(flagged, frameId, stem) {
-  if (flagged) return { hit: { ...flagged, choice: "flag" }, all: [flagged] };
-  const all = plansFor(frameId, stem);
-  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all };
-  const withFiles = all.filter((h) => h.plan.files);
-  if (withFiles.length === 1 && withFiles[0]) return { hit: { ...withFiles[0], choice: "files" }, all };
-  return { all };
+var idlessNote = (idless) => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node \u2014 add "nodeId")` : "";
+function choosePlan(flagged, frameId) {
+  const { hits: all, idless } = plansForNode(frameId);
+  if (flagged) {
+    const others = all.filter((h) => !samePlanFile(h.file, flagged.file));
+    return { hit: { ...flagged, choice: "flag" }, all, idless, ...others.length ? { note: `using ${flagged.file} (--plan); design/plan/ also describes node ${frameId ?? "?"} in ${others.map((h) => h.file).join(", ")}` } : {} };
+  }
+  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all, idless };
+  if (all.length > 1) return { all, idless, error: `${all.length} plans in design/plan/ describe node ${frameId ?? "?"} (${all.map((h) => h.file).join(", ")}) \u2014 keep one, or pass --plan <plan.json> (a multi-frame plan)` };
+  return { all, idless };
 }
 function selectForAccept(rep, sel) {
   const integrity = rep.integrity;
@@ -7116,11 +7121,13 @@ function expectMain(files, flags, USAGE) {
     flagged = { file: planFlag.split(path16.sep).join("/"), plan: r.doc };
   }
   const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
-  const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path16.basename(outBase0));
-  const planForExpect = chosen.hit;
-  if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
-    console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
+  const chosen = choosePlan(flagged, firstRoot && firstRoot.id);
+  if (chosen.error !== void 0) {
+    console.error(`error  ${chosen.error}`);
+    return 2;
   }
+  if (chosen.note !== void 0) console.error(`note  ${chosen.note}`);
+  const planForExpect = chosen.hit;
   const readReference = (pointer) => {
     const file = resolveInside(exportRoot, pointer);
     if (file === null) return null;
@@ -7257,12 +7264,10 @@ function compareMain(files, flags, USAGE) {
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path16.basename(expFile, ".json").replace(/\.expected$/, "");
-    const chosen = choosePlan(flagged, frameId, stem);
+    const chosen = choosePlan(flagged, frameId);
     const all = chosen.all;
-    const hits = all.filter((h) => h.plan.files);
-    const onlyHit = hits.length === 1 ? hits[0] : void 0;
     planHit = chosen.hit;
+    if (chosen.note !== void 0) console.error(`note  ${chosen.note}`);
     const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : void 0;
     if (recPi !== void 0 && !(planHit && samePlanFile(planHit.file, recPi))) {
       const r = readJson(recPi, isPlan);
@@ -7274,20 +7279,23 @@ function compareMain(files, flags, USAGE) {
         planHit = { file: recPi, plan: r.doc, choice: "recorded" };
       }
     }
-    if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) \u2014 no waivers/descopes applied; pass --plan <plan.json>`);
-    if (recordPlanFlag && !planHit) {
-      console.error(all.length > 1 ? `--record-plan: ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) \u2014 pass --plan <plan.json> to say which one records the run` : "--record-plan: no plan in design/plan/ describes this frame (run from the project root) \u2014 pass --plan <plan.json>");
+    if (!planHit && chosen.error !== void 0) {
+      console.error(`error  ${chosen.error}`);
       return 2;
     }
-    if (onlyHit && onlyHit.plan.files) {
-      code = { plan: onlyHit.file, files: fileHashes(planCodeFiles(onlyHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
-      const skipped = planCodeSkippedNote(onlyHit.plan, process.cwd());
+    if (recordPlanFlag && !planHit) {
+      console.error(`--record-plan: no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} (run from the project root) \u2014 pass --plan <plan.json>`);
+      return 2;
+    }
+    if (planHit && planHit.plan.files) {
+      code = { plan: planHit.file, files: fileHashes(planCodeFiles(planHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
+      const skipped = planCodeSkippedNote(planHit.plan, process.cwd());
       if (skipped) {
-        compareNotes.push(`${onlyHit.file}: ${skipped}`);
+        compareNotes.push(`${planHit.file}: ${skipped}`);
         console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
       }
     } else {
-      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.file).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : all.length ? `note  ${all.map((h) => h.file).join(", ")} list${all.length === 1 ? "s" : ""} no files[] \u2014 the report records no code hashes, so verify-build --status cannot tie it to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
+      console.error(planHit ? `note  ${planHit.file} lists no files[] \u2014 the report records no code hashes, so verify-build --status cannot tie it to the code` : `note  no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code`);
     }
   }
   const planInputs = planHit ? {
@@ -7412,14 +7420,18 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path16.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
   let planFile = flags.plan ?? (recorded && fs17.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
-    const hits = plansFor(report.nodeId, stem);
-    const only = hits.length === 1 ? hits[0] : void 0;
+    const nodeId = report.nodeId || nodeIdFromSetName(path16.basename(reportFile).replace(/\.report\.json$/, "")) || void 0;
+    const { hits, idless } = plansForNode(nodeId);
+    if (hits.length > 1) {
+      console.error(`error  ${hits.length} plans in design/plan/ describe node ${nodeId ?? "?"} (${hits.map((h) => h.file).join(", ")}) \u2014 keep one, or pass --plan <plan.json>`);
+      return 2;
+    }
+    const only = hits[0];
     if (!only) {
-      console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) \u2014 pass --plan <plan.json>` : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)");
+      console.error(`error  no plan in design/plan/ describes this screen${idlessNote(idless)} (run from the project root, or pass --plan <plan.json>)`);
       return 1;
     }
     planFile = only.file;

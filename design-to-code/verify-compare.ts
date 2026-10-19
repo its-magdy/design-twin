@@ -1836,11 +1836,11 @@ function planInteractionsCheck(cx: CompareCtx): Pick<Graded, "planNow" | "planIn
   const planNow = opts.plan || null;
   const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : undefined;
   const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
-  // name --plan when the plan was not simply the frame's only one (picked by --plan, among several, or as the
-  // expectation's recorded plan), or the expectation merged another plan's rows — a plain re-run of --expect could
+  // name --plan when the plan was not simply the frame's only one (picked by --plan, or as the expectation's recorded
+  // plan), or the expectation merged another plan's rows — a plain re-run of --expect could
   // otherwise pick a different plan
   const otherPlan = recordedPi !== undefined && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
-  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "files" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
+  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
   const gone = opts.recordedPlanGone || null;
   const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
   const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null

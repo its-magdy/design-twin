@@ -20,7 +20,7 @@ import { normColor, normWeight, normFamily, lineHeightPx, FIELDS } from "../desi
 import { planCodeFiles } from "../design-to-code/content-hash.ts";
 import { audit } from "../design-to-code/audit.ts";
 import type { ExpectInput } from "../design-to-code/verify-expect.ts";
-import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured } from "../design-to-code/types.ts";
+import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { malformed, must, readFixture, screenExport } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { NodeInput } from "./fixtures.ts";
@@ -936,8 +936,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   put("design/plan/Orders__1_1.json", planA);
   put("design/plan/Orders.json", { nodeId: "1:1", files: ["src/Orders.tsx"] });
   const amb = run("--compare", exp, meas, "--record-plan");
-  okOuter("two plans describe the frame, no --plan → exit 2 naming both, NO report written",
-    amb.status === 2 && /--record-plan: 2 plans in design\/plan\/ describe this frame/.test(amb.stderr) && /pass --plan/.test(amb.stderr) && !fs.existsSync(report));
+  okOuter("two plans of the frame's node, no --plan → exit 2 naming both, NO report written",
+    amb.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Orders\.json, design\/plan\/Orders__1_1\.json\) — keep one, or pass --plan/m.test(amb.stderr) && !fs.existsSync(report));
   okOuter("--record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
   fs.rmSync(path.join(cwd, "design/plan/Orders.json"));
   const rec = run("--compare", exp, meas, "--record-plan");
@@ -955,6 +955,56 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const rep2 = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
   const hits = (rep2?.probe?.inputNotes || []).filter((n) => /^design\/plan\/Orders__1_1\.json: mapModule path\(s\) not hashed with this plan's code: @\/components\/Shell, @acme\/ui — /.test(n));
   okOuter(`an alias/package mapModule → ONE input note in the report naming them (got ${hits.length})`, hits.length === 1);
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
+// ---------- [plans] a frame's plans are found by its node id only; several are a data error ----------
+(() => {
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-plans-"));
+  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const put = (rel: string, d: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof d === "string" ? d : JSON.stringify(d, null, 4) + "\n"); return rel; };
+  const docs = [doc([textNode("2:1", "Title", "Bins", { family: "Inter", size: 14 })])]; // frame 1:1
+  const exp = put("design/verify/Bins__1_1.expected.json", buildExpectation(docs));
+  const expSha = crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, exp))).digest("hex");
+  const meas = put("design/verify/Bins__1_1.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 20, fontFamily: "Inter", text: "Bins" } }], { expectationSha256: expSha }));
+  const report = path.join(cwd, "design/verify/Bins__1_1.report.json");
+  const repOf = (): VerifyReport | null => (fs.existsSync(report) ? readFixture(report, isVerifyReport) : null);
+  const codeOf = (): string => { const c = repOf()?.inputs?.code; return c ? `${c.plan} ${Object.keys(c.files).join(",")}` : "none"; };
+  put("src/A.tsx", "export {}\n");
+  put("src/B.tsx", "export {}\n");
+  // a plan whose nodeId names another node (its name carries this frame's id: nodeId wins), and a plan that names no node
+  put("design/plan/Bins__1_1.json", { nodeId: "9:9", files: ["src/A.tsx"] });
+  put("design/plan/Bins.json", { screen: "Bins__1_1", files: ["src/A.tsx"] });
+  const none = run("--compare", exp, meas);
+  okOuter(`[plans] a plan's nodeId wins over the id its name carries; a plan named for the frame's set but with no node id describes it not — the note names it (add "nodeId") (got ${codeOf()}: ${none.stderr.split("\n").filter((l) => /plan/.test(l)).join(" | ")})`,
+    codeOf() === "none" && /^note {2}no plan in design\/plan\/ describes this frame \(design\/plan\/Bins\.json names no node — add "nodeId"\)/m.test(none.stderr));
+  // two plans of node 1:1: one by its nodeId, one by the id its name carries
+  fs.rmSync(path.join(cwd, "design/plan/Bins.json"));
+  put("design/plan/Bins__1_1.json", { files: ["src/A.tsx"] });
+  put("design/plan/Crates_bins.json", { nodeId: "1:1", files: ["src/B.tsx"] });
+  fs.rmSync(report);
+  const two = run("--compare", exp, meas);
+  okOuter(`[plans] two plans of the node at --compare → exit 2 naming both, no report written (got ${two.status}: ${two.stderr.trim()})`,
+    two.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — keep one, or pass --plan/m.test(two.stderr) && !fs.existsSync(report));
+  const flag = run("--compare", exp, meas, "--plan", "design/plan/Crates_bins.json");
+  okOuter(`[plans] --plan wins over them: the report is written with that plan's code hashes, and a note names the other (got ${codeOf()})`,
+    (flag.status === 0 || flag.status === 1) && codeOf() === "design/plan/Crates_bins.json src/B.tsx"
+    && /^note {2}using design\/plan\/Crates_bins\.json \(--plan\); design\/plan\/ also describes node 1:1 in design\/plan\/Bins__1_1\.json$/m.test(flag.stderr));
+  // --accept with no --plan and no plan recorded in the report: the two plans of its node are a data error too
+  const rep = repOf();
+  if (rep) { const { inputs, ...rest } = rep; fs.writeFileSync(report, JSON.stringify({ ...rest, inputs: { exportContentSha256: inputs?.exportContentSha256 } }, null, 2)); }
+  const acc = run("--accept", "design/verify/Bins__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "kept", "--by", "owner");
+  okOuter(`[plans] --accept: two plans of the report's node → exit 2 naming both (got ${acc.status}: ${acc.stderr.trim()})`,
+    acc.status === 2 && /2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — keep one, or pass --plan/.test(acc.stderr));
+  // the plan --expect merged interactions from (outside design/plan/) is used at --compare: the code hashes are ITS files
+  const mine = { nodeId: "1:1", interactions: [], files: ["src/A.tsx"] };
+  put("scratch/mine.json", mine);
+  put(exp, buildExpectation(docs, { plan: { file: "scratch/mine.json", plan: mine } }));
+  put(meas, measured([{ nodeId: "2:1", styles: { fontSize: 20, fontFamily: "Inter", text: "Bins" } }], { expectationSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, exp))).digest("hex") }));
+  const rec = run("--compare", exp, meas);
+  okOuter(`[plans] the recorded plan wins at --compare over two plans of the node (a note), and the code hashes come from it (got ${rec.status}, ${codeOf()})`,
+    (rec.status === 0 || rec.status === 1) && codeOf() === "scratch/mine.json src/A.tsx" && /note {2}using scratch\/mine\.json \(the plan --expect merged interactions from\); 2 plans in design\/plan\/ describe this frame now/.test(rec.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
