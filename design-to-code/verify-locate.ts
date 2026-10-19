@@ -32,12 +32,18 @@ function indexRows(exportDir: string): IndexRow[] {
   return rows;
 }
 
-/** locateExport()'s result: the screen export a plan describes, plus what the index knows about it. */
-export interface ExportHit { file: string; doc: ScreenDoc; row: IndexRow | null; nodeId: string | null; layerName: string; sameNameRows: number }
+/** locateExport()'s result: the screen export a plan describes, plus what the index knows about it. `staleFile`: the
+ *  plan's `file` header when the index files that export's node under another file now (read instead), else null. */
+export interface ExportHit { file: string; doc: ScreenDoc; row: IndexRow | null; nodeId: string | null; layerName: string; sameNameRows: number; staleFile: string | null }
+
+const docNodeId = (doc: ScreenDoc): string | null => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
 
 // The screen export a plan describes: its `file` header (project-relative, or relative to
 // design/export as the index writes it), else its `nodeId`, else the node id in its `screen` stem or
-// its own filename, looked up in the export index. Returns { file, doc, row } or null.
+// its own filename, looked up in the export index. The export index has the last word on where a node's export is: when
+// it files the node of the header's export (that doc's root id, else the plan's nodeId) under another readable file — a
+// re-pull after a layer rename leaves the old file behind — that file is read and `staleFile` names the header's.
+// Returns { file, doc, row, … } or null.
 function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel: string | null | undefined): { file: string; doc: ScreenDoc } | null => {
@@ -53,14 +59,21 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
+  let staleFile: string | null = null;
+  if (hit && plan.file) {
+    const id = docNodeId(hit.doc) || plan.nodeId || null;
+    const filed = id ? rows.find((r) => r.id === id) : undefined;
+    const now = filed ? tryFile(filed.file) : null;
+    if (filed && now && path.resolve(now.file) !== path.resolve(hit.file)) { hit = now; row = filed; staleFile = plan.file; }
+  }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
   const root: IrNode | undefined = screenRoots(hit.doc)[0];
   const exp = screenExportOf(hit.doc);
-  const nodeId = (exp && exp.nodeId) || (root && root.id) || null;
+  const nodeId = docNodeId(hit.doc);
   const layerName = String((exp && exp.screen) || (root && root.name) || "");
   if (!row) row = rows.find((r) => r.id === nodeId) || null;
-  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 
 /** The node id a plan is of, as locateReports reads it: its `nodeId`, else its export's, else the id in its `screen`

@@ -6011,6 +6011,7 @@ function indexRows(exportDir) {
   }
   return rows;
 }
+var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
@@ -6029,14 +6030,25 @@ function locateExport(plan, planFile, cwd) {
     row = rows.find((r) => r.id === id) || null;
     if (row) break;
   }
+  let staleFile = null;
+  if (hit && plan.file) {
+    const id = docNodeId(hit.doc) || plan.nodeId || null;
+    const filed = id ? rows.find((r) => r.id === id) : void 0;
+    const now = filed ? tryFile(filed.file) : null;
+    if (filed && now && path14.resolve(now.file) !== path14.resolve(hit.file)) {
+      hit = now;
+      row = filed;
+      staleFile = plan.file;
+    }
+  }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
   const root = screenRoots(hit.doc)[0];
   const exp = screenExportOf(hit.doc);
-  const nodeId = exp && exp.nodeId || root && root.id || null;
+  const nodeId = docNodeId(hit.doc);
   const layerName = String(exp && exp.screen || root && root.name || "");
   if (!row) row = rows.find((r) => r.id === nodeId) || null;
-  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 function planNodeId(plan, planFile, exp) {
   return plan.nodeId || exp && exp.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path14.basename(planFile, ".json")) : null);

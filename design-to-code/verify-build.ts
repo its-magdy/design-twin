@@ -1135,6 +1135,10 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   if (!exp) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) — the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
+    if (exp.staleFile) {
+      const now = path.relative(cwd, exp.file).split(path.sep).join("/");
+      warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} — read ${now}; re-run plan-skeleton --out to refresh the header`);
+    }
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");

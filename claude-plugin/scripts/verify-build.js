@@ -1575,6 +1575,7 @@ function indexRows(exportDir) {
   }
   return rows;
 }
+var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
@@ -1593,14 +1594,25 @@ function locateExport(plan, planFile, cwd) {
     row = rows.find((r) => r.id === id) || null;
     if (row) break;
   }
+  let staleFile = null;
+  if (hit && plan.file) {
+    const id = docNodeId(hit.doc) || plan.nodeId || null;
+    const filed = id ? rows.find((r) => r.id === id) : void 0;
+    const now = filed ? tryFile(filed.file) : null;
+    if (filed && now && path9.resolve(now.file) !== path9.resolve(hit.file)) {
+      hit = now;
+      row = filed;
+      staleFile = plan.file;
+    }
+  }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
   const root = screenRoots(hit.doc)[0];
   const exp = screenExportOf(hit.doc);
-  const nodeId = exp && exp.nodeId || root && root.id || null;
+  const nodeId = docNodeId(hit.doc);
   const layerName = String(exp && exp.screen || root && root.name || "");
   if (!row) row = rows.find((r) => r.id === nodeId) || null;
-  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 function planNodeId(plan, planFile, exp) {
   return plan.nodeId || exp && exp.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path9.basename(planFile, ".json")) : null);
@@ -2759,6 +2771,10 @@ function checkPlan({ plan, file }, cwd, opts) {
   if (!exp) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
+    if (exp.staleFile) {
+      const now = path10.relative(cwd, exp.file).split(path10.sep).join("/");
+      warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
+    }
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");

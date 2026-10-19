@@ -1817,6 +1817,29 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
       JSON.stringify(found) === JSON.stringify(["design/verify/Crates__80_1.dark.report.json nodeId", "design/verify/Crates__80_1.report.json nodeId"]));
     fs.rmSync(vroot, { recursive: true, force: true });
   }
+  {
+    // [stale-export] the layer was renamed and re-pulled: the old export file is still on disk, the index files the node
+    // under the new one, and the plan's `file` header still names the old
+    const OLD = "design/export/pages/P/Crates__80_1.json", NEW = "design/export/pages/P/Crates_Renamed__80_1.json";
+    const doc = (name: string) => JSON.stringify(screenExport([{ type: "FRAME", id: "80:1", name }], { screen: name, nodeId: "80:1" }));
+    const index = (layers: unknown[]) => JSON.stringify({ pageDirs: [], layers });
+    const at = (layers: unknown[]) => project({ [OLD]: doc("Crates"), [NEW]: doc("Crates Renamed"), "design/export/pages/index.json": index(layers) }, { nodeId: "80:1", file: OLD, files: [] });
+    const STALE = /^plan\.file names (.*); the index files node 80:1 under (.*) — read \2; re-run plan-skeleton --out to refresh the header$/;
+    const moved = at([{ id: "80:1", name: "Crates Renamed", file: "pages/P/Crates_Renamed__80_1.json" }]);
+    const hit = verifyBuild.locateExport(planOf(moved), path.join(moved, "design", "plan", "login.json"), moved);
+    const w = checkPlan({ plan: planOf(moved), file: path.join(moved, "design", "plan", "login.json") }, moved).warnings.map((x) => STALE.exec(x)).filter((m) => m !== null);
+    check(`[stale-export] the export the index files the plan's node under is read, staleFile names the header's (got ${hit ? `${path.relative(moved, hit.file)} ${String(hit.staleFile)} ${hit.layerName}` : "null"})`,
+      !!hit && path.relative(moved, hit.file).split(path.sep).join("/") === NEW && hit.staleFile === OLD && hit.layerName === "Crates Renamed" && hit.row?.id === "80:1");
+    check(`[stale-export] verify-build warns: plan.file names the old file, the index files the node under the new one (got ${JSON.stringify(w.map((m) => m[0]))})`,
+      w.length === 1 && w[0]?.[1] === OLD && w[0]?.[2] === NEW);
+    // the node has no index row (another node's only): the header's file is read as before, no warning
+    const unfiled = at([{ id: "90:1", name: "Other", file: "pages/P/Other__90_1.json" }]);
+    const hit2 = verifyBuild.locateExport(planOf(unfiled), path.join(unfiled, "design", "plan", "login.json"), unfiled);
+    const w2 = checkPlan({ plan: planOf(unfiled), file: path.join(unfiled, "design", "plan", "login.json") }, unfiled).warnings.filter((x) => STALE.test(x));
+    check("[stale-export] a plan whose node has no index row reads its `file` header as before, no warning",
+      !!hit2 && path.relative(unfiled, hit2.file).split(path.sep).join("/") === OLD && hit2.staleFile === null && hit2.layerName === "Crates" && w2.length === 0);
+    for (const r of [moved, unfiled]) fs.rmSync(r, { recursive: true, force: true });
+  }
   check("the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
 
   // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook
