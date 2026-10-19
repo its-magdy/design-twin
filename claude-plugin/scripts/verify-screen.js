@@ -6932,14 +6932,17 @@ function selectForAccept(rep, sel) {
 }
 function main(argv) {
   const USAGE = `usage:
-  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--plan <plan.json>]
+  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
       The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
       ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot
       be graded is dropped with why. Their hash binds the expectation: change them \u2192 re-run --expect.
       Read them; never retype them. --out is the verify directory (default design/verify; a new one ends in "/"): the set is
       named by the frame's node, <Layer>__<id> \u2014 the name a set of that node there already has (a frame renamed in Figma keeps
-      it). Any other --out basename is refused (exit 2): one node, one set. Replacing one that differs keeps the old bytes as
+      it). Any other --out basename is refused (exit 2): one node, one set. --variant <slug> writes the variant set
+      <Layer>__<id>.<slug> instead (a dark theme, a narrow width): lower-case letters and digits, words joined by single "-",
+      at most 32; a file tail of the set is no slug, nor one that extends another variant of the node by "-" (exit 2).
+      Replacing one that differs keeps the old bytes as
       <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export
       content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).
   ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]
@@ -7015,6 +7018,7 @@ exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an inter
     force: { type: "boolean" },
     expect: { type: "boolean" },
     compare: { type: "boolean" },
+    variant: { type: "string" },
     accept: { type: "boolean" },
     node: { type: "string" },
     field: { type: "string" },
@@ -7063,7 +7067,7 @@ exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an inter
       console.error("pass --status or --wait, not both\n" + USAGE);
       return 2;
     }
-    const other = ["expect", "compare", "accept", "out", "interactions", "against", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"].filter((k) => flags[k] !== void 0);
+    const other = ["expect", "compare", "accept", "out", "interactions", "against", "variant", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"].filter((k) => flags[k] !== void 0);
     if (other.length || files.length) {
       console.error(`--${flags.status !== void 0 ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}
 ` + USAGE);
@@ -7102,6 +7106,10 @@ exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an inter
 ` + USAGE);
     return 2;
   }
+  if (flags.variant !== void 0 && !doExpect) {
+    console.error("--variant only applies to --expect (the set's name carries it after that)\n" + USAGE);
+    return 2;
+  }
   if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
@@ -7129,10 +7137,15 @@ function write(doExpect, base, obj, md) {
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }
 function expectMain(files, flags, USAGE) {
-  const { out, plan: planFlag } = flags;
+  const { out, plan: planFlag, variant } = flags;
   const firstFile = files[0];
   if (firstFile === void 0) {
     console.error("--expect needs at least one screen export\n" + USAGE);
+    return 2;
+  }
+  const slugWhy = variant === void 0 ? null : variantProblem(variant);
+  if (slugWhy !== null) {
+    console.error(`error  --variant: ${slugWhy}`);
     return 2;
   }
   const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path16.basename(f, ".json") }));
@@ -7201,11 +7214,18 @@ function expectMain(files, flags, USAGE) {
     console.error(`error  ${k.why}`);
     return 2;
   }
-  const setName = formatSetName(k.stem);
+  const setName = formatSetName(k.stem, variant);
   const ob = outBaseOf(out, setName, VERIFY_DIR);
   if ("error" in ob) {
     console.error(`error  ${ob.error}`);
     return 2;
+  }
+  if (variant !== void 0) {
+    const clash = verifySets(ob.dir).map(parseSetName).find((p) => p !== null && p.stem === k.stem && p.variant !== null && p.variant !== variant && (variant.startsWith(p.variant + "-") || p.variant.startsWith(variant + "-")));
+    if (clash) {
+      console.error(`error  --variant ${variant} overlaps the variant ${clash.stem}.${clash.variant ?? ""} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other \u2014 pick a slug that neither extends`);
+      return 2;
+    }
   }
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
   if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} \u2014 verify-screen --migrate renames them to ${k.stem}`);

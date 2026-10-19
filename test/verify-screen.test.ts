@@ -557,6 +557,48 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
+// ---------- --expect --variant <slug>: a second set of the node is a variant, named once ----------
+(() => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-variant-"));
+  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
+  const vdir = path.join(cwd, "design", "verify");
+  const screenFile = path.join(cwd, "Screen__5_6.json");
+  fs.writeFileSync(screenFile, JSON.stringify({ exportedAt: "2026-09-22T00:00:00.000Z", screen: "Screen", nodes: [{ type: "FRAME", id: "5:6", name: "Screen", children: [] }] }));
+  const r = run("--expect", screenFile, "--variant", "w320");
+  ok(`[variant] --expect --variant w320 writes design/verify/Screen__5_6.w320.expected.json (got ${r.status}: ${r.stderr.split("\n")[0] ?? ""})`,
+    r.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.w320.expected.json")) && !fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
+  const base = run("--expect", screenFile);
+  ok("[variant] …the base set beside it is the node's own set (the variant fixes the same stem)", base.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
+  const upper = run("--expect", screenFile, "--variant", "W320");
+  ok(`[variant] an upper-case slug → exit 2 suggesting the slug (got ${upper.status}: ${upper.stderr.trim()})`, upper.status === 2 && /variant 'W320' is not a slug .* — use 'w320'/.test(upper.stderr));
+  const reserved = run("--expect", screenFile, "--variant", "diff");
+  ok("[variant] a reserved slug (diff: <set>.diff.png is the base set's diff) → exit 2, nothing written",
+    reserved.status === 2 && /variant 'diff' is reserved/.test(reserved.stderr) && !fs.existsSync(path.join(vdir, "Screen__5_6.diff.expected.json")));
+  const long = run("--expect", screenFile, "--variant", "a".repeat(33));
+  ok("[variant] a 33-character slug → exit 2", long.status === 2 && /is 33 characters long — a slug is at most 32/.test(long.stderr));
+  // `<set>-<state>.png`: w320's dialog shot is w320-dialog's screenshot
+  const ext = run("--expect", screenFile, "--variant", "w320-dialog");
+  ok(`[variant] a slug that extends a live variant of the node by "-" (w320 → w320-dialog) → exit 2 naming it (got ${ext.status}: ${ext.stderr.trim()})`,
+    ext.status === 2 && /--variant w320-dialog overlaps the variant Screen__5_6\.w320 of node 5:6 by "-"/.test(ext.stderr) && !fs.existsSync(path.join(vdir, "Screen__5_6.w320-dialog.expected.json")));
+  fs.renameSync(path.join(vdir, "Screen__5_6.w320.expected.json"), path.join(vdir, "Screen__5_6.w320-wide.expected.json"));
+  const short = run("--expect", screenFile, "--variant", "w320");
+  ok("[variant] …and the other way (w320-wide live → w320) → exit 2", short.status === 2 && /--variant w320 overlaps the variant Screen__5_6\.w320-wide/.test(short.stderr));
+  const unrelated = run("--expect", screenFile, "--variant", "w3200");
+  ok("[variant] a slug that only shares a prefix without \"-\" (w3200) is not an overlap", unrelated.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.w3200.expected.json")));
+  // --variant names a set once: everywhere else the set's name carries it
+  const meas = path.join(cwd, "measured.json");
+  fs.writeFileSync(meas, JSON.stringify({ measuredAt: "2026-09-22T00:00:01.000Z", renderer: "test", viewport: { w: 1, h: 1 }, artifacts: [], nodes: [], components: [], interactions: [] }));
+  const withCompare = run("--compare", path.join(vdir, "Screen__5_6.w3200.expected.json"), meas, "--variant", "w3200");
+  ok("[variant] --variant with --compare → exit 2 (only --expect takes it)", withCompare.status === 2 && /--variant only applies to --expect/.test(withCompare.stderr));
+  const cmp = run("--compare", path.join(vdir, "Screen__5_6.w3200.expected.json"), meas);
+  ok("[variant] --compare of the variant's expectation writes the variant's report (the set's name carries the slug)",
+    (cmp.status === 0 || cmp.status === 1) && fs.existsSync(path.join(vdir, "Screen__5_6.w3200.report.json")));
+  const withStatus = run("--status", "Screen__5_6.w3200", "--phase", "starting", "--new-run", "--variant", "w3200");
+  ok("[variant] --status takes none of --variant (exit 2)", withStatus.status === 2 && /--status takes none of --variant/.test(withStatus.stderr));
+  fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
 // ================================================================= regressions from a recorded run
 // Every fixture below is the REAL export / probe output of a recorded run, pruned from a
 // live-test export, names replaced (the pruned exports gave byte-identical expectations and
