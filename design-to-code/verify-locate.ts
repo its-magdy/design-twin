@@ -56,6 +56,14 @@ function sameSource(r: IndexRow, src: { file: string; key: string | null } | nul
   if (!src || !r.sourceFile) return null;
   return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
 }
+/** Whether every stamped row of the index is of one Figma file (sameSource with the first): a single-file project, where
+ *  an unstamped export (an older pull) is of that file too. */
+function oneSource(rows: readonly IndexRow[]): boolean {
+  const first = rows.find((r) => r.sourceFile);
+  if (!first?.sourceFile) return true;
+  const src = { file: first.sourceFile, key: first.sourceFileKey || null };
+  return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
+}
 
 // The screen export a plan describes: its `file` header (project-relative, or relative to
 // design/export as the index writes it), else its `nodeId`, else the node id in its `screen` stem or
@@ -63,8 +71,9 @@ function sameSource(r: IndexRow, src: { file: string; key: string | null } | nul
 // no row of the header's node (that doc's root id, else the plan's nodeId) files it under the header's file, but one
 // readable row files it elsewhere — a re-pull after a layer rename leaves the old file behind — that file is read and
 // `staleFile` names the header's. Node ids repeat across Figma files (the index merges several), so the row taken is the
-// one of the header's Figma file (its source stamp), else the one unstamped row; several, or only other files' rows,
-// keep the header.
+// one of the header's Figma file (its source stamp), else the one unstamped row — for an unstamped header, the one row of
+// any stamp only when the whole index is of one Figma file; several, or only other files' rows, keep the header (with no
+// row: a row of its node id may be another file's).
 // Returns { file, doc, row, … } or null.
 function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
   const exportDir = exportDirOf(cwd);
@@ -82,6 +91,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   let row: IndexRow | null = null;
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   let staleFile: string | null = null;
+  let noRow = false; // the header is kept and no row of its Figma file files it: no row, not one found by node id below
   if (hit && plan.file) {
     const id = docNodeId(hit.doc) || plan.nodeId || null;
     const header = hit;
@@ -92,11 +102,14 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
     else {
       const src = sourceOf(header.doc);
       const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
-      const unknown = filed.filter((x) => sameSource(x.r, src) === null);
+      // a row whose Figma file is unknown: an unstamped row; for an unstamped header, a stamped row too only when the
+      // whole index is of one Figma file (else it may be another file's node)
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null && (src !== null || !x.r.sourceFile || oneSource(rows)));
       // the replacement: the one row of the header's Figma file, else the one row whose file is unknown — never a row of
       // another Figma file, never a pick among several
       const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : undefined;
       if (pick) { hit = pick.now; row = pick.r; staleFile = plan.file; }
+      else { row = null; noRow = true; } // a row of the id may be another Figma file's
     }
   }
   if (!hit && row) hit = tryFile(row.file);
@@ -105,7 +118,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   const exp = screenExportOf(hit.doc);
   const nodeId = docNodeId(hit.doc);
   const layerName = String((exp && exp.screen) || (root && root.name) || "");
-  if (!row) row = rows.find((r) => r.id === nodeId) || null;
+  if (!row && !noRow) row = rows.find((r) => r.id === nodeId) || null;
   return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 

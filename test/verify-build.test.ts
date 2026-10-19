@@ -1880,7 +1880,19 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const other = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins", "File B", "keyB") }, [rowA]);
     const r4 = run(other);
     check(`[stale-export] the only row of the id is another Figma file's: the header is kept (got ${JSON.stringify(r4)})`, r4.rel === B && r4.stale === null && r4.warned === 0);
-    for (const r of [two, renamed, amb, other]) fs.rmSync(r, { recursive: true, force: true });
+    // the header's export is an older, unstamped pull of file B; the index holds file A's stamped row of the id and a
+    // row of file B's other node: the index is of two Figma files, so file A's row may be another file's node
+    const rowB9 = { id: "9:9", name: "Lids", file: "pages/PB/Lids__9_9.json", sourceFile: "File B", sourceFileKey: "keyB" };
+    const unstamped = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins") }, [rowA, rowB9]);
+    const r5 = run(unstamped);
+    check(`[stale-export] an unstamped header and one stamped row of the id in a two-file index: the header is kept, no row, no warning (got ${JSON.stringify(r5)})`,
+      r5.rel === B && r5.stale === null && r5.row === null && r5.warned === 0);
+    // one Figma file only: the header's older unstamped export, the frame renamed and re-pulled (stamped) — a re-pull
+    const single = at({ [B]: doc("Bins"), [B2]: doc("Bins Renamed", "File B", "keyB") }, [rowB2, rowB9]);
+    const r6 = run(single);
+    check(`[stale-export] an unstamped header in a one-file index: the renamed row is read (got ${JSON.stringify(r6)})`,
+      r6.rel === B2 && r6.stale === B && r6.row === rowB2.file && r6.warned === 1);
+    for (const r of [two, renamed, amb, other, unstamped, single]) fs.rmSync(r, { recursive: true, force: true });
   }
   {
     // [stale-export] the header spells the index's file in another case: on a case-insensitive disk that is one file, not

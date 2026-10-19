@@ -6075,6 +6075,12 @@ function sameSource(r, src) {
   if (!src || !r.sourceFile) return null;
   return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
 }
+function oneSource(rows) {
+  const first = rows.find((r) => r.sourceFile);
+  if (!first?.sourceFile) return true;
+  const src = { file: first.sourceFile, key: first.sourceFileKey || null };
+  return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
+}
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
@@ -6094,6 +6100,7 @@ function locateExport(plan, planFile, cwd) {
     if (row) break;
   }
   let staleFile = null;
+  let noRow = false;
   if (hit && plan.file) {
     const id = docNodeId(hit.doc) || plan.nodeId || null;
     const header = hit;
@@ -6107,12 +6114,15 @@ function locateExport(plan, planFile, cwd) {
     } else {
       const src = sourceOf(header.doc);
       const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
-      const unknown = filed.filter((x) => sameSource(x.r, src) === null);
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null && (src !== null || !x.r.sourceFile || oneSource(rows)));
       const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : void 0;
       if (pick) {
         hit = pick.now;
         row = pick.r;
         staleFile = plan.file;
+      } else {
+        row = null;
+        noRow = true;
       }
     }
   }
@@ -6122,7 +6132,7 @@ function locateExport(plan, planFile, cwd) {
   const exp = screenExportOf(hit.doc);
   const nodeId = docNodeId(hit.doc);
   const layerName = String(exp && exp.screen || root && root.name || "");
-  if (!row) row = rows.find((r) => r.id === nodeId) || null;
+  if (!row && !noRow) row = rows.find((r) => r.id === nodeId) || null;
   return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 function planNodeId(plan, planFile, exp) {
