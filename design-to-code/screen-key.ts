@@ -68,12 +68,9 @@ export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
     const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
     if (r.status !== "resolved") {
       const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage — pass the node id`
-        : r.status === "needs-confirmation" ? `'${q}' matched only by text search — pass the node id`
+        : r.status === "needs-confirmation" ? `'${q}' matched only ${r.stage === "text search" ? "by text search" : 'ignoring spaces, "-" and "_"'} — pass the node id or the exact name`
         : `'${q}' matches no screen in ${exportDir}`;
       return { status: "unresolved", why, candidates: r.candidates };
-    }
-    if (r.kind === "folded") {
-      return { status: "unresolved", why: `'${q}' matches ${r.row.name} (${r.row.id}) only ignoring spaces, "-" and "_" — pass the node id or the exact name`, candidates: [] };
     }
     const k = nodeStem(verifyDir, r.row.id, r.row.name);
     if ("why" in k) return { status: "unresolved", why: k.why, candidates: [] };

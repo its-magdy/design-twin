@@ -5792,6 +5792,7 @@ function describe2(row, matchedVia) {
   return out;
 }
 var fold = (s) => String(s || "").trim().toLowerCase();
+var FOLD_STAGE = "whitespace-insensitive match (layer name / title / plan header)";
 var foldCompact = (s) => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
 var FILE_TAIL_RE = /(?:\.(?:measured|expected|vars))?\.json$|\.png$/i;
 var PATH_DIR_RE = /^design[\\/]|[\\/](?:plan|verify|export)[\\/]/i;
@@ -5848,6 +5849,7 @@ function resolveScreen(exportDir, query, opts) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id", kind: "carried id" };
   }
+  let folded = [];
   for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
       plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id) => !!id)
@@ -5863,22 +5865,19 @@ function resolveScreen(exportDir, query, opts) {
       if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
     }
     const compactRows = [...compact.values()];
-    const one = compactRows.length === 1 ? compactRows[0] : void 0;
-    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + "), kind: "folded" };
-    if (compactRows.length > 1) {
-      return {
-        status: "ambiguous",
-        stage: "whitespace-insensitive match (layer name / title / plan header)",
-        candidates: compactRows.map((u) => describe2(u.row, [...u.via]))
-      };
+    if (compactRows.length) {
+      folded = compactRows.map((u) => describe2(u.row, [...u.via]));
+      break;
     }
   }
   const textMatches = rows.filter(
     (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))
   );
-  if (textMatches.length) {
+  if (folded.length || textMatches.length) {
+    const foldedIds = new Set(folded.map((c) => c.id));
+    const candidates = [...folded, ...textMatches.filter((r) => !foldedIds.has(r.id)).map((r) => describe2(r))];
     return Object.assign(
-      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe2(r)) },
+      { status: "needs-confirmation", stage: folded.length ? FOLD_STAGE : "text search", candidates },
       noTitles ? { noTitles: true } : null
     );
   }
@@ -5899,11 +5898,8 @@ function screenKey(query, opts = {}) {
   if (exportDir && fs14.existsSync(path13.join(exportDir, "pages", "index.json"))) {
     const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
     if (r.status !== "resolved") {
-      const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage \u2014 pass the node id` : r.status === "needs-confirmation" ? `'${q}' matched only by text search \u2014 pass the node id` : `'${q}' matches no screen in ${exportDir}`;
+      const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage \u2014 pass the node id` : r.status === "needs-confirmation" ? `'${q}' matched only ${r.stage === "text search" ? "by text search" : 'ignoring spaces, "-" and "_"'} \u2014 pass the node id or the exact name` : `'${q}' matches no screen in ${exportDir}`;
       return { status: "unresolved", why, candidates: r.candidates };
-    }
-    if (r.kind === "folded") {
-      return { status: "unresolved", why: `'${q}' matches ${r.row.name} (${r.row.id}) only ignoring spaces, "-" and "_" \u2014 pass the node id or the exact name`, candidates: [] };
     }
     const k = nodeStem(verifyDir, r.row.id, r.row.name);
     if ("why" in k) return { status: "unresolved", why: k.why, candidates: [] };

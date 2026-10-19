@@ -87,7 +87,10 @@ console.log("\nscreenKey with an export index (exact stages only):");
   check("an exact layer name, a title, a plan screenName and a carried id give the same key",
     [k("Seed Trays"), k("Trays"), k("Seed_Trays__1_1"), k("design/verify/Seed_Trays__1_1.report.json")].every((x) => keyOf(x) === "1:1 Seed_Trays__1_1") && keyOf(k("Orchard")) === "3:1 Hedge_Rows__3_1");
   const fold = k("hedge-rows");
-  check(`a whitespace-insensitive hit names no key (got ${keyOf(fold)})`, fold.status === "unresolved" && /only ignoring spaces/.test(fold.why));
+  check(`a whitespace-insensitive hit names no key — its row is a candidate (got ${keyOf(fold)}; ${fold.status === "unresolved" ? JSON.stringify(fold.candidates.map((c) => c.id)) : ""})`,
+    fold.status === "unresolved" && /matched only ignoring spaces/.test(fold.why) && JSON.stringify(fold.candidates.map((c) => c.id)) === JSON.stringify(["3:1"]));
+  const foldSet = setKey("hedge-rows", { exportDir, planDir, verifyDir });
+  check("[setKey] a whitespace-insensitive hit names no set either — the candidate listed", foldSet.status === "unresolved" && JSON.stringify(foldSet.candidates.map((c) => c.id)) === JSON.stringify(["3:1"]));
   check("an ambiguous exact union names no key, listing both", (() => { const a = k("Compost"); return a.status === "unresolved" && a.candidates.length === 2; })());
   check("a text-search hit names no key", (() => { const a = k("Seed"); return a.status === "unresolved" && /text search/.test(a.why); })());
   check("an unknown name names no key", k("Greenhouse").status === "unresolved");

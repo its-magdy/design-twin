@@ -39,6 +39,9 @@ import { isScreenExport } from "../design-to-code/export-shape.ts";
 type Unresolved = Exclude<ResolveScreenResult, { status: "resolved" }>;
 // The arm a check expects; any other arm is a named failure (not a TypeError on a missing field).
 const unresolved = (r: ResolveScreenResult): Unresolved => must(r.status === "resolved" ? null : r, "an unresolved result");
+// A whitespace-insensitive (4c) result's candidate ids in order, or null for any other result (a resolve included).
+const foldIds = (r: ResolveScreenResult): string | null =>
+  r.status === "needs-confirmation" && r.stage === "whitespace-insensitive match (layer name / title / plan header)" ? r.candidates.map((c) => c.id).join() : null;
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
 
@@ -448,8 +451,9 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
 }
 
 {
-  // a plan file's name ("SeedSwaps", "StaffRoles") finds the screen named "Seed Swaps" /
-  // "Staff Roles": no exact match -> compare with whitespace removed and case folded. Exact still wins; 2+ hits stay ambiguous.
+  // a plan file's name ("SeedSwaps", "StaffRoles") finds the screen named "Seed Swaps" / "Staff Roles" as a CANDIDATE:
+  // no exact match -> compare with whitespace removed and case folded -> needs-confirmation, never a resolve (one hit
+  // or several). Exact still wins.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-fold-"));
   fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
   fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
@@ -463,11 +467,10 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
   ] }));
   fs.writeFileSync(path.join(dir, "plan", "RotaSettings.json"), JSON.stringify({ file: "RotaSettings.json", screenName: "Rota Prefs", nodeId: "4:1" }));
   const pub = resolveScreen(dir, "SeedSwaps");
-  ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" (got ${pub.status})`, pub.status === "resolved" && pub.row.id === "1:1");
+  ok(`[fold] 'SeedSwaps' finds the layer "Seed Swaps" as the one candidate to confirm, never a resolve (got ${foldIds(pub)})`, foldIds(pub) === "1:1");
   ok("[fold] a lower-case, spaced-differently query ('seed  SWAPS') exact-folds", (() => { const r = resolveScreen(dir, "seed swaps"); return r.status === "resolved" && r.stage === "exact layer name"; })());
   const staff = resolveScreen(dir, "StaffRoles");
-  ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows is AMBIGUOUS, listing both node ids (got ${staff.status})`,
-    staff.status === "ambiguous" && staff.candidates.map((c) => c.id).sort().join() === "2:1,2:2");
+  ok(`[fold] 'StaffRoles' matching a title AND a layer name of different rows lists both node ids to confirm (got ${foldIds(staff)})`, foldIds(staff) === "2:1,2:2");
   const rota = resolveScreen(dir, "Shift Rota");
   ok("[fold] exact beats fold: 'Shift Rota' resolves to the layer so named, not ambiguous with 'ShiftRota'", rota.status === "resolved" && rota.row.id === "3:1" && rota.stage === "exact layer name");
   const rota2 = resolveScreen(dir, "SHIFTROTA");
@@ -477,20 +480,23 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
   const noPlan = resolveScreen(dir, "RotaPrefs");
   ok("[fold] control: with no plan dir, 'RotaPrefs' matches nothing", noPlan.status === "not-found");
   const planFold = resolveScreen(dir, "RotaPrefs", { planDir: path.join(dir, "plan") });
-  ok("[fold] the plan header's screenName is folded too ('RotaPrefs' -> 'Rota Prefs' -> 4:1)", planFold.status === "resolved" && planFold.row.id === "4:1");
-  ok("[fold] a fold never reaches into a substring: 'Swap' is still a text-search candidate list, not a resolve", resolveScreen(dir, "Swap").status === "needs-confirmation");
+  ok(`[fold] the plan header's screenName is folded too ('RotaPrefs' -> 'Rota Prefs' -> the candidate 4:1; got ${foldIds(planFold)})`, foldIds(planFold) === "4:1");
+  const cli4c = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), dir, "SeedSwaps"], { encoding: "utf8" });
+  ok(`[4c] the CLI: exit 1, 'matched only ignoring spaces/-/_ — confirm with the node id', the candidate listed, no stem line (got ${cli4c.status}: ${cli4c.stderr.trim()})`,
+    cli4c.status === 1 && /^error {2}'SeedSwaps' matched only ignoring spaces\/-\/_ — confirm with the node id/m.test(cli4c.stderr) && /^ {2}1:1 {2}Seed Swaps/m.test(cli4c.stderr) && !/^stem /m.test(cli4c.stdout));
+  ok("[fold] a fold never reaches into a substring: 'Swap' is a text-search candidate list, not a resolve", (() => { const r = resolveScreen(dir, "Swap"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
 {
-  // A plan file's name or path, a kebab/snake-case slug and a differently-cased name all find the screen; a fold
-  // that makes two screens equal stays ambiguous.
+  // A plan file's name or path and a kebab/snake-case slug find the screen as a candidate to confirm (4c never
+  // resolves); a differently-cased name resolves in the exact stage.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-query-"));
   fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
   fs.mkdirSync(path.join(dir, "plan"), { recursive: true });
   fs.writeFileSync(path.join(dir, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [
     { name: "Crop Plans", id: "1:1", type: "FRAME", page: "P", file: "pages/P/Crop_Plans__1_1.json" },
-    { name: "Seed Swaps", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__2_1.json" },
+    { name: "Seed Swaps", id: "2:1", type: "FRAME", page: "P", file: "pages/P/Seed_Swaps__2_1.json", texts: ["seed-swaps"] },
     { name: "Yield Map", id: "3:1", type: "FRAME", page: "P", file: "pages/P/Yield_Map__3_1.json" },
     { name: "Yield-Map", id: "3:2", type: "FRAME", page: "P", file: "pages/P/Yield-Map__3_2.json" },
     { name: "Soil Tests", id: "4:1", type: "FRAME", page: "P", file: "pages/P/Soil_Tests__4_1.json" },
@@ -498,6 +504,7 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
     { name: "Profile", id: "5:2", type: "FRAME", page: "P", file: "pages/P/Profile__5_2.json" },
     { name: "Compost Bins", id: "6:1", type: "FRAME", page: "P", file: "pages/P/Compost_Bins__6_1.json" },
     { name: "Login", id: "7:1", type: "FRAME", page: "P", file: "pages/P/Login__7_1.json" },
+    { name: "Tray Labels", id: "8:1", type: "FRAME", page: "P", file: "pages/P/Tray_Labels__8_1.json", texts: ["Seed-Swaps label"] },
   ] }));
   fs.writeFileSync(path.join(dir, "plan", "Unnamed.json"), JSON.stringify({ file: "Unnamed.json", nodeId: "6:1" }));
   fs.writeFileSync(path.join(dir, "plan", "Orchard.json"), JSON.stringify({ file: "Orchard.json", screenName: "Orchard Rows", nodeId: "4:1", route: "/Orchard/Rows" }));
@@ -505,25 +512,26 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
     const r = resolveScreen(dir, q, plan ? { planDir: path.join(dir, "plan") } : undefined);
     return r.status === "resolved" ? r.row.id : null;
   };
-  ok("[query] 'CropPlans.json' finds the layer \"Crop Plans\"", idOf("CropPlans.json") === "1:1");
-  ok("[query] 'CropPlans.JSON' (extension case) finds it too", idOf("CropPlans.JSON") === "1:1");
-  ok("[query] a path 'design/plan/CropPlans.json' finds it", idOf("design/plan/CropPlans.json") === "1:1");
-  ok("[query] a Windows path 'design\\plan\\CropPlans.json' finds it", idOf("design\\plan\\CropPlans.json") === "1:1");
-  ok("[query] a path without an extension 'design/plan/CropPlans' finds it", idOf("design/plan/CropPlans") === "1:1");
-  ok("[query] a screenshot name 'design/verify/Crop_Plans.png' finds it", idOf("design/verify/Crop_Plans.png") === "1:1");
-  ok("[query] a verify artefact name 'Crop_Plans.measured.json' finds it", idOf("design/verify/Crop_Plans.measured.json") === "1:1");
-  ok("[query] 'crop-plans' (kebab) finds the layer \"Crop Plans\"", idOf("crop-plans") === "1:1");
-  ok("[query] 'seed-swaps' finds \"Seed Swaps\"; so does 'seed_swaps.json'", idOf("seed-swaps") === "2:1" && idOf("seed_swaps.json") === "2:1");
+  const fold = (q: string, plan?: boolean): string | null => foldIds(resolveScreen(dir, q, plan ? { planDir: path.join(dir, "plan") } : undefined));
+  ok("[query] 'CropPlans.json' finds the layer \"Crop Plans\" as a candidate, not a resolve", fold("CropPlans.json") === "1:1" && idOf("CropPlans.json") === null);
+  ok("[query] 'CropPlans.JSON' (extension case) finds it too", fold("CropPlans.JSON") === "1:1");
+  ok("[query] a path 'design/plan/CropPlans.json' finds it", fold("design/plan/CropPlans.json") === "1:1");
+  ok("[query] a Windows path 'design\\plan\\CropPlans.json' finds it", fold("design\\plan\\CropPlans.json") === "1:1");
+  ok("[query] a path without an extension 'design/plan/CropPlans' finds it", fold("design/plan/CropPlans") === "1:1");
+  ok("[query] a screenshot name 'design/verify/Crop_Plans.png' finds it", fold("design/verify/Crop_Plans.png") === "1:1");
+  ok("[query] a verify artefact name 'Crop_Plans.measured.json' finds it", fold("design/verify/Crop_Plans.measured.json") === "1:1");
+  ok("[query] 'crop-plans' (kebab) finds the layer \"Crop Plans\"", fold("crop-plans") === "1:1");
+  ok(`[4c] 'seed-swaps': the fold's row first, then the text-search rows not among it — 2:1 (whose text also holds it) once (got ${String(fold("seed-swaps"))})`, fold("seed-swaps") === "2:1,8:1");
+  ok("[query] 'seed_swaps.json' finds \"Seed Swaps\"", fold("seed_swaps.json") === "2:1");
   const cased = resolveScreen(dir, "CROP PLANS");
   ok("[query] a case-different exact name resolves in the exact stage", cased.status === "resolved" && cased.row.id === "1:1" && cased.stage === "exact layer name");
   const ys = resolveScreen(dir, "yield_map.json");
-  ok(`[query] a fold that makes two screens equal ('Yield Map' / 'Yield-Map') is ambiguous, not a pick (got ${ys.status})`,
-    ys.status === "ambiguous" && ys.candidates.map((c) => c.id).sort().join() === "3:1,3:2");
+  ok(`[query] a fold that makes two screens equal ('Yield Map' / 'Yield-Map') lists both, not a pick (got ${foldIds(ys)})`, foldIds(ys) === "3:1,3:2");
   ok("[query] exact still beats the fold: 'Yield-Map' resolves to 3:2 alone", idOf("Yield-Map") === "3:2");
   ok("[query] a layer name with a slash still resolves exactly ('Settings / Profile' -> 5:1)", idOf("Settings / Profile") === "5:1");
   ok("[query] a spaced 'Nope / Profile' does not fall back to its last segment ('Profile')", idOf("Nope / Profile") === null);
   ok("[query] a slash name without spaces ('Admin/Login') does not fall back to the screen 'Login'",
-    idOf("Admin/Login") === null && idOf("Login") === "7:1" && idOf("design/plan/Login.json") === "7:1");
+    idOf("Admin/Login") === null && fold("Admin/Login") === null && idOf("Login") === "7:1" && fold("design/plan/Login.json") === "7:1");
   ok("[query] control: a path to a screen that does not exist is not found", resolveScreen(dir, "design/plan/Nothing.json").status === "not-found");
   ok("[query] a bare '.json' is not found (empty after the tail)", resolveScreen(dir, ".json").status !== "resolved");
   ok("[query] the plan header's screenName is case-folded in the exact stage ('ORCHARD rows' -> 4:1)", (() => {
@@ -535,7 +543,7 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
     return r.status === "resolved" && r.row.id === "4:1" && r.stage === "plan screenName/route";
   })());
   ok("[query] control: without the plan dir 'ORCHARD rows' matches nothing", resolveScreen(dir, "ORCHARD rows").status === "not-found");
-  ok("[query] a plan file name 'design/plan/OrchardRows.json' finds the plan's screen through the fold", idOf("design/plan/OrchardRows.json", true) === "4:1");
+  ok("[query] a plan file name 'design/plan/OrchardRows.json' finds the plan's screen through the fold", fold("design/plan/OrchardRows.json", true) === "4:1");
   ok("[query] an empty query matches no plan header (a plan without a screenName does not fold to it)", (() => {
     const r = resolveScreen(dir, "  ", { planDir: path.join(dir, "plan") });
     return r.status !== "resolved";

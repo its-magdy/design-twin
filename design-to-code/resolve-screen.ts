@@ -27,9 +27,11 @@
 //                            whitespace, "-" and "_" removed and case folded, after a directory part and a
 //                            file tail (`.json`, `.measured.json`, `.png`) are dropped from the query, so a
 //                            plan file's name or path (`CropPlans.json`, `design/plan/CropPlans.json`),
-//                            `seed-swaps` or `SeedSwaps` finds the screen named "Crop Plans" / "Seed Swaps".
-//                            Two or more rows are still AMBIGUOUS (listed with their node ids); an
-//                            exact match always wins because this stage never runs after one.
+//                            `seed-swaps` or `SeedSwaps` finds the screen named "Crop Plans" / "Seed Swaps"
+//                            — as a CANDIDATE, never a result, even on exactly one row: a fold that makes two
+//                            names equal is a near-match ("Crop-Plans" and "Crop Plans" are two screens), and a
+//                            writer that took one could name one screen's files after another. Its rows are
+//                            `needs-confirmation`, listed first, then stage 5's rows that are not among them.
 //   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                            row.texts (the first N deduped text strings on the frame).
 //
@@ -42,8 +44,8 @@
 // exactly the ambiguity this module exists to catch, and a sequence of independent exact stages hid it.
 // Collecting the union first is what makes "evaluated together" true in code, not just in comment.
 //
-// Text search (stage 5) NEVER resolves, even on exactly one hit:
-// a text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
+// Neither 4c nor text search (stage 5) EVER resolves, even on exactly one hit:
+// a folded or text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
 // resolve by node id — never as `resolved`. This is what "never take a near-match" / "do not make
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 import fs from "node:fs";
@@ -155,6 +157,8 @@ function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
 }
 
 const fold = (s: unknown): string => String(s || "").trim().toLowerCase();
+/** The stage a 4c (whitespace-insensitive) hit is reported under. */
+const FOLD_STAGE = "whitespace-insensitive match (layer name / title / plan header)";
 // The 4c comparison: every whitespace, "-" and "_" run dropped, case folded ("SeedSwaps" === "seed-swaps" ===
 // "Seed Swaps").
 const foldCompact = (s: unknown): string => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -184,7 +188,8 @@ function compactKeys(q: string): string[] {
 //     in the exact-stage union.
 //   { status: "ambiguous", stage, candidates }                  — the exact-stage union has >1 row;
 //     each candidate's `matchedVia` names which field(s) it matched on.
-//   { status: "needs-confirmation", stage: "text search", candidates } — one or more text-search
+//   { status: "needs-confirmation", stage, candidates }       — one or more whitespace-insensitive (4c: stage
+//     "whitespace-insensitive match …", its rows first, then text-search rows) or text-search (stage "text search")
 //     hits; never auto-picked, even when there is only one.
 //   { status: "not-found", candidates, noTitles? }               — nothing matched anywhere;
 //     `noTitles: true` when NOT ONE row in this export carries a `title` at all, meaning the export
@@ -255,8 +260,9 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
 
   // Stage 4c: the same three fields, ignoring whitespace, "-", "_" and case. Nothing exact matched (or carried an
   // id), so a query such as a plan file's name or path (`design/plan/CropPlans.json` -> "CropPlans", `crop-plans`)
-  // can still find "Crop Plans". One row resolves; two or more stop and list (e.g. two frames named "Crop Plans",
-  // or "Crop Plans" and "Crop-Plans"): a fold that makes rows equal never picks one.
+  // can still find "Crop Plans" — as a candidate to confirm by node id, never a result: a fold that makes rows equal
+  // never picks one, and one row is no proof the query meant it. The first key with rows gives them.
+  let folded: ScreenCandidate[] = [];
   for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
       plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id): id is string => !!id)
@@ -272,15 +278,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
       if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
     }
     const compactRows = [...compact.values()];
-    const one = compactRows.length === 1 ? compactRows[0] : undefined;
-    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + "), kind: "folded" };
-    if (compactRows.length > 1) {
-      return {
-        status: "ambiguous",
-        stage: "whitespace-insensitive match (layer name / title / plan header)",
-        candidates: compactRows.map((u) => describe(u.row, [...u.via])),
-      };
-    }
+    if (compactRows.length) { folded = compactRows.map((u) => describe(u.row, [...u.via])); break; }
   }
 
   // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header (a single
@@ -291,9 +289,12 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
       (r.title && fold(r.title).includes(qFold)) ||
       (Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold)))
   );
-  if (textMatches.length) {
+  if (folded.length || textMatches.length) {
+    // 4c's rows first, then the text-search rows that are not among them
+    const foldedIds = new Set(folded.map((c) => c.id));
+    const candidates = [...folded, ...textMatches.filter((r) => !foldedIds.has(r.id)).map((r) => describe(r))];
     return Object.assign<Extract<ResolveScreenResult, { status: "needs-confirmation" }>, { noTitles: true } | null>(
-      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe(r)) },
+      { status: "needs-confirmation", stage: folded.length ? FOLD_STAGE : "text search", candidates },
       noTitles ? { noTitles: true } : null
     );
   }
@@ -342,7 +343,8 @@ function main(argv: string[]): number {
     return 1;
   }
   if (res.status === "needs-confirmation") {
-    console.error(`error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`);
+    console.error(res.stage === "text search" ? `error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`
+      : `error  '${query}' matched only ignoring spaces/-/_ — confirm with the node id (never resolved automatically from a near-match):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
     return 1;

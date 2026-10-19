@@ -1306,16 +1306,16 @@ export interface DirDiffResult { dir: string; results: DiffResult[]; notCompared
 
 export interface ScreenCandidate {
   name: string; id: string; title: string | null; w?: number; h?: number; nodes?: number; reference: string | null; screenshot: string | null;
-  /** which exact-stage field(s) this row matched on */
+  /** which exact-stage (or whitespace-insensitive) field(s) this row matched on */
   matchedVia?: string[];
 }
-/** Which kind of stage resolved a screen: the node id typed (1), the exact union (2–4), an id the query carries (4b), or
- *  the whitespace-insensitive union (4c) — `stage` is the words for people, `kind` the one to branch on. */
-export type ResolveStageKind = "node id" | "exact" | "carried id" | "folded";
+/** Which kind of stage resolved a screen: the node id typed (1), the exact union (2–4) or an id the query carries (4b) —
+ *  `stage` is the words for people, `kind` the one to branch on. (A whitespace-insensitive hit, 4c, never resolves.) */
+export type ResolveStageKind = "node id" | "exact" | "carried id";
 export type ResolveScreenResult =
   | { status: "resolved"; row: IndexRow; stage: string; kind: ResolveStageKind }
   | { status: "ambiguous"; stage: string; candidates: ScreenCandidate[] }
-  | { status: "needs-confirmation"; stage: "text search"; candidates: ScreenCandidate[]; noTitles?: true }
+  | { status: "needs-confirmation"; stage: "text search" | "whitespace-insensitive match (layer name / title / plan header)"; candidates: ScreenCandidate[]; noTitles?: true }
   | { status: "not-found"; candidates: ScreenCandidate[]; noTitles?: true; noIndex?: { dir: string; hint: string | null } };
 
 // ================================================================ tiny guards for the raw-JSON boundary
