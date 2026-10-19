@@ -601,6 +601,11 @@ console.log("CLI --compare reads the set's ONE status base, and a migrated set's
   const live = migratedRun();
   safe("[migrated] a live set named Garden again → no fallback (that name is another set's), 'no screenshot'", () => rowOf(live.rep)?.exists === false && noShot(live.rep));
   fs.rmSync(path.join(dir, "Garden.expected.json"));
+  // the old name live again in another case: on a case-insensitive disk garden.* and Garden.* are one set's files
+  fs.writeFileSync(path.join(dir, "garden.expected.json"), JSON.stringify(exp));
+  const lower = migratedRun();
+  safe("[migrated] a live set named garden (the old name in another case) → no fallback, 'no screenshot'", () => rowOf(lower.rep)?.exists === false && noShot(lower.rep));
+  fs.rmSync(path.join(dir, "garden.expected.json"));
   safe("[migrated] (guard) with Garden gone again, the fallback holds", () => rowOf(migratedRun().rep)?.exists === true);
   fs.rmSync(path.dirname(liveStatusFile(path.join(dir, S))), { recursive: true, force: true });
   fs.rmSync(cwd, { recursive: true, force: true });

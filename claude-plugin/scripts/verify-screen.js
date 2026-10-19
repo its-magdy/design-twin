@@ -6957,7 +6957,8 @@ function migratedArtifact(listed2, o) {
   if (path16.resolve(path16.dirname(listed2)) !== path16.resolve(o.verifyDir)) return null;
   const base = path16.basename(listed2);
   if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
-  if (verifySets(o.verifyDir).includes(st.screen)) return null;
+  const old = st.screen.toLowerCase();
+  if (verifySets(o.verifyDir).some((n) => n.toLowerCase() === old)) return null;
   const candidate = listed2.slice(0, listed2.length - base.length) + o.setName + base.slice(st.screen.length);
   return fs17.existsSync(candidate) ? candidate : null;
 }

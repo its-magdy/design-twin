@@ -108,7 +108,7 @@ function expectDirOf(out: string | undefined): string {
 /** Where an artefact the measured file lists under its set's OLD name is now — `<dir>/<set><rest>` — when the set was
  *  renamed (verify-screen --migrate) after the run that wrote it; else null. Every condition holds or nothing is taken:
  *  the listed file is gone; the run's status (v2) names the set by another name (`screen`, the old one, which no live set
- *  of the dir holds now); the measured file is that run's (its runId) and the very file the run recorded (its sha); the
+ *  of the dir holds now, in any case); the measured file is that run's (its runId) and the very file the run recorded (its sha); the
  *  listed file was in the set's own dir and carries the old name's prefix (`<old>.` / `<old>-`); the renamed file exists.
  *  Never a screenshot of another set, never one that is not on disk. */
 function migratedArtifact(listed: string, o: { setName: string; verifyDir: string; status: VerifyStatusV2 | "v1" | null; measuredRun: string | undefined; measuredSha: string }): string | null {
@@ -118,7 +118,9 @@ function migratedArtifact(listed: string, o: { setName: string; verifyDir: strin
   if (path.resolve(path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
   const base = path.basename(listed);
   if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
-  if (verifySets(o.verifyDir).includes(st.screen)) return null;
+  // in any case: on a case-insensitive disk `garden.*` are `Garden.*` — a live set under the old name in another case owns them
+  const old = st.screen.toLowerCase();
+  if (verifySets(o.verifyDir).some((n) => n.toLowerCase() === old)) return null;
   // the listed path's own directory spelling, the new name in place of the old
   const candidate = listed.slice(0, listed.length - base.length) + o.setName + base.slice(st.screen.length);
   return fs.existsSync(candidate) ? candidate : null;
