@@ -382,6 +382,25 @@ console.log("[canonical] a new plan is <stem>.json, one per node; an existing pl
   check(`[canonical] the stem is the one the node's verify set already has (exit ${layerNamed.status} for the layer's name, ${stemNamed.status} for the set's)`,
     layerNamed.status === 2 && layerNamed.stderr.includes(path.join(fresh, "Older_Name__5_6.json")) && stemNamed.status === 0 && fs.readdirSync(fresh).join() === "Older_Name__5_6.json");
 }
+{
+  // a run opened by --status before any of its set's files exist names the node's set too: the frame renamed in Figma and
+  // re-pulled since, a new plan takes the open run's stem
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-open-"));
+  fs.writeFileSync(path.join(dir, "package.json"), "{}");
+  const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const q = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__7_7", "--phase", "queued", "--new-run"], { encoding: "utf8", cwd: dir });
+  const sf = put("export/New__7_7.json", { screen: "New", nodes: [{ id: "7:7", type: "FRAME", name: "New", children: [] }] });
+  const vf = put("export/New__7_7.vars.json", { collections: [], variables: [] });
+  const planDir = path.join(dir, "design", "plan");
+  fs.mkdirSync(planDir, { recursive: true });
+  const sk = (name: string) => run([sf, vf, path.join(dir, "no-design-system"), "--out", path.join(planDir, name)], { cwd: dir });
+  const byName = sk("New__7_7.json");
+  const byRun = sk("Old__7_7.json");
+  check(`[canonical] a status-only run Old__7_7 is open, the frame renamed "New": a new plan is Old__7_7.json, not New__7_7.json (status ${q.status}; exit ${byName.status}: ${byName.stderr.trim().split("\n").pop()}; exit ${byRun.status})`,
+    q.status === 0 && !fs.existsSync(path.join(dir, "design", "verify", "Old__7_7.expected.json")) && byName.status === 2 && byName.stderr.includes(path.join(planDir, "Old__7_7.json"))
+    && byRun.status === 0 && fs.readdirSync(planDir).join() === "Old__7_7.json");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
 
 // ---------------------------------------------------------------- anchorsSuggested
 // A screen has 12-291 anchor slots; the skeleton names the few boundaries worth filling first: the root's

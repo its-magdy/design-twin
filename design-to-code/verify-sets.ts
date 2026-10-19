@@ -178,7 +178,7 @@ export function setNodeId(verifyDir: string, name: string): string | null {
 }
 
 /** The stems of the grammar-named sets (base or variant) in `verifyDir` that carry `nodeId`, sorted. `open`: the names of
- *  the dir's sets with a run open in the run cache (verify-run.ts openRunSets) — a run opened by --status before any of
+ *  the dir's sets with a run open in the run cache (verify-status.ts openRunSets) — a run opened by --status before any of
  *  its files exist names its set too. */
 export function canonicalStemsFor(verifyDir: string, nodeId: string, open: readonly string[] = []): string[] {
   const stems = new Set<string>();

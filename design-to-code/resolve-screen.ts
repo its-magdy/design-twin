@@ -61,6 +61,7 @@ import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { EXPORT_DIR, EXPORT_SUBDIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeStem } from "./verify-sets.ts";
+import { openRunSets } from "./verify-status.ts";
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
 // doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
@@ -329,8 +330,9 @@ function main(argv: string[]): number {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     // the key the screen's files are named by, as screen-key.ts screenKey names it (verify-sets.ts nodeStem): plans,
     // verify sets, --status. A verify set already in design/verify for the node keeps its stem, so after a rename in
-    // Figma this names the existing set.
-    const k = nodeStem(fs.existsSync(VERIFY_DIR) ? path.resolve(VERIFY_DIR) : null, res.row.id, res.row.name);
+    // Figma this names the existing set — and so does a run open in the run cache before any of its files exist.
+    const verifyDir = path.resolve(VERIFY_DIR);
+    const k = nodeStem(verifyDir, res.row.id, res.row.name, openRunSets(verifyDir));
     console.log(`stem ${"why" in k ? screenStem(res.row.name, res.row.id) : k.stem}`);
     if ("why" in k) console.error(`note   ${k.why}`);
     else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} — verify-screen --migrate renames them to ${k.stem}`);

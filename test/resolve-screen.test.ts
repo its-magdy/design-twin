@@ -370,6 +370,24 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
       renamed.status === 0 && renamed.out.split("\n")[1] === "stem Jet_Roles__7314_87192");
     fs.rmSync(proj, { recursive: true, force: true });
   }
+  {
+    // a run opened by --status before any of its set's files exist keeps the stem: the frame renamed in Figma and re-pulled
+    // as "New" since, the stem printed is the open run's (the one --status continues), not New__3_3
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-open-"));
+    fs.writeFileSync(path.join(proj, "package.json"), "{}");
+    const exp = path.join(proj, "design", "export");
+    const index = (name: string): void => {
+      fs.mkdirSync(path.join(exp, "pages"), { recursive: true });
+      fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [{ name, id: "3:3", type: "FRAME", page: "P", file: "pages/P/3_3.json" }] }));
+    };
+    index("Old");
+    const q = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__3_3", "--phase", "queued", "--new-run"], { encoding: "utf8", cwd: proj });
+    index("New");
+    const r = cliIn(proj, exp, "3:3");
+    ok(`a status-only run Old__3_3 is open and the frame is renamed "New": \`stem Old__3_3\` (status ${q.status}: ${q.stderr.trim()}; got ${JSON.stringify(r.out.split("\n")[1])})`,
+      q.status === 0 && !fs.existsSync(path.join(proj, "design", "verify", "Old__3_3.expected.json")) && r.status === 0 && r.out.split("\n")[1] === "stem Old__3_3");
+    fs.rmSync(proj, { recursive: true, force: true });
+  }
   const c1 = cli(pageDir, "Jet Roles");
   ok("the CLI says 'not an export root' and names the root — no empty 'Known layers:'",
     c1.status === 1 && /not an export root/.test(c1.err) && c1.err.includes(`pass ${FIXTURE}`) && !/Known layers/.test(c1.err));

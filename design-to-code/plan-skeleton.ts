@@ -64,6 +64,7 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 import { VERIFY_DIR, findMapFile, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { nodeStem } from "./verify-sets.ts";
+import { openRunSets } from "./verify-status.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
 const USAGE = [
@@ -663,7 +664,8 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
 }
 
 /** Why a NEW plan (its --out not there yet) cannot be written at `out`, or null. A node has one plan, and it is named by
- *  the node: `<stem>.json`, the stem the verify dir already names the node by, else `<Layer>__<id>` (nodeStem). Another
+ *  the node: `<stem>.json`, the stem the verify dir (or a run open in its run cache) already names the node by, else
+ *  `<Layer>__<id>` (nodeStem). Another
  *  plan in the same directory that describes the node — by its `nodeId`, else the id its file name carries, as
  *  verify-screen finds a frame's plans — is the one to merge into. An existing plan merges under any name. */
 function newPlanProblem(out: string, nodeId: string | undefined, layerName: string): string | null {
@@ -676,7 +678,7 @@ function newPlanProblem(out: string, nodeId: string | undefined, layerName: stri
       return `${have} is already the plan of node ${nodeId} — one node, one plan: pass --out ${have} to merge into it`;
     }
   }
-  const k = nodeStem(fs.existsSync(VERIFY_DIR) ? VERIFY_DIR : null, nodeId, layerName);
+  const k = nodeStem(VERIFY_DIR, nodeId, layerName, openRunSets(VERIFY_DIR));
   if ("why" in k) return k.why;
   const want = k.stem + ".json";
   return path.basename(out) === want ? null : `a new plan is named by its node: --out ${path.join(dir, want)}, not ${path.basename(out)}`;

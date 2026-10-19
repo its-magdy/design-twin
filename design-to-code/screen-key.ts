@@ -34,7 +34,7 @@ export interface ScreenKeyOpts {
   planDir?: string | null | undefined;
   /** the verify dir: an existing set keeps its stem */
   verifyDir?: string | null | undefined;
-  /** the verify dir's sets with a run open in the run cache (verify-run.ts openRunSets): a run opened before any of its
+  /** the verify dir's sets with a run open in the run cache (verify-status.ts openRunSets): a run opened before any of its
    *  set's files exist fixes the stem too */
   openSets?: readonly string[] | undefined;
 }
