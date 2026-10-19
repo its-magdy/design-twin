@@ -1406,6 +1406,9 @@ function setNameOfFile(file) {
   const b = path8.basename(file);
   return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
 }
+function statusBaseOf(expectedFile) {
+  return path8.join(path8.dirname(expectedFile), setNameOfFile(expectedFile));
+}
 function outBaseOf(out, setName, defaultDir) {
   if (out === void 0) return { base: path8.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
@@ -4842,11 +4845,12 @@ function runIntegrity(cx) {
   if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
   if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
+  const screen = opts.status?.screen;
+  const S = screen !== void 0 ? shellArg(screen) : "<Layer>__<id>";
   if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
-    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure` : st.phase === "done" ? "measure again" : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
+    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${!st ? `record it with --status ${S} --phase measured --run ${measuredRun}, or re-measure` : st.phase === "done" ? "measure again" : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)` : `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)`}`);
   } else if (st) {
     const stFile = opts.status ? opts.status.file : "status.json";
-    const S = shellArg(st.screen);
     const record = measuredRun === void 0 && TERMINAL_PHASES.includes(st.phase) ? ` \u2014 a measured file that names no run is tied to a run by recording it: --status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>` : "";
     if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
     else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
@@ -5261,7 +5265,7 @@ function verdictOf(cx, g) {
   if (planInteractionsChanged) reasons.push(planInteractionsChanged);
   if (legacy2) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
-  if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
+  if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Layer>__<id>.png and list it in artifacts)");
   for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' \u2014 the canonical key is '${f.field}')` : ""}`);
   if (notMeasured.length) reasons.push(`${notMeasured.length} of ${nodesExpected} node spec(s) were never measured`);
   if (high) reasons.push(`${high} high-severity value mismatch(es)`);
@@ -6872,6 +6876,17 @@ function expectDirOf(out) {
   if (/[\\/]$/.test(out)) return out.replace(/[\\/]+$/, "") || out;
   return path16.dirname(out);
 }
+function migratedArtifact(listed2, o) {
+  const st = o.status;
+  if (fs17.existsSync(listed2) || st === null || st === "v1" || st.screen === o.setName) return null;
+  if (o.measuredRun === void 0 || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
+  if (path16.resolve(path16.dirname(listed2)) !== path16.resolve(o.verifyDir)) return null;
+  const base = path16.basename(listed2);
+  if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
+  if (verifySets(o.verifyDir).includes(st.screen)) return null;
+  const candidate = listed2.slice(0, listed2.length - base.length) + o.setName + base.slice(st.screen.length);
+  return fs17.existsSync(candidate) ? candidate : null;
+}
 function plansForNode(nodeId) {
   const hits = [];
   const idless = [];
@@ -7281,11 +7296,25 @@ function compareMain(files, flags, USAGE) {
   }
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
   const compareBase = ob.base;
+  const statusBase = statusBaseOf(expFile);
+  const found = readStatusAt(statusBase);
+  const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path16.basename(found.file) : `${path16.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
+  const measuredSha = sha(measuredFile);
+  const migrated = (listed2) => migratedArtifact(listed2, { setName, verifyDir: path16.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
+  const artifactNotes = [];
+  const movedNote = (listed2, now) => {
+    artifactNotes.push(`${listed2} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) \u2014 read as ${now}`);
+    console.error(`note  ${artifactNotes[artifactNotes.length - 1]}`);
+  };
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
-    const p = typeof a === "string" ? a : a && a.path;
+    const listed2 = typeof a === "string" ? a : a && a.path;
+    const moved = listed2 ? migrated(listed2) : null;
+    if (listed2 && moved !== null) movedNote(listed2, moved);
+    const p = moved ?? listed2;
     const exists3 = !!p && fs17.existsSync(p);
-    return { ...ifDefined("path", p), exists: exists3, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists3 ? sha(p) : void 0) };
+    return { ...ifDefined("path", p), exists: exists3, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists3 ? sha(p) : void 0), ...moved !== null ? { listedAs: listed2 } : {} };
   });
   let code;
   let planHit;
@@ -7356,31 +7385,27 @@ function compareMain(files, flags, USAGE) {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
-  const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path16.join(path16.dirname(expFile), path16.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path16.resolve(probeBase) !== path16.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  const statusOpt = found ? { status: {
-    file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path16.basename(found.file) : `${path16.basename(found.file)} (live, ${found.file})`,
-    status: found.status
-  } } : measuredBase !== null ? { status: null } : {};
   const vd = measured.visual && measured.visual.ran ? measured.visual.diff : void 0;
   let visualDiff = null;
   if (typeof vd === "string" && vd) {
     const beside = path16.join(path16.dirname(measuredFile), path16.basename(vd));
-    visualDiff = fs17.existsSync(vd) ? { path: vd, exists: true } : fs17.existsSync(beside) ? { path: beside.split(path16.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const moved = fs17.existsSync(vd) || fs17.existsSync(beside) ? null : migrated(vd);
+    if (moved !== null) movedNote(vd, moved);
+    visualDiff = fs17.existsSync(vd) ? { path: vd, exists: true } : fs17.existsSync(beside) ? { path: beside.split(path16.sep).join("/"), exists: true } : moved !== null ? { path: moved, exists: true } : { path: vd, exists: false };
   }
+  const inputNotes = [...readable.notes, ...compareNotes, ...artifactNotes];
   const rep = compare(expectation, measured, {
     ...statusOpt,
     ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {},
     ...readable.dropped.includes("visual") ? { visualMalformed: true } : {},
     ...visualDiff ? { visualDiff } : {},
-    ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {},
+    ...inputNotes.length ? { inputNotes } : {},
     ...ifDefined("recordedPlanGone", recordedPlanGone),
     ...ifDefined("interactions", extra),
     ...ifDefined("components", extraComponents),
     ...extraInferred !== void 0 ? { inferred: extraInferred } : {},
     expectationSha256: sha(expFile),
-    measuredSha256: sha(measuredFile),
+    measuredSha256: measuredSha,
     artifactCheck,
     ...ifDefined("code", code),
     ...ifDefined("against", against),

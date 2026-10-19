@@ -1090,7 +1090,9 @@ export interface VerifyInteractionResult extends VerifyInteraction { result: Int
   activation?: string; detectedBy?: string; revealedBy?: string;
   /** the other side's disagreeing claim that this result overrides */
   overridden?: string }
-export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string }
+/** One of measured.artifacts as --compare found it on disk. `listedAs`: the path the measured file lists, when the row reads
+ *  the file under its set's new name instead (renamed by verify-screen --migrate after the run). */
+export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string; listedAs?: string }
 /** report.inputs.code: which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
 export type VerifyVerdict = "pass" | "pass-with-deviations" | "fail" | "incomplete";

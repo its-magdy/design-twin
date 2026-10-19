@@ -45,6 +45,7 @@ import {
 } from "./doc-guards.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
+import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
@@ -64,7 +65,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile } from "./verify-sets.ts";
+import { expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -102,6 +103,25 @@ function expectDirOf(out: string | undefined): string {
   if (dir || path.resolve(out) === path.resolve(VERIFY_DIR)) return out;
   if (/[\\/]$/.test(out)) return out.replace(/[\\/]+$/, "") || out;
   return path.dirname(out);
+}
+
+/** Where an artefact the measured file lists under its set's OLD name is now — `<dir>/<set><rest>` — when the set was
+ *  renamed (verify-screen --migrate) after the run that wrote it; else null. Every condition holds or nothing is taken:
+ *  the listed file is gone; the run's status (v2) names the set by another name (`screen`, the old one, which no live set
+ *  of the dir holds now); the measured file is that run's (its runId) and the very file the run recorded (its sha); the
+ *  listed file was in the set's own dir and carries the old name's prefix (`<old>.` / `<old>-`); the renamed file exists.
+ *  Never a screenshot of another set, never one that is not on disk. */
+function migratedArtifact(listed: string, o: { setName: string; verifyDir: string; status: VerifyStatusV2 | "v1" | null; measuredRun: string | undefined; measuredSha: string }): string | null {
+  const st = o.status;
+  if (fs.existsSync(listed) || st === null || st === "v1" || st.screen === o.setName) return null;
+  if (o.measuredRun === undefined || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
+  if (path.resolve(path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
+  const base = path.basename(listed);
+  if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
+  if (verifySets(o.verifyDir).includes(st.screen)) return null;
+  // the listed path's own directory spelling, the new name in place of the old
+  const candidate = listed.slice(0, listed.length - base.length) + o.setName + base.slice(st.screen.length);
+  return fs.existsSync(candidate) ? candidate : null;
 }
 
 // The plans under design/plan/ (relative to the working directory) of node `nodeId`, by node id only: a plan's `nodeId`,
@@ -473,13 +493,33 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
   const compareBase = ob.base;
+  // the run status of the set: ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the live status in the
+  // run cache, else the published <dir>/<set>.status.json — the key every writer of the set's run uses (--status, --wait,
+  // verify-probe), wherever the measured file was written. Always looked up: null = looked and found none (a measured file
+  // naming its run then has nothing recording it).
+  const statusBase = statusBaseOf(expFile);
+  const found = readStatusAt(statusBase);
+  const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
+  // an artefact listed under the set's old name (renamed by --migrate after its run) is read under the new one — only by
+  // migratedArtifact's rule, and said so
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
+  const measuredSha = sha(measuredFile);
+  const migrated = (listed: string): string | null => migratedArtifact(listed, { setName, verifyDir: path.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
+  const artifactNotes: string[] = [];
+  const movedNote = (listed: string, now: string): void => {
+    artifactNotes.push(`${listed} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) — read as ${now}`);
+    console.error(`note  ${artifactNotes[artifactNotes.length - 1]}`);
+  };
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
   // can never cite a screenshot that does not exist.
   const artifacts = measured.artifacts || [];
   const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
-    const p = typeof a === "string" ? a : a && a.path;
+    const listed = typeof a === "string" ? a : a && a.path;
+    const moved = listed ? migrated(listed) : null;
+    if (listed && moved !== null) movedNote(listed, moved);
+    const p = moved ?? listed;
     const exists = !!p && fs.existsSync(p);
-    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined) };
+    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined), ...(moved !== null ? { listedAs: listed } : {}) };
   });
   // tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
@@ -552,28 +592,22 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
   }
-  // the run status of the measured file (<dir>/<S>.measured.json → the live status of <dir>/<S>, else the
-  // published <dir>/<S>.status.json) — the same resolver --status, --wait and verify-probe --run use
-  // — and, for a measured file naming its run, else the status of the expectation's dir the probe wrote it to
-  // (verify-probe keys the run by the expectation's dir, so a measured file it wrote to a stage dir finds its run)
-  const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path.join(path.dirname(expFile), path.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path.resolve(probeBase) !== path.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  // (status: null = looked and found none — a measured file naming its run then has nothing recording it)
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`,
-    status: found.status } }
-    : measuredBase !== null ? { status: null } : {};
-  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
+  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage), else
+  // under the set's new name (migratedArtifact)
   const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
   let visualDiff: { path: string; exists: boolean } | null = null;
   if (typeof vd === "string" && vd) {
     const beside = path.join(path.dirname(measuredFile), path.basename(vd));
-    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const moved = fs.existsSync(vd) || fs.existsSync(beside) ? null : migrated(vd);
+    if (moved !== null) movedNote(vd, moved);
+    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true }
+      : moved !== null ? { path: moved, exists: true } : { path: vd, exists: false };
   }
+  const inputNotes = [...readable.notes, ...compareNotes, ...artifactNotes];
   const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}),
-    ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
+    ...(visualDiff ? { visualDiff } : {}), ...(inputNotes.length ? { inputNotes } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
     ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile),
-    measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+    measuredSha256: measuredSha, artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
   const md = reportToMarkdown(rep);
   write(false, compareBase, rep, md);
   console.error(rep.headline);
