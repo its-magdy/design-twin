@@ -1,5 +1,6 @@
 // The helpers shared by the browser e2e suites (verify-probe-e2e, -drive-e2e, -drive-tail-e2e, -behaviour-e2e, -visual-e2e):
-// the concurrency pool and runNode, the async spawn of one probe / verify-screen process.
+// the concurrency pool and runNode, the async spawn of one probe / verify-screen process, and verifyCase, a run's own
+// verify dir.
 //
 //   const q = limit(poolSize());          // a queue running at most n of its tasks at once
 //   const P = { a: q(() => probe(…)), … }; // queued up front, awaited where their checks are
@@ -7,8 +8,12 @@
 // Each task is still its own `node verify-probe.js` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { KILL_HOST, killPidTree, type KillHost } from "../design-to-code/kill-tree.ts";
+import { runCacheDir } from "../design-to-code/run-cache.ts";
+import { setNameOfFile } from "../design-to-code/verify-sets.ts";
 
 export { killPidTree, type KillHost };
 
@@ -79,3 +84,27 @@ export const runNode = (cwd: string, script: string, args: string[], killAfterMs
   // a killed run's status is null everywhere (Windows: a process ended by taskkill or TerminateProcess exits with code 1)
   p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed, treeKilled }); });
 });
+
+/** A run's own verify dir (verifyCase): the dir, the expectation's copy in it and the set's base there (`<dir>/<set>`). */
+export interface VerifyCase { dir: string; expected: string; base: string }
+const caseDirs: string[] = [];
+/** A verify dir of one run's own, `<src's dir>/<name>/`, holding a byte-identical copy of the expectation `src` under its
+ *  own file name: the same sha, the same set name. A set has ONE status base (statusBaseOf: `<its dir>/<set>`), so two
+ *  probes of one set in one dir refuse each other (another run is open) — each pooled run, and each run that leaves its
+ *  status open, measures from a dir of its own. Paths are relative to `proj` when `src` is. dropCaseCaches removes the
+ *  dir's run cache. */
+export const verifyCase = (proj: string, name: string, src: string): VerifyCase => {
+  const dir = path.join(path.dirname(src), name), expected = path.join(dir, path.basename(src));
+  fs.mkdirSync(path.resolve(proj, dir), { recursive: true });
+  fs.copyFileSync(path.resolve(proj, src), path.resolve(proj, expected));
+  caseDirs.push(path.resolve(proj, dir));
+  return { dir, expected, base: path.join(dir, setNameOfFile(src)) };
+};
+/** Removes the run cache (live statuses, stage dirs, locks) of every dir verifyCase made — in a project without a
+ *  package.json it is under the OS temp dir, never removed with the suite's temp tree. Called by a suite's finish(),
+ *  before the case dirs themselves go (the cache is keyed by the dir's real path). */
+export const dropCaseCaches = (): void => {
+  for (const d of caseDirs.splice(0)) {
+    try { fs.rmSync(runCacheDir(d), { recursive: true, force: true }); } catch { /* a cache left read-only by a failed check */ }
+  }
+};

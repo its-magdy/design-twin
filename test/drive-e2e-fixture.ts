@@ -5,7 +5,8 @@
 // Each suite calls startDriveFixture() once: its own temp project, its own server, its own write accounting, torn down by finish().
 //
 //   const fx = await startDriveFixture("dt-probe-drive-e2e-", "verify-probe drive e2e — …:");
-//   const r = await fx.probe(["--expected", fx.EXPECTED, "--url", fx.url(), "--out", out("Beds__70_1"), …]);
+//   const c = fx.verifyCase("Wide", fx.EXPECTED);  // a verify dir of the run's own, with a copy of the expectation
+//   const r = await fx.probe(["--expected", c.expected, "--url", fx.url(), …]);  // writes c.base + ".measured.json"
 //
 // The fixture "Plot Ledger" (test/fixtures/probe/plot-ledger.*, invented names) is a single-page app whose sections are
 // picked by state, not by the URL: the Beds screen (root 70:1) exists only after its sidebar button (70:30) is clicked
@@ -35,7 +36,7 @@ import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../desig
 import { readStatus, type VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import { check, report } from "./assert.ts";
-import { killPidTree, runNode, type KillHost, type Run } from "./pool.ts";
+import { dropCaseCaches, killPidTree, runNode, verifyCase, type KillHost, type Run, type VerifyCase } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -47,7 +48,7 @@ export const READY = "[data-dt-node=\"70:1\"]";
 // the steps' sha: canonical JSON (sorted keys) — for one-key string steps that is JSON.stringify of the list
 export const stepsSha = crypto.createHash("sha256").update(JSON.stringify(STEPS)).digest("hex");
 
-export type { Run };
+export type { Run, VerifyCase };
 export const out = (name: string): string => path.join("design", "verify", name);
 export const ix = (m: VerifyMeasured | null, id: string): InteractionEvidence | undefined => (m?.interactions || []).find((i) => i.nodeId === id);
 /** the "had not finished loading after 10s" note of a document whose load timed out */
@@ -95,6 +96,8 @@ export interface DriveFixture {
   /** a path inside the temp project, and the run status the probe left for a verify dir base (the run cache's live file) */
   abs: (rel: string) => string;
   status: (base: string) => VerifyStatusV2 | "v1" | null;
+  /** a verify dir of a run's own under design/verify, holding a copy of `src` (EXPECTED or QUIET): pool.ts verifyCase */
+  verifyCase: (name: string, src: string) => VerifyCase;
   /** the expectation from the real --expect, and the same without interactions (nothing to drive) */
   EXPECTED: string;
   QUIET: string;
@@ -210,7 +213,7 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
       { ...o, env: { [BEHAVIOUR_OFF_ENV]: "1", ...o?.env } });
   };
   const vs = (args: string[]): Promise<Run> => run(VS, args);
-  const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
+  const finish = (): void => { server.closeAllConnections(); server.close(); dropCaseCaches(); fs.rmSync(tmp, { recursive: true, force: true }); };
   const read = (base: string): VerifyMeasured | null => readJsonOrNull(path.join(proj, base + ".measured.json"), isVerifyMeasured);
   const readReport = (base: string): VerifyReport | null => readJsonOrNull(path.join(proj, base + ".report.json"), isVerifyReport);
   const written = (base: string): boolean => fs.existsSync(path.join(proj, base + ".measured.json")) || fs.existsSync(path.join(proj, base + ".png"));
@@ -238,5 +241,5 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
 
   const abs = (rel: string): string => path.join(proj, rel);
   const status = (base: string): VerifyStatusV2 | "v1" | null => readStatus(abs(base));
-  return { url, edge, probe, vs, read, readReport, written, writes, writesOf, froze, abs, status, EXPECTED, QUIET, finish };
+  return { url, edge, probe, vs, read, readReport, written, writes, writesOf, froze, abs, status, verifyCase: (name, src) => verifyCase(proj, name, src), EXPECTED, QUIET, finish };
 }

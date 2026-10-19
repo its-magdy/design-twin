@@ -29,7 +29,8 @@ import { isJsonObject } from "../design-to-code/types.ts";
 import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import type { BehaviourCheck, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { limit, runNode, type Run } from "./pool.ts";
+import { must } from "./fixtures.ts";
+import { dropCaseCaches, limit, runNode, verifyCase, type Run, type VerifyCase } from "./pool.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROBE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
@@ -117,8 +118,19 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/seed-shelf.html
 // (--behaviour off is taken only with the test-only env var)
 const probe = (proj: string, args: string[]): Promise<Run> => runNode(proj, PROBE, [...args, "--project", proj], 0, { ...process.env, [BEHAVIOUR_OFF_ENV]: "1" });
 const vs = (proj: string, args: string[]): Promise<Run> => runNode(proj, VS, args);
-const finish = (): void => { for (const s of sockets) s.destroy(); server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
+const finish = (): void => { for (const s of sockets) s.destroy(); server.closeAllConnections(); server.close(); dropCaseCaches(); fs.rmSync(tmp, { recursive: true, force: true }); };
 const out = (name: string): string => path.join("design", "verify", name);
+// each run measures from a verify dir of its own (design/verify/<name>/ of its project, a copy of its expectation: a set
+// has one status base, so two runs of one set in one dir would refuse each other): kase → the copy to pass as --expected
+// (no --out: the files go beside it), baseOf → where the run wrote (<that dir>/<set>), relative to its project
+const cases = new Map<string, VerifyCase>();
+const kase = (proj: string, name: string, src: string): string => { const c = verifyCase(proj, name, src); cases.set(name, c); return c.expected; };
+const caseOf = (name: string): VerifyCase => must(cases.get(name), `the verify dir of the run ${name}`);
+const baseOf = (name: string): string => caseOf(name).base;
+/** a probe run whose arguments (and so its verify dir) are built now, run when the pool gets to it */
+const later = (proj: string, args: string[]) => (): Promise<Run> => probe(proj, args);
+/** run `name`'s --compare: its own copy of the expectation (so its own run's status is read), the report beside it */
+const compareCase = (proj: string, name: string): Promise<Run> => { const c = caseOf(name); return vs(proj, ["--compare", c.expected, c.base + ".measured.json", "--out", c.dir]); };
 const read = (proj: string, base: string): VerifyMeasured | null => readJsonOrNull(path.join(proj, base + ".measured.json"), isVerifyMeasured);
 const readReport = (proj: string, base: string): VerifyReport | null => readJsonOrNull(path.join(proj, base + ".report.json"), isVerifyReport);
 /** the behaviour rows (none when the block is absent or did not run) */
@@ -156,7 +168,7 @@ for (const proj of [projAxe, projBare, projSlowAxe]) {
 }
 const EXP = out("Crates__80_1") + ".expected.json", QUIET = out("Crates__80_1.quiet") + ".expected.json";
 
-// ---- the independent probe runs, queued up front and run 3 at a time (each has its own --out); awaited where their checks are
+// ---- the independent probe runs, queued up front and run 3 at a time (each in a verify dir of its own); awaited where their checks are
 // (a fixed 3, not poolSize(): the budget-sensitive checks were validated at 3 on a 4-vCPU CI runner)
 const q = limit(3);
 // correct builds the probe must not misjudge or touch
@@ -183,33 +195,33 @@ const E11 = "own-r6";
 const E12 = "own-r7";
 const P = {
   // the first Enter freezes the page for good — its unit is cut at its own cap, the next unit still runs (the longest run: first)
-  rFz: q(() => probe(projBare, ["--expected", EXP, "--url", url("freeze-enter"), "--out", out("FreezeEnter"), "--max-time", "70000"])),
-  r1: q(() => probe(projAxe, ["--expected", EXP, "--url", url(), "--out", out("Ok")])),
-  r2: q(() => probe(projBare, ["--expected", EXP, "--url", url("broken"), "--out", out("Broken")])),
-  rE1: q(() => probe(projBare, ["--expected", EXP, "--url", url(E1), "--out", out("Edge1")])),
-  rE2: q(() => probe(projBare, ["--expected", EXP, "--url", url(E2), "--out", out("Edge2")])),
-  rE3: q(() => probe(projBare, ["--expected", EXP, "--url", url(E3), "--out", out("Edge3")])),
-  rE4: q(() => probe(projBare, ["--expected", EXP, "--url", url(E4), "--out", out("Edge4")])),
-  rE5: q(() => probe(projBare, ["--expected", EXP, "--url", url(E5), "--out", out("Edge5")])),
-  rE6: q(() => probe(projBare, ["--expected", EXP, "--url", url(E6), "--out", out("Edge6")])),
-  rE7: q(() => probe(projBare, ["--expected", EXP, "--url", url(E7), "--out", out("Edge7")])),
-  rE8: q(() => probe(projBare, ["--expected", EXP, "--url", url(E8), "--out", out("Edge8")])),
-  rE9: q(() => probe(projBare, ["--expected", EXP, "--url", url(E9), "--out", out("Edge9")])),
-  rE10: q(() => probe(projBare, ["--expected", EXP, "--url", url(E10), "--out", out("Edge10")])),
-  rE11: q(() => probe(projBare, ["--expected", EXP, "--url", url(E11), "--out", out("Edge11")])),
-  rE12: q(() => probe(projBare, ["--expected", EXP, "--url", url(E12), "--out", out("Edge12")])),
+  rFz: q(later(projBare, ["--expected", kase(projBare, "FreezeEnter", EXP), "--url", url("freeze-enter"), "--max-time", "70000"])),
+  r1: q(later(projAxe, ["--expected", kase(projAxe, "Ok", EXP), "--url", url()])),
+  r2: q(later(projBare, ["--expected", kase(projBare, "Broken", EXP), "--url", url("broken")])),
+  rE1: q(later(projBare, ["--expected", kase(projBare, "Edge1", EXP), "--url", url(E1)])),
+  rE2: q(later(projBare, ["--expected", kase(projBare, "Edge2", EXP), "--url", url(E2)])),
+  rE3: q(later(projBare, ["--expected", kase(projBare, "Edge3", EXP), "--url", url(E3)])),
+  rE4: q(later(projBare, ["--expected", kase(projBare, "Edge4", EXP), "--url", url(E4)])),
+  rE5: q(later(projBare, ["--expected", kase(projBare, "Edge5", EXP), "--url", url(E5)])),
+  rE6: q(later(projBare, ["--expected", kase(projBare, "Edge6", EXP), "--url", url(E6)])),
+  rE7: q(later(projBare, ["--expected", kase(projBare, "Edge7", EXP), "--url", url(E7)])),
+  rE8: q(later(projBare, ["--expected", kase(projBare, "Edge8", EXP), "--url", url(E8)])),
+  rE9: q(later(projBare, ["--expected", kase(projBare, "Edge9", EXP), "--url", url(E9)])),
+  rE10: q(later(projBare, ["--expected", kase(projBare, "Edge10", EXP), "--url", url(E10)])),
+  rE11: q(later(projBare, ["--expected", kase(projBare, "Edge11", EXP), "--url", url(E11)])),
+  rE12: q(later(projBare, ["--expected", kase(projBare, "Edge12", EXP), "--url", url(E12)])),
   // every load after the measurement pass's is an empty state (page checks only)
-  rFp: q(() => probe(projBare, ["--expected", QUIET, "--url", url("later-empty"), "--out", out("LaterEmpty")])),
-  r3: q(() => probe(projAxe, ["--expected", EXP, "--url", url(), "--out", out("Off"), "--behaviour", "off"])),
-  r4: q(() => probe(projBare, ["--expected", QUIET, "--url", url("fixed-table"), "--out", out("Fixed")])),
-  r5: q(() => probe(projBare, ["--expected", QUIET, "--url", url(), "--out", out("QuietOk"), "--behaviour", "off"])),
-  rAx: q(() => probe(projSlowAxe, ["--expected", QUIET, "--url", url(), "--out", out("SlowAxe")])),
-  r6: q(() => probe(projBare, ["--expected", QUIET, "--url", url("spin-on-tab"), "--out", out("Spin"), "--max-time", "40000"])),
+  rFp: q(later(projBare, ["--expected", kase(projBare, "LaterEmpty", QUIET), "--url", url("later-empty")])),
+  r3: q(later(projAxe, ["--expected", kase(projAxe, "Off", EXP), "--url", url(), "--behaviour", "off"])),
+  r4: q(later(projBare, ["--expected", kase(projBare, "Fixed", QUIET), "--url", url("fixed-table")])),
+  r5: q(later(projBare, ["--expected", kase(projBare, "QuietOk", QUIET), "--url", url(), "--behaviour", "off"])),
+  rAx: q(later(projSlowAxe, ["--expected", kase(projSlowAxe, "SlowAxe", QUIET), "--url", url()])),
+  r6: q(later(projBare, ["--expected", kase(projBare, "Spin", QUIET), "--url", url("spin-on-tab"), "--max-time", "40000"])),
 };
 
 // ================================================================ the correct twin (axe-core in the project)
 const r1 = await P.r1;
-const m1 = read(projAxe, out("Ok"));
+const m1 = read(projAxe, baseOf("Ok"));
 if (r1.status !== 0) console.log(r1.stderr);
 const b1 = m1?.behaviour;
 check("ok: exit 0, measured.behaviour version 1, ran, chromium, budget ≤ 90 s, not cut", r1.status === 0 && b1?.version === 1 && b1.ran === true && b1.browser.name === "chromium" && b1.budgetMs <= 90_000 && b1.budgetMs > 0 && !b1.cut);
@@ -245,15 +257,15 @@ check("an opener under a transparent layer (synthetic drive row, ok:null) is nev
   && rows(m1).filter((c) => c.nodeId === "80:24").length === 8 && rows(m1).filter((c) => c.nodeId === "80:24").every((c) => c.status === "not-run" && /synthetic/.test(c.detail)));
 check("[axe] axe-core from the PROJECT: ran, version = the repo's devDependency, 0 violations → a11y.axe pass — under the page's CSP script-src 'self'",
   b1?.ran === true && b1.axe.ran === true && b1.axe.version === axeVersion && b1.axe.violations.length === 0 && statusOf(m1, "a11y.axe") === "pass" && cspPages > 0 && m1?.frame?.via === "tag");
-const fc1 = path.join(projAxe, out("Ok") + ".forced-colors.png");
+const fc1 = path.join(projAxe, baseOf("Ok") + ".forced-colors.png");
 check("<S>.forced-colors.png written and listed in behaviour.artifacts, never in measured.artifacts",
-  fs.existsSync(fc1) && b1?.ran === true && b1.artifacts.some((a) => a.endsWith("Ok.forced-colors.png")) && !(m1?.artifacts || []).some((a) => /forced-colors/.test(String(a))));
+  fs.existsSync(fc1) && b1?.ran === true && b1.artifacts.some((a) => a === (baseOf("Ok") + ".forced-colors.png").split(path.sep).join("/")) && !(m1?.artifacts || []).some((a) => /forced-colors/.test(String(a))));
 check("names are labelled: behaviour.namesComputedBy says 'not screen-reader verified'", b1?.ran === true && /not screen-reader verified/.test(b1.namesComputedBy));
 check("the probe prints one behaviour line (not the verdict), with axe-core's version", /^behaviour \(not the fidelity verdict\) 0 fail · 0 warn · \d+ pass/m.test(r1.stderr) && /axe-core \d+\.\d+/.test(r1.stderr));
 
 // ================================================================ the broken twin (no axe-core in the project)
 const r2 = await P.r2;
-const m2 = read(projBare, out("Broken"));
+const m2 = read(projBare, baseOf("Broken"));
 if (r2.status !== 0) console.log(r2.stderr);
 check("broken: exit 0 with failing behaviour checks (never exit 4), measured.json written", r2.status === 0 && m2 !== null && rows(m2).some((c) => c.status === "fail"));
 check("a visibility:hidden opener shown only on row hover: focus-return 80:12 escape AND close fail (focus on <body> with the pointer away)",
@@ -269,7 +281,7 @@ check("outline-hidden + focus-visible:outline-2 without outline-solid → keyboa
   statusOf(m2, "keyboard.focus-visible", "80:19") === "fail" && row(m2, "keyboard.focus-visible", "80:25") === undefined);
 check("a CSS-mask icon painted with currentColor → forced-colors.visible fail naming 80:20; the forced-colours PNG written + listed",
   statusOf(m2, "forced-colors.visible", "80:20") === "fail" && /data-dt-node="80:20"/.test(row(m2, "forced-colors.visible", "80:20")?.detail ?? "")
-  && fs.existsSync(path.join(projBare, out("Broken") + ".forced-colors.png")) && m2?.behaviour?.ran === true && m2.behaviour.artifacts.length === 1);
+  && fs.existsSync(path.join(projBare, baseOf("Broken") + ".forced-colors.png")) && m2?.behaviour?.ran === true && m2.behaviour.artifacts.length === 1);
 check("two <main> → a11y.landmarks fail; region \"Seed Trays list\" inside \"Seed Trays\" → warn",
   rows(m2).some((c) => c.id === "a11y.landmarks" && c.status === "fail" && /2 main/.test(c.detail)) && rows(m2).some((c) => c.id === "a11y.landmarks" && c.status === "warn" && /Seed Trays list/.test(c.detail)));
 check("an icon-only button without a name → a11y.name 80:21 fail, labelled 'not screen-reader verified'",
@@ -288,7 +300,7 @@ check("never destructive: no POST /mutate after both battery runs (Delete crate 
 // a readonly picker field in a POST form, a focusable row around a div opener, Headless UI's 0-px dialog root,
 // a closed disclosure menu, a WAAPI entrance + a position:fixed scroll lock on one dialog
 const rE1 = await P.rE1;
-const mE1 = read(projBare, out("Edge1"));
+const mE1 = read(projBare, baseOf("Edge1"));
 if (rE1.status !== 0) console.log(rE1.stderr);
 if (rows(mE1).some((c) => c.status === "fail" || c.status === "warn")) show(mE1, /fail|warn/);
 check("exit 0, the correct shapes give no fail and no warn", rE1.status === 0 && rows(mE1).length > 0 && !rows(mE1).some((c) => c.status === "fail" || c.status === "warn"));
@@ -308,7 +320,7 @@ check("a WAAPI entrance + a position:fixed body scroll lock on 80:17: scroll-ope
 // Close, a scrimless modal with a JS control in the corner, a 40-field untrapped modal, a row action revealed on its
 // own :focus-visible, a WAAPI spinner in a button with no focus indicator, a lab() scrim
 const rE2 = await P.rE2;
-const mE2 = read(projBare, out("Edge2"));
+const mE2 = read(projBare, baseOf("Edge2"));
 if (rE2.status !== 0) console.log(rE2.stderr);
 check("exit 0 and NO write — the JS help toggle in the corner of a scrimless modal is never clicked (0 POSTs)", rE2.status === 0 && mE2 !== null && writesOf(E2).length === 0);
 check("a date input, a shadow-DOM pager and an iframe before the openers do not end the Tab walk: keyboard.reachable 8 of 8, no 'Tab walk' row; the openers after them get keyboard.activation pass (80:15, 80:16, 80:17)",
@@ -332,7 +344,7 @@ check("a button with no focus indicator holding a running WAAPI spinner → keyb
 // a clickable card opener with its own Delete, a dialog that confirms on Enter, a keydown-opened dialog that focuses
 // Delete in the same task, a global Enter hotkey that writes
 const rE3 = await P.rE3;
-const mE3 = read(projBare, out("Edge3"));
+const mE3 = read(projBare, baseOf("Edge3"));
 if (rE3.status !== 0) console.log(rE3.stderr);
 check("[write block] a card with Delete, an Enter=confirm dialog, a keydown-open + focus Delete and a global Enter hotkey: the server receives 0 POSTs", rE3.status === 0 && mE3 !== null && writesOf(E3).length === 0);
 check("keyboard.reachable counts only the opener's own control: the card's inline Delete is reached, the card (80:16) is not known to be — not-run 'the opener is a container; Tab reaches <button aria-label=\"Delete crate\"> inside it' (not counted as reached)",
@@ -350,7 +362,7 @@ check("the Enter=confirm dialog is closed by a mouse click on Cancel: focus-retu
 // Headless UI's documented Tailwind layout (a transparent fixed centring wrapper over the backdrop) + a tag on the label
 // inside the opener's <button>
 const rE4 = await P.rE4;
-const mE4 = read(projBare, out("Edge4"));
+const mE4 = read(projBare, baseOf("Edge4"));
 if (rE4.status !== 0) console.log(rE4.stderr);
 check("Headless UI's centring wrapper: dialog.scrim 80:16 pass (the backdrop below the transparent wrapper) and click-outside 80:16 pass",
   statusOf(mE4, "dialog.scrim", "80:16") === "pass" && statusOf(mE4, "dialog.click-outside", "80:16") === "pass");
@@ -366,7 +378,7 @@ check("a cell whose centred button has a 2nd focusable (Clear) beside it: the dr
 // an Angular CDK overlay (pointer-events:none container + backdrop + wrapper), a clickable toast in the corner of a
 // full-viewport pointer-events:none region
 const rE5 = await P.rE5;
-const mE5 = read(projBare, out("Edge5"));
+const mE5 = read(projBare, baseOf("Edge5"));
 if (rE5.status !== 0) console.log(rE5.stderr);
 check("Angular CDK's overlay: dialog.scrim 80:16 pass and click-outside 80:16 pass", statusOf(mE5, "dialog.scrim", "80:16") === "pass" && statusOf(mE5, "dialog.click-outside", "80:16") === "pass");
 check("the toast in the corner is never clicked (0 POSTs): click-outside picks another backdrop point (80:12, 80:16 pass)",
@@ -374,7 +386,7 @@ check("the toast in the corner is never clicked (0 POSTs): click-outside picks a
 const triedTo = (m: VerifyMeasured | null, id: string, nodeId: string, what: RegExp): boolean => statusOf(m, id, nodeId) === "not-run" && what.test(row(m, id, nodeId)?.detail ?? "");
 // a non-modal picker (role=dialog, no aria-modal) opened inside an already-open aria-modal sheet
 const rE6 = await P.rE6;
-const mE6 = read(projBare, out("Edge6"));
+const mE6 = read(projBare, baseOf("Edge6"));
 if (rE6.status !== 0) console.log(rE6.stderr);
 check("a non-modal picker inside an open modal sheet is not this row's modal: every dialog.* 80:16 not-run 'not a modal dialog' (no escape-closes fail)",
   ["dialog.escape-closes", "dialog.focus-trap", "dialog.scrim"].every((id) => statusOf(mE6, id, "80:16") === "not-run" && /not a modal dialog/.test(row(mE6, id, "80:16")?.detail ?? "")));
@@ -394,7 +406,7 @@ check(`[ws-send] sends no WebSocket message: the drive's mouse click opens the s
 // ================================================================ the write block's reach, attribution, the backdrop stack
 // three writes that never pass through the page's own network stack, and a transparent app container under no scrim
 const rE7 = await P.rE7;
-const mE7 = read(projBare, out("Edge7"));
+const mE7 = read(projBare, baseOf("Edge7"));
 if (rE7.status !== 0) console.log(rE7.stderr);
 check(`[write-blocked] (a SharedWorker's DELETE, a prototype-registered service worker's POST, a WebSocket message): the server receives NO write of any method at any path and no WebSocket message (saw: ${writesOf(E7).join(", ") || "none"})`,
   rE7.status === 0 && mE7 !== null && writesOf(E7).length === 0);
@@ -408,7 +420,7 @@ check("a transparent static app container over a decorative fixed layer is page 
   triedTo(mE7, "dialog.click-outside", "80:16", /no backdrop to click/) && statusOf(mE7, "dialog.scrim", "80:16") === "warn" && /the scrim is none/.test(row(mE7, "dialog.scrim", "80:16")?.detail ?? ""));
 // the battery's reach may write (a read by POST /graphql) and service workers run (MSW)
 const rE8 = await P.rE8;
-const mE8 = read(projBare, out("Edge8"));
+const mE8 = read(projBare, baseOf("Edge8"));
 if (rE8.status !== 0) console.log(rE8.stderr);
 const differs = (m: VerifyMeasured | null): boolean => rows(m).some((c) => /differs from the measured page/.test(c.detail));
 check(`[late-bar] (the action bar shows after POST /graphql answers and after an MSW-style service worker is ready): the battery runs on the measured page — keyboard.reachable 8 of 8, keyboard.activation 80:23 pass, no 'display:none at rest', no fingerprint mismatch (graphql reads answered: ${graphqlReads})`,
@@ -418,7 +430,7 @@ check("a covering wrapper whose background computes to oklab(0 0 0 / 0) is trans
   statusOf(mE8, "dialog.scrim", "80:16") === "pass" && statusOf(mE8, "dialog.click-outside", "80:16") === "pass");
 // a write 300 ms after the Enter that clicked Delete; an open 0-px modal root around the whole screen
 const rE9 = await P.rE9;
-const mE9 = read(projBare, out("Edge9"));
+const mE9 = read(projBare, baseOf("Edge9"));
 if (rE9.status !== 0) console.log(rE9.stderr);
 check("a write deferred 300 ms after the Enter that clicked Delete taints that Enter's check and every later one of the unit: keyboard.activation 80:15 and dialog.focus-on-open 80:15 not-run 'the page tried to write (POST /mutate…)' (not an activation pass)",
   rE9.status === 0 && writesOf(E9).length === 0 && triedTo(mE9, "keyboard.activation", "80:15", /the page tried to write \(POST \/mutate/) && triedTo(mE9, "dialog.focus-on-open", "80:15", /the page tried to write/));
@@ -429,7 +441,7 @@ check("a non-dialog popup opened inside an open modal root with a 0-px box is no
 // a cell's text that shows nothing never makes its sole centred button another control — driven by the drive,
 // pressed and reached by the keyboard battery exactly as the plain cell (80:22) in the same run
 const rE10 = await P.rE10;
-const mE10 = read(projBare, out("Edge10"));
+const mE10 = read(projBare, baseOf("Edge10"));
 if (rE10.status !== 0) console.log(rE10.stderr);
 const asPlainCell = (id: string): boolean => ["keyboard.reachable", "keyboard.activation"].every((c) => statusOf(mE10, c, id) === statusOf(mE10, c, "80:22"));
 check("cells whose sole centred icon button sits beside an opacity-0 hover tooltip (80:18) or a clip-path-only sr-only label (80:23): the drive clicks them (ok:true, mouse) as the plain cell 80:22 (not ok:null 'another control')",
@@ -442,7 +454,7 @@ check(`[cell-opener] sends no write (saw: ${writesOf(E10).join(", ") || "none"})
 // card's own content — its centred Delete is never its control, in the interaction drive and in the keyboard battery alike; a hover tint
 // over a cell is its chrome
 const rE11 = await P.rE11;
-const mE11 = read(projBare, out("Edge11"));
+const mE11 = read(projBare, baseOf("Edge11"));
 if (rE11.status !== 0) console.log(rE11.stderr);
 const notOwn = (id: string, ctl: string): boolean => ix(mE11, id)?.ok === null && (ix(mE11, id)?.detail ?? "").startsWith(`the opener's click point is another control inside it (<button type="button" aria-label="${ctl}">)`)
   && statusOf(mE11, "keyboard.reachable", id) === "not-run" && new RegExp(`the opener is a container; Tab reaches <button[^>]*${ctl}[^>]*> inside it`).test(row(mE11, "keyboard.reachable", id)?.detail ?? "");
@@ -456,7 +468,7 @@ check(`[container-label] sends no write (saw: ${writesOf(E11).join(", ") || "non
 // ::before status dot (80:23): the drive refuses its Delete by the pixels and Tab reaching the Delete is not the card reached (the
 // battery's markOpener takes no control there, so no key is ever pressed on it); a cell whose sole button sits in a filled wrapper (80:22): driven, Enter opens it
 const rE12 = await P.rE12;
-const mE12 = read(projBare, out("Edge12"));
+const mE12 = read(projBare, baseOf("Edge12"));
 if (rE12.status !== 0) console.log(rE12.stderr);
 // a <progress> is counted by the DOM's media rule first (no pixel shot), the dot by the pixels
 const notOwnPx = (id: string, ctl: string, byPx: boolean): boolean => ix(mE12, id)?.ok === null && (ix(mE12, id)?.detail ?? "").startsWith(`the opener's click point is another control inside it (<button type="button" aria-label="${ctl}">)`)
@@ -474,7 +486,7 @@ check(`the refusal names its reason: 80:18 drive row '… — not driven (its ow
   && /— not driven \(the opener paints something of its own/.test(ix(mE12, "80:23")?.detail ?? "") && /not the opener's own control — the opener paints something of its own/.test(row(mE12, "keyboard.reachable", "80:23")?.detail ?? ""));
 // the fingerprint: the battery's pages answered as an empty state
 const rFp = await P.rFp;
-const mFp = read(projBare, out("LaterEmpty"));
+const mFp = read(projBare, baseOf("LaterEmpty"));
 if (rFp.status !== 0) console.log(rFp.stderr);
 check("every page the behaviour checks reach differs from the measured one (an empty state): every check not-run 'the page reached for this check differs from the measured page (… 80:30 …)' — never judged on another screen",
   rFp.status === 0 && (mFp?.nodes || []).length > 0 && rows(mFp).length > 0 && rows(mFp).every((c) => c.status === "not-run" && /the page reached for this check differs from the measured page \(.*80:30/.test(c.detail)));
@@ -484,7 +496,7 @@ check("behaviour.writeBlock states the block's scope in one line (what is blocke
   b1?.ran === true && typeof b1.writeBlock === "string" && /GET\/HEAD\/OPTIONS/.test(b1.writeBlock) && /WebSocket/.test(b1.writeBlock) && !b1.writeBlock.includes("\n"));
 // a page frozen by the first Enter
 const rFz = await P.rFz;
-const mFz = read(projBare, out("FreezeEnter"));
+const mFz = read(projBare, baseOf("FreezeEnter"));
 if (rFz.status !== 0) console.log(rFz.stderr);
 const judgedBattery = rows(mFz).filter((c) => (c.id === "keyboard.activation" || c.id.startsWith("dialog.")) && ["pass", "warn", "fail"].includes(c.status));
 check(`a page frozen for good by the first Enter (the first battery row's): that unit is cut at its own cap ('time budget'), a later unit still runs (${judgedBattery.length} judged battery check(s)), exit 0 within --max-time 70 s (exit ${String(rFz.status)} in ${rFz.ms} ms; 80:12 activation: ${(row(mFz, "keyboard.activation", "80:12")?.detail ?? "no row").slice(0, 60)})`,
@@ -492,58 +504,57 @@ check(`a page frozen for good by the first Enter (the first battery row's): that
 
 // ================================================================ --behaviour off, the interactions unchanged
 const r3 = await P.r3;
-const m3 = read(projAxe, out("Off"));
+const m3 = read(projAxe, baseOf("Off"));
 if (r3.status !== 0) console.log(r3.stderr);
 const off = m3?.behaviour;
 check("--behaviour off → exit 0, measured.behaviour {version:1, ran:false, why:'--behaviour off'}, no forced-colours PNG, the line says so",
-  r3.status === 0 && off !== undefined && off.version === 1 && off.ran === false && off.why === "--behaviour off" && !fs.existsSync(path.join(projAxe, out("Off") + ".forced-colors.png")) && /behaviour not run \(--behaviour off\)/.test(r3.stderr));
+  r3.status === 0 && off !== undefined && off.version === 1 && off.ran === false && off.why === "--behaviour off" && !fs.existsSync(path.join(projAxe, baseOf("Off") + ".forced-colors.png")) && /behaviour not run \(--behaviour off\)/.test(r3.stderr));
 check("measured.interactions are identical with behaviour on and off (the battery never touches the drive evidence)",
   (m1?.interactions || []).length === 8 && JSON.stringify(m1?.interactions) === JSON.stringify(m3?.interactions));
-// (--out is a directory, the report the expectation's set: one directory per run's report)
-const c1 = await vs(projAxe, ["--compare", EXP, out("Ok") + ".measured.json", "--out", out("Ok") + path.sep]);
-const c3 = await vs(projAxe, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off") + path.sep]);
-const rep1 = readReport(projAxe, path.join(out("Ok"), "Crates__80_1")), rep3 = readReport(projAxe, path.join(out("Off"), "Crates__80_1"));
+const c1 = await compareCase(projAxe, "Ok");
+const c3 = await compareCase(projAxe, "Off");
+const rep1 = readReport(projAxe, baseOf("Ok")), rep3 = readReport(projAxe, baseOf("Off"));
 if (rep1 === null || rep3 === null) console.log(c1.stderr, c3.stderr);
 check("--compare: verdict and why are the same with behaviour on and off", rep1 !== null && rep3 !== null && rep1.verdict === rep3.verdict && JSON.stringify(rep1.why) === JSON.stringify(rep3.why));
-const bogus = await probe(projAxe, ["--expected", EXP, "--url", url(), "--out", out("Bogus"), "--behaviour", "maybe"]);
-check("--behaviour takes on|off only (exit 2, nothing written)", bogus.status === 2 && /--behaviour must be on or off/.test(bogus.stderr) && read(projAxe, out("Bogus")) === null);
+const bogus = await probe(projAxe, ["--expected", kase(projAxe, "Bogus", EXP), "--url", url(), "--behaviour", "maybe"]);
+check("--behaviour takes on|off only (exit 2, nothing written)", bogus.status === 2 && /--behaviour must be on or off/.test(bogus.stderr) && read(projAxe, baseOf("Bogus")) === null);
 const help = await runNode(projAxe, PROBE, ["--help"]);
 check("the usage text lists --behaviour on|off", /\[--behaviour on\|off\]/.test(help.stdout));
 
 // ================================================================ a collapsing table (page checks only)
 const r4 = await P.r4;
-const m4 = read(projBare, out("Fixed"));
+const m4 = read(projBare, baseOf("Fixed"));
 if (r4.status !== 0) console.log(r4.stderr);
 check("a 0-px column at design width → layout.subpixel warn (design)", rows(m4).some((c) => c.id === "layout.subpixel" && c.variant === "design" && c.status === "warn" && /<td> "x" renders 0px/.test(c.detail)));
 check("the auto last column collapses at 1024 → layout.subpixel warn (1024x800)", rows(m4).some((c) => c.id === "layout.subpixel" && c.variant === "1024x800" && c.status === "warn" && /Notes for the crate/.test(c.detail)));
 check("the fixed table overflows at 320 → overflow.narrow warn, '2-D content exception may apply'",
   statusOf(m4, "overflow.narrow") === "warn" && /2-D content exception may apply/.test(row(m4, "overflow.narrow")?.detail ?? "") && m4?.behaviour?.ran === true && (m4.behaviour.widths.find((w) => w.role === "narrow")?.overflow.scrollable ?? false));
 const r5 = await P.r5;
-const c4 = await vs(projBare, ["--compare", QUIET, out("Fixed") + ".measured.json", "--out", out("Fixed") + path.sep]);
-const c5 = await vs(projBare, ["--compare", QUIET, out("QuietOk") + ".measured.json", "--out", out("QuietOk") + path.sep]);
-const rep4 = readReport(projBare, path.join(out("Fixed"), "Crates__80_1.quiet")), rep5 = readReport(projBare, path.join(out("QuietOk"), "Crates__80_1.quiet"));
+const c4 = await compareCase(projBare, "Fixed");
+const c5 = await compareCase(projBare, "QuietOk");
+const rep4 = readReport(projBare, baseOf("Fixed")), rep5 = readReport(projBare, baseOf("QuietOk"));
 if (rep4 === null || rep5 === null) console.log(r5.stderr, c4.stderr, c5.stderr);
 check("--compare: the fixed-table run's verdict and why equal the correct twin's (sub-pixel cells are behaviour warnings, never fidelity deltas)",
   rep4 !== null && rep5 !== null && rep4.verdict === rep5.verdict && JSON.stringify(rep4.why) === JSON.stringify(rep5.why));
 
 // an axe.run that never answers → a11y.axe not-run "axe timed out" after its own bound (≤ 20 s); the walk's checks still run
 const rAx = await P.rAx;
-const mAx = read(projSlowAxe, out("SlowAxe"));
+const mAx = read(projSlowAxe, baseOf("SlowAxe"));
 if (rAx.status !== 0) console.log(rAx.stderr);
 check("a hanging axe-core → a11y.axe not-run 'axe timed out', and the a11y unit goes on (keyboard.reachable / a11y.name not cut)",
   rAx.status === 0 && statusOf(mAx, "a11y.axe") === "not-run" && /axe timed out/.test(row(mAx, "a11y.axe")?.detail ?? "") && statusOf(mAx, "a11y.name") === "pass" && mAx?.behaviour?.ran === true && !mAx.behaviour.cut);
 
 // a later run that takes no forced-colours screenshot removes the earlier one at that exact path
-const r4off = await probe(projBare, ["--expected", QUIET, "--url", url("fixed-table"), "--out", out("Fixed"), "--behaviour", "off"]);
-check("the same --out re-run with --behaviour off → the earlier <S>.forced-colors.png is gone, measured.json + PNG written",
-  r4off.status === 0 && !fs.existsSync(path.join(projBare, out("Fixed") + ".forced-colors.png")) && fs.existsSync(path.join(projBare, out("Fixed") + ".png")) && read(projBare, out("Fixed"))?.behaviour?.ran === false);
+const r4off = await probe(projBare, ["--expected", caseOf("Fixed").expected, "--url", url("fixed-table"), "--behaviour", "off"]);
+check("the same set re-run in its dir with --behaviour off → the earlier <S>.forced-colors.png is gone, measured.json + PNG written",
+  r4off.status === 0 && !fs.existsSync(path.join(projBare, baseOf("Fixed") + ".forced-colors.png")) && fs.existsSync(path.join(projBare, baseOf("Fixed") + ".png")) && read(projBare, baseOf("Fixed"))?.behaviour?.ran === false);
 
 // ================================================================ the browser wedges (SIGSTOP) during the behaviour units
 if (process.platform !== "win32") {
   const frozen: number[] = [];
   const t0 = Date.now();
   // the trigger is the behaviour phase actually starting: the probe's debug line for its first (a11y) unit — never a fixed delay
-  const pFrz = spawn(process.execPath, [PROBE, "--expected", EXP, "--url", url(), "--out", out("Frozen"), "--max-time", "40000", "--project", projBare], { cwd: projBare, env: { ...process.env, DT_BEHAVIOUR_DEBUG: "1" } });
+  const pFrz = spawn(process.execPath, [PROBE, "--expected", kase(projBare, "Frozen", EXP), "--url", url(), "--max-time", "40000", "--project", projBare], { cwd: projBare, env: { ...process.env, DT_BEHAVIOUR_DEBUG: "1" } });
   let errFrz = "";
   const exited = new Promise<number | null>((r) => pFrz.on("close", (c) => r(c)));
   pFrz.stderr.on("data", (d: Buffer) => {
@@ -555,15 +566,15 @@ if (process.platform !== "win32") {
   const code = await exited;
   const ms = Date.now() - t0;
   for (const k of frozen) { try { process.kill(k, "SIGKILL"); } catch { /* the probe killed it */ } }
-  const mFrz = read(projBare, out("Frozen"));
+  const mFrz = read(projBare, baseOf("Frozen"));
   if (code !== 0) console.log(errFrz.slice(-600));
   check(`the browser SIGSTOPped once the behaviour units run (after the a11y unit), --max-time 40 s → exit 0 in < 40 s with measured.json + PNG written (nodes measured, behaviour cut) — ${Math.round(ms / 1000)} s`,
-    frozen.length > 0 && code === 0 && ms < 40_000 && mFrz !== null && (mFrz.nodes || []).length > 0 && fs.existsSync(path.join(projBare, out("Frozen") + ".png")) && mFrz.behaviour?.ran === true && mFrz.behaviour.cut);
+    frozen.length > 0 && code === 0 && ms < 40_000 && mFrz !== null && (mFrz.nodes || []).length > 0 && fs.existsSync(path.join(projBare, baseOf("Frozen") + ".png")) && mFrz.behaviour?.ran === true && mFrz.behaviour.cut);
 }
 
 // ================================================================ never exit 4 (a page whose Tab handler never yields)
 const r6 = await P.r6;
-const m6 = read(projBare, out("Spin"));
+const m6 = read(projBare, baseOf("Spin"));
 if (r6.status !== 0) console.log(r6.stderr);
 check("a Tab handler that never yields, --max-time 40 s → exit 0 within the bound, measured.json written, behaviour.cut, the walk's checks not-run 'time budget'",
   r6.status === 0 && r6.ms < 40_000 && m6?.behaviour?.ran === true && m6.behaviour.cut && statusOf(m6, "keyboard.reachable") === "not-run" && /time budget/.test(row(m6, "keyboard.reachable")?.detail ?? ""));

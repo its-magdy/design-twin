@@ -19,6 +19,7 @@ import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../de
 import { isJsonObject } from "../design-to-code/types.ts";
 import { freeHoverPoint } from "../design-to-code/probe-page.ts";
 import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
+import { shellArg } from "../design-to-code/cli-args.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";
@@ -127,7 +128,7 @@ const probeDefaultReady = (args: string[]): Promise<Run> => runNode(tmp, BUNDLE,
 // that is <os tmpdir>/designtwin-verify/<key>/: removed with tmp)
 const finish = (): void => {
   server.closeAllConnections(); server.close();
-  fs.rmSync(path.dirname(liveStatusFile(path.join(tmp, "Staff"))), { recursive: true, force: true });
+  fs.rmSync(path.dirname(liveStatusFile(path.join(tmp, SET))), { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
 };
 
@@ -150,23 +151,25 @@ if (pre.status === 3) {
 check("--check resolves the repo's playwright and launches chromium (exit 0)", pre.status === 0 && /^ok {2}playwright /.test(pre.stdout));
 
 const read = (base: string): VerifyMeasured | null => readJsonOrNull(base + ".measured.json", isVerifyMeasured);
+// --out is the directory the files go to (a new one ends in a separator); the expectation's set names them: <dir>/<SET>
+const outOf = (base: string): string => path.dirname(base) + path.sep;
 const node = (m: VerifyMeasured | null, id: string): MeasuredNode | undefined => (m?.nodes || []).find((n) => n.nodeId === id);
 const styleOf = (n: MeasuredNode | undefined, k: string): unknown => (n && n.styles ? n.styles[k] : undefined);
 
 // ---- the main page: measuring, identity
-const base = path.join(tmp, "run1", "Staff");
-const r1 = await probe(["--expected", expected, "--url", url(), "--out", base, "--project", ROOT]);
+const base = path.join(tmp, "run1", SET);
+const r1 = await probe(["--expected", expected, "--url", url(), "--out", outOf(base), "--project", ROOT]);
 const m1 = read(base);
 check("a clean page → exit 0, measured.json (a valid VerifyMeasured) and the screenshot written", r1.status === 0 && m1 !== null && fs.existsSync(base + ".png"));
 if (r1.status !== 0) console.log(r1.stderr);
 
-// no --run: a run of its own, keyed (like --run's) by the expectation's dir + the --out name — the measured file names it,
+// no --run: a run of its own, keyed (like --run's) by the expectation's set (its dir + its name) — the measured file names it,
 // and its `done` (published beside the expectation) records that file's sha, so --compare judges it by that run
 const ownRunOf = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
 const statusOf = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown; ownRun?: unknown } | null => readJsonOrNull(f, isJsonObject);
 const own1 = ownRunOf(r1.stderr);
-const live1 = liveStatusFile(path.join(tmp, "Staff"));
-const st1 = statusOf(live1), pub1 = statusOf(path.join(tmp, "Staff.status.json"));
+const live1 = liveStatusFile(path.join(tmp, SET));
+const st1 = statusOf(live1), pub1 = statusOf(path.join(tmp, SET + ".status.json"));
 const sha1 = fs.existsSync(base + ".measured.json") ? crypto.createHash("sha256").update(fs.readFileSync(base + ".measured.json")).digest("hex") : "";
 check("no --run → a run of its own: `run <id>` on stderr, measured.runId = that id; its live status `done` rev 2 by verify-probe, measuredSha256 = the measured file's; the same doc, without its ownRun (pid, host), published as <Screen>.status.json beside the expectation",
   /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(own1) && m1?.runId === own1 && st1?.runId === own1 && st1.phase === "done" && st1.rev === 2 && st1.by === "verify-probe" && st1.measuredSha256 === sha1
@@ -249,15 +252,23 @@ const c = m1?.matchedByCensus || {};
 check("matchedByCensus counts every spec once (tag + text + frame + notMeasured = specs)", (c.tag ?? 0) + (c.sharedPath ?? 0) + (c.text ?? 0) + (c.textOrdinal ?? 0) + (c.position ?? 0) + (c.frame ?? 0) + (c.notMeasured ?? 0) === 25 && c.notMeasured === 4);
 check("a quiet page: no navigation after the initial load, no re-run", m1?.navigation?.afterInitialLoad === 0 && m1.navigation.reruns === 0);
 
+// [out] the older spelling `--out <dir>/<the set>` still writes there, with a note naming the directory to pass instead
+const bOld = path.join(tmp, "run-older", SET);
+const rOld = await probe(["--expected", expected, "--url", url(), "--out", bOld, "--project", ROOT]);
+if (rOld.status !== 0) console.log(rOld.stderr);
+check("[out] --out <dir>/<SET> (the older spelling) → exit 0, the files at <dir>/<SET>, the note 'pass the directory <dir>', the next line's --out the directory",
+  rOld.status === 0 && read(bOld) !== null && rOld.stderr.includes(`note  --out ${bOld} names the set: pass the directory ${path.dirname(bOld)}`)
+  && (/^next {2}.+$/m.exec(rOld.stderr)?.[0] ?? "").endsWith(` --out ${shellArg(path.dirname(bOld))}`));
+
 // ---- reloads
 const allTagged = (m: VerifyMeasured | null): boolean => ["50:4", "50:5", "50:6", "50:7", "50:12", "50:14"].every((id) => node(m, id)?.matchedBy === "tag");
-const b2 = path.join(tmp, "run2", "Staff");
-const r2 = await probe(["--expected", expected, "--url", url("reload-once"), "--out", b2, "--project", ROOT]);
+const b2 = path.join(tmp, "run2", SET);
+const r2 = await probe(["--expected", expected, "--url", url("reload-once"), "--out", outOf(b2), "--project", ROOT]);
 const m2 = read(b2);
 check("the page reloads once 200ms after load → absorbed by the readiness wait: exit 0, afterInitialLoad 1, every tagged spec resolved", r2.status === 0 && m2?.navigation?.afterInitialLoad === 1 && m2.navigation.reruns === 0 && allTagged(m2));
 
-const b3 = path.join(tmp, "run3", "Staff");
-const r3 = await probe(["--expected", expected, "--url", url("reload-on-first-hover"), "--out", b3, "--project", ROOT]);
+const b3 = path.join(tmp, "run3", SET);
+const r3 = await probe(["--expected", expected, "--url", url("reload-on-first-hover"), "--out", outOf(b3), "--project", ROOT]);
 const m3 = read(b3);
 // (this check is timing-sensitive — print what the probe said when it fails)
 if (!(r3.status === 0 && m3?.navigation?.reruns === 1 && allTagged(m3))) console.log(`first-hover reload run: exit ${r3.status}, reruns ${m3?.navigation?.reruns ?? "-"}\n${r3.stderr}`);
@@ -265,9 +276,9 @@ check("a reload DURING measurement (first hover) → one full re-run: exit 0, re
 
 // the same, but the reload's response holds its last bytes for 3 s — the re-run's goto aborts it mid-body. The probe
 // waits only for its current pass's bodies, and at most 2 s: exit 0 well inside --max-time (not the --max-time exit 4)
-const b3h = path.join(tmp, "run3h", "Staff");
+const b3h = path.join(tmp, "run3h", SET);
 const t3h = Date.now();
-const r3h = await probe(["--expected", expected, "--url", `${url("reload-on-first-hover")}&hold=1`, "--out", b3h, "--project", ROOT, "--max-time", "30000"]);
+const r3h = await probe(["--expected", expected, "--url", `${url("reload-on-first-hover")}&hold=1`, "--out", outOf(b3h), "--project", ROOT, "--max-time", "30000"]);
 const took3h = Date.now() - t3h;
 const m3h = read(b3h);
 if (r3h.status !== 0) console.log(`held-reload run: exit ${r3h.status} after ${took3h} ms\n${r3h.stderr}`);
@@ -276,9 +287,9 @@ check(`a reload during measurement whose response body never completes (aborted 
 
 // a document response cut short by the page's own next navigation IN the measured pass — its body never settles;
 // the wait for the pass's bodies is bounded (2 s) and the unread one is named in a note (no hang until --max-time, exit 4)
-const b3s = path.join(tmp, "run3s", "Staff");
+const b3s = path.join(tmp, "run3s", SET);
 const t3s = Date.now();
-const r3s = await probe(["--expected", expected, "--url", url("held-doc"), "--out", b3s, "--project", ROOT, "--max-time", "30000"]);
+const r3s = await probe(["--expected", expected, "--url", url("held-doc"), "--out", outOf(b3s), "--project", ROOT, "--max-time", "30000"]);
 const took3s = Date.now() - t3s;
 const m3s = read(b3s);
 if (r3s.status !== 0) console.log(`held-document run: exit ${r3s.status} after ${took3s} ms ${JSON.stringify(m3s?.navigation)} ${JSON.stringify(m3s?.notes)}\n${r3s.stderr}`);
@@ -286,32 +297,32 @@ check(`a same-pass document load cut short by the next navigation → exit 0 in 
   r3s.status === 0 && took3s < 20_000 && m3s?.navigation?.reruns === 0 && allTagged(m3s)
   && (m3s.notes || []).some((n) => /^build identity: 1 same-origin response body\(ies\) not hashed — \/held-page\.html \(not received within 2 s/.test(n)));
 
-const b4 = path.join(tmp, "run4", "Staff");
-const r4 = await probe(["--expected", expected, "--url", url("reload-on-every-hover"), "--out", b4, "--project", ROOT]);
+const b4 = path.join(tmp, "run4", SET);
+const r4 = await probe(["--expected", expected, "--url", url("reload-on-every-hover"), "--out", outOf(b4), "--project", ROOT]);
 check("reloaded during measurement twice → exit 4, nothing written, the watch-tree hint and the navigation log printed", r4.status === 4 && !fs.existsSync(b4 + ".measured.json") && !fs.existsSync(b4 + ".png")
   && /watch tree/.test(r4.stderr) && /navigation log/.test(r4.stderr));
 
-const b5 = path.join(tmp, "run5", "Staff");
-const r5 = await probe(["--expected", expected, "--url", url("reload-forever"), "--out", b5, "--project", ROOT, "--timeout", "2500"]);
+const b5 = path.join(tmp, "run5", SET);
+const r5 = await probe(["--expected", expected, "--url", url("reload-forever"), "--out", outOf(b5), "--project", ROOT, "--timeout", "2500"]);
 check("a page that keeps reloading after load → exit 4, nothing written", r5.status === 4 && !fs.existsSync(b5 + ".measured.json") && /kept navigating/.test(r5.stderr));
 
-const b6 = path.join(tmp, "run6", "Staff");
-const r6 = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/missing.html`, "--out", b6, "--project", ROOT, "--ready", "#never", "--timeout", "1500"]);
+const b6 = path.join(tmp, "run6", SET);
+const r6 = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/missing.html`, "--out", outOf(b6), "--project", ROOT, "--ready", "#never", "--timeout", "1500"]);
 check("--ready never visible → exit 4, nothing written", r6.status === 4 && !fs.existsSync(b6 + ".measured.json"));
 
 // the default --ready (the frame's tag): a redirect after load is the page not being the screen — never "kept
 // navigating", never the dev-server advice
-const b6r = path.join(tmp, "run6r", "Staff");
-const r6r = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/session-bounce`, "--out", b6r, "--project", ROOT, "--timeout", "1500"]);
+const b6r = path.join(tmp, "run6r", SET);
+const r6r = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/session-bounce`, "--out", outOf(b6r), "--project", ROOT, "--timeout", "1500"]);
 check("[ready] a location.replace to a login page after load (default --ready) → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint; no 'kept navigating', no watch-tree advice; nothing written",
   r6r.status === 4 && /never became visible \(the page shows 0 of the expectation's \d+ own tags — fewer than half\)/.test(r6r.stderr)
   && r6r.stderr.includes("is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
   && !/kept navigating|watch tree/.test(r6r.stderr) && !fs.existsSync(b6r + ".measured.json"));
 
 // ---- watchdog, --run status, build identity
-const b7 = path.join(tmp, "run7", "Staff");
+const b7 = path.join(tmp, "run7", SET);
 const t7 = Date.now();
-const r7 = await probe(["--expected", expected, "--url", url("busy"), "--out", b7, "--project", ROOT, "--max-time", "4000"]);
+const r7 = await probe(["--expected", expected, "--url", url("busy"), "--out", outOf(b7), "--project", ROOT, "--max-time", "4000"]);
 const took7 = Date.now() - t7;
 check(`a page whose script never yields + --max-time 4000 → exit 4 within ~8 s (took ${took7} ms), nothing written, says --max-time`,
   r7.status === 4 && took7 < 12_000 && !fs.existsSync(b7 + ".measured.json") && !fs.existsSync(b7 + ".png") && /--max-time/.test(r7.stderr) && /nothing written/.test(r7.stderr));
@@ -325,19 +336,19 @@ const vdir = path.join(projDir, "design", "verify");
 fs.mkdirSync(vdir, { recursive: true });
 fs.mkdirSync(path.join(projDir, "node_modules"));
 fs.writeFileSync(path.join(projDir, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
-fs.copyFileSync(expected, path.join(vdir, "Staff.expected.json"));
-const liveFile = liveStatusFile(path.join(vdir, "Staff"));
-const stage = path.join(tmp, "stage", "Staff");
+fs.copyFileSync(expected, path.join(vdir, SET + ".expected.json"));
+const liveFile = liveStatusFile(path.join(vdir, SET));
+const stage = path.join(tmp, "stage", SET);
 const treeBefore = treeState(projDir);
 statusWatch = { live: liveFile, project: projDir };
-const r8 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage, "--project", ROOT, "--run", "run-e2e-1"]);
+const r8 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stage), "--project", ROOT, "--run", "run-e2e-1"]);
 statusWatch = null;
 const readStatus = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown } | null => readJsonOrNull(f, isJsonObject);
 const seenStatus = pageSeen.map((p) => (p.status === null ? null : ((): unknown => { try { const v: unknown = JSON.parse(p.status); return v; } catch { return null; } })()));
 check("with --run, every page request saw the live status the probe wrote BEFORE launch (measuring, rev 1) in node_modules/.cache/designtwin-verify/",
   r8.status === 0 && pageSeen.length > 0 && liveFile.includes(path.join("node_modules", ".cache", "designtwin-verify")) && seenStatus.every((v) => isJsonObject(v) && v.phase === "measuring" && v.rev === 1 && v.runId === "run-e2e-1"));
 check("while the page was connected, nothing in the project tree (outside node_modules) was created or modified",
-  pageSeen.length > 0 && pageSeen.every((p) => p.tree === treeBefore) && !fs.existsSync(path.join(vdir, "Staff.status.json")));
+  pageSeen.length > 0 && pageSeen.every((p) => p.tree === treeBefore) && !fs.existsSync(path.join(vdir, SET + ".status.json")));
 const st8 = readStatus(liveFile);
 const m8 = read(stage);
 check("after close: status `measured` rev 2 by verify-probe, measuredSha256 = sha256 of the measured file; measured.runId = the run",
@@ -345,7 +356,7 @@ check("after close: status `measured` rev 2 by verify-probe, measuredSha256 = sh
   && st8.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(stage + ".measured.json")).digest("hex") && m8?.runId === "run-e2e-1");
 check("the status is the verify dir's (live, run cache), not in the --out staging dir, and not in design/verify until done; no tmp files left", !fs.existsSync(stage + ".status.json") && treeState(projDir) === treeBefore && fs.existsSync(path.dirname(stage)) && !fs.readdirSync(path.dirname(stage)).some((f) => f.includes(".tmp-")));
 // each later --run below names a new run: a --run is written only while the status names no other run that has not ended
-writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-1", phase: "failed", by: "orchestrator", detail: "test over" });
+writeStatus(path.join(vdir, SET), { runId: "run-e2e-1", phase: "failed", by: "orchestrator", detail: "test over" });
 
 // The two refused-write blocks make a directory read-only with chmod; on Windows that refuses nothing.
 const NO_READONLY_DIRS = process.platform === "win32" ? "mode bits do not make a directory read-only on Windows — chmod 0o555 / 0o000 refuses nothing" : null;
@@ -355,77 +366,77 @@ const NO_READONLY_DIRS = process.platform === "win32" ? "mode bits do not make a
 if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused post-measure status write — ${NO_READONLY_DIRS})`);
 else {
   const cache10 = path.dirname(liveFile);
-  const stage10 = path.join(tmp, "stage10", "Staff");
+  const stage10 = path.join(tmp, "stage10", SET);
   onPage = () => fs.chmodSync(cache10, 0o555);
-  const r10 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage10, "--project", ROOT, "--run", "run-e2e-10"]);
+  const r10 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stage10), "--project", ROOT, "--run", "run-e2e-10"]);
   onPage = null;
   fs.chmodSync(cache10, 0o755);
   const st10 = readStatus(liveFile);
-  check("a refused post-measure status write → exit 0, the measured file stays, a warning naming the cache and `--status Staff --phase measured --run run-e2e-10`, no stack",
+  check(`a refused post-measure status write → exit 0, the measured file stays, a warning naming the cache and \`--status ${SET} --phase measured --run run-e2e-10\`, no stack`,
     r10.status === 0 && fs.existsSync(stage10 + ".measured.json") && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(r10.stderr)
-    && /--status Staff --phase measured --run run-e2e-10 --dir /.test(r10.stderr) && !/\n\s+at /.test(r10.stderr) && st10?.phase === "measuring" && st10.runId === "run-e2e-10");
+    && r10.stderr.includes(`--status ${SET} --phase measured --run run-e2e-10 --dir `) && !/\n\s+at /.test(r10.stderr) && st10?.phase === "measuring" && st10.runId === "run-e2e-10");
   if (r10.status !== 0) console.log(r10.stderr);
   check("…the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
     /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
-  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-10", phase: "failed", by: "orchestrator", detail: "test over" });
+  writeStatus(path.join(vdir, SET), { runId: "run-e2e-10", phase: "failed", by: "orchestrator", detail: "test over" });
 }
 
 // the orchestrator ends the run while the page is measured → the probe writes no files, exits 2,
 // and the ended status stays (no measured.json, PNG, diff or behaviour screenshot written, no exit 0, no "next --compare")
-const stageA1 = path.join(tmp, "stageA1", "Staff");
-onPage = () => writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-12", phase: "failed", by: "agent", detail: "gave up" });
-const rA1 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA1, "--project", ROOT, "--run", "run-e2e-12"]);
+const stageA1 = path.join(tmp, "stageA1", SET);
+onPage = () => writeStatus(path.join(vdir, SET), { runId: "run-e2e-12", phase: "failed", by: "agent", detail: "gave up" });
+const rA1 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA1), "--project", ROOT, "--run", "run-e2e-12"]);
 onPage = null;
 const stA1 = readStatus(liveFile);
 const leftA1 = fs.existsSync(path.dirname(stageA1)) ? fs.readdirSync(path.dirname(stageA1)) : [];
 check("a run ended while the page is measured → exit 2, nothing in --out's directory (no measured file, screenshot or diff), the failed status unchanged, no next step",
   rA1.status === 2 && leftA1.length === 0 && stA1?.phase === "failed" && stA1.runId === "run-e2e-12"
-  && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr) && !fs.existsSync(lockFileOfStatus(path.join(vdir, "Staff"))));
+  && rA1.stderr.includes("run run-e2e-12 already ended at failed (gave up)") && !/^next /m.test(rA1.stderr) && !fs.existsSync(lockFileOfStatus(path.join(vdir, SET))));
 if (rA1.status !== 2 || leftA1.length) console.log(`${rA1.stderr}\n  left: ${leftA1.join(", ")}`);
 
 // --run, and ANOTHER run is queued (--new-run) while the page is measured: a stale verifier's probe never writes over the
 // newer run — its `measured` write is refused (`current`): exit 2, no files, the newer run's status kept
-const stageA5 = path.join(tmp, "stageA5", "Staff");
-onPage = () => writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-16", phase: "queued", by: "orchestrator" });
-const rA5 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA5, "--project", ROOT, "--run", "run-e2e-15"]);
+const stageA5 = path.join(tmp, "stageA5", SET);
+onPage = () => writeStatus(path.join(vdir, SET), { runId: "run-e2e-16", phase: "queued", by: "orchestrator" });
+const rA5 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA5), "--project", ROOT, "--run", "run-e2e-15"]);
 onPage = null;
 const stA5 = readStatus(liveFile);
 const leftA5 = fs.existsSync(path.dirname(stageA5)) ? fs.readdirSync(path.dirname(stageA5)) : [];
 check("--run, another run opened while the page is measured → exit 2, nothing in --out's directory, that run's queued status unchanged, no next step",
   rA5.status === 2 && leftA5.length === 0 && stA5?.runId === "run-e2e-16" && stA5.phase === "queued" && stA5.rev === 1
-  && rA5.stderr.includes("run run-e2e-15 is not the current run of Staff: run run-e2e-16 is open (phase queued, rev 1, by orchestrator, ") && !/^next /m.test(rA5.stderr));
+  && rA5.stderr.includes(`run run-e2e-15 is not the current run of ${SET}: run run-e2e-16 is open (phase queued, rev 1, by orchestrator, `) && !/^next /m.test(rA5.stderr));
 if (rA5.status !== 2 || leftA5.length) console.log(`${rA5.stderr}\n  left: ${leftA5.join(", ")}`);
-writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-16", phase: "failed", by: "orchestrator", detail: "test over" });
+writeStatus(path.join(vdir, SET), { runId: "run-e2e-16", phase: "failed", by: "orchestrator", detail: "test over" });
 // …and its `measured` write refused by the run cache (read-only) too: the refused path finds the newer open run and
 // writes no files (exit 2)
 if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused --run write beside a newer run — ${NO_READONLY_DIRS})`);
 else {
-  const stageA6 = path.join(tmp, "stageA6", "Staff");
+  const stageA6 = path.join(tmp, "stageA6", SET);
   const cacheA6 = path.dirname(liveFile);
-  onPage = () => { writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-18", phase: "queued", by: "orchestrator" }); fs.chmodSync(cacheA6, 0o555); };
-  const rA6 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA6, "--project", ROOT, "--run", "run-e2e-17"]);
+  onPage = () => { writeStatus(path.join(vdir, SET), { runId: "run-e2e-18", phase: "queued", by: "orchestrator" }); fs.chmodSync(cacheA6, 0o555); };
+  const rA6 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA6), "--project", ROOT, "--run", "run-e2e-17"]);
   onPage = null;
   fs.chmodSync(cacheA6, 0o755);
   const stA6 = readStatus(liveFile);
   const leftA6 = fs.existsSync(path.dirname(stageA6)) ? fs.readdirSync(path.dirname(stageA6)) : [];
   check("--run, another run opened while measuring, its `measured` write refused (read-only run cache) → exit 2, no files in --out's directory, the newer run's queued status kept, no next step",
     rA6.status === 2 && leftA6.length === 0 && stA6?.runId === "run-e2e-18" && stA6.phase === "queued"
-    && rA6.stderr.includes("run run-e2e-17 is not the current run of Staff: run run-e2e-18 is open (phase queued, ") && !/^next /m.test(rA6.stderr));
+    && rA6.stderr.includes(`run run-e2e-17 is not the current run of ${SET}: run run-e2e-18 is open (phase queued, `) && !/^next /m.test(rA6.stderr));
   if (rA6.status !== 2 || leftA6.length) console.log(`${rA6.stderr}\n  left: ${leftA6.join(", ")}`);
-  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-18", phase: "failed", by: "orchestrator", detail: "test over" });
+  writeStatus(path.join(vdir, SET), { runId: "run-e2e-18", phase: "failed", by: "orchestrator", detail: "test over" });
 }
 // --run, and ANOTHER run starts AND ends (done, its measured file written) while the page is measured: once its
 // `measuring` is recorded the probe continues its run — the `measured` write is refused (RunReplaced): exit 2, the newer
 // run's file and status kept
-const stageA7 = path.join(tmp, "stageA7", "Staff");
+const stageA7 = path.join(tmp, "stageA7", SET);
 const newerA7 = "{\"runId\":\"run-e2e-20\"}\n";
 onPage = () => {
-  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-20", phase: "queued", by: "orchestrator" });
+  writeStatus(path.join(vdir, SET), { runId: "run-e2e-20", phase: "queued", by: "orchestrator" });
   fs.mkdirSync(path.dirname(stageA7), { recursive: true });
   fs.writeFileSync(stageA7 + ".measured.json", newerA7);
-  writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-20", phase: "done", by: "agent", detail: "verified" });
+  writeStatus(path.join(vdir, SET), { runId: "run-e2e-20", phase: "done", by: "agent", detail: "verified" });
 };
-const rA7 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA7, "--project", ROOT, "--run", "run-e2e-19"]);
+const rA7 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA7), "--project", ROOT, "--run", "run-e2e-19"]);
 onPage = null;
 const stA7 = readStatus(liveFile);
 const leftA7 = fs.existsSync(path.dirname(stageA7)) ? fs.readdirSync(path.dirname(stageA7)) : [];
@@ -438,14 +449,14 @@ if (rA7.status !== 2 || leftA7.length !== 1) console.log(`${rA7.stderr}\n  left:
 // run and writes no files (exit 2)
 if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused --run write after a newer run ended — ${NO_READONLY_DIRS})`);
 else {
-  const stageA8 = path.join(tmp, "stageA8", "Staff");
+  const stageA8 = path.join(tmp, "stageA8", SET);
   const cacheA8 = path.dirname(liveFile);
   onPage = () => {
-    writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-22", phase: "queued", by: "orchestrator" });
-    writeStatus(path.join(vdir, "Staff"), { runId: "run-e2e-22", phase: "done", by: "agent", detail: "verified" });
+    writeStatus(path.join(vdir, SET), { runId: "run-e2e-22", phase: "queued", by: "orchestrator" });
+    writeStatus(path.join(vdir, SET), { runId: "run-e2e-22", phase: "done", by: "agent", detail: "verified" });
     fs.chmodSync(cacheA8, 0o555);
   };
-  const rA8 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stageA8, "--project", ROOT, "--run", "run-e2e-21"]);
+  const rA8 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA8), "--project", ROOT, "--run", "run-e2e-21"]);
   onPage = null;
   fs.chmodSync(cacheA8, 0o755);
   const stA8 = readStatus(liveFile);
@@ -458,30 +469,30 @@ else {
 
 // no --run, and a verifier's run is started (--new-run) while the page is measured: the probe's own run never writes over
 // it — exit 2, no files, the new run's status kept
-const stageA2 = path.join(tmp, "stageA2", "Staff");
-const baseA2 = path.join(tmp, "Staff");
+const stageA2 = path.join(tmp, "stageA2", SET);
+const baseA2 = path.join(tmp, SET);
 onPage = () => writeStatus(baseA2, { runId: "run-e2e-13", phase: "queued", by: "orchestrator" });
-const rA2 = await probe(["--expected", expected, "--url", url(), "--out", stageA2, "--project", ROOT]);
+const rA2 = await probe(["--expected", expected, "--url", url(), "--out", outOf(stageA2), "--project", ROOT]);
 onPage = null;
 const stA2 = readStatus(liveStatusFile(baseA2));
 const leftA2 = fs.existsSync(path.dirname(stageA2)) ? fs.readdirSync(path.dirname(stageA2)) : [];
 check("no --run, another run opened while the page is measured → exit 2, nothing in --out's directory, that run's queued status unchanged, no next step",
   rA2.status === 2 && leftA2.length === 0 && stA2?.runId === "run-e2e-13" && stA2.phase === "queued" && stA2.rev === 1
-  && rA2.stderr.includes("verify-probe: another run opened while this probe ran; nothing is written — run run-e2e-13 of Staff is open (phase queued, rev 1, by orchestrator, ") && !/^next /m.test(rA2.stderr));
+  && rA2.stderr.includes(`verify-probe: another run opened while this probe ran; nothing is written — run run-e2e-13 of ${SET} is open (phase queued, rev 1, by orchestrator, `) && !/^next /m.test(rA2.stderr));
 if (rA2.status !== 2 || leftA2.length) console.log(`${rA2.stderr}\n  left: ${leftA2.join(", ")}`);
 // …and while that run is open, a probe without --run is refused before anything starts; once it ended, it measures again
-const rA3 = await probe(["--expected", expected, "--url", url(), "--out", path.join(tmp, "stageA3", "Staff"), "--project", ROOT]);
+const rA3 = await probe(["--expected", expected, "--url", url(), "--out", path.join(tmp, "stageA3") + path.sep, "--project", ROOT]);
 check("…beside that open run, the next probe without --run → exit 2 before a browser starts, no files", rA3.status === 2 && !fs.existsSync(path.join(tmp, "stageA3"))
-  && rA3.stderr.startsWith("verify-probe: run run-e2e-13 of Staff is open"));
+  && rA3.stderr.startsWith(`verify-probe: run run-e2e-13 of ${SET} is open`));
 writeStatus(baseA2, { runId: "run-e2e-13", phase: "failed", by: "orchestrator", detail: "test over" });
 // no --run, its run replaced by one that has ENDED while the page is measured, and its own `done` write refused by the run
 // cache (read-only): the refused path finds the status naming the replacement and writes no files (exit 2)
 if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write beside a replacement run — ${NO_READONLY_DIRS})`);
 else {
-  const stageA4 = path.join(tmp, "stageA4", "Staff");
+  const stageA4 = path.join(tmp, "stageA4", SET);
   const cacheA4 = path.dirname(liveStatusFile(baseA2));
   onPage = () => { writeStatus(baseA2, { runId: "run-e2e-14", phase: "done", by: "agent", detail: "replaced it" }); fs.chmodSync(cacheA4, 0o555); };
-  const rA4 = await probe(["--expected", expected, "--url", url(), "--out", stageA4, "--project", ROOT]);
+  const rA4 = await probe(["--expected", expected, "--url", url(), "--out", outOf(stageA4), "--project", ROOT]);
   onPage = null;
   fs.chmodSync(cacheA4, 0o755);
   const stA4 = readStatus(liveStatusFile(baseA2));
@@ -501,13 +512,13 @@ else {
   fs.mkdirSync(svdir, { recursive: true });
   fs.mkdirSync(path.join(spaced, "node_modules"));
   fs.writeFileSync(path.join(spaced, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
-  fs.copyFileSync(expected, path.join(svdir, "Staff.expected.json"));
-  const sBase = path.join(svdir, "Staff");
+  fs.copyFileSync(expected, path.join(svdir, SET + ".expected.json"));
+  const sBase = path.join(svdir, SET);
   const sLive = liveStatusFile(sBase);
   const sStage = stageDirOf(sBase, "run-e2e-11");
   fs.mkdirSync(sStage, { recursive: true });
   fs.chmodSync(path.dirname(sLive), 0o555);
-  const r11 = await probe(["--expected", path.join(svdir, "Staff.expected.json"), "--url", url(), "--out", path.join(sStage, "Staff"), "--project", ROOT, "--run", "run-e2e-11"]);
+  const r11 = await probe(["--expected", path.join(svdir, SET + ".expected.json"), "--url", url(), "--out", sStage, "--project", ROOT, "--run", "run-e2e-11"]);
   fs.chmodSync(path.dirname(sLive), 0o755);
   const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
   check("every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
@@ -519,12 +530,12 @@ else {
     const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
     const c11 = spawnSync(sh, ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
     check("the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
-      c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
+      c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, SET + ".report.json")) ? fs.readFileSync(path.join(sStage, SET + ".report.json"), "utf8") : ""));
     // an empty recovery (no warning printed) would run as `sh -c ""` and pass on the probe's own status write
     const rec11 = spawnSync(sh, ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
     const st11 = readStatus(sLive);
     check("the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
-      recovery !== "" && rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
+      recovery !== "" && rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, SET + ".measured.json"))).digest("hex"));
     if (rec11.status !== 0) console.log(rec11.stderr);
   }
 }
@@ -534,23 +545,23 @@ check("measured.build: the url, mode static, same-origin assets hashed (document
   && /^[0-9a-f]{64}$/.test(bd.assetsSha256) && (bd.gitHead === null || /^[0-9a-f]{40}$/.test(bd.gitHead)) && (bd.gitDirty === null || typeof bd.gitDirty === "boolean"));
 check("the same build served again → the same assetsSha256", m8?.build?.assetsSha256 !== undefined && m8.build.assetsSha256 === bd?.assetsSha256);
 fs.writeFileSync(path.join(tmp, "asset.js"), "window.__plotsBuild = 2;\n");
-const b9 = path.join(tmp, "run9", "Staff");
-const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT, "--ready", "none"]);
+const b9 = path.join(tmp, "run9", SET);
+const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", outOf(b9), "--project", ROOT, "--ready", "none"]);
 const m9 = read(b9);
 check("the fixture's JS changed → a different assetsSha256; /@vite/client served → mode vite-dev", r9.status === 0 && m9?.build !== undefined && m9.build.assetsSha256 !== bd?.assetsSha256 && m9.build.mode === "vite-dev");
 
 // ---- the default --ready on the untagged staff-directory root: the frame's tag never shows, so the page is the screen
 // only when it shows at least half of the expectation's 24 own tags (11 show at load here)
-const bUr = path.join(tmp, "run-untagged-root", "Staff");
-const rUr = await probeDefaultReady(["--expected", expected, "--url", url("untagged-root"), "--out", bUr, "--project", ROOT, "--timeout", "3000"]);
+const bUr = path.join(tmp, "run-untagged-root", SET);
+const rUr = await probeDefaultReady(["--expected", expected, "--url", url("untagged-root"), "--out", outOf(bUr), "--project", ROOT, "--timeout", "3000"]);
 const mUr = read(bUr);
 if (rUr.status !== 0) console.log(rUr.stderr);
 check("[ready] the default --ready on an untagged root whose page shows 16 of the expectation's 24 own tags → measured (exit 0), the root by size and fill, with the untagged-root note naming the 3 s wait and how the root was found",
   rUr.status === 0 && mUr?.frame?.via === "size-and-fill" && (mUr.notes || []).includes("the screen root is not tagged: [data-dt-node=\"50:1\"] (the default --ready) never showed within 3s, but the page shows " +
     "at least half of the expectation's own tags and no other screen's tagged root, so it was measured as the screen, its root found as the outermost element with the frame's size (±2 px) " +
     "and a fill — tag the root data-dt-node=\"50:1\", or pass --ready <root selector>"));
-const bUf = path.join(tmp, "run-untagged-few", "Staff");
-const rUf = await probeDefaultReady(["--expected", expected, "--url", url("untagged-few"), "--out", bUf, "--project", ROOT, "--timeout", "3000"]);
+const bUf = path.join(tmp, "run-untagged-few", SET);
+const rUf = await probeDefaultReady(["--expected", expected, "--url", url("untagged-few"), "--out", outOf(bUf), "--project", ROOT, "--timeout", "3000"]);
 check("[ready] …a page that shows 8 of the 24 → exit 4 with the count and the default-ready hint, nothing written",
   rUf.status === 4 && rUf.stderr.includes("verify-probe: --ready '[data-dt-node=\"50:1\"]' never became visible (the page shows 8 of the expectation's 24 own tags — fewer than half): ")
   && rUf.stderr.includes("[data-dt-node=\"50:1\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
@@ -577,10 +588,11 @@ const g11Nodes: VerifySpec[] = [
   { nodeId: "60:39", name: "Soft Card", type: "FRAME" },
   { nodeId: "60:40", name: "Hard Shadow", type: "FRAME" },
 ];
-const g11Exp = path.join(tmp, "Rota.expected.json");
+// (named as --expect names a set: <Layer>__<id> of its frame)
+const g11Exp = path.join(tmp, "Rota_Settings__60_1.expected.json");
 fs.writeFileSync(g11Exp, JSON.stringify({ frame: { nodeId: "60:1", name: "Rota Settings", w: 800, h: 600 }, nodes: g11Nodes }));
-const b12 = path.join(tmp, "run12", "Rota");
-const r12 = await probe(["--expected", g11Exp, "--url", `http://127.0.0.1:${port}/shell-rings.html`, "--out", b12, "--project", ROOT]);
+const b12 = path.join(tmp, "run12", "Rota_Settings__60_1");
+const r12 = await probe(["--expected", g11Exp, "--url", `http://127.0.0.1:${port}/shell-rings.html`, "--out", outOf(b12), "--project", ROOT]);
 const m12 = read(b12);
 if (r12.status !== 0) console.log(r12.stderr);
 const shellNode = node(m12, "I60:5;8:1");
@@ -641,7 +653,7 @@ const g17Nodes: VerifySpec[] = [
   // a transparent box its own two children paint all over
   { nodeId: "70:80", name: "Split Swatch", type: "FRAME", backgroundColor: "#3c3c3cff" },
 ];
-const g17Exp = path.join(tmp, "Loom.expected.json");
+const g17Exp = path.join(tmp, "Loom_Queue__70_1.expected.json");
 fs.writeFileSync(g17Exp, JSON.stringify({ frame: { nodeId: "70:1", name: "Loom Queue", w: 800, h: 600 }, nodes: g17Nodes }));
 // an executable to name — Playwright's own chromium when it is installed, else the headless shell of the same revision
 // in the same cache (a machine may hold only that). Never downloaded; none found → the --browser-path checks are skipped (printed).
@@ -664,8 +676,8 @@ function cachedBrowser(): string | null {
 }
 const exe = cachedBrowser();
 if (exe === null) console.log("SKIPPED the --browser-path checks: no installed chromium or headless shell found in Playwright's cache");
-const b17 = path.join(tmp, "run17", "Loom");
-const r17 = await probe(["--expected", g17Exp, "--url", `http://127.0.0.1:${port}/loom-queue-owner-hover.html`, "--out", b17, "--project", ROOT, ...(exe !== null ? ["--browser-path", exe] : [])]);
+const b17 = path.join(tmp, "run17", "Loom_Queue__70_1");
+const r17 = await probe(["--expected", g17Exp, "--url", `http://127.0.0.1:${port}/loom-queue-owner-hover.html`, "--out", outOf(b17), "--project", ROOT, ...(exe !== null ? ["--browser-path", exe] : [])]);
 const m17 = read(b17);
 if (r17.status !== 0) console.log(r17.stderr);
 const stateStyles = (n: MeasuredNode | undefined, s: string): Record<string, unknown> | null => { const v = n?.states?.[s]; return v && isJsonObject(v) && isJsonObject(v.styles) ? v.styles : null; };
@@ -746,24 +758,24 @@ check("without --browser-path the identity names no executable", m1?.probe?.brow
 // still there: measured (not "could not load … Timeout"). The goto gives up on its load (the note is set), but window.stop()
 // also ends the document's own load (readyState "complete"), so the settle drops the note again: measured fully loaded
 const origin = `http://127.0.0.1:${port}`;
-const bAb = path.join(tmp, "abort", "Self");
-const rAb = await probe(["--expected", expected, "--url", `${origin}/abort-self.html`, "--out", bAb, "--timeout", "3000", "--project", ROOT]);
+const bAb = path.join(tmp, "abort-self", SET);
+const rAb = await probe(["--expected", expected, "--url", `${origin}/abort-self.html`, "--out", outOf(bAb), "--timeout", "3000", "--project", ROOT]);
 const mAb = read(bAb);
 if (rAb.status !== 0) console.log(rAb.stderr);
 check(`a page that renders, then cancels its own next navigation (window.stop) → exit 0, the root measured, not 'could not load' (exit ${String(rAb.status)})`,
   rAb.status === 0 && node(mAb, "50:1")?.matchedBy === "frame" && !/could not load/.test(rAb.stderr));
 fs.writeFileSync(path.join(tmp, "steps-abort.json"), JSON.stringify([{ goto: "/abort-self.html" }]));
-const bAbS = path.join(tmp, "abort", "Step");
-const rAbS = await probe(["--expected", expected, "--url", url(), "--steps", path.join(tmp, "steps-abort.json"), "--out", bAbS, "--timeout", "3000", "--project", ROOT]);
+const bAbS = path.join(tmp, "abort-step", SET);
+const rAbS = await probe(["--expected", expected, "--url", url(), "--steps", path.join(tmp, "steps-abort.json"), "--out", outOf(bAbS), "--timeout", "3000", "--project", ROOT]);
 const mAbS = read(bAbS);
 if (rAbS.status !== 0) console.log(rAbS.stderr);
 check(`the same page as a goto step's target → measured (exit ${String(rAbS.status)})`,
   rAbS.status === 0 && node(mAbS, "50:1")?.matchedBy === "frame" && !/could not load/.test(rAbS.stderr));
 // a URL with no document → exit 4 "could not load" in plain words, not Playwright's raw text
-const r204 = await probe(["--expected", expected, "--url", `${origin}/no-content`, "--out", path.join(tmp, "abort", "NoContent"), "--timeout", "3000", "--project", ROOT]);
+const r204 = await probe(["--expected", expected, "--url", `${origin}/no-content`, "--out", path.join(tmp, "abort-no-content") + path.sep, "--timeout", "3000", "--project", ROOT]);
 check(`a 204 → exit 4, 'could not load … no document (e.g. 204 No Content)' (got ${String(r204.status)}: ${r204.stderr.split("\n").find((l) => l.startsWith("verify-probe:")) ?? ""})`,
   r204.status === 4 && /could not load .*no document \(e\.g\. 204/.test(r204.stderr));
-const rDl = await probe(["--expected", expected, "--url", `${origin}/download`, "--out", path.join(tmp, "abort", "Download"), "--timeout", "3000", "--project", ROOT]);
+const rDl = await probe(["--expected", expected, "--url", `${origin}/download`, "--out", path.join(tmp, "abort-download") + path.sep, "--timeout", "3000", "--project", ROOT]);
 check(`a download → exit 4, 'could not load … started a file download, not a page' (got ${String(rDl.status)}: ${rDl.stderr.split("\n").find((l) => l.startsWith("verify-probe:")) ?? ""})`,
   rDl.status === 4 && /could not load .*started a file download, not a page/.test(rDl.stderr));
 
