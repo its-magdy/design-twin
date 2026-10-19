@@ -96,7 +96,6 @@ export function statusBaseOf(expectedFile: string): string {
   return path.join(path.dirname(expectedFile), setNameOfFile(expectedFile));
 }
 /** Trailing path separators: "/", and "\" only where it is one (Windows) — on POSIX "\" is a file name character. */
-/** Trailing path separators: "/" — and "\\" only where it is one (Windows); on POSIX "\\" is a file name character. */
 const TRAILING_SEP = path.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 /** Whether `p` ends in a path separator (TRAILING_SEP): `--out <dir>/` names a directory that may not exist yet. */
 export const endsInSep = (p: string): boolean => TRAILING_SEP.test(p);
