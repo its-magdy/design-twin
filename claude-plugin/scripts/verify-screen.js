@@ -5648,11 +5648,20 @@ function toNodeId(raw) {
 // design-to-code/verify-sets.ts
 import fs12 from "node:fs";
 import path11 from "node:path";
-var VARIANT_RE = /^[a-z0-9-]+$/;
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => VARIANT_RE.test(s);
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
 function variantSlug(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function variantProblem(s) {
+  if (isVariantSlug(s)) return null;
+  if (RESERVED_SLUGS.has(s)) return `variant '${s}' is reserved \u2014 it names a file of the set (${[...RESERVED_SLUGS].join(", ")} are never slugs); pick another`;
+  if (s.length > MAX_SLUG) return `variant '${s}' is ${s.length} characters long \u2014 a slug is at most ${MAX_SLUG}`;
+  const fixed = variantSlug(s);
+  return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` \u2014 use '${fixed}'` : ""}`;
 }
 function parseSetName(name) {
   const dot = name.indexOf(".");
@@ -5666,8 +5675,13 @@ function parseSetName(name) {
 }
 function formatSetName(stem, variant) {
   if (variant === void 0 || variant === null) return stem;
-  if (!isVariantSlug(variant)) throw new Error(`variant '${variant}' is not a slug ([a-z0-9-]+)`);
+  const why = variantProblem(variant);
+  if (why !== null) throw new Error(why);
   return `${stem}.${variant}`;
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
 }
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
@@ -5875,7 +5889,7 @@ if (false) process.exitCode = main(process.argv.slice(2));
 // design-to-code/screen-key.ts
 import fs14 from "node:fs";
 import path13 from "node:path";
-var FILE_TAIL_RE2 = /\.(?:expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
+var FILE_TAIL_RE2 = /\.(?:expected\.prev|expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
 function screenKey(query, opts = {}) {
   const q = String(query ?? "").trim();
   const verifyDir = opts.verifyDir ?? null;
@@ -5989,7 +6003,7 @@ function locateReports(plan, planFile, cwd, exp) {
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs15.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
@@ -6328,7 +6342,11 @@ function planMigration(d) {
       const isRoot = !parentOf.has(name);
       const slug = slugOf(name);
       if (!isRoot && !slug) {
-        steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug ([a-z0-9-]+) can keep \u2014 rename it by hand`] });
+        steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug can keep \u2014 rename it by hand`] });
+        continue;
+      }
+      if (!isRoot && !isVariantSlug(slug)) {
+        steps.push({ kind: "skip", set: name, why: [`variant '${slug}' is not a slug a set can take (${RESERVED_SLUGS.has(slug) ? "reserved: it names a file of a set" : `longer than ${MAX_SLUG} characters`}) \u2014 rename it by hand`] });
         continue;
       }
       const to = isRoot ? T : formatSetName(T, slug);

@@ -9,6 +9,7 @@ import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
+import { nodeIdFromSetName } from "./verify-sets.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 
@@ -84,7 +85,8 @@ export interface ReportRef {
 }
 
 // Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out), the plan's
-// own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
+// own name, its `screen` — then by content: a report whose `nodeId` is the plan's (or whose set name carries it, a
+// variant's `<Layer>__<id>.<slug>` too), whose sibling
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
 // the frame's layer name when that name is unique in the export (the older `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
@@ -121,7 +123,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     // Only the expectation's frame.nodeId is read here, so only that is required of the file.
     const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;

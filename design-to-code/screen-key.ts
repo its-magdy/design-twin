@@ -16,14 +16,14 @@ import path from "node:path";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { isNodeId } from "../bridge/src/node-id.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { STEM_RE, canonicalStemsFor, legacySetsFor, nodeStem } from "./verify-sets.ts";
+import { STEM_RE, canonicalStemsFor, legacySetsFor, nodeStem, parseSetName, verifySets } from "./verify-sets.ts";
 import type { ScreenCandidate } from "./types.ts";
 
 export {
-  allSets, canonicalStemsFor, existingStem, formatSetName, isVariantSlug, legacySetsFor, nodeIdFromSetName, nodeStem, parseSetName, setFacts, setNodeId,
-  variantSlug, verifySets,
+  EXPECTED_SUFFIX, MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, existingStem, expectationSetProblem, formatSetName, isVariantSlug, legacySetsFor,
+  nodeIdFromSetName, nodeStem, outBaseOf, parseSetName, setFacts, setNameOfFile, setNodeId, statusBaseOf, variantProblem, variantSlug, verifySets,
 } from "./verify-sets.ts";
-export type { SetFacts, SetName } from "./verify-sets.ts";
+export type { OutBase, SetFacts, SetName } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- query → key
 
@@ -48,7 +48,7 @@ export type ScreenKey =
   | { status: "unresolved"; why: string; candidates: ScreenCandidate[] };
 
 /** A file tail a stem may be passed with (an artefact or export file name). */
-const FILE_TAIL_RE = /\.(?:expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
+const FILE_TAIL_RE = /\.(?:expected\.prev|expected|report|measured|status|evidence|vars|assets)\.json$|\.json$/;
 
 /**
  * The (node id, stem) a query names, or why it names none. With an export index: resolveScreen's exact stages only
@@ -95,4 +95,40 @@ export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
       : `no export index to name node ${q} by — pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
   }
   return { status: "unresolved", why: `no export index to resolve '${q}' against — pass the stem (<Layer>__<id>), or the export dir`, candidates: [] };
+}
+
+// ---------------------------------------------------------------- query → set
+
+/** The verify set a query names, as `--status` / `--wait` key a run by it: a valid set name taken as written (its variant
+ *  kept), else the screen's base set (screenKey). `name` is the set name, `existing` whether the node's stem is an existing
+ *  set's, `legacy` the node's legacy-named sets. */
+export type SetKey =
+  | { status: "resolved"; nodeId: string; stem: string; variant: string | null; name: string; via: string; existing: boolean; legacy: string[] }
+  | { status: "unresolved"; why: string; candidates: ScreenCandidate[] };
+
+/**
+ * The set a query names, or why it names none. In order: the basename without a file tail (an artefact path or name) is
+ * 1) a set name (`<stem>` / `<stem>.<slug>`, parseSetName) → that set, as written — unless another grammar-named stem in
+ *    the verify dir holds its node (a second name for one node); 2) a legacy-named set in the verify dir → unresolved,
+ *    with --migrate; 3) else screenKey (the base set: variant null) on the query — on that basename when the query named
+ *    a file. A set name goes first: screenKey would drop its `.<slug>`.
+ */
+export function setKey(query: string, opts: ScreenKeyOpts = {}): SetKey {
+  const q = String(query ?? "").trim();
+  const verifyDir = opts.verifyDir ?? null;
+  const base = q.split(/[\\/]/).pop() ?? q;
+  const lit = base.replace(FILE_TAIL_RE, "");
+  const p = parseSetName(lit);
+  if (p !== null) {
+    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId) : [];
+    const others = stems.filter((s) => s !== p.stem);
+    if (others.length) return { status: "unresolved", why: `node ${p.nodeId} already has a verify set under another name (${others.join(", ")}) — pass that name`, candidates: [] };
+    return { status: "resolved", nodeId: p.nodeId, stem: p.stem, variant: p.variant, name: lit, via: "set name", existing: stems.includes(p.stem), legacy: verifyDir ? legacySetsFor(verifyDir, p.nodeId) : [] };
+  }
+  if (verifyDir && lit && verifySets(verifyDir).includes(lit)) {
+    return { status: "unresolved", why: `${lit} is a legacy-named verify set — run verify-screen --migrate --apply --dir ${verifyDir}, then pass the name it prints (<Layer>__<id>)`, candidates: [] };
+  }
+  const k = screenKey(lit !== base ? lit : q, opts);
+  if (k.status !== "resolved") return k;
+  return { status: "resolved", nodeId: k.nodeId, stem: k.stem, variant: null, name: k.stem, via: k.via, existing: k.existing, legacy: k.legacy };
 }

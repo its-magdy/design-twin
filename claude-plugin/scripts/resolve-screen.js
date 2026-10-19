@@ -391,9 +391,11 @@ function listPlans(dir) {
 // design-to-code/verify-sets.ts
 import fs4 from "node:fs";
 import path3 from "node:path";
-var VARIANT_RE = /^[a-z0-9-]+$/;
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => VARIANT_RE.test(s);
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
 function parseSetName(name) {
   const dot = name.indexOf(".");
   const stem = dot < 0 ? name : name.slice(0, dot);

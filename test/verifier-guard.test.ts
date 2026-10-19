@@ -70,6 +70,12 @@ const WRITE_NO: readonly string[] = [
   "src/App.tsx", "C:\\proj\\src\\App.tsx", "C:\\proj\\design\\verify\\..\\..\\src\\App.tsx",
 ];
 for (const f of WRITE_NO) check(`Write ${f}`, denied(write(f)));
+// [slug] a variant set's files (`<stem>.<slug>`): its tool-owned ones refused like the base set's, its measured file and
+// screenshots (a state's `-dialog.png`, a `-diff.png` as the base set's) allowed — the regex is anchored at the end, so a slug changes nothing
+for (const f of ["expected.json", "expected.prev.json", "report.json", "report.md", "status.json", "diff.png"].map((t) => `/proj/design/verify/Home__1_2.w320-dialog.${t}`))
+  check(`[slug] Write ${f} → refused`, denied(write(f)) && writeVerdict(f, CTX) !== null);
+for (const f of ["measured.json", "png"].map((t) => `/proj/design/verify/Home__1_2.w320-dialog.${t}`).concat(["/proj/design/verify/Home__1_2.dark-dialog.png", "/proj/design/verify/Home__1_2.dark-diff.png"]))
+  check(`[slug] Write ${f} → allowed`, allowed(write(f)) && writeVerdict(f, CTX) === null);
 check("Edit / MultiEdit / NotebookEdit go through the same allow-list (if the agent is ever given them)",
   denied(write("/proj/src/App.tsx", "Edit")) && denied(write("/proj/src/App.tsx", "MultiEdit")) && denied(write("/proj/a.ipynb", "NotebookEdit", "notebook_path"))
   && allowed(write("/proj/design/verify/X.measured.json", "Edit")));

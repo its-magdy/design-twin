@@ -445,6 +445,18 @@ for (const [legacy, to] of [["Crates@320", "Crates__80_1.320"], ["Crates.dark", 
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
+{
+  // a reserved slug: Crates.diff would become Crates__80_1.diff, whose screenshot <S>.diff.png is the base set's diff
+  const p = project("Crates__80_1", { record: false });
+  writeSet(p.put, "Crates.diff");
+  const before = p.ls();
+  const { r } = run(p, true);
+  const s = r.steps.find((x) => x.set === "Crates.diff");
+  check(`[slug] a legacy set whose variant slug is reserved (Crates.diff) is skipped, saying so; nothing moves (got ${JSON.stringify(s)})`,
+    s?.kind === "skip" && s.why.some((w) => /variant 'diff' is not a slug a set can take \(reserved/.test(w)) && r.done.length === 0 && JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
 console.log("\na legacy set beside its node's canonical set is retired:");
 {
   const p = project("Crates", { record: false });

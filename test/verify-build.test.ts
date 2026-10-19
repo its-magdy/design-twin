@@ -1809,6 +1809,14 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   check("…with no node id known, it names the plan's screen",
     JSON.stringify(verifyBuild.legacySetWarnings({}, undefined, [clean], null)) === JSON.stringify(["legacy-named verify set Crates for this plan's screen — run verify-screen --migrate"])
     && verifyBuild.legacySetWarnings({}, path.join("design", "plan", "Crates__80_1.json"), [clean], null)[0]?.includes("node 80:1") === true);
+  {
+    // [variant] a variant's report that names no node and has no expectation beside it is the plan's node's by its set name
+    const vroot = project({ "design/verify/Crates__80_1.dark.report.json": JSON.stringify({ verdict: "pass" }), "design/verify/Crates__80_1.report.json": JSON.stringify({ verdict: "pass" }) }, { nodeId: "80:1" });
+    const found = verifyBuild.locateReports(planOf(vroot), path.join(vroot, "design", "plan", "login.json"), vroot, null).map((r) => `${r.rel} ${r.matchedBy}`);
+    check(`[variant] locateReports finds the base report and the .dark variant's by the node id their set names carry (got ${JSON.stringify(found)})`,
+      JSON.stringify(found) === JSON.stringify(["design/verify/Crates__80_1.dark.report.json nodeId", "design/verify/Crates__80_1.report.json nodeId"]));
+    fs.rmSync(vroot, { recursive: true, force: true });
+  }
   check("the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
 
   // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook

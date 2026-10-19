@@ -1537,6 +1537,29 @@ if (false) process.exitCode = main(process.argv.slice(2));
 // design-to-code/verify-locate.ts
 import fs10 from "node:fs";
 import path9 from "node:path";
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+
+// design-to-code/verify-locate.ts
 function exportDirOf(cwd) {
   const e = path9.join(cwd, EXPORT_DIR);
   return fs10.existsSync(path9.join(e, "pages")) ? e : path9.join(cwd, DESIGN_DIR);
@@ -1612,7 +1635,7 @@ function locateReports(plan, planFile, cwd, exp) {
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs10.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
@@ -1650,21 +1673,6 @@ function locateReports(plan, planFile, cwd, exp) {
     });
   }
   return out;
-}
-
-// design-to-code/verify-sets.ts
-var VARIANT_RE = /^[a-z0-9-]+$/;
-var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => VARIANT_RE.test(s);
-function parseSetName(name) {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
 }
 
 // design-to-code/hook-input.ts

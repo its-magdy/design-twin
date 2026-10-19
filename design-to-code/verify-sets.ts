@@ -2,28 +2,44 @@
 //
 // A verify set is the files that share one name in the verify dir (`<name>.expected.json`, `.report.json`,
 // `.measured.json`, `.report.md`, `.status.json`, `<name>.png`, `<name>-diff.png`, …). Its name is the stem, or the stem
-// and a variant: `<stem>.<slug>` (a dark theme, a narrow width), slug [a-z0-9-]+. A stem is safe() output and the id
-// after its last "__", so it never holds a "." — the part before the first "." is always the stem. Any other name (a
-// nickname, `<Screen>@320`, `<Screen>-r1`) is legacy: `verify-screen --migrate` renames it (verify-migrate.ts).
+// and a variant: `<stem>.<slug>` (a dark theme, a narrow width), slug = runs of [a-z0-9] joined by single "-", at most
+// MAX_SLUG long, never a RESERVED_SLUGS word. A stem is safe() output and the id after its last "__", so it never holds
+// a "." — the part before the first "." is always the stem. Any other name (a nickname, `<Screen>@320`, `<Screen>-r1`)
+// is legacy: `verify-screen --migrate` renames it (verify-migrate.ts).
 //
 // A module of its own, under screen-key.ts (which resolves a query to a node first, through resolve-screen.ts): so
 // resolve-screen's CLI can name a node's stem the way screenKey does without importing screen-key.
 import fs from "node:fs";
 import path from "node:path";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
+import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 
-/** A variant slug: what follows the stem's "." in a set name. */
-const VARIANT_RE = /^[a-z0-9-]+$/;
+/** Slugs a variant never takes: a file tail of the set (`<S>.diff.png` is the base set's diff, `<S>.forced-colors.png` its
+ *  forced-colors screenshot; `<S>.report.json` its report) or a word the tools read as one. */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+/** The longest variant slug. */
+export const MAX_SLUG = 32;
+/** A variant slug: what follows the stem's "." in a set name — runs of [a-z0-9] joined by single "-". */
+const VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** A stem: safe() output only (letters, digits, "_"). */
 export const STEM_RE = /^[A-Za-z0-9_]+$/;
 
-export const isVariantSlug = (s: string): boolean => VARIANT_RE.test(s);
+export const isVariantSlug = (s: string): boolean => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
 
 /** Text → a variant slug: lower case, every run of other characters one "-", none at either end ("" when nothing is left). */
 export function variantSlug(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** Why `s` is refused as a variant slug (`--variant s`), or null when it is one. Suggests variantSlug(s) when that is a slug. */
+export function variantProblem(s: string): string | null {
+  if (isVariantSlug(s)) return null;
+  if (RESERVED_SLUGS.has(s)) return `variant '${s}' is reserved — it names a file of the set (${[...RESERVED_SLUGS].join(", ")} are never slugs); pick another`;
+  if (s.length > MAX_SLUG) return `variant '${s}' is ${s.length} characters long — a slug is at most ${MAX_SLUG}`;
+  const fixed = variantSlug(s);
+  return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` — use '${fixed}'` : ""}`;
 }
 
 /** A set name read by the grammar: its stem, the node id the stem carries, and its variant (null for the base set). */
@@ -44,7 +60,8 @@ export function parseSetName(name: string): SetName | null {
 /** The set name of a stem and an optional variant slug (throws on a slug outside the grammar). */
 export function formatSetName(stem: string, variant?: string | null): string {
   if (variant === undefined || variant === null) return stem;
-  if (!isVariantSlug(variant)) throw new Error(`variant '${variant}' is not a slug ([a-z0-9-]+)`);
+  const why = variantProblem(variant);
+  if (why !== null) throw new Error(why);
   return `${stem}.${variant}`;
 }
 
@@ -52,6 +69,53 @@ export function formatSetName(stem: string, variant?: string | null): string {
 export function nodeIdFromSetName(name: string): string | null {
   const dot = name.indexOf(".");
   return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+
+// ---------------------------------------------------------------- a set's files and where they go
+
+export const EXPECTED_SUFFIX = ".expected.json";
+
+/** The set name an expectation file gives: its basename without ".expected.json" (else without ".json"). */
+export function setNameOfFile(file: string): string {
+  const b = path.basename(file);
+  return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
+}
+
+/** THE status base of the set an expectation names: `<its dir>/<set name>` — the run cache key and the status lock every
+ *  writer and reader of that set's run status uses (verify-run.ts), wherever a run writes its other files. */
+export function statusBaseOf(expectedFile: string): string {
+  return path.join(path.dirname(expectedFile), setNameOfFile(expectedFile));
+}
+
+/** Where a set's files go for `--out`: the base `<dir>/<set>`, its dir, and whether --out was the older spelling (the base
+ *  itself, `<dir>/<set>`) — or why --out names no place for this set. */
+export type OutBase = { base: string; dir: string; deprecated: boolean } | { error: string };
+/**
+ * `--out` read as the verify directory. In order: none → `<defaultDir>/<set>`; an existing directory → `<out>/<set>`; an
+ * existing file → refused; a path ending in "/" (or "\") or the project's verify dir (design/verify) → that directory
+ * (the writer creates it); a path whose basename is the set's name, exact case → the base itself (the older spelling,
+ * `deprecated`); anything else → refused: a basename that is not the set's would name a second set for one node.
+ */
+export function outBaseOf(out: string | undefined, setName: string, defaultDir: string): OutBase {
+  if (out === undefined) return { base: path.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  const why = `--out takes the verify directory; this set is ${setName}`;
+  let st: fs.Stats | null = null;
+  try { st = fs.statSync(out); } catch { /* not there */ }
+  if (st?.isDirectory()) return { base: path.join(out, setName), dir: out, deprecated: false };
+  if (st) return { error: `--out ${out} is a file — ${why}` };
+  if (/[\\/]$/.test(out) || path.resolve(out) === path.resolve(VERIFY_DIR)) return { base: path.join(out, setName), dir: out.replace(/[\\/]+$/, "") || out, deprecated: false };
+  if (path.basename(out) === setName) return { base: out, dir: path.dirname(out), deprecated: true };
+  return { error: `--out ${out} is not a directory (a new one ends in "/") — ${why}` };
+}
+
+/** Why an expectation file cannot be compared or probed under its name, or null: a legacy name (not `<stem>` /
+ *  `<stem>.<slug>`), or a name whose node id is not the expectation's frame's. */
+export function expectationSetProblem(expectedFile: string, frameNodeId: string | undefined, verifyDir: string): string | null {
+  const name = setNameOfFile(expectedFile);
+  const p = parseSetName(name);
+  if (p === null) return `${expectedFile} is a legacy-named verify set — run verify-screen --migrate --dir ${verifyDir}, then use ${path.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (frameNodeId !== undefined && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} — re-run --expect for the frame (it names the set)`;
+  return null;
 }
 
 // ---------------------------------------------------------------- the verify dir's sets

@@ -259,6 +259,24 @@ await block("verify-screen --status --publish (staging):", async () => {
   safe("evidence published in this run is hashed at done", () => fin?.evidenceSha256 === sha(path.join(dir, "Plots.evidence.json")));
 });
 
+console.log("[tool-owned] --publish and a variant set's files:");
+await block("[tool-owned] --publish and a variant set's files:", async () => {
+  const dest = path.join(mk("dt-run-owned-"), "verify");
+  fs.mkdirSync(dest);
+  // TOOL_OWNED is anchored at the end: a variant `<stem>.<slug>` set's expected/report/status/prev files are refused like the base set's
+  for (const t of ["expected.json", "report.json", "report.md", "status.json", "expected.prev.json"]) {
+    const stage = mk("dt-run-owned-stage-");
+    fs.writeFileSync(path.join(stage, `Plots__1_1.w320-dialog.${t}`), "{}");
+    const r = VR.prepareStaged(stage, dest);
+    safe(`[tool-owned] a staged Plots__1_1.w320-dialog.${t} → refused, nothing copied`, () => "error" in r && r.error.includes(`Plots__1_1.w320-dialog.${t}`) && !fs.readdirSync(dest).length);
+  }
+  const stage = mk("dt-run-owned-stage-");
+  const own = ["Plots__1_1.w320-dialog.measured.json", "Plots__1_1.w320-dialog.png", "Plots__1_1.w320-dialog-dialog.png", "Plots__1_1.w320-dialog-diff.png", "Plots__1_1.dark.evidence.json"];
+  for (const f of own) fs.writeFileSync(path.join(stage, f), "x");
+  const r = VR.publishStaged(stage, dest);
+  safe(`[tool-owned] its measured file, screenshots, a state's -dialog.png, its -diff.png and evidence → published (got ${JSON.stringify(r)})`, () => "published" in r && JSON.stringify(r.published) === JSON.stringify([...own].sort()));
+});
+
 // `--phase measured` is the probe's recovery when its own `measured` write was refused — it records the measured
 // file's sha after the same checks done applies, so compare and done can tell the file apart from a later one
 console.log("--status --phase measured — the recovery records the measured file:");

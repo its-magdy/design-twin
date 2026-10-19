@@ -11,7 +11,8 @@
 //     layer itself and a suffix after "." or "@" (`<X>.dark`, `<X>@320`, safe(X) the layer name's safe(): the index's,
 //     else the expectation's frame name, else the report's screen) — with or without a base set beside it, it is never
 //     retired and never becomes the base; "-" is not read this way (layer names hold dashes). Any other name is the
-//     base (a nickname). Two sets of one node that extend nothing are skipped (which one is the screen is a person's call);
+//     base (a nickname). Two sets of one node that extend nothing are skipped (which one is the screen is a person's call),
+//     and so is a variant whose slug the grammar refuses (reserved — `<S>.diff` — or too long);
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
 //     every reader skips) and its other files stay under `<S>` — unless a plan's verification.recorded names the
 //     legacy report (re-record first: skipped);
@@ -64,7 +65,7 @@ import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { allSets, canonicalStemsFor, formatSetName, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
+import { MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
 import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
 import type { ReportRef } from "./verify-locate.ts";
@@ -418,7 +419,12 @@ export function planMigration(d: Dirs): MigrateStep[] {
       if (roots.length > 1 && roots.includes(rootOf(name))) continue;
       const isRoot = !parentOf.has(name);
       const slug = slugOf(name);
-      if (!isRoot && !slug) { steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug ([a-z0-9-]+) can keep — rename it by hand`] }); continue; }
+      if (!isRoot && !slug) { steps.push({ kind: "skip", set: name, why: [`its name extends ${parentOf.get(name) ?? "?"} by nothing a variant slug can keep — rename it by hand`] }); continue; }
+      // a slug the grammar refuses (reserved: `diff` would make `<S>.diff.png` both this variant's screenshot and the base set's diff)
+      if (!isRoot && !isVariantSlug(slug)) {
+        steps.push({ kind: "skip", set: name, why: [`variant '${slug}' is not a slug a set can take (${RESERVED_SLUGS.has(slug) ? "reserved: it names a file of a set" : `longer than ${MAX_SLUG} characters`}) — rename it by hand`] });
+        continue;
+      }
       const to = isRoot ? T : formatSetName(T, slug);
       plannedTo.set(name, to);
       wanted.set(to, [...(wanted.get(to) ?? []), name]);
