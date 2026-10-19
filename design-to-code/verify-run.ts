@@ -390,10 +390,10 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
  * listed); at --status a node with only legacy-named sets — a run under the new name would start a second set for it
  * (--migrate first); and at --status --new-run a set name with no files and no status whose node the export index names
  * by another stem (the set --expect would write is that one). A legacy set's own name is refused too (--migrate renames
- * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait), or ended
+ * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait --run <its id>), or ended
  * (--status --run <its id> with done/failed/blocked) under the old name.
  */
-type RunAt = { kind: "wait" } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
+type RunAt = { kind: "wait"; run: string | undefined } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
 function runBase(screen: string, dir: string | undefined, at: RunAt): { base: string; notes: string[] } | { error: string } {
   const asPath = dir === undefined && /[\\/]/.test(screen);
   const verifyDir = dir ?? (asPath ? path.dirname(screen) : VERIFY_DIR);
@@ -403,7 +403,8 @@ function runBase(screen: string, dir: string | undefined, at: RunAt): { base: st
     const open = k.legacySet !== undefined ? readStatus(path.join(verifyDir, k.legacySet)) : null;
     if (k.legacySet !== undefined && open !== null && open !== "v1" && !TERMINAL_PHASES.includes(open.phase)) {
       const S = k.legacySet;
-      const ends = at.kind === "wait" || (!at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase));
+      // no new run opens under a legacy name: only the open run itself is waited for or ended there
+      const ends = at.kind === "wait" ? at.run === undefined || at.run === open.runId : !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
       if (ends) return { base: path.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set — once run ${open.runId} ends, verify-screen --migrate renames it`] };
       const { waitIt, endIt } = runCommands(path.join(verifyDir, S), open);
       return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) — only that run's end is ` +
@@ -589,7 +590,7 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
   if (!screen || f.run === undefined) { console.error("--wait needs the verify set and the run: --wait <Layer>__<id> --run <id>\n" + usage); return 2; }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
   if (timeout === null || stall === null || interval === null) { console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage); return 2; }
-  const key = runBase(screen, f.dir, { kind: "wait" });
+  const key = runBase(screen, f.dir, { kind: "wait", run: f.run });
   if ("error" in key) { console.error(key.error); return 2; }
   for (const n of key.notes) console.error(n);
   const base = key.base;

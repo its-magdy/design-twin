@@ -1975,7 +1975,7 @@ function runBase(screen, dir, at) {
     const open = k.legacySet !== void 0 ? readStatus(path12.join(verifyDir, k.legacySet)) : null;
     if (k.legacySet !== void 0 && open !== null && open !== "v1" && !TERMINAL_PHASES.includes(open.phase)) {
       const S = k.legacySet;
-      const ends = at.kind === "wait" || !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
+      const ends = at.kind === "wait" ? at.run === void 0 || at.run === open.runId : !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
       if (ends) return { base: path12.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set \u2014 once run ${open.runId} ends, verify-screen --migrate renames it`] };
       const { waitIt, endIt } = runCommands(path12.join(verifyDir, S), open);
       return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) \u2014 only that run's end is written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
@@ -2166,7 +2166,7 @@ async function waitMain(screen, f, usage) {
     console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage);
     return 2;
   }
-  const key = runBase(screen, f.dir, { kind: "wait" });
+  const key = runBase(screen, f.dir, { kind: "wait", run: f.run });
   if ("error" in key) {
     console.error(key.error);
     return 2;

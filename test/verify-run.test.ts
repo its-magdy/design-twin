@@ -836,6 +836,9 @@ await block("[key] legacy set, open run:", async () => {
   const w = cli("--wait", "Shed", "--run", "run-legacy", "--timeout", "0.3", "--interval", "0.1");
   safe(`[key] --wait Shed waits on the legacy set's live status, with the --migrate note (got ${w.status}: ${w.stderr.trim()})`, () =>
     w.status === 5 && w.stderr.includes(`wait  run run-legacy on ${VR.liveStatusFile(legacyBase)}`) && /note {2}Shed is a legacy-named verify set — once run run-legacy ends, verify-screen --migrate renames it/.test(w.stderr));
+  const wOther = cli("--wait", "Shed", "--run", "run-other", "--timeout", "0.3", "--interval", "0.1");
+  safe(`[key] --wait Shed --run <another run> → exit 2 at once, naming the open run (no run but run-legacy can be under the old name) (got ${wOther.status}: ${wOther.stderr.trim()})`, () =>
+    wOther.status === 2 && /Shed is a legacy-named verify set, and its run run-legacy is open \(phase measuring\)/.test(wOther.stderr) && !wOther.stderr.includes("wait  run"));
   const early = cli("--migrate", "--apply");
   safe(`[key] --migrate --apply while the run is open skips the set (got ${early.status})`, () => early.status === 1 && fs.existsSync(path.join(dir, "Shed.expected.json")));
   const end = cli("--status", "Shed", "--phase", "failed", "--run", "run-legacy", "--detail", "verifier gone");
