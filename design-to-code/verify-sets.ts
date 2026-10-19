@@ -94,14 +94,21 @@ export function setNameOfFile(file: string): string {
 export function statusBaseOf(expectedFile: string): string {
   return path.join(path.dirname(expectedFile), setNameOfFile(expectedFile));
 }
+/** Trailing path separators: "/", and "\" only where it is one (Windows) — on POSIX "\" is a file name character. */
+/** Trailing path separators: "/" — and "\\" only where it is one (Windows); on POSIX "\\" is a file name character. */
+const TRAILING_SEP = path.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+/** Whether `p` ends in a path separator (TRAILING_SEP): `--out <dir>/` names a directory that may not exist yet. */
+export const endsInSep = (p: string): boolean => TRAILING_SEP.test(p);
+/** `p` without its trailing separators (TRAILING_SEP), or `p` itself when nothing else is left (a root). */
+export const trimSep = (p: string): string => p.replace(TRAILING_SEP, "") || p;
 
 /** Where a set's files go for `--out`: the base `<dir>/<set>`, its dir, and whether --out was the older spelling (the base
  *  itself, `<dir>/<set>`) — or why --out names no place for this set. */
 export type OutBase = { base: string; dir: string; deprecated: boolean } | { error: string };
 /**
  * `--out` read as the verify directory. In order: none → `<defaultDir>/<set>`; an existing directory → `<out>/<set>`; an
- * existing file → refused; a path ending in "/" (or "\") or the project's verify dir (design/verify) → that directory
- * (the writer creates it); a path whose basename is the set's name, exact case → the base itself (the older spelling,
+ * existing file → refused; a path ending in a separator (endsInSep: "/", and "\" on Windows) or the project's verify dir
+ * (design/verify) → that directory (the writer creates it); a path whose basename is the set's name, exact case → the base itself (the older spelling,
  * `deprecated`); anything else → refused: a basename that is not the set's would name a second set for one node.
  */
 export function outBaseOf(out: string | undefined, setName: string, defaultDir: string): OutBase {
@@ -111,7 +118,7 @@ export function outBaseOf(out: string | undefined, setName: string, defaultDir: 
   try { st = fs.statSync(out); } catch { /* not there */ }
   if (st?.isDirectory()) return { base: path.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file — ${why}` };
-  if (/[\\/]$/.test(out) || path.resolve(out) === path.resolve(VERIFY_DIR)) return { base: path.join(out, setName), dir: out.replace(/[\\/]+$/, "") || out, deprecated: false };
+  if (endsInSep(out) || path.resolve(out) === path.resolve(VERIFY_DIR)) return { base: path.join(out, setName), dir: trimSep(out), deprecated: false };
   if (path.basename(out) === setName) return { base: out, dir: path.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") — ${why}` };
 }

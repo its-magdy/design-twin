@@ -65,7 +65,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
+import { endsInSep, expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -101,7 +101,7 @@ function expectDirOf(out: string | undefined): string {
   let dir = false;
   try { dir = fs.statSync(out).isDirectory(); } catch { /* not there */ }
   if (dir || path.resolve(out) === path.resolve(VERIFY_DIR)) return out;
-  if (/[\\/]$/.test(out)) return out.replace(/[\\/]+$/, "") || out;
+  if (endsInSep(out)) return trimSep(out);
   return path.dirname(out);
 }
 

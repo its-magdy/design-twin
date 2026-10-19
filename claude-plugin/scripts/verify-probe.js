@@ -6208,6 +6208,9 @@ function setNameOfFile(file) {
 function statusBaseOf(expectedFile) {
   return path8.join(path8.dirname(expectedFile), setNameOfFile(expectedFile));
 }
+var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var endsInSep = (p) => TRAILING_SEP.test(p);
+var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
 function outBaseOf(out, setName, defaultDir) {
   if (out === void 0) return { base: path8.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
@@ -6218,7 +6221,7 @@ function outBaseOf(out, setName, defaultDir) {
   }
   if (st?.isDirectory()) return { base: path8.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (/[\\/]$/.test(out) || path8.resolve(out) === path8.resolve(VERIFY_DIR)) return { base: path8.join(out, setName), dir: out.replace(/[\\/]+$/, "") || out, deprecated: false };
+  if (endsInSep(out) || path8.resolve(out) === path8.resolve(VERIFY_DIR)) return { base: path8.join(out, setName), dir: trimSep(out), deprecated: false };
   if (path8.basename(out) === setName) return { base: out, dir: path8.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
 }

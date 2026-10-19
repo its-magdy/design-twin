@@ -159,7 +159,10 @@ console.log("\n[statusBaseOf] / setNameOfFile / [outBaseOf] / expectationSetProb
     check(`[outBaseOf] none → <default dir>/<set> (got ${o(undefined)})`, o(undefined) === `${path.join("design", "verify", S)}|${path.join("design", "verify")}|false` && o(undefined, "exp") === `${path.join("exp", S)}|exp|false`);
     check(`[outBaseOf] an existing directory → <dir>/<set> (got ${o(path.join("qa", "verify"))})`, o(path.join("qa", "verify")) === `${path.join("qa", "verify", S)}|${path.join("qa", "verify")}|false`);
     check(`[outBaseOf] an existing file → refused (got ${o(path.join("qa", "file.txt"))})`, /^error: --out .* is a file — --out takes the verify directory; this set is Plots__1_1$/.test(o(path.join("qa", "file.txt"))));
-    check(`[outBaseOf] a new path ending in a separator → that directory (got ${o("new/")})`, o("new/") === `${path.join("new", S)}|new|false` && o("new\\") === `${path.join("new\\", S)}|new|false`);
+    check(`[outBaseOf] a new path ending in a separator → that directory (got ${o("new/")})`, o("new/") === `${path.join("new", S)}|new|false`);
+    // "\\" is a separator on Windows only: on POSIX `new\\` is a file name, never the directory `new`
+    if (process.platform === "win32") check(`[outBaseOf] Windows: a new path ending in "\\" → that directory (got ${o("new\\")})`, o("new\\") === `${path.join("new", S)}|new|false`);
+    else check(`[outBaseOf] POSIX: a new path ending in "\\" is a file name, not a directory → refused (got ${o("new\\")})`, /^error: --out new\\ is not a directory/.test(o("new\\")));
     check(`[outBaseOf] the project's verify dir, not there yet → that directory (got ${o(path.join("design", "verify"), "elsewhere")})`, o(path.join("design", "verify"), "elsewhere") === `${path.join("design", "verify", S)}|${path.join("design", "verify")}|false`);
     check(`[outBaseOf] <dir>/<the set's name> → the base itself, deprecated (got ${o(path.join("design", "verify", S))})`, o(path.join("design", "verify", S)) === `${path.join("design", "verify", S)}|${path.join("design", "verify")}|true`);
     check(`[outBaseOf] a basename that is the set's in another case → refused (got ${o(path.join("design", "verify", "plots__1_1"))})`, /^error: .*this set is Plots__1_1$/.test(o(path.join("design", "verify", "plots__1_1"))));

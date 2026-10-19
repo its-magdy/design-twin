@@ -1349,6 +1349,7 @@ function parseSetName(name) {
   if (variant !== null && !isVariantSlug(variant)) return null;
   return { stem, nodeId, variant };
 }
+var TRAILING_SEP = path7.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
