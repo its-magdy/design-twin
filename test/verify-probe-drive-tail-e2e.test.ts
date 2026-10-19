@@ -33,6 +33,8 @@ const { url, edge, probe, vs, read, readReport, written, writes, froze, abs, sta
 // the freeze runs: Playwright's launcher log on stderr (the browser pids and how each ended), and killed at 90 s with everything it started (runNode) — a hang fails, never hangs the suite
 const FREEZE_RUN = { env: BROWSER_LOG, killAfterMs: 90_000 };
 const freezeArgs = (u: string, base: string, maxTime: string): string[] => ["--expected", EXPECTED, "--url", u, "--out", out(base), "--timeout", "30000", "--max-time", maxTime];
+// the run bound to a verify run (--status names it): a variant set of the screen's node, so --status takes its name as written
+const FREEZE_SET = "Beds__70_1.freeze-raf";
 const freezeUrl = `${edge("freeze-drive")}&how=raf`;
 
 // ---- the runs (T): each started only when the one before it has finished (wall-clock windows, see the header)
@@ -67,7 +69,7 @@ const T = {
   bounceHang: () => probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", out("BounceHang"), "--timeout", "12000", "--max-time", "40000"]),
   redirSlow: () => probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", out("RedirSlow"), "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]),
   // a page whose main thread stops answering mid-drive: --timeout 30 s, so only the drive's budget can end the freeze
-  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl, "FreezeRaf", "30000"), "--run", runId], FREEZE_RUN),
+  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl, FREEZE_SET, "30000"), "--run", runId], FREEZE_RUN),
 };
 console.log(`serial: ${Object.keys(T).length} runs, one at a time`);
 
@@ -308,20 +310,20 @@ const freezeChecks = (label: string, r: Run, m: VerifyMeasured | null, u: string
 // an endless loop in the animation frame after the click (every later evaluate never returns), the run bound to a verify run:
 // its `measured` status is written after the measured file (it carries that file's sha) — then --compare grades the cut row as
 // not probed, never as a failure
-const stF = await vs(["--status", "FreezeRaf", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
+const stF = await vs(["--status", FREEZE_SET, "--phase", "starting", "--new-run", "--dir", "design/verify"]);
 const runF = /^run (\S+) rev 1$/m.exec(stF.stdout)?.[1] ?? "";
 const rF = await T.freezeRaf(runF);
-const mF = read(out("FreezeRaf"));
+const mF = read(out(FREEZE_SET));
 freezeChecks("an opener whose click freezes the next animation frame for good (70:45)", rF, mF, freezeUrl, ["70:44"]);
 check("the frozen row on stderr as the probe words it: 'drive 70:45 on_click → ok:null · not-run: time budget'", /^drive 70:45 on_click → ok:null · not-run: time budget$/m.test(rF.stderr));
-const sF = status(out("FreezeRaf"));
-const mFile = abs(out("FreezeRaf") + ".measured.json");
+const sF = status(out(FREEZE_SET));
+const mFile = abs(out(FREEZE_SET) + ".measured.json");
 const mBytes = fs.existsSync(mFile) ? fs.readFileSync(mFile) : null;
 check(`the run's status after the freeze: measured, by verify-probe, rev 3 (starting → measuring → measured), its measuredSha256 the measured file's bytes and its time not before that file's (saw ${sF === null || sF === "v1" ? String(sF) : `${sF.phase} rev ${sF.rev}`})`,
   runF !== "" && sF !== null && sF !== "v1" && sF.runId === runF && sF.phase === "measured" && sF.by === "verify-probe" && sF.rev === 3 && mBytes !== null
   && sF.measuredSha256 === crypto.createHash("sha256").update(mBytes).digest("hex") && Date.parse(sF.at) >= Math.floor(fs.statSync(mFile).mtimeMs));
-const cF = await vs(["--compare", EXPECTED, out("FreezeRaf") + ".measured.json", "--out", out("FreezeRaf")]);
-const repF = readReport(out("FreezeRaf"));
+const cF = await vs(["--compare", EXPECTED, out(FREEZE_SET) + ".measured.json", "--out", out(FREEZE_SET)]);
+const repF = readReport(out(FREEZE_SET));
 const rowF = (id: string): string | undefined => (repF?.interactions || []).find((i) => i.nodeId === id)?.result;
 if (repF === null) console.log(cF.stderr);
 check(`--compare of the frozen run: the cut row 70:45 not-probed (saw ${String(rowF("70:45"))}), never fail; 70:44, driven before the freeze, passes (saw ${String(rowF("70:44"))})`,

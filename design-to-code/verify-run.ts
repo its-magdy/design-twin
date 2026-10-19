@@ -47,7 +47,8 @@ import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
 import type { ProcessStamp } from "../bridge/src/file-lock.ts";
-import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import { setKey } from "./screen-key.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
 /** Every phase a status v2 can be in, in the order a run normally passes through them. */
@@ -217,19 +218,20 @@ export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): Run
 export class RunOpen extends Error {
   constructor(base: string, open: VerifyStatusV2) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
+    const o = open.ownRun, S = path.basename(base);
     super(o
-      ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} — ` +
+      ? `run ${open.runId} of ${S} ${ownRunOpen(open, o)} — ` +
         `a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}`
-      : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
+      : `run ${open.runId} of ${S} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
         `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) ` +
         `or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 }
-/** The commands a refusal names for the open run `open`: wait for it, and end it `failed`. */
+/** The commands a refusal names for the open run `open` of `<base>`: wait for it, and end it `failed` — by the set's name,
+ *  basename(base) (a migrated set's status still says its old name in `screen`). */
 function runCommands(base: string, open: VerifyStatusV2): { waitIt: string; endIt: string } {
-  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+  const vs = scriptCmd("verify-screen"), S = shellArg(path.basename(base)), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 /** How a refusal names another probe's own run that is open: when and by which process it started — nobody waits for
@@ -284,11 +286,11 @@ export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId:
 export class RunNotCurrent extends Error {
   constructor(base: string, runId: string, open: VerifyStatusV2) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
+    const o = open.ownRun, S = path.basename(base);
     super(o
-      ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : undefined)} — ` +
+      ? `run ${runId} is not the current run of ${S}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : undefined)} — ` +
         `nothing is written; if no probe is running, end it: ${endIt}`
-      : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
+      : `run ${runId} is not the current run of ${S}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
         `nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
@@ -453,10 +455,27 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
 }
 
 // ---------------------------------------------------------------- CLI glue (called from verify-screen.ts main)
-/** `<dir>/<S>`: S is a screen name (`--dir` defaults to design/verify); a path with a separator is taken as-is. */
-function runBase(screen: string, dir: string | undefined): string {
-  const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
-  return /[\\/]/.test(s) && dir === undefined ? s : path.join(dir ?? VERIFY_DIR, s);
+/**
+ * `<verify dir>/<set>`: the verify set `screen` names (screen-key.ts setKey) — a set name as written (a variant
+ * `<Layer>__<id>.<slug>` too, an artefact's file tail dropped), else the screen's base set through the export index's
+ * exact stages (a node id, the exact layer name / title / plan header): the set's stem is fixed once it exists, so a frame
+ * renamed in Figma mid-run still names the same live status. The verify dir is --dir, else the directory of a `screen`
+ * given as a path, else design/verify. Refused: a query that names no set (the candidates listed), and at --status a node
+ * with only legacy-named sets — a run under the new name would start a second set for it (--migrate first).
+ */
+function runBase(screen: string, dir: string | undefined, at: "status" | "wait"): { base: string; notes: string[] } | { error: string } {
+  const asPath = dir === undefined && /[\\/]/.test(screen);
+  const verifyDir = dir ?? (asPath ? path.dirname(screen) : VERIFY_DIR);
+  const k = setKey(asPath ? path.basename(screen) : screen, { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir });
+  if (k.status === "unresolved") {
+    return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
+  }
+  const legacy = k.legacy.length ? `legacy-named verify set(s) ${k.legacy.join(", ")} of node ${k.nodeId}` : null;
+  if (legacy !== null && !k.existing && at === "status") {
+    return { error: `${legacy}, and none named ${k.stem} — a run of ${k.name} would start a second set for the node: run ${scriptCmd("verify-screen")} --migrate --apply` +
+      `${dir !== undefined ? ` --dir ${shellArg(dir)}` : ""}, then --status ${shellArg(k.name)}` };
+  }
+  return { base: path.join(verifyDir, k.name), notes: legacy !== null ? [`note  ${legacy} — verify-screen --migrate renames them to ${k.stem}`] : [] };
 }
 
 /** The measured file's expectationSha256 (and runId, when it names one), or why it has none. */
@@ -514,7 +533,10 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   if (f.run !== undefined && !RUN_ID.test(f.run)) { console.error(`--run must be a run id (letters, digits, . : _ -), got '${f.run}'\n` + usage); return 2; }
   if (f.by !== undefined && f.by !== "agent" && f.by !== "orchestrator") { console.error(`--by must be agent or orchestrator (got '${f.by}')\n` + usage); return 2; }
   const by: StatusWriter = f.by === "orchestrator" ? "orchestrator" : "agent";
-  const base = runBase(screen, f.dir);
+  const key = runBase(screen, f.dir, "status");
+  if ("error" in key) { console.error(key.error); return 2; }
+  for (const n of key.notes) console.error(n);
+  const base = key.base;
   const phase = f.phase;
   const prev = readStatus(base);
   const prevV2 = prev && prev !== "v1" ? prev : null;
@@ -617,7 +639,10 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
   if (!screen || f.run === undefined) { console.error("--wait needs the screen name and the run: --wait <Screen> --run <id>\n" + usage); return 2; }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
   if (timeout === null || stall === null || interval === null) { console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage); return 2; }
-  const base = runBase(screen, f.dir);
+  const key = runBase(screen, f.dir, "wait");
+  if ("error" in key) { console.error(key.error); return 2; }
+  for (const n of key.notes) console.error(n);
+  const base = key.base;
   console.error(`wait  run ${f.run} on ${liveStatusFile(base)} (then ${statusFile(base)})`);
   const t0 = Date.now();
   let lastKey = "", lastChange = Date.now(), noted = "";

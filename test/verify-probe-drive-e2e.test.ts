@@ -58,11 +58,11 @@ const P = {
   bedsOn: q(() => probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", out("BedsOn"), "--behaviour", "on"])),
   // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare, in that order
   main: q(async () => {
-    const st = await vs(["--status", "Beds", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
+    const st = await vs(["--status", "Beds__70_1", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
     const runId = /^run (\S+) rev 1$/m.exec(st.stdout)?.[1] ?? "";
     const r2 = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, ...(runId ? ["--run", runId] : [])]);
-    const done = await vs(["--status", "Beds", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
-    const c2 = await vs(["--compare", EXPECTED, out("Beds") + ".measured.json", "--out", out("Beds")]);
+    const done = await vs(["--status", "Beds__70_1", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
+    const c2 = await vs(["--compare", EXPECTED, out("Beds__70_1") + ".measured.json", "--out", out("Beds__70_1")]);
     return { runId, r2, done, c2 };
   }),
   // (--ready none here and on clickNavSlow: they check the load wait alone, with no --ready — the default is the frame tag)
@@ -134,7 +134,7 @@ check("[ready-default] no --steps and no --ready → the default --ready (the fr
 
 // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare (one queued task: P.main)
 const { runId, r2, done, c2 } = await P.main;
-const m2 = read(out("Beds"));
+const m2 = read(out("Beds__70_1"));
 if (r2.status !== 0) console.log(r2.stderr);
 check("[steps] --steps (click the sidebar button, waitFor the root) → exit 0, measured.json written", r2.status === 0 && m2 !== null);
 check("[steps] measured.reach: 2 steps, sha256 of their canonical JSON, source '--steps steps.json', the url after the steps",
@@ -169,7 +169,7 @@ check("[page-width] measured.page at the design width: scrollWidth = clientWidth
   m2?.page?.scrollWidth === 1024 && m2.page.clientWidth === 1024 && m2.page.viewport.w === 1024 && !m2.page.scrollable && m2.page.offenders.length === 0 && m2.page.overflowX === "visible" && m2.page.compatMode === "CSS1Compat");
 
 if (done.status !== 0) console.log(done.stderr);
-const rep2 = readReport(out("Beds"));
+const rep2 = readReport(out("Beds__70_1"));
 if (rep2 === null) console.log(c2.stderr);
 check("[hover-action] --compare: the hover-revealed overlay passes (not 'not-probed': the drive reaches it)", res(rep2, "70:44")?.result === "pass");
 check("[plan-only] --compare: the plan row is graded (source plan) and passes", res(rep2, "70:50")?.result === "pass" && res(rep2, "70:50")?.source === "plan");

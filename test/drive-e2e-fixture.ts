@@ -5,7 +5,7 @@
 // Each suite calls startDriveFixture() once: its own temp project, its own server, its own write accounting, torn down by finish().
 //
 //   const fx = await startDriveFixture("dt-probe-drive-e2e-", "verify-probe drive e2e — …:");
-//   const r = await fx.probe(["--expected", fx.EXPECTED, "--url", fx.url(), "--out", out("Beds"), …]);
+//   const r = await fx.probe(["--expected", fx.EXPECTED, "--url", fx.url(), "--out", out("Beds__70_1"), …]);
 //
 // The fixture "Plot Ledger" (test/fixtures/probe/plot-ledger.*, invented names) is a single-page app whose sections are
 // picked by state, not by the URL: the Beds screen (root 70:1) exists only after its sidebar button (70:30) is clicked
@@ -226,11 +226,12 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   }
 
   // ---- the expectation, from the real --expect (auto-discovers design/plan/Beds__70_1.json)
-  const exp = await vs(["--expect", "design/export/pages/Plots/Beds__70_1.json", "--out", out("Beds")]);
-  const EXPECTED = out("Beds") + ".expected.json";
+  const exp = await vs(["--expect", "design/export/pages/Plots/Beds__70_1.json", "--out", out("Beds__70_1")]);
+  const EXPECTED = out("Beds__70_1") + ".expected.json";
   if (exp.status !== 0 || !fs.existsSync(path.join(proj, EXPECTED))) { console.log(exp.stderr); check("verify-screen --expect wrote the expectation", false); finish(); report(); }
-  // the same expectation without interactions: for the runs that check only reaching + measuring (nothing to drive)
-  const QUIET = out("Quiet") + ".expected.json";
+  // the same expectation without interactions: for the runs that check only reaching + measuring (nothing to drive) — a
+  // variant set of the node, Beds__70_1.quiet
+  const QUIET = out("Beds__70_1.quiet") + ".expected.json";
   const full = readJsonOrNull(path.join(proj, EXPECTED), isVerifyExpectation);
   if (full !== null) { const { interactions: _drop, ...quiet } = full; fs.writeFileSync(path.join(proj, QUIET), JSON.stringify(quiet, null, 2) + "\n"); }
 
