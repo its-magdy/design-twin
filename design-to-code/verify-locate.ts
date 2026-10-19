@@ -7,8 +7,9 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
-import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
+import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
+import { canonical } from "./run-cache.ts";
 import { nodeIdFromSetName } from "./verify-sets.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
@@ -38,11 +39,32 @@ export interface ExportHit { file: string; doc: ScreenDoc; row: IndexRow | null;
 
 const docNodeId = (doc: ScreenDoc): string | null => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
 
+/** Two spellings of one file: their real paths (the on-disk case, symlinks followed) compare equal — so a header that
+ *  differs from the index's spelling only in case (a case-insensitive disk) is the same file. */
+const sameFile = (a: string, b: string): boolean => path.resolve(a) === path.resolve(b) || canonical(a) === canonical(b);
+
+/** The Figma file a pull came from, as an export stamps it (write-out.ts): its name and key; null when unstamped. */
+function sourceOf(doc: ScreenDoc): { file: string; key: string | null } | null {
+  const exp = screenExportOf(doc);
+  const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : undefined;
+  if (!file) return null;
+  return { file, key: exp?.sourceFileKey || null };
+}
+/** Whether an index row is of the Figma file `src` (the key decides when both carry one, else the file name, as
+ *  pages-layout.ts reads two rows of one node); null when either side is unstamped. */
+function sameSource(r: IndexRow, src: { file: string; key: string | null } | null): boolean | null {
+  if (!src || !r.sourceFile) return null;
+  return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
+}
+
 // The screen export a plan describes: its `file` header (project-relative, or relative to
 // design/export as the index writes it), else its `nodeId`, else the node id in its `screen` stem or
 // its own filename, looked up in the export index. The export index has the last word on where a node's export is: when
-// it files the node of the header's export (that doc's root id, else the plan's nodeId) under another readable file — a
-// re-pull after a layer rename leaves the old file behind — that file is read and `staleFile` names the header's.
+// no row of the header's node (that doc's root id, else the plan's nodeId) files it under the header's file, but one
+// readable row files it elsewhere — a re-pull after a layer rename leaves the old file behind — that file is read and
+// `staleFile` names the header's. Node ids repeat across Figma files (the index merges several), so the row taken is the
+// one of the header's Figma file (its source stamp), else the one unstamped row; several, or only other files' rows,
+// keep the header.
 // Returns { file, doc, row, … } or null.
 function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
   const exportDir = exportDirOf(cwd);
@@ -62,9 +84,20 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   let staleFile: string | null = null;
   if (hit && plan.file) {
     const id = docNodeId(hit.doc) || plan.nodeId || null;
-    const filed = id ? rows.find((r) => r.id === id) : undefined;
-    const now = filed ? tryFile(filed.file) : null;
-    if (filed && now && path.resolve(now.file) !== path.resolve(hit.file)) { hit = now; row = filed; staleFile = plan.file; }
+    const header = hit;
+    // node ids repeat across Figma files: every readable row of the id, and whether one of them is the header's file
+    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => { const now = tryFile(r.file); return now ? [{ r, now }] : []; });
+    const own = filed.find((x) => sameFile(x.now.file, header.file));
+    if (own) { if (!row || row.id === id) row = own.r; }
+    else {
+      const src = sourceOf(header.doc);
+      const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null);
+      // the replacement: the one row of the header's Figma file, else the one row whose file is unknown — never a row of
+      // another Figma file, never a pick among several
+      const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : undefined;
+      if (pick) { hit = pick.now; row = pick.r; staleFile = plan.file; }
+    }
   }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;

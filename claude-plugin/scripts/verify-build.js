@@ -1576,6 +1576,17 @@ function indexRows(exportDir) {
   return rows;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
+var sameFile = (a, b) => path9.resolve(a) === path9.resolve(b) || canonical2(a) === canonical2(b);
+function sourceOf(doc) {
+  const exp = screenExportOf(doc);
+  const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
+  if (!file) return null;
+  return { file, key: exp?.sourceFileKey || null };
+}
+function sameSource(r, src) {
+  if (!src || !r.sourceFile) return null;
+  return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
+}
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
@@ -1597,12 +1608,24 @@ function locateExport(plan, planFile, cwd) {
   let staleFile = null;
   if (hit && plan.file) {
     const id = docNodeId(hit.doc) || plan.nodeId || null;
-    const filed = id ? rows.find((r) => r.id === id) : void 0;
-    const now = filed ? tryFile(filed.file) : null;
-    if (filed && now && path9.resolve(now.file) !== path9.resolve(hit.file)) {
-      hit = now;
-      row = filed;
-      staleFile = plan.file;
+    const header = hit;
+    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => {
+      const now = tryFile(r.file);
+      return now ? [{ r, now }] : [];
+    });
+    const own = filed.find((x) => sameFile(x.now.file, header.file));
+    if (own) {
+      if (!row || row.id === id) row = own.r;
+    } else {
+      const src = sourceOf(header.doc);
+      const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null);
+      const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : void 0;
+      if (pick) {
+        hit = pick.now;
+        row = pick.r;
+        staleFile = plan.file;
+      }
     }
   }
   if (!hit && row) hit = tryFile(row.file);
@@ -3047,7 +3070,7 @@ function planSkeletonOuts(cmd, powershell = false) {
   }
   return out;
 }
-function sameFile(w, rel, cwd) {
+function sameFile2(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
   if (!c) return false;
   const want = path10.resolve(cwd, rel).replace(/\\/g, "/");
@@ -3070,8 +3093,8 @@ function ownPlans(open, input, all, cwd) {
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => {
     const planRel = path10.relative(cwd, path10.resolve(p.file));
-    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
-    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
+    if (writes.some((w) => sameFile2(w, planRel, cwd))) return true;
+    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile2(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
   if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
@@ -3081,7 +3104,7 @@ function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
   return bad.filter((b) => {
     const rel = path10.relative(cwd, path10.resolve(b.file));
-    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b);
+    return scan.writes.some((w) => sameFile2(w, rel, cwd)) && !closedStatusOf(b);
   });
 }
 function closedStatusOf(b) {

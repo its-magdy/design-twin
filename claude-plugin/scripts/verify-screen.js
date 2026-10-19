@@ -6021,6 +6021,17 @@ function indexRows(exportDir) {
   return rows;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
+var sameFile = (a, b) => path14.resolve(a) === path14.resolve(b) || canonical2(a) === canonical2(b);
+function sourceOf(doc) {
+  const exp = screenExportOf(doc);
+  const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
+  if (!file) return null;
+  return { file, key: exp?.sourceFileKey || null };
+}
+function sameSource(r, src) {
+  if (!src || !r.sourceFile) return null;
+  return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
+}
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
@@ -6042,12 +6053,24 @@ function locateExport(plan, planFile, cwd) {
   let staleFile = null;
   if (hit && plan.file) {
     const id = docNodeId(hit.doc) || plan.nodeId || null;
-    const filed = id ? rows.find((r) => r.id === id) : void 0;
-    const now = filed ? tryFile(filed.file) : null;
-    if (filed && now && path14.resolve(now.file) !== path14.resolve(hit.file)) {
-      hit = now;
-      row = filed;
-      staleFile = plan.file;
+    const header = hit;
+    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => {
+      const now = tryFile(r.file);
+      return now ? [{ r, now }] : [];
+    });
+    const own = filed.find((x) => sameFile(x.now.file, header.file));
+    if (own) {
+      if (!row || row.id === id) row = own.r;
+    } else {
+      const src = sourceOf(header.doc);
+      const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null);
+      const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : void 0;
+      if (pick) {
+        hit = pick.now;
+        row = pick.r;
+        staleFile = plan.file;
+      }
     }
   }
   if (!hit && row) hit = tryFile(row.file);
@@ -6135,7 +6158,7 @@ function locateReports(plan, planFile, cwd, exp) {
 // design-to-code/verify-migrate.ts
 var slash2 = (p) => p.split(path15.sep).join("/");
 var exists2 = (p) => fs16.existsSync(p);
-function sameFile(a, b) {
+function sameFile2(a, b) {
   try {
     const x = fs16.statSync(a, { bigint: true }), y = fs16.statSync(b, { bigint: true });
     return x.dev === y.dev && x.ino === y.ino;
@@ -6479,7 +6502,7 @@ function planMigration(d) {
           continue;
         }
         const retired = from + ".retired";
-        if (exists2(retired) && !sameFile(from, retired)) {
+        if (exists2(retired) && !sameFile2(from, retired)) {
           steps.push({ kind: "skip", set: name, why: [`${path15.basename(retired)} already exists \u2014 refusing to replace it`] });
           continue;
         }
@@ -6491,7 +6514,7 @@ function planMigration(d) {
         continue;
       }
       const moves = files.map((f) => ({ from: path15.join(d.verifyDir, f), to: path15.join(d.verifyDir, to + f.slice(name.length)) }));
-      const clash = moves.filter((m) => exists2(m.to) && !sameFile(m.from, m.to)).map((m) => path15.basename(m.to));
+      const clash = moves.filter((m) => exists2(m.to) && !sameFile2(m.from, m.to)).map((m) => path15.basename(m.to));
       if (clash.length) {
         steps.push({ kind: "skip", set: name, why: [`refusing to replace ${clash.join(", ")}`] });
         continue;
@@ -6528,7 +6551,7 @@ function lockStatuses(bases) {
   const locks = [];
   const taken = [];
   for (const file of [...new Set(bases.map(lockFileOfStatus))].sort()) {
-    if (taken.some((t) => t.toLowerCase() === file.toLowerCase() && sameFile(t, file))) continue;
+    if (taken.some((t) => t.toLowerCase() === file.toLowerCase() && sameFile2(t, file))) continue;
     try {
       locks.push(acquireFileLock(file, STATUS_LOCK2));
       taken.push(file);
@@ -6589,13 +6612,13 @@ function undoMove(m, link) {
   try {
     if (m.tmp !== void 0 && listed(m.tmp)) {
       if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
-      if (listed(m.to) && sameFile(m.tmp, m.to)) fs16.unlinkSync(m.to);
+      if (listed(m.to) && sameFile2(m.tmp, m.to)) fs16.unlinkSync(m.to);
       moveNoReplace(m.tmp, m.from, link);
       return null;
     }
     const atFrom = listed(m.from), atTo = listed(m.to);
     if (atFrom && atTo) {
-      if (!sameFile(m.from, m.to)) return `${name(m.from)} and ${name(m.to)} both exist \u2014 keep one by hand`;
+      if (!sameFile2(m.from, m.to)) return `${name(m.from)} and ${name(m.to)} both exist \u2014 keep one by hand`;
       fs16.unlinkSync(m.to);
       return null;
     }
@@ -6723,7 +6746,7 @@ function applyRetire(s, d) {
     const byName = nameOnlyBlocks(plans, s.set, s.nodeId, d, freshRefs(d));
     if (byName.length) return { why: byName, notes: [] };
     if (exists2(s.file.to)) {
-      if (!sameFile(s.file.from, s.file.to)) return { why: [`${path15.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
+      if (!sameFile2(s.file.from, s.file.to)) return { why: [`${path15.basename(s.file.to)} already exists \u2014 refusing to replace it`], notes: [] };
       fs16.unlinkSync(s.file.from);
       return { why: [], notes: [`${path15.basename(s.file.from)} and ${path15.basename(s.file.to)} were one file (a retire that was interrupted) \u2014 finished`] };
     }
@@ -6763,7 +6786,7 @@ function applyRename(s, d) {
   try {
     const open = openRunOf(oldBase) ?? openRunOf(newBase);
     if (open) return { why: [open], notes };
-    const clash = s.files.filter((m) => !exists2(m.from) || exists2(m.to) && !sameFile(m.from, m.to));
+    const clash = s.files.filter((m) => !exists2(m.from) || exists2(m.to) && !sameFile2(m.from, m.to));
     if (clash.length) return { why: [`the verify dir changed since it was read (${clash.map((m) => path15.basename(m.from)).join(", ")}) \u2014 run --migrate again`], notes };
     if (exists2(journal)) return { why: [`${path15.basename(journal)} already exists \u2014 run --migrate again (it rolls that migration back first)`], notes };
     const plans = readPlans(d.planDir, d.cwd);
@@ -6781,7 +6804,7 @@ function applyRename(s, d) {
       const r = recordedReport(p.plan);
       return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null;
     }).map((p) => p.file));
-    const moves = s.files.filter((m) => m.from !== m.to).map((m) => m.from.toLowerCase() === m.to.toLowerCase() || sameFile(m.from, m.to) ? { ...m, tmp: m.from + tmpSuffix() } : m);
+    const moves = s.files.filter((m) => m.from !== m.to).map((m) => m.from.toLowerCase() === m.to.toLowerCase() || sameFile2(m.from, m.to) ? { ...m, tmp: m.from + tmpSuffix() } : m);
     const liveOld = liveStatusFile(oldBase), liveNew = liveStatusFile(newBase);
     const live = exists2(liveOld) && !exists2(liveNew);
     const jdoc = {
