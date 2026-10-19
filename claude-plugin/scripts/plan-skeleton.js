@@ -2,8 +2,8 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs9 from "node:fs";
-import path7 from "node:path";
+import fs10 from "node:fs";
+import path8 from "node:path";
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -240,12 +240,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path8, parent, depth) {
+  (function go(node, parentHidden, path9, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path8, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path9, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path9 ? path9 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -486,7 +486,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path8, message) => errors.push({ path: path8, message });
+  const err = (path9, message) => errors.push({ path: path9, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -807,6 +807,24 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
+}
+
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
@@ -860,6 +878,10 @@ function findMapFile(cwd) {
   const legacy2 = path2.join(cwd, LEGACY_MAP_FILE);
   if (fs3.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+function listPlans(dir) {
+  if (!fs3.existsSync(dir)) return [];
+  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/cross-check.ts
@@ -1309,6 +1331,74 @@ function parsePlanText(raw, file) {
   return pp.plan;
 }
 
+// design-to-code/verify-sets.ts
+import fs9 from "node:fs";
+import path7 from "node:path";
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
+var RETIRED = ".expected.json.retired";
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs9.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
+    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path7.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(path7.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+}
+function setNodeId(verifyDir, name) {
+  const f = setFacts(verifyDir, name);
+  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
+  return f.expectedId ?? f.reportId;
+}
+function canonicalStemsFor(verifyDir, nodeId) {
+  const stems = /* @__PURE__ */ new Set();
+  for (const name of verifySets(verifyDir)) {
+    const p = parseSetName(name);
+    if (p && p.nodeId === nodeId) stems.add(p.stem);
+  }
+  return [...stems].sort();
+}
+function legacySetsFor(verifyDir, nodeId) {
+  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
+}
+function nodeStem(verifyDir, nodeId, layerName) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
+  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
+  const have = stems[0];
+  return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
+}
+
 // design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -1328,7 +1418,9 @@ var USAGE = [
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
-  "                       overwritten: every field you filled is kept.",
+  "                       overwritten: every field you filled is kept. A new plan is named by its node,",
+  "                       design/plan/<Layer>__<id>.json (the stem its verify set already has, if any);",
+  "                       another name, or a second plan of a node that already has one, is refused (exit 2).",
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
@@ -1659,7 +1751,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path7.relative(cwd || process.cwd(), path7.resolve(screenFile)).split(path7.sep).join("/") : null;
+  const rel = screenFile ? path8.relative(cwd || process.cwd(), path8.resolve(screenFile)).split(path8.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1667,14 +1759,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs9.existsSync(path7.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs10.existsSync(path8.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path7.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path8.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1794,13 +1886,28 @@ function seed(plan, from, label) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path7.dirname(path7.resolve(screenFile));
-  for (const idx of [path7.join(dir, "..", "index.json"), path7.join(dir, "index.json")]) {
+  const dir = path8.dirname(path8.resolve(screenFile));
+  for (const idx of [path8.join(dir, "..", "index.json"), path8.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
   }
   return null;
+}
+function newPlanProblem(out, nodeId, layerName) {
+  if (!nodeId) return "the screen export names no node id, and a new plan is named by its node \u2014 re-pull the screen";
+  const dir = path8.dirname(out);
+  for (const f of listPlans(dir)) {
+    const p = readJsonOrNull(path8.join(dir, f), isPlan);
+    if (p && (p.nodeId || nodeIdFromStem(path8.basename(f, ".json"))) === nodeId) {
+      const have = path8.join(dir, f);
+      return `${have} is already the plan of node ${nodeId} \u2014 one node, one plan: pass --out ${have} to merge into it`;
+    }
+  }
+  const k = nodeStem(fs10.existsSync(VERIFY_DIR) ? VERIFY_DIR : null, nodeId, layerName);
+  if ("why" in k) return k.why;
+  const want = k.stem + ".json";
+  return path8.basename(out) === want ? null : `a new plan is named by its node: --out ${path8.join(dir, want)}, not ${path8.basename(out)}`;
 }
 var cannotRead = (what, file, error) => {
   console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`);
@@ -1825,18 +1932,18 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs9.existsSync(dsDir) && fs9.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs10.existsSync(dsDir) && fs10.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path7.join(dsDir, file), guard);
+    const r = readJson(path8.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
   const { TOKENS: TOKENS4, COMPONENTS_LOCAL: COMPONENTS_LOCAL3, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY3 } = DESIGN_SYSTEM_FILES;
   const dsRead = optional(TOKENS4, isTokensDoc), catRead = optional(COMPONENTS_LOCAL3, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY3, isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path7.join(dsDir, TOKENS4), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path7.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path7.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path8.join(dsDir, TOKENS4), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path8.join(dsDir, COMPONENTS_LOCAL3), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path8.join(dsDir, COMPONENTS_LIBRARY3), libRead.error);
   const mapAt = findMapFile(process.cwd());
   const mapFile = mapFlag || (mapAt.missing ? void 0 : mapAt.rel);
   let mapKeys = /* @__PURE__ */ new Map();
@@ -1853,12 +1960,21 @@ function main(argv) {
     seeds.push({ file: f, plan: parsed.plan });
   }
   const seedAll = (plan) => seeds.map((sd) => {
-    const n = seed(plan, sd.plan, path7.basename(sd.file));
+    const n = seed(plan, sd.plan, path8.basename(sd.file));
     return `plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " \u2014 review them (seededFrom)" : "");
   });
-  const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
-  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
+  const exp = screenExportOf(doc), root = screenRoots(doc)[0];
+  const nodeId = exp?.nodeId || root?.id;
+  const indexRow = findIndexRow(screenFile, nodeId);
+  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow });
   const c = fresh.counts;
+  if (out && !fs10.existsSync(out)) {
+    const why = newPlanProblem(out, nodeId, indexRow?.name ?? exp?.screen ?? root?.name ?? "");
+    if (why) {
+      console.error(`plan-skeleton: ${why} \u2014 nothing written`);
+      return 2;
+    }
+  }
   if (!out) {
     for (const l of seedAll(fresh)) console.error(l);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
@@ -1880,7 +1996,7 @@ function main(argv) {
       });
       if (!changed) {
         const now = /* @__PURE__ */ new Date();
-        fs9.utimesSync(out, now, now);
+        fs10.utimesSync(out, now, now);
       }
     } catch (e) {
       console.error(`plan-skeleton: ${out}: ${errMsg(e)} \u2014 not written`);

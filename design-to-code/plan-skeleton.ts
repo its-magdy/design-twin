@@ -44,7 +44,7 @@ import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { isAlias, isComponentsCatalog, isPageIndex, isPagesRootIndex, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import { isAlias, isComponentsCatalog, isPageIndex, isPagesRootIndex, isPlan, isTokensDoc, parsePlan } from "./doc-guards.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -61,7 +61,9 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
 import { parsePlanText, updatePlan } from "./plan-record.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { findMapFile } from "../bridge/src/project-layout.ts";
+import { VERIFY_DIR, findMapFile, listPlans } from "../bridge/src/project-layout.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
+import { nodeStem } from "./verify-sets.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
 const USAGE = [
@@ -82,7 +84,9 @@ const USAGE = [
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted — stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
-  "                       overwritten: every field you filled is kept.",
+  "                       overwritten: every field you filled is kept. A new plan is named by its node,",
+  "                       design/plan/<Layer>__<id>.json (the stem its verify set already has, if any);",
+  "                       another name, or a second plan of a node that already has one, is refused (exit 2).",
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
@@ -658,6 +662,26 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
   return null;
 }
 
+/** Why a NEW plan (its --out not there yet) cannot be written at `out`, or null. A node has one plan, and it is named by
+ *  the node: `<stem>.json`, the stem the verify dir already names the node by, else `<Layer>__<id>` (nodeStem). Another
+ *  plan in the same directory that describes the node — by its `nodeId`, else the id its file name carries, as
+ *  verify-screen finds a frame's plans — is the one to merge into. An existing plan merges under any name. */
+function newPlanProblem(out: string, nodeId: string | undefined, layerName: string): string | null {
+  if (!nodeId) return "the screen export names no node id, and a new plan is named by its node — re-pull the screen";
+  const dir = path.dirname(out);
+  for (const f of listPlans(dir)) {
+    const p = readJsonOrNull(path.join(dir, f), isPlan);
+    if (p && (p.nodeId || nodeIdFromStem(path.basename(f, ".json"))) === nodeId) {
+      const have = path.join(dir, f);
+      return `${have} is already the plan of node ${nodeId} — one node, one plan: pass --out ${have} to merge into it`;
+    }
+  }
+  const k = nodeStem(fs.existsSync(VERIFY_DIR) ? VERIFY_DIR : null, nodeId, layerName);
+  if ("why" in k) return k.why;
+  const want = k.stem + ".json";
+  return path.basename(out) === want ? null : `a new plan is named by its node: --out ${path.join(dir, want)}, not ${path.basename(out)}`;
+}
+
 // One line for a file that is there but cannot be used; `what` names it the way the messages always have.
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
 
@@ -709,9 +733,15 @@ function main(argv: string[]): number {
     const n = seed(plan, sd.plan, path.basename(sd.file));
     return `plan-skeleton: seeded ${n.tokens} token row(s), ${n.components} component row(s) from ${sd.file}` + (n.tokens || n.components ? " — review them (seededFrom)" : "");
   });
-  const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
-  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
+  const exp = screenExportOf(doc), root = screenRoots(doc)[0];
+  const nodeId = exp?.nodeId || root?.id;
+  const indexRow = findIndexRow(screenFile, nodeId);
+  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow });
   const c = fresh.counts;
+  if (out && !fs.existsSync(out)) {
+    const why = newPlanProblem(out, nodeId, indexRow?.name ?? exp?.screen ?? root?.name ?? "");
+    if (why) { console.error(`plan-skeleton: ${why} — nothing written`); return 2; }
+  }
   if (!out) {
     for (const l of seedAll(fresh)) console.error(l);
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");

@@ -1469,6 +1469,27 @@ function recordedEdits(plan, cwd) {
   return out;
 }
 
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+
 // design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -1488,7 +1509,9 @@ var USAGE = [
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
-  "                       overwritten: every field you filled is kept.",
+  "                       overwritten: every field you filled is kept. A new plan is named by its node,",
+  "                       design/plan/<Layer>__<id>.json (the stem its verify set already has, if any);",
+  "                       another name, or a second plan of a node that already has one, is refused (exit 2).",
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
@@ -1537,29 +1560,6 @@ if (false) process.exitCode = main(process.argv.slice(2));
 // design-to-code/verify-locate.ts
 import fs10 from "node:fs";
 import path9 from "node:path";
-
-// design-to-code/verify-sets.ts
-var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
-var MAX_SLUG = 32;
-var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
-function parseSetName(name) {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
-}
-function nodeIdFromSetName(name) {
-  const dot = name.indexOf(".");
-  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
-}
-
-// design-to-code/verify-locate.ts
 function exportDirOf(cwd) {
   const e = path9.join(cwd, EXPORT_DIR);
   return fs10.existsSync(path9.join(e, "pages")) ? e : path9.join(cwd, DESIGN_DIR);
