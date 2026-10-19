@@ -195,7 +195,7 @@ function main(argv: string[]): number | Promise<number> {
   const USAGE =
     "usage:\n" +
     `  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]\n` +
-    "      writes <Screen>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
+    "      writes <Layer>__<id>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
     "      The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]\n" +
     "      ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot\n" +
     "      be graded is dropped with why. Their hash binds the expectation: change them → re-run --expect.\n" +
@@ -205,10 +205,10 @@ function main(argv: string[]): number | Promise<number> {
     "      <Layer>__<id>.<slug> instead (a dark theme, a narrow width): lower-case letters and digits, words joined by single \"-\",\n" +
     "      at most 32; a file tail of the set is no slug, nor one that extends another variant of the node by \"-\" (exit 2).\n" +
     "      Replacing one that differs keeps the old bytes as\n" +
-    "      <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
-    "      content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).\n" +
-    `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]\n` +
-    "      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
+    "      <Layer>__<id>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
+    "      content). It notes a last run of <Layer>__<id> that failed, was blocked or never finished (its files are partial).\n" +
+    `  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]\n` +
+    "      writes <Layer>__<id>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…], components:[…], inferred:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
     "      components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}\n" +
@@ -229,14 +229,14 @@ function main(argv: string[]): number | Promise<number> {
     "      or the renderer of a rendered report that gives none.\n" +
     "      No plan, or several and no --plan: exit 2 before comparing. A failed record — e.g. a report outside the project\n" +
     "      (the plan records project-relative paths only) — leaves the report written (exit 1).\n" +
-    `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
+    `  ${scriptCmd("verify-screen")} --accept <Layer>__<id>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
     "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
     "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
     "      absent components, failed interactions and unmeasured nodes are never waivable. Refuses a report whose run is\n" +
     "      unverified (its integrity[]), or that records no integrity[] (re-run --compare first). Re-run --compare to apply.\n" +
-    `  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
+    `  ${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
     "      writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache —\n" +
-    "      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +
+    "      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +
     "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
     "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
@@ -246,11 +246,11 @@ function main(argv: string[]): number | Promise<number> {
     "      it). Over another run that has ended it is written and says so: a `note  run <id> replaced run <other> …` line, and\n" +
     "      replaced {runId, phase, at} in the status (carried through the run, kept in the published copy). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
-    "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
-    "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +
+    "      not the one the probe recorded in this run — then publishes, records the sha256 of <Layer>__<id>.expected/.measured.json (and\n" +
+    "      .evidence.json when this run published it), and writes the final status into <dir>/<Layer>__<id>.status.json. --publish copies every\n" +
     "      file of a staging directory into <dir> (tmp file in <dir>, then rename) — stage in the run cache while any page of the app is open.\n" +
-    `  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
-    "      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json (and the\n" +
+    `  ${scriptCmd("verify-screen")} --wait <Layer>__<id> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
+    "      waits (on the live status, else <dir>/<Layer>__<id>.status.json) until run <id> is done and <Layer>__<id>.measured.json (and the\n" +
     "      evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
     "      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,\n" +
     "      6 when the run cache exists but cannot be read.\n" +
@@ -659,7 +659,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
 function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined;
   "all-fields"?: boolean | undefined }, USAGE: string): number {
   const reportFile = files[0];
-  if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE); return 2; }
+  if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Layer>__<id>.report.json\n" + USAGE); return 2; }
   if ((flags.node === undefined) === (flags.group === undefined)) { console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE); return 2; }
   if ((flags.field !== undefined || flags["all-fields"]) && flags.group !== undefined) { console.error("--field / --all-fields go with --node, not --group\n" + USAGE); return 2; }
   // One "keep the 16px" must not also waive a copy or colour delta on the same node: name the field, or say all.

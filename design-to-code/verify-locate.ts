@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Screen>__<id>` stem (the exporter's own file naming)
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
@@ -97,7 +97,7 @@ export interface ReportRef {
   shippedProbe: boolean;
 }
 
-// Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out), the plan's
+// Reports are found by name first — `<Layer>__<id>` (the set verify-screen names the node), the plan's
 // own name, its `screen` — then by content: a report whose `nodeId` is the plan's (or whose set name carries it, a
 // variant's `<Layer>__<id>.<slug>` too), whose sibling
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is

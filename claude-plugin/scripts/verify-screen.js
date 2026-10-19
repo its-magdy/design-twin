@@ -1031,7 +1031,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
       return inside(real) ? real : null;
     };
     const reportAt = rel(reportRel);
-    if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify/<Screen>)`);
+    if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify)`);
     const exists3 = (p) => {
       try {
         return fs8.statSync(path6.resolve(cwd, p)).isFile();
@@ -1979,7 +1979,7 @@ function statusMain(screen, f, usage) {
 }
 function statusRun(screen, f, usage) {
   if (!screen) {
-    console.error("--status needs the screen name: --status <Screen> --phase <phase>\n" + usage);
+    console.error("--status needs the verify set: --status <Layer>__<id> --phase <phase>\n" + usage);
     return 2;
   }
   if (!isPhase(f.phase)) {
@@ -2098,7 +2098,7 @@ var seconds = (v, dflt) => {
 };
 async function waitMain(screen, f, usage) {
   if (!screen || f.run === void 0) {
-    console.error("--wait needs the screen name and the run: --wait <Screen> --run <id>\n" + usage);
+    console.error("--wait needs the verify set and the run: --wait <Layer>__<id> --run <id>\n" + usage);
     return 2;
   }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
@@ -6945,7 +6945,7 @@ function selectForAccept(rep, sel) {
 function main(argv) {
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]
-      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
+      writes <Layer>__<id>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
       The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
       ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot
       be graded is dropped with why. Their hash binds the expectation: change them \u2192 re-run --expect.
@@ -6955,10 +6955,10 @@ function main(argv) {
       <Layer>__<id>.<slug> instead (a dark theme, a narrow width): lower-case letters and digits, words joined by single "-",
       at most 32; a file tail of the set is no slug, nor one that extends another variant of the node by "-" (exit 2).
       Replacing one that differs keeps the old bytes as
-      <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export
-      content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).
-  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]
-      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares
+      <Layer>__<id>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export
+      content). It notes a last run of <Layer>__<id> that failed, was blocked or never finished (its files are partial).
+  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]
+      writes <Layer>__<id>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares
       two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
       (a JSON array, or {interactions:[\u2026], components:[\u2026], inferred:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail};
       components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}
@@ -6979,14 +6979,14 @@ function main(argv) {
       or the renderer of a rendered report that gives none.
       No plan, or several and no --plan: exit 2 before comparing. A failed record \u2014 e.g. a report outside the project
       (the plan records project-relative paths only) \u2014 leaves the report written (exit 1).
-  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
+  ${scriptCmd("verify-screen")} --accept <Layer>__<id>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
       writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed
       and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:
       absent components, failed interactions and unmeasured nodes are never waivable. Refuses a report whose run is
       unverified (its integrity[]), or that records no integrity[] (re-run --compare first). Re-run --compare to apply.
-  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "\u2026"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]
+  ${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "\u2026"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]
       writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache \u2014
-      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the
+      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json (the project's: the nearest package.json at or above <dir>, or the
       workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed
       commands, with no package.json or Yarn PnP) \u2014 <dir> resolves against the cwd \u2014 outside every dev-server
       watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
@@ -6996,11 +6996,11 @@ function main(argv) {
       it). Over another run that has ended it is written and says so: a \`note  run <id> replaced run <other> \u2026\` line, and
       replaced {runId, phase, at} in the status (carried through the run, kept in the published copy). \`done\` checks first \u2014 refuses (exit 1)
       a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
-      not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
-      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every
+      not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Layer>__<id>.expected/.measured.json (and
+      .evidence.json when this run published it), and writes the final status into <dir>/<Layer>__<id>.status.json. --publish copies every
       file of a staging directory into <dir> (tmp file in <dir>, then rename) \u2014 stage in the run cache while any page of the app is open.
-  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]
-      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json (and the
+  ${scriptCmd("verify-screen")} --wait <Layer>__<id> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]
+      waits (on the live status, else <dir>/<Layer>__<id>.status.json) until run <id> is done and <Layer>__<id>.measured.json (and the
       evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);
       exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,
       6 when the run cache exists but cannot be read.
@@ -7477,7 +7477,7 @@ function compareMain(files, flags, USAGE) {
 function acceptMain(files, flags, USAGE) {
   const reportFile = files[0];
   if (!reportFile || files.length > 1) {
-    console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE);
+    console.error("--accept needs exactly one <Layer>__<id>.report.json\n" + USAGE);
     return 2;
   }
   if (flags.node === void 0 === (flags.group === void 0)) {

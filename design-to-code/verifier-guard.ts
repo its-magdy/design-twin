@@ -96,7 +96,7 @@ export function writeVerdict(file: string, ctx: GuardCtx): string | null {
   if (after(segs, VERIFY_DIR) >= 0) {
     if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
     return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. `
-      + `Report progress with \`${scriptCmd("verify-screen")} --status <Screen> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
+      + `Report progress with \`${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) `
     + `and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. `

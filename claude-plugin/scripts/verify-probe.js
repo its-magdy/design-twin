@@ -7332,7 +7332,7 @@ var USAGE = `usage:
       starts. --viewport defaults to the frame's w\xD7h; --project to cwd.
       Every measurement belongs to a run, and measured.runId names it. --run <id> (from verify-screen --status \u2026 --new-run):
       that run. Without --run the probe starts a run of its own (\`run <id>\` on stderr) and ends it \u2014 \`done\` with the files
-      (published as <Screen>.status.json beside the expectation), \`failed\` on an exit 3/4 (a re-run is a new run); refused
+      (published as <Layer>__<id>.status.json beside the expectation), \`failed\` on an exit 3/4 (a re-run is a new run); refused
       before anything starts (exit 2) while another run of the screen is open \u2014 a verifier's writes the same files: wait for
       it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends
       its own run \`failed\`. One left at measuring \u2014 a SIGKILL, or an exit whose last status write was refused \u2014 names the
@@ -7341,7 +7341,7 @@ var USAGE = `usage:
       when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one
       (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an
       error). The probe writes the run's LIVE status (the run cache,
-      node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
+      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
       exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run
       (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a

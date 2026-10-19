@@ -161,7 +161,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
       return inside(real) ? real : null;
     };
     const reportAt = rel(reportRel);
-    if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) — the plan records project-relative paths only; write the report inside the project (--out design/verify/<Screen>)`);
+    if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) — the plan records project-relative paths only; write the report inside the project (--out design/verify)`);
     const exists = (p: string): boolean => { try { return fs.statSync(path.resolve(cwd, p)).isFile(); } catch { return false; } };
 
     // artifacts: the report itself (+ its .md), then the report's artifacts that exist on disk (relative to the project)

@@ -1,5 +1,5 @@
 // verify-probe.ts — the shipped web probe: render the built screen, measure every expectation row the same
-// way every time, write <Screen>.measured.json for `verify-screen.js --compare`. Flags and exit codes: --help.
+// way every time, write <Layer>__<id>.measured.json for `verify-screen.js --compare`. Flags and exit codes: --help.
 //
 // Why it exists: a verifier left to write its own Playwright script matches elements differently each time
 // (first element with the text; the <li> instead of the <button>; the <h2> of a CLOSED dialog), leaves keys
@@ -1193,7 +1193,7 @@ const USAGE =
   "      starts. --viewport defaults to the frame's w×h; --project to cwd.\n" +
   "      Every measurement belongs to a run, and measured.runId names it. --run <id> (from verify-screen --status … --new-run):\n" +
   "      that run. Without --run the probe starts a run of its own (`run <id>` on stderr) and ends it — `done` with the files\n" +
-  "      (published as <Screen>.status.json beside the expectation), `failed` on an exit 3/4 (a re-run is a new run); refused\n" +
+  "      (published as <Layer>__<id>.status.json beside the expectation), `failed` on an exit 3/4 (a re-run is a new run); refused\n" +
   "      before anything starts (exit 2) while another run of the screen is open — a verifier's writes the same files: wait for\n" +
   "      it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends\n" +
   "      its own run `failed`. One left at measuring — a SIGKILL, or an exit whose last status write was refused — names the\n" +
@@ -1202,7 +1202,7 @@ const USAGE =
   "      when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one\n" +
   "      (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an\n" +
   "      error). The probe writes the run's LIVE status (the run cache,\n" +
-  "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
+  "      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json — never the project tree a dev server watches) — `measuring`\n" +
   "      before the browser starts, `measured` (its own run: `done`) + the measured file's sha256 after it is closed. With --run an\n" +
   "      exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run\n" +
   "      (after an exit 3, once the user has fixed the renderer), the second ends the run `failed` — the probe writes it (a\n" +

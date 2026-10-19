@@ -31,8 +31,8 @@
 //     rename, so a stage dir on another filesystem (EXDEV) works too;
 //   - wait: poll the status until THIS run is done and the measured file is the one the status names.
 //
-//   verify-screen.js --status <S> --phase <p> [--run <id> | --new-run] [--detail …] [--dir design/verify] [--publish <stageDir>]
-//   verify-screen.js --wait <S> --run <id> [--timeout <s>] [--stall <s>] [--dir design/verify]
+//   verify-screen.js --status <Layer>__<id> --phase <p> [--run <id> | --new-run] [--detail …] [--dir design/verify] [--publish <stageDir>]
+//   verify-screen.js --wait <Layer>__<id> --run <id> [--timeout <s>] [--stall <s>] [--dir design/verify]
 // (on verify-screen.js, so one script path covers every allow rule — the CLI glue is statusMain/waitMain here).
 import fs from "node:fs";
 import path from "node:path";
@@ -527,7 +527,7 @@ export function statusMain(screen: string | undefined, f: StatusFlags, usage: st
   }
 }
 function statusRun(screen: string | undefined, f: StatusFlags, usage: string): number {
-  if (!screen) { console.error("--status needs the screen name: --status <Screen> --phase <phase>\n" + usage); return 2; }
+  if (!screen) { console.error("--status needs the verify set: --status <Layer>__<id> --phase <phase>\n" + usage); return 2; }
   if (!isPhase(f.phase)) { console.error(`--status needs --phase ${STATUS_PHASES.join("|")}${f.phase !== undefined ? ` (got '${f.phase}')` : ""}\n` + usage); return 2; }
   if (f.run !== undefined && f["new-run"]) { console.error("pass --run <id> or --new-run, not both\n" + usage); return 2; }
   if (f.run !== undefined && !RUN_ID.test(f.run)) { console.error(`--run must be a run id (letters, digits, . : _ -), got '${f.run}'\n` + usage); return 2; }
@@ -636,7 +636,7 @@ const seconds = (v: string | undefined, dflt: number): number | null => {
  * changed for --stall seconds; 6 when the run cache exists but cannot be read; 2 usage. Polls every --interval seconds (2).
  */
 export async function waitMain(screen: string | undefined, f: WaitFlags, usage: string): Promise<number> {
-  if (!screen || f.run === undefined) { console.error("--wait needs the screen name and the run: --wait <Screen> --run <id>\n" + usage); return 2; }
+  if (!screen || f.run === undefined) { console.error("--wait needs the verify set and the run: --wait <Layer>__<id> --run <id>\n" + usage); return 2; }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
   if (timeout === null || stall === null || interval === null) { console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage); return 2; }
   const key = runBase(screen, f.dir, "wait");

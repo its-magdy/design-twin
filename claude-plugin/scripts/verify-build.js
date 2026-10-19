@@ -2210,7 +2210,7 @@ function checkVerification(plan, cwd) {
     const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
     const wrongShape = [];
     if (f.artifacts !== void 0 && !Array.isArray(f.artifacts))
-      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
     if (f.deltas !== void 0 && !Array.isArray(f.deltas))
       wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
