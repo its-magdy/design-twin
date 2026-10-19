@@ -1381,6 +1381,10 @@ function variantProblem(s) {
   const fixed = variantSlug(s);
   return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` \u2014 use '${fixed}'` : ""}`;
 }
+function variantOverlap(slug, others) {
+  for (const o of others) if (o !== slug && (slug.startsWith(o + "-") || o.startsWith(slug + "-"))) return o;
+  return null;
+}
 function parseSetName(name) {
   const dot = name.indexOf(".");
   const stem = dot < 0 ? name : name.slice(0, dot);
@@ -1469,6 +1473,12 @@ function canonicalStemsFor(verifyDir, nodeId, open = []) {
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
   return [...stems].sort();
+}
+function variantsOf(verifyDir, stem) {
+  return verifySets(verifyDir).flatMap((name) => {
+    const p = parseSetName(name);
+    return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : [];
+  });
 }
 function legacySetsFor(verifyDir, nodeId) {
   return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
@@ -6499,10 +6509,20 @@ function planMigration(d) {
       const why = `${roots.length} legacy sets of node ${id} extend no other name (${roots.join(", ")}) \u2014 which one is the screen is your call: retire the others (mv <S>.expected.json <S>.expected.json.retired), then --migrate`;
       for (const name of group) if (roots.includes(rootOf(name))) steps.push({ kind: "skip", set: name, why: [why] });
     }
+    const variantsAfter = [...variantsOf(d.verifyDir, T), ...[...plannedTo.values()].flatMap((t) => {
+      const v = parseSetName(t)?.variant;
+      return v ? [v] : [];
+    })];
     for (const [name, to] of plannedTo) {
       const rivals = wanted.get(to) ?? [];
       if (rivals.length > 1) {
         steps.push({ kind: "skip", set: name, why: [`${rivals.join(" and ")} would both become ${to} \u2014 retire one by hand`] });
+        continue;
+      }
+      const slug = parseSetName(to)?.variant ?? null;
+      const overlap = slug !== null ? variantOverlap(slug, variantsAfter) : null;
+      if (slug !== null && overlap !== null) {
+        steps.push({ kind: "skip", set: name, why: [`variant '${slug}' overlaps '${overlap}' by "-" (<set>-<state>.png of one names a screenshot of the other) \u2014 rename one by hand`] });
         continue;
       }
       const open = openRunOf(path15.join(d.verifyDir, name)) ?? openRunOf(path15.join(d.verifyDir, to));
@@ -7297,9 +7317,9 @@ function expectMain(files, flags, USAGE) {
     return 2;
   }
   if (variant !== void 0) {
-    const clash = verifySets(ob.dir).map(parseSetName).find((p) => p !== null && p.stem === k.stem && p.variant !== null && p.variant !== variant && (variant.startsWith(p.variant + "-") || p.variant.startsWith(variant + "-")));
-    if (clash) {
-      console.error(`error  --variant ${variant} overlaps the variant ${clash.stem}.${clash.variant ?? ""} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other \u2014 pick a slug that neither extends`);
+    const clash = variantOverlap(variant, variantsOf(ob.dir, k.stem));
+    if (clash !== null) {
+      console.error(`error  --variant ${variant} overlaps the variant ${k.stem}.${clash} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other \u2014 pick a slug that neither extends`);
       return 2;
     }
   }

@@ -21,7 +21,7 @@ import type { ScreenCandidate } from "./types.ts";
 
 export {
   EXPECTED_SUFFIX, MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, existingStem, expectationSetProblem, formatSetName, isVariantSlug, legacySetsFor,
-  nodeIdFromSetName, nodeStem, outBaseOf, parseSetName, setFacts, setNameOfFile, setNodeId, statusBaseOf, variantProblem, variantSlug, verifySets,
+  nodeIdFromSetName, nodeStem, outBaseOf, parseSetName, setFacts, setNameOfFile, setNodeId, statusBaseOf, variantOverlap, variantProblem, variantSlug, variantsOf, verifySets,
 } from "./verify-sets.ts";
 export type { OutBase, SetFacts, SetName } from "./verify-sets.ts";
 

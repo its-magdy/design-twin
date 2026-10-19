@@ -42,6 +42,14 @@ export function variantProblem(s: string): string | null {
   return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` — use '${fixed}'` : ""}`;
 }
 
+/** The variant among `others` that `slug` overlaps by "-" — one extends the other (`w320` and `w320-dialog`) — or null. A
+ *  state screenshot is `<set>-<state>.png`, so variant w320's `-dialog` shot IS variant w320-dialog's screenshot: two such
+ *  variants of one stem would share files. */
+export function variantOverlap(slug: string, others: Iterable<string>): string | null {
+  for (const o of others) if (o !== slug && (slug.startsWith(o + "-") || o.startsWith(slug + "-"))) return o;
+  return null;
+}
+
 /** A set name read by the grammar: its stem, the node id the stem carries, and its variant (null for the base set). */
 export interface SetName { stem: string; nodeId: string; variant: string | null }
 
@@ -172,6 +180,11 @@ export function canonicalStemsFor(verifyDir: string, nodeId: string, open: reado
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
   return [...stems].sort();
+}
+
+/** The variant slugs of `stem` among the live sets of `verifyDir`, sorted. */
+export function variantsOf(verifyDir: string, stem: string): string[] {
+  return verifySets(verifyDir).flatMap((name) => { const p = parseSetName(name); return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : []; });
 }
 
 /** The stem the verify dir already names `nodeId` by — the ONE grammar-named set's stem — or null (none, or several). */

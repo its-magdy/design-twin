@@ -12,7 +12,8 @@
 //     else the expectation's frame name, else the report's screen) — with or without a base set beside it, it is never
 //     retired and never becomes the base; "-" is not read this way (layer names hold dashes). Any other name is the
 //     base (a nickname). Two sets of one node that extend nothing are skipped (which one is the screen is a person's call),
-//     and so is a variant whose slug the grammar refuses (reserved — `<S>.diff` — or too long);
+//     and so is a variant whose slug the grammar refuses (reserved — `<S>.diff` — or too long), or that overlaps another
+//     variant of the node by "-" (`w320` / `w320-dialog`, a live one or one the same run plans: variantOverlap);
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
 //     every reader skips) and its other files stay under `<S>` — unless a plan's verification.recorded names the
 //     legacy report (re-record first: skipped);
@@ -65,7 +66,7 @@ import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantSlug } from "./screen-key.ts";
+import { MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
 import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
 import type { ReportRef } from "./verify-locate.ts";
@@ -434,9 +435,17 @@ export function planMigration(d: Dirs): MigrateStep[] {
         `(mv <S>.expected.json <S>.expected.json.retired), then --migrate`;
       for (const name of group) if (roots.includes(rootOf(name))) steps.push({ kind: "skip", set: name, why: [why] });
     }
+    // the node's variants once the batch is done: the live ones and every one this batch plans (variantOverlap)
+    const variantsAfter = [...variantsOf(d.verifyDir, T), ...[...plannedTo.values()].flatMap((t) => { const v = parseSetName(t)?.variant; return v ? [v] : []; })];
     for (const [name, to] of plannedTo) {
       const rivals = wanted.get(to) ?? [];
       if (rivals.length > 1) { steps.push({ kind: "skip", set: name, why: [`${rivals.join(" and ")} would both become ${to} — retire one by hand`] }); continue; }
+      const slug = parseSetName(to)?.variant ?? null;
+      const overlap = slug !== null ? variantOverlap(slug, variantsAfter) : null;
+      if (slug !== null && overlap !== null) {
+        steps.push({ kind: "skip", set: name, why: [`variant '${slug}' overlaps '${overlap}' by "-" (<set>-<state>.png of one names a screenshot of the other) — rename one by hand`] });
+        continue;
+      }
       const open = openRunOf(path.join(d.verifyDir, name)) ?? openRunOf(path.join(d.verifyDir, to));
       if (open) { steps.push({ kind: "skip", set: name, why: [open] }); continue; }
       const files = (filesOf.get(name) ?? []).sort();

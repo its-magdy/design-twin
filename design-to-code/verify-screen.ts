@@ -65,7 +65,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, parseSetName, setNameOfFile, statusBaseOf, variantProblem, verifySets } from "./verify-sets.ts";
+import { expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -409,12 +409,10 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   const setName = formatSetName(k.stem, variant);
   const ob = outBaseOf(out, setName, VERIFY_DIR);
   if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
-  // a state screenshot is `<set>-<state>.png`: variant w320's `-dialog` shot IS variant w320-dialog's screenshot — a slug
-  // that extends another live variant of the node by "-" (or that one extends) would share files with it
+  // a slug that extends another live variant of the node by "-" (or that one extends) would share files with it (variantOverlap)
   if (variant !== undefined) {
-    const clash = verifySets(ob.dir).map(parseSetName).find((p) => p !== null && p.stem === k.stem && p.variant !== null && p.variant !== variant
-      && (variant.startsWith(p.variant + "-") || p.variant.startsWith(variant + "-")));
-    if (clash) { console.error(`error  --variant ${variant} overlaps the variant ${clash.stem}.${clash.variant ?? ""} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other — pick a slug that neither extends`); return 2; }
+    const clash = variantOverlap(variant, variantsOf(ob.dir, k.stem));
+    if (clash !== null) { console.error(`error  --variant ${variant} overlaps the variant ${k.stem}.${clash} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other — pick a slug that neither extends`); return 2; }
   }
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
   if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} — verify-screen --migrate renames them to ${k.stem}`);
