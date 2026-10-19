@@ -148,12 +148,13 @@ const brief = (m: VerifyMeasured | null): string => { const v = vis(m); return v
 // ---- the expectations, from the real --expect
 const FIR = "design/export/pages/Kilns/Firings__90_1.json", LED = "design/export/pages/Kilns/Kiln_Ledger__90_50.json";
 for (const proj of [pMain, pOld, pThumb, pSwap, pMono]) {
-  const e = await vs(proj, ["--expect", FIR, "--out", out("Firings")]);
+  // (--out is the verify directory: the set is named by the frame's node, Firings__90_1)
+  const e = await vs(proj, ["--expect", FIR, "--out", "design/verify"]);
   if (e.status !== 0) { console.log(e.stderr); check("verify-screen --expect wrote the expectation", false); finish(); report(); process.exit(1); }
 }
-const el = await vs(pMain, ["--expect", LED, "--out", out("Ledger")]);
+const el = await vs(pMain, ["--expect", LED, "--out", "design/verify"]);
 if (el.status !== 0) console.log(el.stderr);
-const EXP = out("Firings") + ".expected.json";
+const EXP = out("Firings__90_1") + ".expected.json";
 // e7: the same expectation without referenceImage (an expectation that predates the visual diff)
 const full = readJsonOrNull(path.join(pMain, EXP), isVerifyExpectation);
 if (full !== null) { const { referenceImage: _drop, ...old } = full; fs.writeFileSync(path.join(pMain, out("Older") + ".expected.json"), JSON.stringify(old, null, 2) + "\n"); }
@@ -183,9 +184,9 @@ const P = {
   e6x: q(() => probe(pMain, ["--expected", EXP, "--url", url("tabs"), "--out", out("TabsBad"), "--steps", "bad-steps.json", ...OFF])),
   e8: q(() => probe(pMain, ["--expected", EXP, "--url", url(), "--out", out("Short"), "--max-time", "15000", ...OFF])),
   e9: q(() => probe(pMain, ["--expected", EXP, "--url", url("tall"), "--out", out("Tall"), ...OFF])),
-  e10: q(() => probe(pMain, ["--expected", out("Ledger") + ".expected.json", "--url", url("long"), "--out", out("Ledger"), ...OFF])),
+  e10: q(() => probe(pMain, ["--expected", out("Kiln_Ledger__90_50") + ".expected.json", "--url", url("long"), "--out", out("Ledger"), ...OFF])),
   e11: q(() => runNode(pMain, PROBE, ["--expected", out("Null") + ".expected.json", "--url", url(), "--out", out("Null"), "--project", pMain, ...OFF], 60_000, OFF_ENV)),
-  e12: q(() => runNode(monoApp, PROBE, ["--expected", path.join("..", out("Firings") + ".expected.json"), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000, OFF_ENV)),
+  e12: q(() => runNode(monoApp, PROBE, ["--expected", path.join("..", EXP), "--url", url(), "--out", path.join("..", out("Mono")), "--project", monoApp, ...OFF], 90_000, OFF_ENV)),
 };
 
 // ---- e1: the correct twin
@@ -249,9 +250,10 @@ const strip = (m: VerifyMeasured | null): string => JSON.stringify(m === null ? 
   const m = read(pThumb, out("Firings"));
   console.log(`    thumbnail: exit ${r.status} — ${brief(m)}`);
   check(`[thumbnail] a 360 px thumbnail: not run, the why (${whyOf(m)})`, r.status === 0 && /a discovery thumbnail\)/.test(whyOf(m)) && !fs.existsSync(path.join(pThumb, out("Firings") + ".diff.png")));
-  const c4 = await vs(pThumb, ["--compare", EXP, out("Firings") + ".measured.json", "--out", out("Firings")]);
-  const c1 = await vs(pMain, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off")]);
-  const r4 = readReport(pThumb, out("Firings")), r1 = readReport(pMain, out("Off"));
+  // (--out is a directory, the report the expectation's set: one directory per run's report)
+  const c4 = await vs(pThumb, ["--compare", EXP, out("Firings") + ".measured.json", "--out", out("Firings") + path.sep]);
+  const c1 = await vs(pMain, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off") + path.sep]);
+  const r4 = readReport(pThumb, path.join(out("Firings"), "Firings__90_1")), r1 = readReport(pMain, path.join(out("Off"), "Firings__90_1"));
   console.log(`    thumbnail compare: ${r4?.verdict} / ${r1?.verdict} (exit ${c4.status}/${c1.status}) — ${JSON.stringify(r4?.why ?? null).slice(0, 300)}`);
   check("[thumbnail] the --compare verdict and why equal the diffed run's (the diff is never the verdict)", r4 !== null && r1 !== null && r4.verdict === r1.verdict && JSON.stringify(r4.why ?? null) === JSON.stringify(r1.why ?? null));
 }

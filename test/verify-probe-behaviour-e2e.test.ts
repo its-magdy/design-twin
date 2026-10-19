@@ -147,13 +147,14 @@ if (axeVersion === null) check("the repo's devDependency axe-core is installed (
 
 // ---- the expectations, from the real --expect
 for (const proj of [projAxe, projBare, projSlowAxe]) {
-  const e = await vs(proj, ["--expect", "design/export/pages/Shelf/Crates__80_1.json", "--out", out("Crates")]);
+  // (--out is the verify directory: the set is named by the frame's node, Crates__80_1)
+  const e = await vs(proj, ["--expect", "design/export/pages/Shelf/Crates__80_1.json", "--out", "design/verify"]);
   if (e.status !== 0) { console.log(e.stderr); check("verify-screen --expect wrote the expectation", false); finish(); report(); }
-  // the same expectation without interactions (page checks only — fast)
-  const full = readJsonOrNull(path.join(proj, out("Crates") + ".expected.json"), isVerifyExpectation);
-  if (full !== null) { const { interactions: _drop, ...quiet } = full; fs.writeFileSync(path.join(proj, out("Quiet") + ".expected.json"), JSON.stringify(quiet, null, 2) + "\n"); }
+  // the same expectation without interactions (page checks only — fast): a variant set of the node, Crates__80_1.quiet
+  const full = readJsonOrNull(path.join(proj, out("Crates__80_1") + ".expected.json"), isVerifyExpectation);
+  if (full !== null) { const { interactions: _drop, ...quiet } = full; fs.writeFileSync(path.join(proj, out("Crates__80_1.quiet") + ".expected.json"), JSON.stringify(quiet, null, 2) + "\n"); }
 }
-const EXP = out("Crates") + ".expected.json", QUIET = out("Quiet") + ".expected.json";
+const EXP = out("Crates__80_1") + ".expected.json", QUIET = out("Crates__80_1.quiet") + ".expected.json";
 
 // ---- the independent probe runs, queued up front and run 3 at a time (each has its own --out); awaited where their checks are
 // (a fixed 3, not poolSize(): the budget-sensitive checks were validated at 3 on a 4-vCPU CI runner)
@@ -498,9 +499,10 @@ check("--behaviour off → exit 0, measured.behaviour {version:1, ran:false, why
   r3.status === 0 && off !== undefined && off.version === 1 && off.ran === false && off.why === "--behaviour off" && !fs.existsSync(path.join(projAxe, out("Off") + ".forced-colors.png")) && /behaviour not run \(--behaviour off\)/.test(r3.stderr));
 check("measured.interactions are identical with behaviour on and off (the battery never touches the drive evidence)",
   (m1?.interactions || []).length === 8 && JSON.stringify(m1?.interactions) === JSON.stringify(m3?.interactions));
-const c1 = await vs(projAxe, ["--compare", EXP, out("Ok") + ".measured.json", "--out", out("Ok")]);
-const c3 = await vs(projAxe, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off")]);
-const rep1 = readReport(projAxe, out("Ok")), rep3 = readReport(projAxe, out("Off"));
+// (--out is a directory, the report the expectation's set: one directory per run's report)
+const c1 = await vs(projAxe, ["--compare", EXP, out("Ok") + ".measured.json", "--out", out("Ok") + path.sep]);
+const c3 = await vs(projAxe, ["--compare", EXP, out("Off") + ".measured.json", "--out", out("Off") + path.sep]);
+const rep1 = readReport(projAxe, path.join(out("Ok"), "Crates__80_1")), rep3 = readReport(projAxe, path.join(out("Off"), "Crates__80_1"));
 if (rep1 === null || rep3 === null) console.log(c1.stderr, c3.stderr);
 check("--compare: verdict and why are the same with behaviour on and off", rep1 !== null && rep3 !== null && rep1.verdict === rep3.verdict && JSON.stringify(rep1.why) === JSON.stringify(rep3.why));
 const bogus = await probe(projAxe, ["--expected", EXP, "--url", url(), "--out", out("Bogus"), "--behaviour", "maybe"]);
@@ -517,9 +519,9 @@ check("the auto last column collapses at 1024 → layout.subpixel warn (1024x800
 check("the fixed table overflows at 320 → overflow.narrow warn, '2-D content exception may apply'",
   statusOf(m4, "overflow.narrow") === "warn" && /2-D content exception may apply/.test(row(m4, "overflow.narrow")?.detail ?? "") && m4?.behaviour?.ran === true && (m4.behaviour.widths.find((w) => w.role === "narrow")?.overflow.scrollable ?? false));
 const r5 = await P.r5;
-const c4 = await vs(projBare, ["--compare", QUIET, out("Fixed") + ".measured.json", "--out", out("Fixed")]);
-const c5 = await vs(projBare, ["--compare", QUIET, out("QuietOk") + ".measured.json", "--out", out("QuietOk")]);
-const rep4 = readReport(projBare, out("Fixed")), rep5 = readReport(projBare, out("QuietOk"));
+const c4 = await vs(projBare, ["--compare", QUIET, out("Fixed") + ".measured.json", "--out", out("Fixed") + path.sep]);
+const c5 = await vs(projBare, ["--compare", QUIET, out("QuietOk") + ".measured.json", "--out", out("QuietOk") + path.sep]);
+const rep4 = readReport(projBare, path.join(out("Fixed"), "Crates__80_1.quiet")), rep5 = readReport(projBare, path.join(out("QuietOk"), "Crates__80_1.quiet"));
 if (rep4 === null || rep5 === null) console.log(r5.stderr, c4.stderr, c5.stderr);
 check("--compare: the fixed-table run's verdict and why equal the correct twin's (sub-pixel cells are behaviour warnings, never fidelity deltas)",
   rep4 !== null && rep5 !== null && rep4.verdict === rep5.verdict && JSON.stringify(rep4.why) === JSON.stringify(rep5.why));

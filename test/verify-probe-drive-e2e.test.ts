@@ -31,6 +31,7 @@
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
+import path from "node:path";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -62,7 +63,7 @@ const P = {
     const runId = /^run (\S+) rev 1$/m.exec(st.stdout)?.[1] ?? "";
     const r2 = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, ...(runId ? ["--run", runId] : [])]);
     const done = await vs(["--status", "Beds__70_1", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
-    const c2 = await vs(["--compare", EXPECTED, out("Beds__70_1") + ".measured.json", "--out", out("Beds__70_1")]);
+    const c2 = await vs(["--compare", EXPECTED, out("Beds__70_1") + ".measured.json", "--out", "design/verify"]);
     return { runId, r2, done, c2 };
   }),
   // (--ready none here and on clickNavSlow: they check the load wait alone, with no --ready — the default is the frame tag)
@@ -74,7 +75,8 @@ const P = {
   // the run, then its --compare
   wide: q(async () => {
     const r5 = await probe(["--expected", EXPECTED, "--url", url("wide"), "--out", out("Wide"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
-    const c5 = await vs(["--compare", EXPECTED, out("Wide") + ".measured.json", "--out", out("Wide")]);
+    // (--out is a directory, the report the expectation's set: a directory of its own, beside main's report)
+    const c5 = await vs(["--compare", EXPECTED, out("Wide") + ".measured.json", "--out", out("Wide") + path.sep]);
     return { r5, c5 };
   }),
   slowImg: q(() => probe(["--expected", QUIET, "--url", `${edge("slow-img")}&d=13000`, "--out", out("SlowImg"), "--timeout", "30000", "--max-time", "60000"])),
@@ -217,7 +219,7 @@ const m5 = read(b5);
 if (r5.status !== 0) console.log(r5.stderr);
 check("[overflow] a 1700px strip in the Beds section → page.scrollWidth ≥ 1600, scrollable, the strip named among the offenders",
   r5.status === 0 && (m5?.page?.scrollWidth ?? 0) >= 1600 && m5?.page?.scrollable === true && m5.page.offenders.some((o) => o.dt === "70:57"));
-const rep5 = readReport(b5);
+const rep5 = readReport(path.join(b5, "Beds__70_1"));
 if (rep5 === null) console.log(c5.stderr);
 const ov = (rep5?.deltas || []).find((d) => d.field === "overflowX");
 check("[overflow] --compare: one HIGH overflowX delta on the root frame (expected clientWidth, actual scrollWidth)", ov?.severity === "high" && ov.nodeId === "70:1" && ov.expected === 1024 && typeof ov.actual === "number" && ov.actual >= 1600);

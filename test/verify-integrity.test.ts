@@ -467,7 +467,7 @@ console.log("CLI --compare with the run status beside the measured file:");
   const stageDir = path.join(cwd, "stage-elsewhere");
   fs.mkdirSync(stageDir);
   fs.writeFileSync(path.join(stageDir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-staged" })));
-  const c4 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "stage-elsewhere/Garden_Plots__1_1.measured.json", "--out", "stage-elsewhere/Garden_Plots__1_1");
+  const c4 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "stage-elsewhere/Garden_Plots__1_1.measured.json", "--out", "stage-elsewhere");
   const rep4 = readJsonOrNull(path.join(stageDir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
     rec.status === 0 && c4.status === 1 && (rep4?.why || []).some((w) => /is at phase measuring/.test(w)) && !(rep4?.why || []).some((w) => /no status of that run records it/.test(w)));

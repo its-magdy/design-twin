@@ -235,8 +235,8 @@ console.log("--compare CLI — the second headline after the probe line:");
   safe("…report.json carries behaviour; report.md the section", () =>
     rep?.behaviour?.summary.fail === 2 && /## Behaviour and accessibility — not part of the verdict/.test(fs.readFileSync(path.join(cwd, "design/verify/Crates__80_1.report.md"), "utf8")));
   const m2 = put("design/verify/Old__80_1.measured.json", { ...base(), behaviour: { checks: [] } });
-  const r2 = spawnSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/Old__80_1"], { encoding: "utf8", cwd });
-  const rep2 = readJsonOrNull(path.join(cwd, "design/verify/Old__80_1.report.json"), isVerifyReport);
+  const r2 = spawnSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/old/"], { encoding: "utf8", cwd });
+  const rep2 = readJsonOrNull(path.join(cwd, "design/verify/old/Crates__80_1.report.json"), isVerifyReport);
   safe("a malformed behaviour block: a note, the compare still runs (exit 0/1, never 2), report.behaviour ran:false", () =>
     (r2.status === 0 || r2.status === 1) && /note .*measured\.behaviour is not a behaviour block/.test(r2.stderr) && rep2?.behaviour?.ran === false);
   safe("…through the CLI the report says 'malformed', and the headline 'not run (the measured file's behaviour block is malformed …)'", () =>

@@ -248,49 +248,52 @@ block("components from the --interactions object; coverage baseline — through 
   const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
   const put = (name: string, doc: unknown): string => { fs.writeFileSync(path.join(cwd, name), JSON.stringify(doc)); return name; };
   put("orders.json", screen(185));
-  const ex = run("--expect", "orders.json", "--out", "design/verify/Orders");
-  const expFile = "design/verify/Orders.expected.json";
+  const ex = run("--expect", "orders.json", "--out", "design/verify");
+  const expFile = "design/verify/Orders__1_1.expected.json";
+  // the report --compare writes in design/verify: the set's name, the path joined (backslashes on Windows)
+  const ownReport = path.join("design", "verify", "Orders__1_1.report.json");
   const e = readJsonOrNull(path.join(cwd, expFile), (x: unknown): x is BuiltExpectation => typeof x === "object" && x !== null);
   t("[cli] --expect wrote a 185-row list expectation", () => ex.status === 0 && !!e && e.nodes.filter((n) => /^2:/.test(n.nodeId)).length === 185);
   const rows = (k: number, sha: string): VerifyMeasured => measured(Array.from({ length: k }, (_, i) => probeNode(`2:${i + 1}`, { text: `Order ${i + 1}`, tag: "li" }, { matchedBy: "text" })), { probe: { ...IDENT, sha256: sha } });
   put("m185.json", rows(185, "a".repeat(64)));
   put("m42.json", rows(42, "b".repeat(64)));
-  const first = run("--compare", expFile, "m185.json", "--out", "design/verify/Orders");
-  const second = run("--compare", expFile, "m42.json", "--out", "design/verify/Orders");
-  const rep2 = readJsonOrNull(path.join(cwd, "design/verify/Orders.report.json"), isVerifyReport);
+  const first = run("--compare", expFile, "m185.json", "--out", "design/verify");
+  const second = run("--compare", expFile, "m42.json", "--out", "design/verify");
+  const rep2 = readJsonOrNull(path.join(cwd, ownReport), isVerifyReport);
   t("first round: no baseline, no COVERAGE FELL", () => !/COVERAGE FELL/.test(first.stderr));
   t("the probe line follows the headline on stderr", () => /\nprobe verify-probe 0\.9\.0 \(sha aaaaaaaaaaaa…\) · playwright 1\.63\.0 · chromium 140\.0\.7339\.16 · matched: tag 0 · text 185/.test(first.stderr));
-  t("implicit baseline: the report being overwritten → 'COVERAGE FELL 185→42 vs design/verify/Orders.report.json' + 'probe changed'", () =>
-    /COVERAGE FELL 185→42 vs design\/verify\/Orders\.report\.json/.test(second.stderr) && /· probe changed/.test(second.stderr));
+  t("implicit baseline: the report being overwritten → 'COVERAGE FELL 185→42 vs design/verify/Orders__1_1.report.json' + 'probe changed'", () =>
+    second.stderr.includes(`COVERAGE FELL 185→42 vs ${ownReport}`) && /· probe changed/.test(second.stderr));
   t("report.against records both rounds", () => {
     const a = rep2?.against;
-    return !!a && a.report === "design/verify/Orders.report.json" && a.nodesMeasured.before === 185 && a.nodesMeasured.after === 42 && a.probeChanged === true && a.expectationChanged === false;
+    return !!a && a.report === ownReport && a.nodesMeasured.before === 185 && a.nodesMeasured.after === 42 && a.probeChanged === true && a.expectationChanged === false;
   });
   t("the verdict is the one compare gives without a baseline", () => {
     const m42 = readJsonOrNull(path.join(cwd, "m42.json"), isVerifyMeasured);
     return !!e && !!m42 && !!rep2 && rep2.verdict === compare(e, m42).verdict;
   });
   put("old.report.json", { verdict: "incomplete", why: [], deltas: [], inputs: { probe: "unknown" }, coverage: { nodesExpected: 190, nodesMeasured: 190, fieldsChecked: 1 } });
-  const third = run("--compare", expFile, "m42.json", "--out", "design/verify/Orders", "--against", "old.report.json");
+  const third = run("--compare", expFile, "m42.json", "--out", "design/verify", "--against", "old.report.json");
   t("--against <file> overrides the implicit baseline", () => /COVERAGE FELL 190→42 vs old\.report\.json/.test(third.stderr) && /· probe changed/.test(third.stderr));
-  const bad = run("--compare", expFile, "m42.json", "--out", "design/verify/Orders", "--against", "missing.report.json");
+  const bad = run("--compare", expFile, "m42.json", "--out", "design/verify", "--against", "missing.report.json");
   t("an unreadable --against is exit 2, naming the file", () => bad.status === 2 && /--against 'missing\.report\.json' does not exist/.test(bad.stderr));
-  fs.writeFileSync(path.join(cwd, "design/verify/Orders.report.json"), "{ not json");
-  const garbled = run("--compare", expFile, "m42.json", "--out", "design/verify/Orders");
-  t("an unreadable implicit baseline is a note, not an error", () => garbled.status === 1 && /note {2}design\/verify\/Orders\.report\.json is not valid JSON/.test(garbled.stderr) && !/COVERAGE FELL/.test(garbled.stderr));
+  fs.writeFileSync(path.join(cwd, ownReport), "{ not json");
+  const garbled = run("--compare", expFile, "m42.json", "--out", "design/verify");
+  t("an unreadable implicit baseline is a note, not an error", () => garbled.status === 1 && garbled.stderr.includes(`note  ${ownReport} is not valid JSON`) && !/COVERAGE FELL/.test(garbled.stderr));
   t("[cli] --against is registered and documented; only with --compare", () => /--against <report\.json>/.test(run("--help").stdout) && run("--expect", "orders.json", "--against", "x.json").status === 2);
 
   put("evidence.json", { interactions: [], components: [{ setName: "Button", present: false, detail: "no button in the toolbar" }] });
   // tied to this expectation (a measured file naming no expectation is an integrity failure → incomplete, never fail)
   put("m185e.json", { ...rows(185, "a".repeat(64)), expectationSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, expFile))).digest("hex") });
-  run("--compare", expFile, "m185e.json", "--out", "design/verify/Ev", "--interactions", "evidence.json");
-  const ev = readJsonOrNull(path.join(cwd, "design/verify/Ev.report.json"), isVerifyReport);
+  // (each report in a directory of its own: --out is the verify directory, the report the expectation's set)
+  run("--compare", expFile, "m185e.json", "--out", "design/verify/ev/", "--interactions", "evidence.json");
+  const ev = readJsonOrNull(path.join(cwd, "design/verify/ev/Orders__1_1.report.json"), isVerifyReport);
   t("[components] components[] in the --interactions object are read: Button reported ABSENT → fail", () =>
     !!ev && (ev.componentsAbsent || []).some((c) => c.setName === "Button" && c.detail === "no button in the toolbar") && ev.verdict === "fail");
-  const withIds = run("--compare", expFile, "m185.json", "--out", "design/verify/Ev2");
+  const withIds = run("--compare", expFile, "m185.json", "--out", "design/verify/ev2/");
   t("[not-in-expectation] the CLI prints nothing when every measured id is known", () => !/not in the expectation/.test(withIds.stderr));
   put("mx.json", measured([probeNode("2:1", { text: "Order 1" }), probeNode("77:1", {}), probeNode("77:2", {})]));
-  const mx = run("--compare", expFile, "mx.json", "--out", "design/verify/Ev3");
+  const mx = run("--compare", expFile, "mx.json", "--out", "design/verify/ev3/");
   t("[not-in-expectation] the CLI prints the count and the first ids", () => /note {2}2 measured node id\(s\) are not in the expectation \(e\.g\. 77:1, 77:2\)/.test(mx.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 });
@@ -300,17 +303,17 @@ block("malformed extras", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-probe-extras-"));
   const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
   fs.writeFileSync(path.join(cwd, "orders.json"), JSON.stringify(screen()));
-  run("--expect", "orders.json", "--out", "design/verify/Orders");
+  run("--expect", "orders.json", "--out", "design/verify");
   fs.writeFileSync(path.join(cwd, "hand.json"), JSON.stringify({ measuredAt: "2026-09-30T01:00:00Z", renderer: "hand", probe: "handmade", notMeasured: {}, nodes: [{ nodeId: "2:1", styles: { text: "Order 1" } }] }));
-  const r = run("--compare", "design/verify/Orders.expected.json", "hand.json", "--out", "design/verify/Hand");
-  const rep = readJsonOrNull(path.join(cwd, "design/verify/Hand.report.json"), isVerifyReport);
+  const r = run("--compare", "design/verify/Orders__1_1.expected.json", "hand.json", "--out", "design/verify/hand/");
+  const rep = readJsonOrNull(path.join(cwd, "design/verify/hand/Orders__1_1.report.json"), isVerifyReport);
   t("[extras] probe: \"handmade\" + notMeasured: {} still compares (exit 1 = a verdict, not 2 = refused)", () => r.status === 1 && !!rep && rep.coverage?.nodesMeasured === 1);
   t("[extras] ... reports probe: unknown", () => rep?.inputs?.probe === "unknown");
   t("[extras] ... and says what it ignored, on stderr and in the report", () =>
     /note {2}hand\.json: measured\.probe is not/.test(r.stderr) && /measured\.notMeasured is not a list/.test(r.stderr)
-    && (rep?.probe?.inputNotes || []).length === 2 && /measured\.probe is not/.test(fs.readFileSync(path.join(cwd, "design/verify/Hand.report.md"), "utf8")));
+    && (rep?.probe?.inputNotes || []).length === 2 && /measured\.probe is not/.test(fs.readFileSync(path.join(cwd, "design/verify/hand/Orders__1_1.report.md"), "utf8")));
   fs.writeFileSync(path.join(cwd, "broken.json"), JSON.stringify({ nodes: [{ styles: {} }] }));
-  t("[extras] measurements compare cannot read (a node without nodeId) are still refused, exit 2", () => run("--compare", "design/verify/Orders.expected.json", "broken.json", "--out", "design/verify/B").status === 2);
+  t("[extras] measurements compare cannot read (a node without nodeId) are still refused, exit 2", () => run("--compare", "design/verify/Orders__1_1.expected.json", "broken.json", "--out", "design/verify/b/").status === 2);
   t("[extras] in-process: a non-identity probe reads as unknown, with a note", () => {
     const rr = compare(exp(), malformed<VerifyMeasured>({ nodes: [], probe: "handmade" }));
     return rr.inputs?.probe === "unknown" && (rr.probe.inputNotes || []).some((n) => /measured\.probe is not/.test(n));

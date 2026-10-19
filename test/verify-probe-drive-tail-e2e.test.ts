@@ -322,7 +322,10 @@ const mBytes = fs.existsSync(mFile) ? fs.readFileSync(mFile) : null;
 check(`the run's status after the freeze: measured, by verify-probe, rev 3 (starting → measuring → measured), its measuredSha256 the measured file's bytes and its time not before that file's (saw ${sF === null || sF === "v1" ? String(sF) : `${sF.phase} rev ${sF.rev}`})`,
   runF !== "" && sF !== null && sF !== "v1" && sF.runId === runF && sF.phase === "measured" && sF.by === "verify-probe" && sF.rev === 3 && mBytes !== null
   && sF.measuredSha256 === crypto.createHash("sha256").update(mBytes).digest("hex") && Date.parse(sF.at) >= Math.floor(fs.statSync(mFile).mtimeMs));
-const cF = await vs(["--compare", EXPECTED, out(FREEZE_SET) + ".measured.json", "--out", out(FREEZE_SET)]);
+// the variant set's own expectation (the same bytes, so the measured file's expectationSha256 names it): --compare names
+// the report by the set the expectation names
+fs.copyFileSync(abs(EXPECTED), abs(out(FREEZE_SET) + ".expected.json"));
+const cF = await vs(["--compare", out(FREEZE_SET) + ".expected.json", out(FREEZE_SET) + ".measured.json", "--out", "design/verify"]);
 const repF = readReport(out(FREEZE_SET));
 const rowF = (id: string): string | undefined => (repF?.interactions || []).find((i) => i.nodeId === id)?.result;
 if (repF === null) console.log(cF.stderr);

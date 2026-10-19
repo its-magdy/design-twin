@@ -779,7 +779,7 @@ await block("verify-screen --wait:", async () => {
   const w1 = cli("--wait", "Plots__1_1", "--run", "run-b", "--timeout", "1", "--interval", "0.1");
   safe("a stale `done` from run A does not end a wait for run B → exit 5 after --timeout", () => w1.status === 5 && /timed out after 1s waiting for run run-b/.test(w1.stderr) && Date.now() - t0 >= 900);
   const w2 = cli("--wait", "Plots__1_1", "--run", "run-a", "--timeout", "5", "--interval", "0.1");
-  safe("run A done and the measured file is the one it names → exit 0, prints the --compare command", () => w2.status === 0 && w2.stdout.includes(`--compare ${relPrinted("Plots__1_1.expected.json")} ${relPrinted("Plots__1_1.measured.json")} --out ${relPrinted("Plots__1_1")}`));
+  safe("run A done and the measured file is the one it names → exit 0, prints the --compare command, --out the verify directory", () => w2.status === 0 && w2.stdout.includes(`--compare ${relPrinted("Plots__1_1.expected.json")} ${relPrinted("Plots__1_1.measured.json")} --out ${shellArg(path.join("design", "verify"))}`) && !w2.stdout.includes(`--out ${relPrinted("Plots__1_1")}`));
   safe("…without --interactions: that evidence file was not published in run A", () => !/--interactions/.test(w2.stdout));
   safe("--wait names the live file it waits on", () => w2.stderr.includes(live));
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), JSON.stringify({ expectationSha256: "remeasured", nodes: [] }));

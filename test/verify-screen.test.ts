@@ -11,7 +11,6 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { findExistingExpectedFor } from "../design-to-code/verify-screen.ts";
 import { liveStatusFile } from "../design-to-code/verify-run.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, tokenFor } from "../design-to-code/verify-compare.ts";
@@ -473,71 +472,88 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     /^# Verify/m.test(reportToMarkdown(rep)) && /What was actually checked/.test(reportToMarkdown(rep)));
 }
 
-// ---------- CLI: --out defaults to the input file's own basename ----------------------
-// `--expect` run once by base name and once by a nickname for the SAME screen
-// wrote two byte-identical files under two names in design/verify/. Defaulting `--out` to the input
-// file's own basename (already `<LayerName>__<node-id>` by construction) means two runs against the
-// same export always land on the same artefact.
+// ---------- CLI: --out is the verify directory; the set is named by the frame's node ----------
+// One node, one set: the set's name is `<Layer>__<id>` (the stem a set of the node already has, else the frame's), never
+// the input file's basename or a name the caller typed — so no nickname can start a second artefact set.
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-out-"));
-  const screenFile = path.join(cwd, "positions___7314_87192.json");
-  fs.writeFileSync(screenFile, JSON.stringify({
-    exportedAt: "2026-09-22T00:00:00.000Z", screen: "positions ",
-    nodes: [{ type: "FRAME", id: "7314:87192", name: "positions ", children: [] }],
-  }));
   const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const r = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
-  ok("[cli-out] --expect with no --out writes design/verify/<the input file's own basename>.expected.json",
-    r.status === 0 && fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.expected.json")));
-  const expFile = path.join(cwd, "design", "verify", "positions___7314_87192.expected.json");
+  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
+  const vdir = path.join(cwd, "design", "verify");
+  const put = (rel: string, d: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(d)); return rel; };
+  const screen = (name: string) => ({ exportedAt: "2026-09-22T00:00:00.000Z", screen: name, nodes: [{ type: "FRAME", id: "5:6", name, children: [] }] });
+  const nick = put("Nick.json", screen("Screen"));
+  const r = run("--expect", nick);
+  ok("[out-dir] --expect with no --out writes design/verify/<Layer>__<id>.expected.json — the frame's node, not the input file's basename",
+    r.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")) && !fs.existsSync(path.join(vdir, "Nick.expected.json")));
+  fs.mkdirSync(path.join(cwd, "elsewhere"));
+  const rDir = run("--expect", nick, "--out", "elsewhere");
+  ok("[out-dir] --out <an existing directory> writes <dir>/<Layer>__<id>.expected.json", rDir.status === 0 && fs.existsSync(path.join(cwd, "elsewhere", "Screen__5_6.expected.json")));
+  const rNew = run("--expect", nick, "--out", "fresh/");
+  ok("[out-dir] --out <a new directory>/ (trailing separator) creates it and writes the set there", rNew.status === 0 && fs.existsSync(path.join(cwd, "fresh", "Screen__5_6.expected.json")));
+  const rOld = run("--expect", nick, "--out", "design/verify/Screen__5_6");
+  ok(`[out-dir] --out <dir>/<the set's own name> (the older spelling) is taken, with a note naming the directory (got ${rOld.status}: ${rOld.stderr.split("\n")[0] ?? ""})`,
+    rOld.status === 0 && /^note {2}--out design\/verify\/Screen__5_6 names the set: pass the directory design\/verify$/m.test(rOld.stderr));
+  const before = fs.readdirSync(vdir).sort().join(",");
+  const rNick = run("--expect", nick, "--out", "design/verify/JetRoles");
+  ok(`[out-dir] --out <dir>/<a nickname> → exit 2 naming the set, nothing written (got ${rNick.status})`,
+    rNick.status === 2 && /--out takes the verify directory; this set is Screen__5_6/.test(rNick.stderr) && fs.readdirSync(vdir).sort().join(",") === before);
+  const rCase = run("--expect", nick, "--out", "design/verify/screen__5_6");
+  ok("[out-dir] --out <dir>/<the set's name in another case> → exit 2 (compared case-exactly)", rCase.status === 2 && /this set is Screen__5_6/.test(rCase.stderr));
+  const rFile = run("--expect", nick, "--out", nick);
+  ok("[out-dir] --out <an existing file> → exit 2", rFile.status === 2 && /--out Nick\.json is a file/.test(rFile.stderr));
+  const rForce = run("--expect", nick, "--force");
+  ok(`[force] --force → exit 2: one node, one set — a variant or --migrate instead (got ${rForce.status}: ${rForce.stderr.split("\n")[0] ?? ""})`,
+    rForce.status === 2 && /^--force is gone: one node, one set — a second set of the node is a variant \(--expect --variant <slug>\); a legacy-named set: verify-screen --migrate$/m.test(rForce.stderr));
+
+  // --compare: the report takes the expectation's set name; --out is a directory
+  const expFile = path.join(vdir, "Screen__5_6.expected.json");
   const measuredFile = path.join(cwd, "measured.json");
   fs.writeFileSync(measuredFile, JSON.stringify({ measuredAt: "2026-09-22T00:00:01.000Z", renderer: "test", viewport: { w: 1, h: 1 }, artifacts: [], nodes: [], components: [], interactions: [] }));
-  spawnSync(process.execPath, [scriptPath, "--compare", expFile, measuredFile], { encoding: "utf8", cwd });
-  ok("[cli-out] --compare defaults to the .expected.json's own basename, not a new name",
-    fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.report.json")));
-
-  // an explicit --out under a NICKNAME for a screen already indexed under its default name would write
-  // a second complete artefact set with no warning. Refuse instead, naming the existing file; --force overrides.
-  const nicknameOut = path.join(cwd, "design", "verify", "JetRoles");
-  const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut], { encoding: "utf8", cwd });
-  ok("[nickname] --expect --out <nickname> for a node that already has an expectation elsewhere is refused",
-    r2.status === 1 && /already has an expectation/.test(r2.stderr) && /positions___7314_87192\.expected\.json/.test(r2.stderr) &&
-      !fs.existsSync(nicknameOut + ".expected.json"));
-  const r3 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut, "--force"], { encoding: "utf8", cwd });
-  ok("[nickname] --force overrides the refusal and writes the second name anyway",
-    r3.status === 0 && fs.existsSync(nicknameOut + ".expected.json"));
+  run("--compare", expFile, measuredFile);
+  ok("[compare-out] --compare with no --out writes design/verify/<the expectation's set>.report.json", fs.existsSync(path.join(vdir, "Screen__5_6.report.json")));
+  run("--compare", expFile, measuredFile, "--out", "elsewhere");
+  ok("[compare-out] --compare --out <dir> writes <dir>/<set>.report.json", fs.existsSync(path.join(cwd, "elsewhere", "Screen__5_6.report.json")));
+  const cOther = run("--compare", expFile, measuredFile, "--out", "elsewhere/Other");
+  ok("[compare-out] --compare --out <dir>/<another name> → exit 2, no report", cOther.status === 2 && /this set is Screen__5_6/.test(cOther.stderr) && !fs.existsSync(path.join(cwd, "elsewhere", "Other.report.json")));
+  // an expectation under a legacy name, or named for another node than its frame: refused before anything is compared
+  fs.copyFileSync(expFile, path.join(vdir, "Nick.expected.json"));
+  const cLegacy = run("--compare", path.join(vdir, "Nick.expected.json"), measuredFile);
+  ok(`[compare-name] a legacy-named expectation → exit 2 with --migrate, no report (got ${cLegacy.status}: ${cLegacy.stderr.split("\n")[0] ?? ""})`,
+    cLegacy.status === 2 && /is a legacy-named verify set — run verify-screen --migrate/.test(cLegacy.stderr) && !fs.existsSync(path.join(vdir, "Nick.report.json")));
+  fs.copyFileSync(expFile, path.join(vdir, "Other__9_9.expected.json"));
+  const cNode = run("--compare", path.join(vdir, "Other__9_9.expected.json"), measuredFile);
+  ok("[compare-name] an expectation named for node 9:9 whose frame is 5:6 → exit 2, no report",
+    cNode.status === 2 && /is named for node 9:9, its frame is 5:6/.test(cNode.stderr) && !fs.existsSync(path.join(vdir, "Other__9_9.report.json")));
+  fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
-// ---------- the guard names the canonical <Layer>__<id>, the old files and the .retired way out ----------
+// ---------- the stem is fixed once a set exists; a legacy-named set of the node is noted, never reused ----------
 (() => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt34-"));
-  const screenFile = path.join(cwd, "Screen__5_6.json");
-  fs.writeFileSync(screenFile, JSON.stringify({
-    exportedAt: "2026-09-22T00:00:00.000Z", screen: "Screen",
-    nodes: [{ type: "FRAME", id: "5:6", name: "Screen", children: [] }],
-  }));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-stem-"));
+  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
   const vdir = path.join(cwd, "design", "verify");
   fs.mkdirSync(vdir, { recursive: true });
-  // an older run that used a nickname: expectation + a state screenshot beside it
+  const screenFile = path.join(cwd, "New__5_6.json");
+  fs.writeFileSync(screenFile, JSON.stringify({ exportedAt: "2026-09-22T00:00:00.000Z", screen: "New", nodes: [{ type: "FRAME", id: "5:6", name: "New", children: [] }] }));
+  // an older run under a nickname: its expectation + a state screenshot
   fs.writeFileSync(path.join(vdir, "Nick.expected.json"), JSON.stringify({ frame: { nodeId: "5:6" } }));
   fs.writeFileSync(path.join(vdir, "Nick-dialog.png"), "x");
-  fs.writeFileSync(path.join(vdir, "NickOther.png"), "x"); // another screen's file: not part of the Nick set
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const r = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
-  ok("the guard refuses (exit 1) and writes nothing", r.status === 1 && !fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")));
-  ok("the message names the canonical <Layer>__<id> basename", /canonical name[^\n]*'Screen__5_6'/.test(r.stderr));
-  ok("the message lists the old set (expectation + state PNG), not another screen's file",
-    /Nick\.expected\.json/.test(r.stderr) && /Nick-dialog\.png/.test(r.stderr) && !/NickOther/.test(r.stderr));
-  ok("the message gives the .retired step with the real path and the old-name way out",
-    /mv [^\n]*Nick\.expected\.json[^\n]* [^\n]*Nick\.expected\.json\.retired/.test(r.stderr) && /--out [^\n]*Nick/.test(r.stderr));
-  // an explicit nickname for the new run: the canonical hint carries --out <canonical>
-  const rNick = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", path.join(vdir, "Other")], { encoding: "utf8", cwd });
-  ok("a third name is told to re-run with --out <canonical>", rNick.status === 1 && /with --out [^\n]*Screen__5_6/.test(rNick.stderr));
-  // the migration step: retire the old expectation -> the canonical name is written
-  fs.renameSync(path.join(vdir, "Nick.expected.json"), path.join(vdir, "Nick.expected.json.retired"));
-  const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
-  ok("after the .retired step the canonical name is written (exit 0)",
-    r2.status === 0 && fs.existsSync(path.join(vdir, "Screen__5_6.expected.json")) && fs.existsSync(path.join(vdir, "Nick-dialog.png")));
+  const r = run("--expect", screenFile);
+  ok(`[legacy] a legacy-named set of the node → the <Layer>__<id> set is written (exit 0) and a note names the legacy set and --migrate (got ${r.status}: ${r.stderr.split("\n")[0] ?? ""})`,
+    r.status === 0 && fs.existsSync(path.join(vdir, "New__5_6.expected.json")) && /^note {2}legacy-named verify set\(s\) Nick of node 5:6 — verify-screen --migrate renames them to New__5_6$/m.test(r.stderr)
+    && fs.existsSync(path.join(vdir, "Nick.expected.json")));
+  // the frame renamed in Figma: the set keeps the stem it has
+  fs.rmSync(path.join(vdir, "Nick.expected.json"));
+  fs.renameSync(path.join(vdir, "New__5_6.expected.json"), path.join(vdir, "Old__5_6.expected.json"));
+  const r2 = run("--expect", screenFile);
+  ok("[fixed-stem] a set Old__5_6 of the node exists and the frame is now 'New' → --expect writes Old__5_6 again, never New__5_6",
+    r2.status === 0 && fs.existsSync(path.join(vdir, "Old__5_6.expected.json")) && !fs.existsSync(path.join(vdir, "New__5_6.expected.json")) && /wrote [^\n]*Old__5_6\.expected\.json/.test(r2.stderr));
+  // two grammar-named sets of the node: which one is not ours to guess
+  fs.copyFileSync(path.join(vdir, "Old__5_6.expected.json"), path.join(vdir, "New__5_6.expected.json"));
+  const r3 = run("--expect", screenFile);
+  ok("[fixed-stem] two <Layer>__<id> sets of the node → exit 2 naming both", r3.status === 2 && /node 5:6 has 2 verify sets under different names \(New__5_6, Old__5_6\)/.test(r3.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
@@ -791,16 +807,18 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const script = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const run = (...a: string[]) => spawnSync(process.execPath, [script, ...a], { encoding: "utf8", cwd });
   const src = path.join(FX, GP_FILE);
-  const r1 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
-  const expFile = path.join(cwd, "design/verify/GuidedPolicies.expected.json");
+  // (no export index here: the set is named by the frame's own layer name, `Studio Configurations`)
+  const GP = "Studio_Configurations__1359_21337";
+  const r1 = run("--expect", src, "--out", "design/verify");
+  const expFile = path.join(cwd, `design/verify/${GP}.expected.json`);
   const bytes1 = fs.readFileSync(expFile);
-  const r2 = run("--expect", src, "--out", "design/verify/GuidedPolicies");
+  const r2 = run("--expect", src, "--out", "design/verify");
   ok("[cli] --expect prints what it skipped as hidden (45 instances, 11 interactions)", () => /skipped 23 hidden layer\(s\) \(\d+ spec\(s\), 45 instance\(s\), 11 interaction\(s\)\)/.test(r1.stderr));
   ok("[cli] a second identical --expect is byte-identical and says 'unchanged'", () => r2.status === 0 && Buffer.compare(bytes1, fs.readFileSync(expFile)) === 0 && /byte-identical to the expectation on disk \(same export inputs.*says nothing about the build/.test(r2.stderr));
-  fs.writeFileSync(path.join(cwd, "design/verify/GuidedPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
-  const c1 = run("--compare", expFile, "design/verify/GuidedPolicies.measured.json");
+  fs.writeFileSync(path.join(cwd, `design/verify/${GP}.measured.json`), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
+  const c1 = run("--compare", expFile, `design/verify/${GP}.measured.json`);
   // The CLI always runs the on-disk artifact check, so its report's artifacts are ArtifactCheck rows.
-  const rep1 = readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport);
+  const rep1 = readFixture(path.join(cwd, `design/verify/${GP}.report.json`), isVerifyReport);
   ok("[cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs?.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
   ok("[cli] a measurement taken against a different expectation is called stale", () => (rep1.why || []).some((w) => /DIFFERENT expectation/.test(w)));
   // The CLI always runs the on-disk artifact check, so every artifact row is an ArtifactCheck.
@@ -808,16 +826,16 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
   const edited = clone(gpDoc); must(edited.nodes[0], "edited.nodes[0]").children = (must(edited.nodes[0], "edited.nodes[0]").children || []).slice(0, 2);
   fs.writeFileSync(path.join(cwd, "edited.json"), JSON.stringify(edited));
-  const r3 = run("--expect", "edited.json", "--out", "design/verify/GuidedPolicies");
+  const r3 = run("--expect", "edited.json", "--out", "design/verify");
   ok("[cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
-    () => /REPLACED an existing/.test(r3.stderr) && /GuidedPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
+    () => /REPLACED an existing/.test(r3.stderr) && new RegExp(`${GP}\\.report\\.json`).test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
   ok("…it says the EXPORT changed and keeps the previous bytes as .expected.prev.json", () =>
-    /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(bytes1, fs.readFileSync(path.join(cwd, "design/verify/GuidedPolicies.expected.prev.json"))) === 0);
+    /: the export changed \(content sha [0-9a-f]{12}… → [0-9a-f]{12}…\)/.test(r3.stderr) && Buffer.compare(bytes1, fs.readFileSync(path.join(cwd, `design/verify/${GP}.expected.prev.json`))) === 0);
   fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, outcome: "dialog-opened", navEvents: 0 }]));
-  run("--expect", src, "--out", "design/verify/GuidedPolicies");
-  run("--compare", expFile, "design/verify/GuidedPolicies.measured.json", "--interactions", "ints.json");
+  run("--expect", src, "--out", "design/verify");
+  run("--compare", expFile, `design/verify/${GP}.measured.json`, "--interactions", "ints.json");
   ok("[cli] --interactions <file> is the input channel for interaction evidence",
-    () => readFixture(path.join(cwd, "design/verify/GuidedPolicies.report.json"), isVerifyReport).coverage?.interactionsPassed === 1);
+    () => readFixture(path.join(cwd, `design/verify/${GP}.report.json`), isVerifyReport).coverage?.interactionsPassed === 1);
   ok("[cli] --help says there is no browser in --compare", () => /NO browser/.test(run("--help").stdout));
 })();
 
@@ -906,16 +924,11 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const r4 = run("--expect", screenFile);
   okOuter("the replaced expectation recorded no export hash → 'the expectation recorded no export hash … cannot tell whether the export or the expectation generator changed', not 'the export changed'",
     /REPLACED an existing [^\n]*: the expectation recorded no export hash \(exportContentSha256\) — cannot tell whether the export or the expectation generator changed; the previous one is kept/.test(r4.stderr) && !/the export changed/.test(r4.stderr));
-  // .prev is never taken for a live expectation
+  // a .prev is never taken for a live set: with the expectation gone, --expect writes Orders__5_6 again, and no other set is named
   fs.rmSync(target);
-  okOuter("findExistingExpectedFor never matches a .expected.prev.json", findExistingExpectedFor(vdir, "5:6", path.join(vdir, "Other.expected.json")) === null);
-  const rOther = run("--expect", screenFile, "--out", path.join(vdir, "Other"));
-  okOuter("…so --expect under another name is not refused because of a .prev", rOther.status === 0 && fs.existsSync(path.join(vdir, "Other.expected.json")));
-  // the dup refusal names the OLD set's last run
-  statusAt("Other", "blocked", { detail: "no dev server" });
-  const rDup = run("--expect", screenFile);
-  okOuter("the nickname refusal names the old set's status (blocked, detail)",
-    rDup.status === 1 && /already has an expectation/.test(rDup.stderr) && /the last run of Other \(run r-7f3a\) ended at phase blocked \(no dev server\)/.test(rDup.stderr));
+  const rPrev = run("--expect", screenFile);
+  okOuter("a .expected.prev.json alone is no set: --expect writes Orders__5_6 again, with no legacy-set note",
+    rPrev.status === 0 && fs.existsSync(target) && !/legacy-named/.test(rPrev.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
@@ -925,9 +938,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-record-"));
   const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
   const put = (rel: string, doc: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(doc, null, 4) + "\n"); return rel; };
-  const exp = put("design/verify/Orders__5_6.expected.json", buildExpectation([doc([textNode("2:1", "Title", "Orders", { family: "Inter", size: 14 })])]));
-  const meas = put("design/verify/Orders__5_6.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Orders" } }]));
-  const report = path.join(cwd, "design/verify/Orders__5_6.report.json");
+  const exp = put("design/verify/Orders__1_1.expected.json", buildExpectation([doc([textNode("2:1", "Title", "Orders", { family: "Inter", size: 14 })])]));
+  const meas = put("design/verify/Orders__1_1.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Orders" } }]));
+  const report = path.join(cwd, "design/verify/Orders__1_1.report.json");
   const none = run("--compare", exp, meas, "--record-plan");
   okOuter("--record-plan with no plan for the frame → exit 2, says so, NO report written",
     none.status === 2 && /--record-plan: no plan in design\/plan\/ describes this frame/.test(none.stderr) && !fs.existsSync(report));
@@ -944,8 +957,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const rep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
   // recordPlan: until it lands the step-0 stub throws — the report is still written and the error is named
   okOuter("the one plan: report written, then recordPlan is called (recorded, or the stub's error with exit 1)",
-    !!rep && (/recorded design\/verify\/Orders__5_6\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
-      || (rec.status === 1 && /error {2}--record-plan: .* — design\/verify\/Orders__5_6\.report\.json is written; design\/plan\/Orders__1_1\.json was not updated/.test(rec.stderr))));
+    !!rep && (/recorded design\/verify\/Orders__1_1\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
+      || (rec.status === 1 && /error {2}--record-plan: .* — design\/verify\/Orders__1_1\.report\.json is written; design\/plan\/Orders__1_1\.json was not updated/.test(rec.stderr))));
   okOuter("[shared-shell] the report hashes planCodeFiles(plan) (files[] + mapped modules)",
     !!rep && JSON.stringify(Object.keys(rep.inputs?.code?.files ?? {})) === JSON.stringify(planCodeFiles(planA)));
   okOuter("a plan whose mapModules are all project files → no 'not hashed' input note", !!rep && !(rep.probe?.inputNotes || []).some((n) => /mapModule path\(s\) not hashed/.test(n)));

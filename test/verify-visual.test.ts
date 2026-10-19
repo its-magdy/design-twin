@@ -253,7 +253,7 @@ console.log("[expect-cli] --expect CLI: main reads design/export/<pointer> and d
     r.status === 0 && !!ri && ri.usable === true && ri.from === "index" && ri.sha256 === sha(REF_PNG) && ri.colorProfile === "display_p3");
   safe("[expect-cli] …stderr names the reference and its scale", () => /reference design\/export\/assets\/90_1_ref-7c1e0a\.png 2082×1058 at 1\.4222x \(index\), offset -12,-12/.test(r.stderr));
   fs.writeFileSync(path.join(cwd, "design/export/" + REF), png(360, 309));
-  const r2 = spawnSync(process.execPath, [CLI, "--expect", scr, "--force"], { encoding: "utf8", cwd });
+  const r2 = spawnSync(process.execPath, [CLI, "--expect", scr], { encoding: "utf8", cwd });
   const e2 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
   safe("[expect-cli] the CLI on a thumbnail: usable:false and a 'no visual diff' note", () =>
     r2.status === 0 && e2?.referenceImage?.usable === false && /note {2}no visual diff for this screen: the reference is a 360 px image/.test(r2.stderr));
@@ -393,8 +393,8 @@ console.log("[visual-cli] --compare CLI — the VISUAL line after the behaviour 
     rep?.visual?.diff?.path === "design/verify/Firings__90_1.diff.png" && rep.visual.diff.exists === true && !/\(missing\)/.test(rep.visual.headline));
   safe("[visual-cli] …report.md carries the section", () => /## Visual diff — informational, not part of the verdict/.test(fs.readFileSync(path.join(cwd, "design/verify/Firings__90_1.report.md"), "utf8")));
   const m2 = put("design/verify/Old__90_1.measured.json", { ...base(), visual: { ran: "yes" } });
-  const r2 = spawnSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/Old__90_1"], { encoding: "utf8", cwd });
-  const rep2 = readJsonOrNull(path.join(cwd, "design/verify/Old__90_1.report.json"), isVerifyReport);
+  const r2 = spawnSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/old/"], { encoding: "utf8", cwd });
+  const rep2 = readJsonOrNull(path.join(cwd, "design/verify/old/Firings__90_1.report.json"), isVerifyReport);
   safe("[visual-cli] a malformed visual block through the CLI: a note, exit 0/1 (never 2), report.visual ran:false 'malformed'", () =>
     (r2.status === 0 || r2.status === 1) && /note .*measured\.visual is not a visual block/.test(r2.stderr) && rep2?.visual?.ran === false && /visual block is malformed/.test(rep2.visual.why ?? ""));
   fs.rmSync(cwd, { recursive: true, force: true });

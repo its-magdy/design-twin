@@ -1401,6 +1401,32 @@ function nodeIdFromSetName(name) {
   const dot = name.indexOf(".");
   return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
 }
+var EXPECTED_SUFFIX = ".expected.json";
+function setNameOfFile(file) {
+  const b = path8.basename(file);
+  return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
+}
+function outBaseOf(out, setName, defaultDir) {
+  if (out === void 0) return { base: path8.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  const why = `--out takes the verify directory; this set is ${setName}`;
+  let st = null;
+  try {
+    st = fs10.statSync(out);
+  } catch {
+  }
+  if (st?.isDirectory()) return { base: path8.join(out, setName), dir: out, deprecated: false };
+  if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
+  if (/[\\/]$/.test(out) || path8.resolve(out) === path8.resolve(VERIFY_DIR)) return { base: path8.join(out, setName), dir: out.replace(/[\\/]+$/, "") || out, deprecated: false };
+  if (path8.basename(out) === setName) return { base: out, dir: path8.dirname(out), deprecated: true };
+  return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
+}
+function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
+  const name = setNameOfFile(expectedFile);
+  const p = parseSetName(name);
+  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path8.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
+  return null;
+}
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
@@ -2111,7 +2137,7 @@ async function waitMain(screen, f, usage) {
         if (st.measuredSha256 && onDisk === st.measuredSha256 && evOnDisk === (st.evidenceSha256 ?? null)) {
           const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
-          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(base)}`);
+          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(path11.dirname(base))}`);
           return 0;
         }
         const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];
@@ -6835,16 +6861,16 @@ function runStatusNote(base, now = Date.now()) {
   return `a run of ${name} (run ${st.runId}) is in progress \u2014 phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1e3)} s ago` : ""}; it measures against the expectation it started with`;
 }
 var PREV_EXPECTED_SUFFIX = ".expected.prev.json";
-function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs17.existsSync(dir)) return null;
-  for (const f of fs17.readdirSync(dir)) {
-    if (!f.endsWith(".expected.json")) continue;
-    const full = path16.join(dir, f);
-    if (path16.resolve(full) === path16.resolve(ownTarget)) continue;
-    const doc = readJsonOrNull(full, isJsonObject);
-    if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
+function expectDirOf(out) {
+  if (out === void 0) return VERIFY_DIR;
+  let dir = false;
+  try {
+    dir = fs17.statSync(out).isDirectory();
+  } catch {
   }
-  return null;
+  if (dir || path16.resolve(out) === path16.resolve(VERIFY_DIR)) return out;
+  if (/[\\/]$/.test(out)) return out.replace(/[\\/]+$/, "") || out;
+  return path16.dirname(out);
 }
 function plansForNode(nodeId) {
   const hits = [];
@@ -6891,23 +6917,24 @@ function selectForAccept(rep, sel) {
 }
 function main(argv) {
   const USAGE = `usage:
-  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
+  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
       The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
       ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot
       be graded is dropped with why. Their hash binds the expectation: change them \u2192 re-run --expect.
-      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.
-      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this
-      directory \u2014 pass --force to write a second one anyway. Replacing one that differs keeps the old bytes as
+      Read them; never retype them. --out is the verify directory (default design/verify; a new one ends in "/"): the set is
+      named by the frame's node, <Layer>__<id> \u2014 the name a set of that node there already has (a frame renamed in Figma keeps
+      it). Any other --out basename is refused (exit 2): one node, one set. Replacing one that differs keeps the old bytes as
       <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export
       content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).
-  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] --out design/verify/<Screen>
+  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]
       writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares
       two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
       (a JSON array, or {interactions:[\u2026], components:[\u2026], inferred:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail};
       components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}
       \u2014 what the build does that the design never drew \u2014 are listed under 'Inferred, not designed', never graded).
-      --out defaults to design/verify/<the .expected.json file's own basename>.
+      --out is the verify directory (default design/verify); the report takes the expectation's set name. A legacy-named
+      expectation, or one named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect).
       Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes
       measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.
       Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another
@@ -6998,6 +7025,10 @@ exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an inter
     help: { type: "boolean", short: "h" }
   };
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.force !== void 0) {
+    console.error("--force is gone: one node, one set \u2014 a second set of the node is a variant (--expect --variant <slug>); a legacy-named set: verify-screen --migrate\n" + USAGE);
+    return 2;
+  }
   if (flags.migrate) {
     const other = Object.entries(flags).filter(([k, v]) => v !== void 0 && !["migrate", "apply", "dir"].includes(k)).map(([k]) => k);
     if (other.length || files.length) {
@@ -7017,7 +7048,7 @@ exit (--migrate): 0 nothing skipped \xB7 1 a set skipped or refused, or an inter
       console.error("pass --status or --wait, not both\n" + USAGE);
       return 2;
     }
-    const other = ["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"].filter((k) => flags[k] !== void 0);
+    const other = ["expect", "compare", "accept", "out", "interactions", "against", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"].filter((k) => flags[k] !== void 0);
     if (other.length || files.length) {
       console.error(`--${flags.status !== void 0 ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}
 ` + USAGE);
@@ -7084,7 +7115,6 @@ function write(doExpect, base, obj, md) {
 }
 function expectMain(files, flags, USAGE) {
   const { out, plan: planFlag } = flags;
-  const force = !!flags.force;
   const firstFile = files[0];
   if (firstFile === void 0) {
     console.error("--expect needs at least one screen export\n" + USAGE);
@@ -7110,7 +7140,6 @@ function expectMain(files, flags, USAGE) {
   const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
   const exportRoot = EXPORT_DIR;
   const readSibling = (file) => readJsonOrNull(path16.join(exportRoot, file), isScreenDoc);
-  const outBase0 = out || path16.join(VERIFY_DIR, path16.basename(firstFile, ".json"));
   let flagged;
   if (planFlag !== void 0) {
     const r = readJson(planFlag, isPlan);
@@ -7146,31 +7175,27 @@ function expectMain(files, flags, USAGE) {
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);
     for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
   }
-  const outBase = outBase0;
-  const target = outBase + ".expected.json";
-  const dup = findExistingExpectedFor(path16.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
-  if (dup && !force) {
-    const oldBase = dup.slice(0, -".expected.json".length);
-    const dir = path16.dirname(dup), stemOld = path16.basename(oldBase);
-    const oldFiles = fs17.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path16.join(dir, f));
-    const canonical3 = path16.join(path16.dirname(target), path16.basename(firstFile, ".json"));
-    const oldStatus = runStatusNote(oldBase);
-    if (oldStatus) console.error(`note  ${oldStatus}`);
-    if (stemOld === path16.basename(canonical3)) {
-      console.error(
-        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical3)}), or pass --force to write a second set anyway.`
-      );
-      return 1;
-    }
-    console.error(
-      `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set).
-       existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}
-       the canonical name for this screen is '${path16.basename(canonical3)}' (<Layer>__<id> \u2014 the screen file's own basename), not '${stemOld}'.
-       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` + (path16.resolve(target) === path16.resolve(canonical3 + ".expected.json") ? "" : ` with --out ${shellArg(canonical3)}`) + `, then probe + --compare as usual \u2014 the old measured/report/PNGs stay as history under the old name.
-       Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set \u2014 not recommended.)`
-    );
-    return 1;
+  const nodeId = exp.frame.nodeId;
+  if (!nodeId) {
+    console.error(`error  the export's frame has no node id \u2014 its set cannot be named; re-pull the screen`);
+    return 2;
   }
+  const layerName = layers.find((l) => l.id === nodeId)?.name ?? exp.frame.name ?? "";
+  const k = nodeStem(expectDirOf(out), nodeId, layerName);
+  if ("why" in k) {
+    console.error(`error  ${k.why}`);
+    return 2;
+  }
+  const setName = formatSetName(k.stem);
+  const ob = outBaseOf(out, setName, VERIFY_DIR);
+  if ("error" in ob) {
+    console.error(`error  ${ob.error}`);
+    return 2;
+  }
+  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
+  if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} \u2014 verify-screen --migrate renames them to ${k.stem}`);
+  const outBase = ob.base;
+  const target = outBase + ".expected.json";
   const next = JSON.stringify(exp, null, 2) + "\n";
   const prev = fs17.existsSync(target) ? fs17.readFileSync(target, "utf8") : null;
   const h = sha256Hex(next);
@@ -7243,6 +7268,19 @@ function compareMain(files, flags, USAGE) {
     extra = list;
     if (comps.length) extraComponents = comps;
   }
+  const setName = setNameOfFile(expFile);
+  const setProblem = expectationSetProblem(expFile, expectation.frame && expectation.frame.nodeId, path16.dirname(expFile));
+  if (setProblem !== null) {
+    console.error(`error  ${setProblem}`);
+    return 2;
+  }
+  const ob = outBaseOf(out, setName, VERIFY_DIR);
+  if ("error" in ob) {
+    console.error(`error  ${ob.error}`);
+    return 2;
+  }
+  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
+  const compareBase = ob.base;
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
@@ -7304,7 +7342,6 @@ function compareMain(files, flags, USAGE) {
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path16.join(VERIFY_DIR, path16.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -7480,6 +7517,5 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
-  findExistingExpectedFor,
   selectForAccept
 };

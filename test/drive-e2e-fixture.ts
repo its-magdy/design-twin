@@ -226,7 +226,8 @@ export async function startDriveFixture(tmpPrefix: string, title: string): Promi
   }
 
   // ---- the expectation, from the real --expect (auto-discovers design/plan/Beds__70_1.json)
-  const exp = await vs(["--expect", "design/export/pages/Plots/Beds__70_1.json", "--out", out("Beds__70_1")]);
+  // (--out is the verify directory: --expect names the set by the frame's node, Beds__70_1)
+  const exp = await vs(["--expect", "design/export/pages/Plots/Beds__70_1.json", "--out", "design/verify"]);
   const EXPECTED = out("Beds__70_1") + ".expected.json";
   if (exp.status !== 0 || !fs.existsSync(path.join(proj, EXPECTED))) { console.log(exp.stderr); check("verify-screen --expect wrote the expectation", false); finish(); report(); }
   // the same expectation without interactions: for the runs that check only reaching + measuring (nothing to drive) — a
