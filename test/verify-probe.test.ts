@@ -418,22 +418,54 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   const GONE_PW = "module.exports = { chromium: { async launch() { return { version: () => '1.0', close: async () => {}, newContext: async () => { throw new Error('browser.newContext: Target page, context or browser has been closed'); } }; } } };\n";
   const goneProj = project("gone-before-measuring", [["playwright", "1.63.0", GONE_PW]]);
   fs.mkdirSync(path.join(goneProj, "design", "verify"), { recursive: true });
-  const goneExp = path.join(goneProj, "design", "verify", "Orders.expected.json");
+  const goneExp = path.join(goneProj, "design", "verify", "Orders__1_1.expected.json");
   fs.writeFileSync(goneExp, JSON.stringify(exp()));
   const goneRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj], { encoding: "utf8" });
   t("a browser gone before measuring → exit 4, the page-or-browser line with --check advice, no stack, nothing written", () =>
     goneRun.status === 4
     && goneRun.stderr.includes("verify-probe: the page or browser closed or crashed (browser.newContext: Target page, context or browser has been closed) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.")
-    && !/\n\s+at /.test(goneRun.stderr) && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders.measured.json")));
-  const goneSt = readStatus(path.join(goneProj, "design", "verify", "Orders"));
+    && !/\n\s+at /.test(goneRun.stderr) && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders__1_1.measured.json")));
+  const goneSt = readStatus(path.join(goneProj, "design", "verify", "Orders__1_1"));
   const goneId = /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(goneRun.stderr)?.[1] ?? "";
   t("…run without --run, that exit 4 ends the probe's own run: `failed` rev 2 'probe exit 4 — nothing written', the run the stderr named; no durable status published", () =>
     goneId !== "" && goneSt !== null && goneSt !== "v1" && goneSt.runId === goneId && goneSt.phase === "failed" && goneSt.rev === 2 && goneSt.detail === "probe exit 4 — nothing written"
-    && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders.status.json")));
+    && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders__1_1.status.json")));
   const usage = spawnSync(process.execPath, [PROBE_CLI, "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] --url without --expected → exit 2 (usage)", () => usage.status === 2);
   const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
   t("[CLI] an unreadable --expected → exit 2 before any browser work", () => badVp.status === 2 && /does not exist/.test(badVp.stderr));
+
+  // --out is a directory and the set is the expectation's name: a refusal is exit 2 before any status write or launch
+  // (the stub's browser would end the probe at exit 4)
+  const outProj = project("out-dir", [["playwright", "1.63.0", GONE_PW]]);
+  const outVerify = path.join(outProj, "design", "verify");
+  fs.mkdirSync(outVerify, { recursive: true });
+  const outExp = path.join(outVerify, "Orders__1_1.expected.json");
+  fs.writeFileSync(outExp, JSON.stringify(exp()));
+  const probeOut = (expected: string, ...more: string[]): SpawnSyncReturns<string> =>
+    spawnSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/", "--project", outProj, ...more], { encoding: "utf8" });
+  const untouched = (r: SpawnSyncReturns<string>, base: string): boolean => r.status === 2 && !/^run {4}/m.test(r.stderr) && readStatus(base) === null;
+  const nick = probeOut(outExp, "--out", path.join(outVerify, "Orders"));
+  t("[out] --out <dir>/<a nickname> → exit 2 '--out takes the verify directory; this set is Orders__1_1', no run started, no status", () =>
+    untouched(nick, path.join(outVerify, "Orders__1_1")) && nick.stderr.includes("--out takes the verify directory; this set is Orders__1_1"));
+  const legacyExp = path.join(outVerify, "Orders.expected.json");
+  fs.writeFileSync(legacyExp, JSON.stringify(exp()));
+  const legacy = probeOut(legacyExp);
+  t("[out] a legacy-named --expected (Orders.expected.json) → exit 2 naming verify-screen --migrate, no run started, no status", () =>
+    untouched(legacy, path.join(outVerify, "Orders")) && /is a legacy-named verify set — run verify-screen --migrate/.test(legacy.stderr));
+  const otherExp = path.join(outVerify, "Orders__9_9.expected.json");
+  fs.writeFileSync(otherExp, JSON.stringify(exp()));
+  const other = probeOut(otherExp);
+  t("[out] an --expected named for another node than its frame (Orders__9_9, frame 1:1) → exit 2, no run started, no status", () =>
+    untouched(other, path.join(outVerify, "Orders__9_9")) && other.stderr.includes("is named for node 9:9, its frame is 1:1"));
+  const older = probeOut(outExp, "--out", path.join(outVerify, "Orders__1_1"));
+  t("[out] the older spelling --out <dir>/<the set> is taken with a note naming the directory (the probe goes on: exit 4 from the stub)", () =>
+    older.status === 4 && older.stderr.includes(`note  --out ${path.join(outVerify, "Orders__1_1")} names the set: pass the directory ${outVerify}`));
+  const staged = probeOut(outExp, "--out", path.join(outProj, "stage") + path.sep);
+  const stagedSt = readStatus(path.join(outVerify, "Orders__1_1"));
+  t("[out] --out <a new dir>/ goes on (exit 4 from the stub); the run's status is the expectation's set's (design/verify/Orders__1_1), not the out dir's", () =>
+    staged.status === 4 && stagedSt !== null && stagedSt !== "v1" && stagedSt.phase === "failed" && stagedSt.runId === (/^run {4}(\S+)/m.exec(staged.stderr)?.[1] ?? "")
+    && readStatus(path.join(outProj, "stage", "Orders__1_1")) === null);
 
   // --ready defaults to the frame's tag; --ready none opts out; a probe of that stubbed project ends at exit 4 after it
   // printed what it waits for
@@ -624,12 +656,12 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
 `;
   const readyProj = project("ready-stub", [["playwright", "1.63.0", READY_PW]]);
   fs.mkdirSync(path.join(readyProj, "design", "verify"), { recursive: true });
-  const readyExp = path.join(readyProj, "design", "verify", "Orders.expected.json");
+  const readyExp = path.join(readyProj, "design", "verify", "Orders__1_1.expected.json");
   fs.writeFileSync(readyExp, JSON.stringify(exp()));
   const stubRun = (scenario: string, expected = readyExp): SpawnSyncReturns<string> =>
     spawnSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off"],
       { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: scenario } });
-  const measuredFile = path.join(readyProj, "design", "verify", "Orders.measured.json");
+  const measuredFile = path.join(readyProj, "design", "verify", "Orders__1_1.measured.json");
   const redirect = stubRun("redirect");
   t("[ready] a redirect after load (location.replace to a login page) with the default --ready → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint — never 'kept navigating' or the dev-server watch advice; nothing written", () =>
     redirect.status === 4 && /verify-probe: --ready '\[data-dt-node="1:1"\]' never became visible \(the page shows 0 of the expectation's \d+ own tags — fewer than half\): locator\.waitFor: Timeout/.test(redirect.stderr)
@@ -679,7 +711,7 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     redirectHung.status === 4 && redirectHung.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)")
     && !/kept navigating|watch tree/.test(redirectHung.stderr) && !fs.existsSync(measuredFile));
   // a screen + dialog export: the dialog root (closed at load) has more nodes than the screen root
-  const panelExp = path.join(readyProj, "design", "verify", "Panel.expected.json");
+  const panelExp = path.join(readyProj, "design", "verify", "Panel__1_1.expected.json");
   fs.writeFileSync(panelExp, JSON.stringify(buildExpectation([{ label: "Panel", doc: screenExport([
     { type: "FRAME", id: "1:1", name: "Panel", box: { x: 0, y: 0, w: 1280, h: 800 }, fills: [{ type: "solid", color: "#ffffff" }],
       children: [text("1:2", "Title", "Panel", FONT), text("1:3", "Body", "Body", FONT)] },
@@ -688,7 +720,7 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   ], { screen: "Panel" }) }])));
   const panel = stubRun("untagged-dialog", panelExp);
   if (panel.status !== 0) console.log(panel.stderr);
-  const panelDoc = readJsonOrNull(path.join(readyProj, "design", "verify", "Panel.measured.json"), isVerifyMeasured);
+  const panelDoc = readJsonOrNull(path.join(readyProj, "design", "verify", "Panel__1_1.measured.json"), isVerifyMeasured);
   t("[ready] a screen + dialog expectation whose untagged screen shows all its root's tags and none of the closed dialog's → measured (exit 0) with the untagged-root note: the dialog root's nodes are not counted", () =>
     panel.status === 0 && panelDoc !== null && (panelDoc.notes || []).some((n) => n.startsWith(NOTE_HEAD)));
   t("[ready] screenTagsWhy: the count below half (a foreign root then is not the reason), else the foreign root by size / by what it encloses", () =>

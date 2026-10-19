@@ -79,6 +79,7 @@ import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
+import { expectationSetProblem, outBaseOf, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
 export const PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"] as const;
@@ -1181,12 +1182,15 @@ export function behaviourLine(b: MeasuredBehaviour): string {
 export const BEHAVIOUR_OFF_ENV = "DESIGNTWIN_TEST_BEHAVIOUR_OFF";
 const USAGE =
   "usage:\n" +
-  `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
+  `  ${scriptCmd("verify-probe")} --expected design/verify/<Layer>__<id>.expected.json --url <url> [--out design/verify]\n` +
   "      [--ready <selector> | none] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
   "      [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]\n" +
   "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path → alias →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
-  "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
+  "      --out is the directory the files go to (default: the expectation's; a new one ends in \"/\"): <out> is <dir>/<the\n" +
+  "      expectation's set name>, never another name (any other --out basename is exit 2). A legacy-named expectation, or one\n" +
+  "      named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect) before anything\n" +
+  "      starts. --viewport defaults to the frame's w×h; --project to cwd.\n" +
   "      Every measurement belongs to a run, and measured.runId names it. --run <id> (from verify-screen --status … --new-run):\n" +
   "      that run. Without --run the probe starts a run of its own (`run <id>` on stderr) and ends it — `done` with the files\n" +
   "      (published as <Screen>.status.json beside the expectation), `failed` on an exit 3/4 (a re-run is a new run); refused\n" +
@@ -1540,10 +1544,23 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   const ownTags = f.ready === undefined && readyPick?.ready !== undefined && expectation && frameNodeId !== undefined ? ownTagsOf(expectation, frameNodeId) : null;
   const untaggedRoot: UntaggedRoot | undefined = ownTags !== null ? { ...ownTags, seen: false } : undefined;
 
-  const outBase = f.out ?? (f.expected ? path.join(path.dirname(f.expected), path.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  // the run's status is the one of the expectation's verify dir (design/verify/<S>), even when --out stages
-  // the files elsewhere; it is written to the run cache (liveStatusFile), never into the watched project tree
-  const statusBase = f.expected ? path.join(path.dirname(f.expected), path.basename(outBase)) : "";
+  // the expectation's set name names the files: a legacy name, or one of another node than its frame, is refused before
+  // any status is read or written and before anything is launched (--migrate renames a legacy set; --expect names the
+  // set by its frame). --out is the directory the files go to (default: the expectation's); the set's name is never the
+  // caller's — any other --out basename is refused, the older `<dir>/<set>` spelling taken with a note.
+  let outBase = "", statusBase = "";
+  if (!f.check && f.expected) {
+    const setProblem = expectationSetProblem(f.expected, frameNodeId, path.dirname(f.expected));
+    if (setProblem !== null) { console.error(`verify-probe: ${setProblem}`); return 2; }
+    const ob = outBaseOf(f.out, setNameOfFile(f.expected), path.dirname(f.expected));
+    if ("error" in ob) { console.error(`verify-probe: ${ob.error}`); return 2; }
+    if (ob.deprecated) console.error(`note  --out ${f.out ?? ""} names the set: pass the directory ${ob.dir}`);
+    outBase = ob.base;
+    // the run's status is the set's ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the same key
+    // --status, --wait and --compare use — even when --out writes the files elsewhere; it is written to the run cache
+    // (liveStatusFile), never into the watched project tree
+    statusBase = statusBaseOf(f.expected);
+  }
   const expSha = expBytes ? sha256Hex(expBytes) : undefined;
   // the run this measurement belongs to (none for --check): --run's, else a run of its own, started with the probe's
   // first status write and ended by its last — so every measured file the probe writes names its run
@@ -1934,7 +1951,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       `--phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
   }
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(path.dirname(outBase))}`);
   return 0;
 }
 
