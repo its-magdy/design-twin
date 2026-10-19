@@ -44,7 +44,7 @@ import {
   readableMeasured,
 } from "./doc-guards.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
+import { STATUS_PHASES, TERMINAL_PHASES, openRunSets, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
@@ -395,13 +395,14 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}…)`);
     for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
   }
-  // the set's name is its node's: <Layer>__<id> — the stem a set of the node in the verify dir already has (fixed: a frame
-  // renamed in Figma keeps it), else the indexed layer name's (the frame's own without an index). Never the input file's
+  // the set's name is its node's: <Layer>__<id> — the stem a set of the node in the verify dir already has, or a run of it
+  // open in the run cache (fixed: a frame renamed in Figma keeps it), else the indexed layer name's (the frame's own without an index). Never the input file's
   // basename or a name the caller typed: two names for one node would be two artefact sets.
   const nodeId = exp.frame.nodeId;
   if (!nodeId) { console.error(`error  the export's frame has no node id — its set cannot be named; re-pull the screen`); return 2; }
   const layerName = layers.find((l) => l.id === nodeId)?.name ?? exp.frame.name ?? "";
-  const k = nodeStem(expectDirOf(out), nodeId, layerName);
+  const kDir = expectDirOf(out);
+  const k = nodeStem(kDir, nodeId, layerName, openRunSets(kDir));
   if ("why" in k) { console.error(`error  ${k.why}`); return 2; }
   const setName = formatSetName(k.stem, variant);
   const ob = outBaseOf(out, setName, VERIFY_DIR);

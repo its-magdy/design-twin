@@ -162,10 +162,12 @@ export function setNodeId(verifyDir: string, name: string): string | null {
   return f.expectedId ?? f.reportId;
 }
 
-/** The stems of the grammar-named sets (base or variant) in `verifyDir` that carry `nodeId`, sorted. */
-export function canonicalStemsFor(verifyDir: string, nodeId: string): string[] {
+/** The stems of the grammar-named sets (base or variant) in `verifyDir` that carry `nodeId`, sorted. `open`: the names of
+ *  the dir's sets with a run open in the run cache (verify-run.ts openRunSets) — a run opened by --status before any of
+ *  its files exist names its set too. */
+export function canonicalStemsFor(verifyDir: string, nodeId: string, open: readonly string[] = []): string[] {
   const stems = new Set<string>();
-  for (const name of verifySets(verifyDir)) {
+  for (const name of [...verifySets(verifyDir), ...open]) {
     const p = parseSetName(name);
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
@@ -185,9 +187,10 @@ export function legacySetsFor(verifyDir: string, nodeId: string): string[] {
 
 /** The stem a known node's files take — the verify dir's existing one for it (fixed once a set exists), else
  *  screenStem(its layer name, id) — with its legacy-named sets; or why none (several grammar-named sets for the node).
- *  screenKey's answer once a query has named the node. */
-export function nodeStem(verifyDir: string | null, nodeId: string, layerName: string): { stem: string; existing: boolean; legacy: string[] } | { why: string } {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
+ *  screenKey's answer once a query has named the node. `open`: as canonicalStemsFor's — a set whose only trace is an
+ *  open run's live status fixes the stem as well. */
+export function nodeStem(verifyDir: string | null, nodeId: string, layerName: string, open: readonly string[] = []): { stem: string; existing: boolean; legacy: string[] } | { why: string } {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
   if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) — keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== undefined, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };

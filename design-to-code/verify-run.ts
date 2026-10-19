@@ -48,7 +48,7 @@ import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
 import type { ProcessStamp } from "../bridge/src/file-lock.ts";
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { setKey } from "./screen-key.ts";
+import { screenKey, setKey } from "./screen-key.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
 /** Every phase a status v2 can be in, in the order a run normally passes through them. */
@@ -175,6 +175,15 @@ export function readStatusAt(base: string): { file: string; status: VerifyStatus
     if (status !== null) return { file, status };
   }
   return null;
+}
+/** The sets of `verifyDir` with a run open (a v2 live status that has not ended) in its run cache, sorted — a run opened
+ *  by --status before any of its set's files exist is one of them. */
+export function openRunSets(verifyDir: string): string[] {
+  const SUFFIX = ".status.json";
+  let files: fs.Dirent[];
+  try { files = fs.readdirSync(runCacheDir(verifyDir), { withFileTypes: true }); } catch { return []; }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length))
+    .filter((name) => { const st = readStatusFile(liveStatusFile(path.join(verifyDir, name))); return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase); }).sort();
 }
 /** readStatusAt() without the file name. */
 export function readStatus(base: string): VerifyStatusV2 | "v1" | null {
@@ -460,18 +469,43 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
  * `<Layer>__<id>.<slug>` too, an artefact's file tail dropped), else the screen's base set through the export index's
  * exact stages (a node id, the exact layer name / title / plan header): the set's stem is fixed once it exists, so a frame
  * renamed in Figma mid-run still names the same live status. The verify dir is --dir, else the directory of a `screen`
- * given as a path, else design/verify. Refused: a query that names no set (the candidates listed), and at --status a node
- * with only legacy-named sets — a run under the new name would start a second set for it (--migrate first).
+ * given as a path, else design/verify. A set whose only trace is a run open in the run cache (opened by --status before
+ * any of its files exist) keeps its stem as well (openRunSets). Refused: a query that names no set (the candidates
+ * listed); at --status a node with only legacy-named sets — a run under the new name would start a second set for it
+ * (--migrate first); and at --status --new-run a set name with no files and no status whose node the export index names
+ * by another stem (the set --expect would write is that one). A legacy set's own name is refused too (--migrate renames
+ * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait), or ended
+ * (--status --run <its id> with done/failed/blocked) under the old name.
  */
-function runBase(screen: string, dir: string | undefined, at: "status" | "wait"): { base: string; notes: string[] } | { error: string } {
+type RunAt = { kind: "wait" } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
+function runBase(screen: string, dir: string | undefined, at: RunAt): { base: string; notes: string[] } | { error: string } {
   const asPath = dir === undefined && /[\\/]/.test(screen);
   const verifyDir = dir ?? (asPath ? path.dirname(screen) : VERIFY_DIR);
-  const k = setKey(asPath ? path.basename(screen) : screen, { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir });
+  const opts = { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir, openSets: openRunSets(verifyDir) };
+  const k = setKey(asPath ? path.basename(screen) : screen, opts);
   if (k.status === "unresolved") {
+    const open = k.legacySet !== undefined ? readStatus(path.join(verifyDir, k.legacySet)) : null;
+    if (k.legacySet !== undefined && open !== null && open !== "v1" && !TERMINAL_PHASES.includes(open.phase)) {
+      const S = k.legacySet;
+      const ends = at.kind === "wait" || (!at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase));
+      if (ends) return { base: path.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set — once run ${open.runId} ends, verify-screen --migrate renames it`] };
+      const { waitIt, endIt } = runCommands(path.join(verifyDir, S), open);
+      return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) — only that run's end is ` +
+        `written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
+    }
     return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
   }
+  // a fresh run under a set name no file or status holds yet: the name must be the one the export index gives the node,
+  // or --expect would later write the set under another
+  if (at.kind === "status" && at.newRun && k.via === "set name" && !k.existing && readStatus(path.join(verifyDir, k.name)) === null) {
+    const c = screenKey(k.nodeId, opts);
+    if (c.status === "resolved" && c.stem !== k.stem) {
+      const want = k.variant !== null ? `${c.stem}.${k.variant}` : c.stem;
+      return { error: `'${screen}' is not node ${k.nodeId}'s verify set: the export index names the node ${JSON.stringify(c.name ?? "")}, so its set is ${want} — pass --status ${shellArg(want)}` };
+    }
+  }
   const legacy = k.legacy.length ? `legacy-named verify set(s) ${k.legacy.join(", ")} of node ${k.nodeId}` : null;
-  if (legacy !== null && !k.existing && at === "status") {
+  if (legacy !== null && !k.existing && at.kind === "status") {
     return { error: `${legacy}, and none named ${k.stem} — a run of ${k.name} would start a second set for the node: run ${scriptCmd("verify-screen")} --migrate --apply` +
       `${dir !== undefined ? ` --dir ${shellArg(dir)}` : ""}, then --status ${shellArg(k.name)}` };
   }
@@ -533,7 +567,7 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   if (f.run !== undefined && !RUN_ID.test(f.run)) { console.error(`--run must be a run id (letters, digits, . : _ -), got '${f.run}'\n` + usage); return 2; }
   if (f.by !== undefined && f.by !== "agent" && f.by !== "orchestrator") { console.error(`--by must be agent or orchestrator (got '${f.by}')\n` + usage); return 2; }
   const by: StatusWriter = f.by === "orchestrator" ? "orchestrator" : "agent";
-  const key = runBase(screen, f.dir, "status");
+  const key = runBase(screen, f.dir, { kind: "status", phase: f.phase, run: f.run, newRun: !!f["new-run"] });
   if ("error" in key) { console.error(key.error); return 2; }
   for (const n of key.notes) console.error(n);
   const base = key.base;
@@ -639,7 +673,7 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
   if (!screen || f.run === undefined) { console.error("--wait needs the verify set and the run: --wait <Layer>__<id> --run <id>\n" + usage); return 2; }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
   if (timeout === null || stall === null || interval === null) { console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage); return 2; }
-  const key = runBase(screen, f.dir, "wait");
+  const key = runBase(screen, f.dir, { kind: "wait" });
   if ("error" in key) { console.error(key.error); return 2; }
   for (const n of key.notes) console.error(n);
   const base = key.base;

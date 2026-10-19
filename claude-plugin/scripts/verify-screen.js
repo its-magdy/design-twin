@@ -1462,9 +1462,9 @@ function setNodeId(verifyDir, name) {
   if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
   return f.expectedId ?? f.reportId;
 }
-function canonicalStemsFor(verifyDir, nodeId) {
+function canonicalStemsFor(verifyDir, nodeId, open = []) {
   const stems = /* @__PURE__ */ new Set();
-  for (const name of verifySets(verifyDir)) {
+  for (const name of [...verifySets(verifyDir), ...open]) {
     const p = parseSetName(name);
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
@@ -1473,8 +1473,8 @@ function canonicalStemsFor(verifyDir, nodeId) {
 function legacySetsFor(verifyDir, nodeId) {
   return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
 }
-function nodeStem(verifyDir, nodeId, layerName) {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
+function nodeStem(verifyDir, nodeId, layerName, open = []) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
   if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
@@ -1637,7 +1637,8 @@ var FILE_TAIL_RE2 = /\.(?:expected\.prev|expected|report|measured|status|evidenc
 function screenKey(query, opts = {}) {
   const q = String(query ?? "").trim();
   const verifyDir = opts.verifyDir ?? null;
-  const stemsOf = (id) => verifyDir ? canonicalStemsFor(verifyDir, id) : [];
+  const open = opts.openSets ?? [];
+  const stemsOf = (id) => verifyDir ? canonicalStemsFor(verifyDir, id, open) : [];
   const legacyOf = (id) => verifyDir ? legacySetsFor(verifyDir, id) : [];
   const exportDir = opts.exportDir ?? null;
   if (exportDir && fs12.existsSync(path10.join(exportDir, "pages", "index.json"))) {
@@ -1646,7 +1647,7 @@ function screenKey(query, opts = {}) {
       const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage \u2014 pass the node id` : r.status === "needs-confirmation" ? `'${q}' matched only ${r.stage === "text search" ? "by text search" : 'ignoring spaces, "-" and "_"'} \u2014 pass the node id or the exact name` : `'${q}' matches no screen in ${exportDir}`;
       return { status: "unresolved", why, candidates: r.candidates };
     }
-    const k = nodeStem(verifyDir, r.row.id, r.row.name);
+    const k = nodeStem(verifyDir, r.row.id, r.row.name, open);
     if ("why" in k) return { status: "unresolved", why: k.why, candidates: [] };
     return { status: "resolved", nodeId: r.row.id, stem: k.stem, via: r.stage, name: r.row.name, existing: k.existing, legacy: k.legacy };
   }
@@ -1672,13 +1673,13 @@ function setKey(query, opts = {}) {
   const lit = base.replace(FILE_TAIL_RE2, "");
   const p = parseSetName(lit);
   if (p !== null) {
-    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId) : [];
+    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId, opts.openSets ?? []) : [];
     const others = stems.filter((s) => s !== p.stem);
     if (others.length) return { status: "unresolved", why: `node ${p.nodeId} already has a verify set under another name (${others.join(", ")}) \u2014 pass that name`, candidates: [] };
     return { status: "resolved", nodeId: p.nodeId, stem: p.stem, variant: p.variant, name: lit, via: "set name", existing: stems.includes(p.stem), legacy: verifyDir ? legacySetsFor(verifyDir, p.nodeId) : [] };
   }
   if (verifyDir && lit && verifySets(verifyDir).includes(lit)) {
-    return { status: "unresolved", why: `${lit} is a legacy-named verify set \u2014 run verify-screen --migrate --apply --dir ${verifyDir}, then pass the name it prints (<Layer>__<id>)`, candidates: [] };
+    return { status: "unresolved", why: `${lit} is a legacy-named verify set \u2014 run verify-screen --migrate --apply --dir ${verifyDir}, then pass the name it prints (<Layer>__<id>)`, candidates: [], legacySet: lit };
   }
   const k = screenKey(lit !== base ? lit : q, opts);
   if (k.status !== "resolved") return k;
@@ -1749,6 +1750,19 @@ function readStatusAt(base) {
     if (status !== null) return { file, status };
   }
   return null;
+}
+function openRunSets(verifyDir) {
+  const SUFFIX = ".status.json";
+  let files;
+  try {
+    files = fs13.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path11.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
 }
 function readStatus(base) {
   const r = readStatusAt(base);
@@ -1925,12 +1939,28 @@ function prepareStaged(stageDir, destDir) {
 function runBase(screen, dir, at) {
   const asPath = dir === void 0 && /[\\/]/.test(screen);
   const verifyDir = dir ?? (asPath ? path11.dirname(screen) : VERIFY_DIR);
-  const k = setKey(asPath ? path11.basename(screen) : screen, { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir });
+  const opts = { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir, openSets: openRunSets(verifyDir) };
+  const k = setKey(asPath ? path11.basename(screen) : screen, opts);
   if (k.status === "unresolved") {
+    const open = k.legacySet !== void 0 ? readStatus(path11.join(verifyDir, k.legacySet)) : null;
+    if (k.legacySet !== void 0 && open !== null && open !== "v1" && !TERMINAL_PHASES.includes(open.phase)) {
+      const S = k.legacySet;
+      const ends = at.kind === "wait" || !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
+      if (ends) return { base: path11.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set \u2014 once run ${open.runId} ends, verify-screen --migrate renames it`] };
+      const { waitIt, endIt } = runCommands(path11.join(verifyDir, S), open);
+      return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) \u2014 only that run's end is written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
+    }
     return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
   }
+  if (at.kind === "status" && at.newRun && k.via === "set name" && !k.existing && readStatus(path11.join(verifyDir, k.name)) === null) {
+    const c = screenKey(k.nodeId, opts);
+    if (c.status === "resolved" && c.stem !== k.stem) {
+      const want = k.variant !== null ? `${c.stem}.${k.variant}` : c.stem;
+      return { error: `'${screen}' is not node ${k.nodeId}'s verify set: the export index names the node ${JSON.stringify(c.name ?? "")}, so its set is ${want} \u2014 pass --status ${shellArg(want)}` };
+    }
+  }
   const legacy2 = k.legacy.length ? `legacy-named verify set(s) ${k.legacy.join(", ")} of node ${k.nodeId}` : null;
-  if (legacy2 !== null && !k.existing && at === "status") {
+  if (legacy2 !== null && !k.existing && at.kind === "status") {
     return { error: `${legacy2}, and none named ${k.stem} \u2014 a run of ${k.name} would start a second set for the node: run ${scriptCmd("verify-screen")} --migrate --apply${dir !== void 0 ? ` --dir ${shellArg(dir)}` : ""}, then --status ${shellArg(k.name)}` };
   }
   return { base: path11.join(verifyDir, k.name), notes: legacy2 !== null ? [`note  ${legacy2} \u2014 verify-screen --migrate renames them to ${k.stem}`] : [] };
@@ -2002,7 +2032,7 @@ function statusRun(screen, f, usage) {
     return 2;
   }
   const by = f.by === "orchestrator" ? "orchestrator" : "agent";
-  const key = runBase(screen, f.dir, "status");
+  const key = runBase(screen, f.dir, { kind: "status", phase: f.phase, run: f.run, newRun: !!f["new-run"] });
   if ("error" in key) {
     console.error(key.error);
     return 2;
@@ -2106,7 +2136,7 @@ async function waitMain(screen, f, usage) {
     console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage);
     return 2;
   }
-  const key = runBase(screen, f.dir, "wait");
+  const key = runBase(screen, f.dir, { kind: "wait" });
   if ("error" in key) {
     console.error(key.error);
     return 2;
@@ -7253,7 +7283,8 @@ function expectMain(files, flags, USAGE) {
     return 2;
   }
   const layerName = layers.find((l) => l.id === nodeId)?.name ?? exp.frame.name ?? "";
-  const k = nodeStem(expectDirOf(out), nodeId, layerName);
+  const kDir = expectDirOf(out);
+  const k = nodeStem(kDir, nodeId, layerName, openRunSets(kDir));
   if ("why" in k) {
     console.error(`error  ${k.why}`);
     return 2;

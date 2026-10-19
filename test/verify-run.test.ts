@@ -769,6 +769,83 @@ await block("[key] refusal commands:", async () => {
     [ro, nc].every((m) => /of Plots__1_1[ :]/.test(m) && m.includes("--wait Plots__1_1 --run run-old") && m.includes("--status Plots__1_1 --phase failed --run run-old") && !/ Plots /.test(m) && !/of Plots[ :]/.test(m)));
 });
 
+// A project's export index (design/export/pages/index.json) with these layer rows.
+const writeIndex = (cwd: string, rows: Array<{ name: string; id: string }>): void => {
+  const f = path.join(cwd, "design", "export", "pages", "index.json");
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: rows.map((r) => ({ ...r, type: "FRAME", page: "P", file: `pages/P/${r.id.replace(":", "_")}.json` })) }));
+};
+
+console.log("[key] a status-only run keeps its set's stem through a Figma rename:");
+await block("[key] status-only run:", async () => {
+  const { cwd, dir, cli } = project();
+  writeIndex(cwd, [{ name: "Old", id: "3:3" }]);
+  const q = cli("--status", "Old__3_3", "--phase", "queued", "--new-run");
+  const runId = /^run (\S+) rev 1$/m.exec(q.stdout)?.[1] ?? "";
+  const oldLive = VR.liveStatusFile(path.join(dir, "Old__3_3")), newLive = VR.liveStatusFile(path.join(dir, "New__3_3"));
+  safe(`[key] --status Old__3_3 --new-run opens a run with no set file yet (got ${q.status}: ${q.stderr.trim()})`, () => q.status === 0 && runId !== "" && readStatusFile(oldLive)?.runId === runId);
+  safe("[key] openRunSets names the set of that open run", () => JSON.stringify(VR.openRunSets(dir)) === JSON.stringify(["Old__3_3"]));
+  // the frame is renamed in Figma and re-pulled: the node id and the new name still reach the open run's status
+  writeIndex(cwd, [{ name: "New", id: "3:3" }]);
+  const byId = cli("--status", "3:3", "--phase", "starting", "--run", runId);
+  const byName = cli("--status", "New", "--phase", "renderer-found");
+  safe(`[key] REQUIRED: the node id (--run) and the new name continue run ${runId} in Old__3_3's live status — no New__3_3 status or lock (got ${byId.status}: ${byId.stdout.trim()} / ${byName.status}: ${byName.stdout.trim()})`, () =>
+    byId.status === 0 && byId.stdout.trim() === `run ${runId} rev 2` && byName.status === 0 && byName.stdout.trim() === `run ${runId} rev 3`
+    && readStatusFile(oldLive)?.rev === 3 && !fs.existsSync(newLive) && !fs.existsSync(newLive + ".lock"));
+  // --expect for the node names the set by the open run's stem too
+  const screen = path.join(cwd, "New__3_3.json");
+  fs.writeFileSync(screen, JSON.stringify({ exportedAt: "2026-10-01T00:00:00.000Z", screen: "New", nodeId: "3:3", nodes: [{ type: "FRAME", id: "3:3", name: "New", children: [] }] }));
+  const ex = cli("--expect", screen);
+  safe(`[key] --expect for the node writes Old__3_3.expected.json, the open run's set, never New__3_3 (got ${ex.status}: ${ex.stderr.trim().split("\n")[0] ?? ""})`, () =>
+    ex.status === 0 && fs.existsSync(path.join(dir, "Old__3_3.expected.json")) && !fs.existsSync(path.join(dir, "New__3_3.expected.json")));
+});
+
+console.log("[key] --status --new-run under a set name the export index does not give its node:");
+await block("[key] fresh set name:", async () => {
+  const { cwd, dir, cli } = project();
+  writeIndex(cwd, [{ name: "Plots", id: "1:1" }, { name: "Garden Beds", id: "4:4" }]);
+  const wrong = cli("--status", "Beds__4_4", "--phase", "queued", "--new-run");
+  safe(`[key] --status Beds__4_4 --new-run, no file or status of it, the index names 4:4 'Garden Beds' → exit 2 naming Garden_Beds__4_4, nothing written (got ${wrong.status}: ${wrong.stderr.trim()})`, () =>
+    wrong.status === 2 && /the export index names the node "Garden Beds", so its set is Garden_Beds__4_4 — pass --status Garden_Beds__4_4/.test(wrong.stderr)
+    && !fs.existsSync(VR.liveStatusFile(path.join(dir, "Beds__4_4"))));
+  const variant = cli("--status", "Beds__4_4.dark", "--phase", "queued", "--new-run");
+  safe(`[key] …a variant of it names the canonical variant (got ${variant.status}: ${variant.stderr.trim()})`, () => variant.status === 2 && /its set is Garden_Beds__4_4\.dark/.test(variant.stderr));
+  const right = cli("--status", "Garden_Beds__4_4", "--phase", "queued", "--new-run");
+  safe(`[key] …the canonical name opens the run (got ${right.status}: ${right.stderr.trim()})`, () => right.status === 0 && readStatusFile(VR.liveStatusFile(path.join(dir, "Garden_Beds__4_4")))?.phase === "queued");
+  // an existing set keeps its stem whatever the index says now (Plots__1_1 exists; the frame is renamed)
+  writeIndex(cwd, [{ name: "Garden Plots", id: "1:1" }, { name: "Garden Beds", id: "4:4" }]);
+  const kept = cli("--status", "Plots__1_1", "--phase", "queued", "--new-run");
+  safe(`[key] …an existing set's name is taken at --new-run though the index renamed its frame (got ${kept.status}: ${kept.stderr.trim()})`, () => kept.status === 0);
+});
+
+console.log("[key] a legacy-named set with an open run: its run can end under the old name, then --migrate renames it:");
+await block("[key] legacy set, open run:", async () => {
+  const { cwd, dir, cli } = project();
+  writeIndex(cwd, [{ name: "Plots", id: "1:1" }, { name: "Sheds", id: "2:2" }]);
+  fs.writeFileSync(path.join(dir, "Shed.expected.json"), JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "2:2", name: "Sheds" }, nodes: [] }));
+  const legacyBase = path.join(dir, "Shed");
+  VR.writeStatus(legacyBase, { runId: "run-legacy", phase: "measuring", by: "agent" });
+  const fresh = cli("--status", "Shed", "--phase", "queued", "--new-run");
+  safe(`[key] --status Shed --new-run → exit 2, the open run named with how to end it (got ${fresh.status}: ${fresh.stderr.trim()})`, () =>
+    fresh.status === 2 && /Shed is a legacy-named verify set, and its run run-legacy is open \(phase measuring\)/.test(fresh.stderr) && /--status Shed --phase failed --run run-legacy/.test(fresh.stderr)
+    && readStatusFile(VR.liveStatusFile(legacyBase))?.rev === 1);
+  const mid = cli("--status", "Shed", "--phase", "measured", "--run", "run-legacy");
+  safe(`[key] --status Shed --phase measured --run <its run> (not an end) → exit 2, nothing written (got ${mid.status})`, () => mid.status === 2 && readStatusFile(VR.liveStatusFile(legacyBase))?.rev === 1);
+  const other = cli("--status", "Shed", "--phase", "failed", "--run", "run-other");
+  safe(`[key] --status Shed --phase failed --run <another run> → exit 2 (got ${other.status})`, () => other.status === 2 && readStatusFile(VR.liveStatusFile(legacyBase))?.rev === 1);
+  const w = cli("--wait", "Shed", "--run", "run-legacy", "--timeout", "0.3", "--interval", "0.1");
+  safe(`[key] --wait Shed waits on the legacy set's live status, with the --migrate note (got ${w.status}: ${w.stderr.trim()})`, () =>
+    w.status === 5 && w.stderr.includes(`wait  run run-legacy on ${VR.liveStatusFile(legacyBase)}`) && /note {2}Shed is a legacy-named verify set — once run run-legacy ends, verify-screen --migrate renames it/.test(w.stderr));
+  const early = cli("--migrate", "--apply");
+  safe(`[key] --migrate --apply while the run is open skips the set (got ${early.status})`, () => early.status === 1 && fs.existsSync(path.join(dir, "Shed.expected.json")));
+  const end = cli("--status", "Shed", "--phase", "failed", "--run", "run-legacy", "--detail", "verifier gone");
+  safe(`[key] --status Shed --phase failed --run run-legacy ends the run → exit 0 (got ${end.status}: ${end.stderr.trim()})`, () =>
+    end.status === 0 && readStatusFile(VR.liveStatusFile(legacyBase))?.phase === "failed");
+  const mig = cli("--migrate", "--apply");
+  safe(`[key] …then --migrate --apply renames Shed to Sheds__2_2 (got ${mig.status}: ${mig.stdout.trim()} ${mig.stderr.trim()})`, () =>
+    mig.status === 0 && fs.existsSync(path.join(dir, "Sheds__2_2.expected.json")) && !fs.existsSync(path.join(dir, "Shed.expected.json")));
+});
+
 console.log("verify-screen --wait:");
 await block("verify-screen --wait:", async () => {
   const { dir, base, live, cli } = project();

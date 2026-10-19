@@ -438,9 +438,9 @@ function setNodeId(verifyDir, name) {
   if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
   return f.expectedId ?? f.reportId;
 }
-function canonicalStemsFor(verifyDir, nodeId) {
+function canonicalStemsFor(verifyDir, nodeId, open = []) {
   const stems = /* @__PURE__ */ new Set();
-  for (const name of verifySets(verifyDir)) {
+  for (const name of [...verifySets(verifyDir), ...open]) {
     const p = parseSetName(name);
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
@@ -449,8 +449,8 @@ function canonicalStemsFor(verifyDir, nodeId) {
 function legacySetsFor(verifyDir, nodeId) {
   return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
 }
-function nodeStem(verifyDir, nodeId, layerName) {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
+function nodeStem(verifyDir, nodeId, layerName, open = []) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
   if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };

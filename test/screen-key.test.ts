@@ -197,6 +197,12 @@ console.log("\n[setKey] a query to the set --status / --wait key a run by:");
   put(path.join(verifyDir, "Shed.expected.json"), expectation("2:2", "Sheds"));
   const legacyName = sk("Shed");
   check(`[setKey] a legacy-named set's own name → unresolved, with --migrate (got ${legacyName})`, /^unresolved: Shed is a legacy-named verify set — run verify-screen --migrate --apply/.test(legacyName));
+  const legacyKey = setKey("Shed.expected.json", { exportDir, verifyDir });
+  check("[setKey] …and says which legacy set it named (legacySet)", legacyKey.status === "unresolved" && legacyKey.legacySet === "Shed");
+  // a run open in the run cache of a set with no files yet (openSets) fixes the node's stem like a set on disk
+  const withOpen = (q: string): string => { const k = setKey(q, { exportDir, verifyDir, openSets: ["Shed_Run__2_2"] }); return k.status === "resolved" ? `${k.name} ${k.existing}` : `unresolved: ${k.why}`; };
+  check(`[setKey] an open run's set fixes the stem: the name and the id → Shed_Run__2_2, existing (got ${withOpen("Sheds")} / ${withOpen("2:2")})`,
+    withOpen("Sheds") === "Shed_Run__2_2 true" && withOpen("2:2") === "Shed_Run__2_2 true" && /^unresolved: node 2:2 already has a verify set under another name \(Shed_Run__2_2\)/.test(withOpen("Sheds__2_2")));
   const legacyOnly = setKey("Sheds", { exportDir, verifyDir });
   check(`[setKey] a node with only a legacy set → its new stem, not existing, the legacy set listed (got ${JSON.stringify(legacyOnly)})`,
     legacyOnly.status === "resolved" && legacyOnly.name === "Sheds__2_2" && !legacyOnly.existing && JSON.stringify(legacyOnly.legacy) === JSON.stringify(["Shed"]));
