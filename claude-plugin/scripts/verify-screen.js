@@ -5746,6 +5746,13 @@ function reportToMarkdown(r) {
   for (const l of r.limits || []) L.push(`- ${l}`);
   return L.join("\n") + "\n";
 }
+function artifactText(a) {
+  if (typeof a === "string") return mdText(a);
+  if (!a.path) return "";
+  const listed2 = "listedAs" in a && a.listedAs ? ` (listed as ${mdText(a.listedAs)})` : "";
+  const missing = "exists" in a && !a.exists ? " (missing on disk)" : "";
+  return mdText(a.path) + listed2 + missing;
+}
 function headMarkdown(r) {
   const L = [];
   L.push(`# Verify \u2014 ${r.screen}`, "");
@@ -5757,6 +5764,8 @@ function headMarkdown(r) {
   if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}\u2026, ${rc.source})${rc.matchesPlan === true ? " \u2014 the plan's navigate" : rc.matchesPlan === false ? " \u2014 **not the plan's navigate**" : ""}.`, "");
   const b = r.inputs && r.inputs.build;
   L.push(b && b !== "unknown" ? `Build served: ${b.mode} ${b.url} \xB7 ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}\u2026${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} \xB7 git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}` : "Build served: build identity unknown (the measured file records none \u2014 measured by a hand-written or older probe).", "");
+  const arts = (r.artifacts || []).map(artifactText).filter((t) => t !== "");
+  if (arts.length) L.push(`Artifacts: ${arts.join(", ")}`, "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");
     for (const w of r.why) L.push(`- ${w}`);

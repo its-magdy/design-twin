@@ -572,6 +572,10 @@ console.log("CLI --compare reads the set's ONE status base, and a migrated set's
     m.r.status === 0 && !!row && row.path === `design/verify/${S}.png` && row.exists === true && row.image === true
     && row.listedAs === "design/verify/Garden.png" && row.sha256 === shaOf(`design/verify/${S}.png`) && !noShot(m.rep)
     && (m.rep?.probe?.inputNotes ?? []).some((n) => n.startsWith("design/verify/Garden.png is listed under the set's name before --migrate (run run-m)")) && /^note {2}design\/verify\/Garden\.png is listed/m.test(m.r.stderr));
+  const md = (): string => { try { return fs.readFileSync(path.join(dir, `${S}.report.md`), "utf8"); } catch { return ""; } };
+  const mdArts = md().split("\n").find((l) => l.startsWith("Artifacts: "));
+  safe(`[migrated] report.md lists the artefact under its new name and says what the measured file listed (got ${JSON.stringify(mdArts)})`, () =>
+    mdArts === `Artifacts: design/verify/${S}.png (listed as design/verify/Garden.png)`);
   // [hint] the advice names the set's new name: a hand-written measured file (no run) beside that done run
   {
     fs.writeFileSync(path.join(cwd, measRel), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: [`design/verify/${S}.png`] })));
@@ -583,6 +587,8 @@ console.log("CLI --compare reads the set's ONE status base, and a migrated set's
   }
   const otherRun = migratedRun({}, { runId: "run-other" });
   safe("[migrated] the status is another run's → no fallback: the row stays missing, 'no screenshot'", () => rowOf(otherRun.rep)?.exists === false && noShot(otherRun.rep));
+  safe("[migrated] …and report.md lists the listed path as missing on disk, no 'listed as'", () =>
+    md().split("\n").includes("Artifacts: design/verify/Garden.png (missing on disk)"));
   const otherSha = migratedRun({}, { measuredSha256: "f".repeat(64) });
   safe("[migrated] the status recorded another measured file (sha) → no fallback, 'no screenshot'", () => rowOf(otherSha.rep)?.exists === false && noShot(otherSha.rep));
   const otherName = migratedRun({ artifacts: ["design/verify/Other.png"] });

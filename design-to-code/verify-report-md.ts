@@ -116,8 +116,17 @@ export function reportToMarkdown(r: VerifyReportV2): string {
   for (const l of r.limits || []) L.push(`- ${l}`);
   return L.join("\n") + "\n";
 }
-/** The title, the three headlines, what was measured against what, how the probe reached the screen, the build served
- *  and why the verdict is not a pass. */
+/** One of report.artifacts as the md lists it: its path; "(listed as <old>)" when --compare read it under the set's migrated
+ *  name (ArtifactCheck.listedAs); "(missing on disk)" when --compare did not find it. */
+function artifactText(a: VerifyReportV2["artifacts"][number]): string {
+  if (typeof a === "string") return mdText(a);
+  if (!a.path) return "";
+  const listed = "listedAs" in a && a.listedAs ? ` (listed as ${mdText(a.listedAs)})` : "";
+  const missing = "exists" in a && !a.exists ? " (missing on disk)" : "";
+  return mdText(a.path) + listed + missing;
+}
+/** The title, the three headlines, what was measured against what, how the probe reached the screen, the build served,
+ *  the artefacts the report lists and why the verdict is not a pass. */
 function headMarkdown(r: VerifyReportV2): string[] {
   const L: string[] = [];
   L.push(`# Verify — ${r.screen}`, "");
@@ -136,6 +145,8 @@ function headMarkdown(r: VerifyReportV2): string[] {
     ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}…${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} · git ` +
       `${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
     : "Build served: build identity unknown (the measured file records none — measured by a hand-written or older probe).", "");
+  const arts = (r.artifacts || []).map(artifactText).filter((t) => t !== "");
+  if (arts.length) L.push(`Artifacts: ${arts.join(", ")}`, "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");
     for (const w of r.why) L.push(`- ${w}`);
