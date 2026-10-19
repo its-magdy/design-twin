@@ -48,7 +48,7 @@ import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { screenKey, setKey } from "./screen-key.ts";
-import { STATUS_PHASES, STATUS_SCHEMA, TERMINAL_PHASES, isPhase, liveStatusFile, openRunSets, readStatusFile } from "./verify-status.ts";
+import { STATUS_PHASES, STATUS_SCHEMA, TERMINAL_PHASES, isPhase, liveStatusFile, openRunSets, readStatusFile, runCommands } from "./verify-status.ts";
 import type { OwnRunStamp, ReplacedRun, StatusPhase, StatusWriter, VerifyStatusV2 } from "./verify-status.ts";
 
 // the status shape, its live file and the open-run listing (verify-status.ts), re-exported for the writers' callers
@@ -158,12 +158,6 @@ export class RunOpen extends Error {
         `or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
-}
-/** The commands a refusal names for the open run `open` of `<base>`: wait for it, and end it `failed` — by the set's name,
- *  basename(base) (a migrated set's status still says its old name in `screen`). */
-function runCommands(base: string, open: VerifyStatusV2): { waitIt: string; endIt: string } {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path.basename(base)), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
-  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 /** How a refusal names another probe's own run that is open: when and by which process it started — nobody waits for
  *  that. `why`: the probe that started it is gone or past the run's deadline (abandonedRun), said after it. */

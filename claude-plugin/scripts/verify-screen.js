@@ -1364,8 +1364,56 @@ function isMainFallback(metaUrl) {
 }
 
 // design-to-code/verify-sets.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
+import path9 from "node:path";
+
+// design-to-code/verify-status.ts
 import path8 from "node:path";
+import fs10 from "node:fs";
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var MEASURED_PHASES = ["measured", "done"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), path8.basename(base) + ".status.json");
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path8.basename(base)), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function openRunSets(verifyDir) {
+  const SUFFIX = ".status.json";
+  let files;
+  try {
+    files = fs10.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path8.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
+}
+
+// design-to-code/verify-sets.ts
 var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
 var MAX_SLUG = 32;
 var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -1407,33 +1455,33 @@ function nodeIdFromSetName(name) {
 }
 var EXPECTED_SUFFIX = ".expected.json";
 function setNameOfFile(file) {
-  const b = path8.basename(file);
+  const b = path9.basename(file);
   return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
 }
 function statusBaseOf(expectedFile) {
-  return path8.join(path8.dirname(expectedFile), setNameOfFile(expectedFile));
+  return path9.join(path9.dirname(expectedFile), setNameOfFile(expectedFile));
 }
-var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var endsInSep = (p) => TRAILING_SEP.test(p);
 var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
 function outBaseOf(out, setName, defaultDir) {
-  if (out === void 0) return { base: path8.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  if (out === void 0) return { base: path9.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
   let st = null;
   try {
-    st = fs10.statSync(out);
+    st = fs11.statSync(out);
   } catch {
   }
-  if (st?.isDirectory()) return { base: path8.join(out, setName), dir: out, deprecated: false };
+  if (st?.isDirectory()) return { base: path9.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (endsInSep(out) || path8.resolve(out) === path8.resolve(VERIFY_DIR)) return { base: path8.join(out, setName), dir: trimSep(out), deprecated: false };
-  if (path8.basename(out) === setName) return { base: out, dir: path8.dirname(out), deprecated: true };
+  if (endsInSep(out) || path9.resolve(out) === path9.resolve(VERIFY_DIR)) return { base: path9.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (path9.basename(out) === setName) return { base: out, dir: path9.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
 }
 function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   const name = setNameOfFile(expectedFile);
   const p = parseSetName(name);
-  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path8.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path9.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
@@ -1442,7 +1490,7 @@ var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs10.readdirSync(verifyDir);
+    files = fs11.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -1459,9 +1507,9 @@ function verifySets(verifyDir) {
 }
 function setFacts(verifyDir, name) {
   const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path8.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(path9.join(verifyDir, name + ".expected.json"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path8.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(path9.join(verifyDir, name + ".report.json"), isJsonObject);
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 function setNodeId(verifyDir, name) {
@@ -1477,6 +1525,15 @@ function canonicalStemsFor(verifyDir, nodeId, open = []) {
   }
   return [...stems].sort();
 }
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path9.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file in ${verifyDir} yet; end it: ${runCommands(path9.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
 function variantsOf(verifyDir, stem) {
   return verifySets(verifyDir).flatMap((name) => {
     const p = parseSetName(name);
@@ -1488,51 +1545,9 @@ function legacySetsFor(verifyDir, nodeId) {
 }
 function nodeStem(verifyDir, nodeId, layerName, open = []) {
   const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
-  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
+  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) \u2014 keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
-}
-
-// design-to-code/verify-status.ts
-import path9 from "node:path";
-import fs11 from "node:fs";
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var MEASURED_PHASES = ["measured", "done"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
-var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
-var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path9.join(runCacheDir(path9.dirname(base)), path9.basename(base) + ".status.json");
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
-    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
-    if (isVerifyStatusV2(kept)) return kept;
-  }
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
-}
-function openRunSets(verifyDir) {
-  const SUFFIX = ".status.json";
-  let files;
-  try {
-    files = fs11.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path9.join(verifyDir, name)));
-    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
-  }).sort();
 }
 
 // design-to-code/resolve-screen.ts
@@ -1695,6 +1710,7 @@ function screenKey(query, opts = {}) {
   const open = opts.openSets ?? [];
   const stemsOf = (id) => verifyDir ? canonicalStemsFor(verifyDir, id, open) : [];
   const legacyOf = (id) => verifyDir ? legacySetsFor(verifyDir, id) : [];
+  const holders = (names) => verifyDir ? stemHolders(verifyDir, names, open) : names.join(", ");
   const exportDir = opts.exportDir ?? null;
   if (exportDir && fs13.existsSync(path11.join(exportDir, "pages", "index.json"))) {
     const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
@@ -1710,14 +1726,14 @@ function screenKey(query, opts = {}) {
   const fromStem = STEM_RE.test(lit) ? nodeIdFromStem(lit) : null;
   if (fromStem !== null) {
     const others = [...stemsOf(fromStem).filter((s) => s !== lit), ...legacyOf(fromStem)];
-    if (others.length) return { status: "unresolved", why: `node ${fromStem} already has a verify set under another name (${others.join(", ")}) \u2014 pass that name, or run verify-screen --migrate`, candidates: [] };
+    if (others.length) return { status: "unresolved", why: `node ${fromStem} already has a verify set under another name (${holders(others)}) \u2014 pass that name, or run verify-screen --migrate`, candidates: [] };
     return { status: "resolved", nodeId: fromStem, stem: lit, via: "canonical stem", name: null, existing: stemsOf(fromStem).includes(lit), legacy: [] };
   }
   if (isNodeId(q)) {
     const stems = stemsOf(q);
     const only = stems.length === 1 ? stems[0] : void 0;
     if (only !== void 0) return { status: "resolved", nodeId: q, stem: only, via: "node id (existing verify set)", name: null, existing: true, legacy: legacyOf(q) };
-    return { status: "unresolved", why: stems.length > 1 ? `node ${q} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` : `no export index to name node ${q} by \u2014 pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
+    return { status: "unresolved", why: stems.length > 1 ? `node ${q} has ${stems.length} verify sets under different names (${holders(stems)}) \u2014 keep one` : `no export index to name node ${q} by \u2014 pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
   }
   return { status: "unresolved", why: `no export index to resolve '${q}' against \u2014 pass the stem (<Layer>__<id>), or the export dir`, candidates: [] };
 }
@@ -1728,9 +1744,10 @@ function setKey(query, opts = {}) {
   const lit = base.replace(FILE_TAIL_RE2, "");
   const p = parseSetName(lit);
   if (p !== null) {
-    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId, opts.openSets ?? []) : [];
+    const open = opts.openSets ?? [];
+    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId, open) : [];
     const others = stems.filter((s) => s !== p.stem);
-    if (others.length) return { status: "unresolved", why: `node ${p.nodeId} already has a verify set under another name (${others.join(", ")}) \u2014 pass that name`, candidates: [] };
+    if (others.length) return { status: "unresolved", why: `node ${p.nodeId} already has a verify set under another name (${verifyDir ? stemHolders(verifyDir, others, open) : others.join(", ")}) \u2014 pass that name`, candidates: [] };
     return { status: "resolved", nodeId: p.nodeId, stem: p.stem, variant: p.variant, name: lit, via: "set name", existing: stems.includes(p.stem), legacy: verifyDir ? legacySetsFor(verifyDir, p.nodeId) : [] };
   }
   if (verifyDir && lit && verifySets(verifyDir).includes(lit)) {
@@ -1802,10 +1819,6 @@ var RunOpen = class extends Error {
     this.name = "RunOpen";
   }
 };
-function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path12.basename(base)), id = shellArg(open.runId), dir = shellArg(path12.resolve(path12.dirname(base)));
-  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
-}
 function ownRunOpen(open, o, why) {
   return `is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase})` + (why !== void 0 ? `, but the probe that started it ${why}` : "");
 }

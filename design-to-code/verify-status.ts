@@ -1,5 +1,6 @@
 // verify-status.ts — a verification run's status v2 as a reader sees it: its shape (isVerifyStatusV2), where its live
-// file is in the run cache (liveStatusFile), and which sets have a run open there (openRunSets). verify-run.ts writes
+// file is in the run cache (liveStatusFile), which sets have a run open there (openRunSets), and the commands that wait for
+// or end an open run (runCommands). verify-run.ts writes
 // statuses and re-exports all of this; a module of its own so readers that only ask which runs are open (resolve-screen,
 // plan-skeleton — a set whose only trace is an open run keeps its stem) do not bundle verify-run.
 import path from "node:path";
@@ -7,6 +8,7 @@ import fs from "node:fs";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { runCacheDir } from "./run-cache.ts";
+import { scriptCmd, shellArg } from "./cli-args.ts";
 import type { ProcessStamp } from "../bridge/src/file-lock.ts";
 
 export const STATUS_SCHEMA = "designtwin/verify-status@2";
@@ -85,6 +87,13 @@ export function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
     if (isVerifyStatusV2(kept)) return kept;
   }
   return isJsonObject(r.doc) && r.doc.schema === undefined && typeof r.doc.phase === "string" ? "v1" : null;
+}
+
+/** The commands a refusal names for the open run `open` of `<base>`: wait for it, and end it `failed` — by the set's name,
+ *  basename(base) (a migrated set's status still says its old name in `screen`). */
+export function runCommands(base: string, open: { runId: string }): { waitIt: string; endIt: string } {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path.basename(base)), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 
 /** The sets of `verifyDir` with a run open (a v2 live status that has not ended) in its run cache, sorted — a run opened

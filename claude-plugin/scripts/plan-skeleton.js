@@ -321,6 +321,7 @@ var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code 
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
@@ -1346,8 +1347,55 @@ function parsePlanText(raw, file) {
 }
 
 // design-to-code/verify-sets.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
+import path8 from "node:path";
+
+// design-to-code/verify-status.ts
 import path7 from "node:path";
+import fs9 from "node:fs";
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), path7.basename(base) + ".status.json");
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path7.basename(base)), id = shellArg(open.runId), dir = shellArg(path7.resolve(path7.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function openRunSets(verifyDir) {
+  const SUFFIX = ".status.json";
+  let files;
+  try {
+    files = fs9.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path7.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
+}
+
+// design-to-code/verify-sets.ts
 var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
 var MAX_SLUG = 32;
 var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -1363,13 +1411,13 @@ function parseSetName(name) {
   if (variant !== null && !isVariantSlug(variant)) return null;
   return { stem, nodeId, variant };
 }
-var TRAILING_SEP = path7.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs9.readdirSync(verifyDir);
+    files = fs10.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -1386,9 +1434,9 @@ function verifySets(verifyDir) {
 }
 function setFacts(verifyDir, name) {
   const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path7.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(path8.join(verifyDir, name + ".expected.json"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path7.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(path8.join(verifyDir, name + ".report.json"), isJsonObject);
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 function setNodeId(verifyDir, name) {
@@ -1404,55 +1452,23 @@ function canonicalStemsFor(verifyDir, nodeId, open = []) {
   }
   return [...stems].sort();
 }
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path8.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file in ${verifyDir} yet; end it: ${runCommands(path8.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
 function legacySetsFor(verifyDir, nodeId) {
   return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
 }
 function nodeStem(verifyDir, nodeId, layerName, open = []) {
   const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
-  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
+  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) \u2014 keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
-}
-
-// design-to-code/verify-status.ts
-import path8 from "node:path";
-import fs10 from "node:fs";
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
-var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
-var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), path8.basename(base) + ".status.json");
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
-    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
-    if (isVerifyStatusV2(kept)) return kept;
-  }
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
-}
-function openRunSets(verifyDir) {
-  const SUFFIX = ".status.json";
-  let files;
-  try {
-    files = fs10.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path8.join(verifyDir, name)));
-    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
-  }).sort();
 }
 
 // design-to-code/plan-skeleton.ts

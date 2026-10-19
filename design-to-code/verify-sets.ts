@@ -15,6 +15,7 @@ import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
+import { liveStatusFile, readStatusFile, runCommands } from "./verify-status.ts";
 
 /** Slugs a variant never takes: a file tail of the set (`<S>.diff.png` is the base set's diff, `<S>.forced-colors.png` its
  *  forced-colors screenshot; `<S>.report.json` its report) or a word the tools read as one. */
@@ -189,6 +190,19 @@ export function canonicalStemsFor(verifyDir: string, nodeId: string, open: reado
   return [...stems].sort();
 }
 
+/** How a refusal names the stems `stems` of `verifyDir`'s sets (canonicalStemsFor's), joined by ", ": a stem with files
+ *  there as itself; one whose only trace is a run open in the run cache (`open`) as that run — the user finds no file of
+ *  it in the verify dir — with the command that ends it. */
+export function stemHolders(verifyDir: string, stems: readonly string[], open: readonly string[]): string {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? undefined : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== undefined ? readStatusFile(liveStatusFile(path.join(verifyDir, set))) : null;
+    if (set === undefined || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file in ${verifyDir} yet; end it: ${runCommands(path.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
+
 /** The variant slugs of `stem` among the live sets of `verifyDir`, sorted. */
 export function variantsOf(verifyDir: string, stem: string): string[] {
   return verifySets(verifyDir).flatMap((name) => { const p = parseSetName(name); return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : []; });
@@ -211,7 +225,7 @@ export function legacySetsFor(verifyDir: string, nodeId: string): string[] {
  *  open run's live status fixes the stem as well. */
 export function nodeStem(verifyDir: string | null, nodeId: string, layerName: string, open: readonly string[] = []): { stem: string; existing: boolean; legacy: string[] } | { why: string } {
   const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
-  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) — keep one` };
+  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) — keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== undefined, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
 }

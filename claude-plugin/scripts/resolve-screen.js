@@ -340,6 +340,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function cliArity(tool, positionals, min, max, usage) {
   if (positionals.length < min) {
@@ -390,94 +391,29 @@ function listPlans(dir) {
 }
 
 // design-to-code/verify-sets.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
-var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
-var MAX_SLUG = 32;
-var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
-function parseSetName(name) {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
-}
-var TRAILING_SEP = path3.sep === "\\" ? /[\\/]+$/ : /\/+$/;
-var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-var RETIRED = ".expected.json.retired";
-function allSets(verifyDir) {
-  let files;
-  try {
-    files = fs4.readdirSync(verifyDir);
-  } catch {
-    return [];
-  }
-  const have = new Set(files);
-  const names = /* @__PURE__ */ new Set();
-  for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
-  }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
-}
-function verifySets(verifyDir) {
-  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
-}
-function setFacts(verifyDir, name) {
-  const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path3.join(verifyDir, name + ".expected.json"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path3.join(verifyDir, name + ".report.json"), isJsonObject);
-  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
-}
-function setNodeId(verifyDir, name) {
-  const f = setFacts(verifyDir, name);
-  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
-  return f.expectedId ?? f.reportId;
-}
-function canonicalStemsFor(verifyDir, nodeId, open = []) {
-  const stems = /* @__PURE__ */ new Set();
-  for (const name of [...verifySets(verifyDir), ...open]) {
-    const p = parseSetName(name);
-    if (p && p.nodeId === nodeId) stems.add(p.stem);
-  }
-  return [...stems].sort();
-}
-function legacySetsFor(verifyDir, nodeId) {
-  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
-}
-function nodeStem(verifyDir, nodeId, layerName, open = []) {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
-  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
-  const have = stems[0];
-  return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
-}
+import fs7 from "node:fs";
+import path5 from "node:path";
 
 // design-to-code/verify-status.ts
-import path5 from "node:path";
-import fs7 from "node:fs";
+import path4 from "node:path";
+import fs6 from "node:fs";
 
 // design-to-code/run-cache.ts
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 import os from "node:os";
-import path4 from "node:path";
+import path3 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/file-lock.ts
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 var LIVE_STALE_MS = 2 * 6e4;
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs5.readlinkSync("/proc/self/ns/pid");
+    return fs4.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -489,55 +425,55 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs6.statSync(p).isDirectory();
+    return fs5.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs6.existsSync(p);
+var exists = (p) => fs5.existsSync(p);
 function realpath(p) {
-  if (typeof fs6.realpathSync.native === "function") {
+  if (typeof fs5.realpathSync.native === "function") {
     try {
-      return fs6.realpathSync.native(p);
+      return fs5.realpathSync.native(p);
     } catch {
     }
   }
-  return fs6.realpathSync(p);
+  return fs5.realpathSync(p);
 }
 function canonical(p) {
-  const abs = path4.resolve(p);
+  const abs = path3.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path4.dirname(abs);
-    return parent === abs ? abs : path4.join(canonical(parent), path4.basename(abs));
+    const parent = path3.dirname(abs);
+    return parent === abs ? abs : path3.join(canonical(parent), path3.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path4.join(d, ".pnp.cjs")) || exists(path4.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path3.join(d, ".pnp.cjs")) || exists(path3.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path4.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path4.join(d, "package.json"), anyJson);
+  if (exists(path3.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path3.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path4.dirname(d)) {
-    if (exists(path4.join(d, "package.json"))) {
+  for (let d = dir; ; d = path3.dirname(d)) {
+    if (exists(path3.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) return null;
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) return null;
   }
-  if (isDir(path4.join(P, "node_modules"))) return P;
+  if (isDir(path3.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path4.dirname(d)) {
+  for (let d = P; ; d = path3.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) break;
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path4.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path3.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
@@ -545,11 +481,11 @@ function runCacheOf(verifyDir) {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path4.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path4.relative(root, v).split(path4.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path4.sep).join("/") ? cache : path4.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path3.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path3.relative(root, v).split(path3.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path3.sep).join("/") ? cache : path3.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path4.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path3.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -568,7 +504,7 @@ function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path5.join(runCacheDir(path5.dirname(base)), path5.basename(base) + ".status.json");
+var liveStatusFile = (base) => path4.join(runCacheDir(path4.dirname(base)), path4.basename(base) + ".status.json");
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -580,18 +516,98 @@ function readStatusFile(file) {
   }
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path4.basename(base)), id = shellArg(open.runId), dir = shellArg(path4.resolve(path4.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
 function openRunSets(verifyDir) {
   const SUFFIX = ".status.json";
   let files;
   try {
-    files = fs7.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+    files = fs6.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
   return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path5.join(verifyDir, name)));
+    const st = readStatusFile(liveStatusFile(path4.join(verifyDir, name)));
     return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
   }).sort();
+}
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+var TRAILING_SEP = path5.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
+var RETIRED = ".expected.json.retired";
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs7.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
+    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path5.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(path5.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+}
+function setNodeId(verifyDir, name) {
+  const f = setFacts(verifyDir, name);
+  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
+  return f.expectedId ?? f.reportId;
+}
+function canonicalStemsFor(verifyDir, nodeId, open = []) {
+  const stems = /* @__PURE__ */ new Set();
+  for (const name of [...verifySets(verifyDir), ...open]) {
+    const p = parseSetName(name);
+    if (p && p.nodeId === nodeId) stems.add(p.stem);
+  }
+  return [...stems].sort();
+}
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path5.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file in ${verifyDir} yet; end it: ${runCommands(path5.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
+function legacySetsFor(verifyDir, nodeId) {
+  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
+}
+function nodeStem(verifyDir, nodeId, layerName, open = []) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
+  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) \u2014 keep one` };
+  const have = stems[0];
+  return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
 }
 
 // design-to-code/resolve-screen.ts

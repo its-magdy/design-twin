@@ -8,8 +8,9 @@ import path from "node:path";
 import { check, report } from "./assert.ts";
 import {
   MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, existingStem, expectationSetProblem, formatSetName, isVariantSlug, legacySetsFor, nodeIdFromSetName, outBaseOf,
-  parseSetName, screenKey, setKey, setNameOfFile, setNodeId, statusBaseOf, variantProblem, variantSlug, verifySets,
+  nodeStem, parseSetName, screenKey, setKey, setNameOfFile, setNodeId, statusBaseOf, variantProblem, variantSlug, verifySets,
 } from "../design-to-code/screen-key.ts";
+import { writeStatus } from "../design-to-code/verify-run.ts";
 import type { ScreenKey } from "../design-to-code/screen-key.ts";
 
 const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-key-" + tag + "-"));
@@ -206,6 +207,21 @@ console.log("\n[setKey] a query to the set --status / --wait key a run by:");
   const withOpen = (q: string): string => { const k = setKey(q, { exportDir, verifyDir, openSets: ["Shed_Run__2_2"] }); return k.status === "resolved" ? `${k.name} ${k.existing}` : `unresolved: ${k.why}`; };
   check(`[setKey] an open run's set fixes the stem: the name and the id → Shed_Run__2_2, existing (got ${withOpen("Sheds")} / ${withOpen("2:2")})`,
     withOpen("Sheds") === "Shed_Run__2_2 true" && withOpen("2:2") === "Shed_Run__2_2 true" && /^unresolved: node 2:2 already has a verify set under another name \(Shed_Run__2_2\)/.test(withOpen("Sheds__2_2")));
+  // that run's live status is in the run cache and no file of its set is in the verify dir: a refusal names the run, and
+  // the command that ends it — not a set the user cannot find there
+  put(path.join(root, "package.json"), {});
+  writeStatus(path.join(verifyDir, "Shed_Run__2_2"), { runId: "run-s", phase: "queued", by: "agent" });
+  const endIt = "--status Shed_Run__2_2 --phase failed --run run-s --dir ";
+  const runRefusal = withOpen("Sheds__2_2");
+  check(`[setKey] the other name is only an open run: the refusal says so and how to end it (got ${runRefusal})`,
+    runRefusal.startsWith("unresolved: node 2:2 already has a verify set under another name (an open run run-s under Shed_Run__2_2 (no file in ") && runRefusal.includes(endIt));
+  const two = nodeStem(verifyDir, "1:1", "Seed Trays", ["New_Trays__1_1"]);
+  writeStatus(path.join(verifyDir, "New_Trays__1_1"), { runId: "run-t", phase: "queued", by: "agent" });
+  const twoRun = nodeStem(verifyDir, "1:1", "Seed Trays", ["New_Trays__1_1"]);
+  check(`[nodeStem] two stems, one only an open run: the set on disk by name, the other as that run (got ${"why" in two ? two.why : ""} / ${"why" in twoRun ? twoRun.why : ""})`,
+    "why" in two && two.why.includes("(New_Trays__1_1, Old_Trays__1_1)") && "why" in twoRun
+    && twoRun.why.startsWith("node 1:1 has 2 verify sets under different names (an open run run-t under New_Trays__1_1 (no file in ")
+    && twoRun.why.includes("--status New_Trays__1_1 --phase failed --run run-t --dir ") && twoRun.why.endsWith(", Old_Trays__1_1) — keep one"));
   const legacyOnly = setKey("Sheds", { exportDir, verifyDir });
   check(`[setKey] a node with only a legacy set → its new stem, not existing, the legacy set listed (got ${JSON.stringify(legacyOnly)})`,
     legacyOnly.status === "resolved" && legacyOnly.name === "Sheds__2_2" && !legacyOnly.existing && JSON.stringify(legacyOnly.legacy) === JSON.stringify(["Shed"]));
