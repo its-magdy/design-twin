@@ -6095,6 +6095,7 @@ function sameSource(r, src) {
 function oneSource(rows) {
   const first = rows.find((r) => r.sourceFile);
   if (!first?.sourceFile) return true;
+  if (new Set(rows.flatMap((r) => r.sourceFile && r.sourceFileKey ? [r.sourceFileKey] : [])).size > 1) return false;
   const src = { file: first.sourceFile, key: first.sourceFileKey || null };
   return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
 }

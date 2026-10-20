@@ -56,11 +56,13 @@ function sameSource(r: IndexRow, src: { file: string; key: string | null } | nul
   if (!src || !r.sourceFile) return null;
   return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
 }
-/** Whether every stamped row of the index is of one Figma file (sameSource with the first): a single-file project, where
- *  an unstamped export (an older pull) is of that file too. */
+/** Whether every stamped row of the index is of one Figma file (sameSource with the first, and at most one file key
+ *  among them — two files may share a name): a single-file project, where an unstamped export (an older pull) is of
+ *  that file too. */
 function oneSource(rows: readonly IndexRow[]): boolean {
   const first = rows.find((r) => r.sourceFile);
   if (!first?.sourceFile) return true;
+  if (new Set(rows.flatMap((r) => r.sourceFile && r.sourceFileKey ? [r.sourceFileKey] : [])).size > 1) return false;
   const src = { file: first.sourceFile, key: first.sourceFileKey || null };
   return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
 }

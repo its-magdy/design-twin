@@ -1892,7 +1892,20 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const r6 = run(single);
     check(`[stale-export] an unstamped header in a one-file index: the renamed row is read (got ${JSON.stringify(r6)})`,
       r6.rel === B2 && r6.stale === B && r6.row === rowB2.file && r6.warned === 1);
-    for (const r of [two, renamed, amb, other, unstamped, single]) fs.rmSync(r, { recursive: true, force: true });
+    // two Figma files of one name: their rows differ only by key, and a row without a key matches both by name — the
+    // index is of two files in every row order, so file A's row of the id is not the unstamped header's replacement
+    const sharedA = { ...rowA, sourceFile: "Shared" };
+    const sharedB = { id: "7:7", name: "Pots", file: "pages/PB/Pots__7_7.json", sourceFile: "Shared", sourceFileKey: "keyB" };
+    const sharedNoKey: { id: string; name: string; file: string; sourceFile: string; sourceFileKey?: string } = { id: "9:9", name: "Lids", file: "pages/PB/Lids__9_9.json", sourceFile: "Shared" };
+    const sameName: string[] = [];
+    for (const order of [[sharedNoKey, sharedA, sharedB], [sharedNoKey, sharedB, sharedA], [sharedA, sharedNoKey, sharedB], [sharedB, sharedNoKey, sharedA]]) {
+      const root = at({ [A]: doc("Crates", "Shared", "keyA"), [B]: doc("Bins") }, order);
+      const r = run(root);
+      check(`[stale-export] an unstamped header, two same-named Figma files told apart by key, rows ${order.map((x) => x.sourceFileKey || "-").join(",")}: the header is kept, no row, no warning (got ${JSON.stringify(r)})`,
+        r.rel === B && r.stale === null && r.row === null && r.warned === 0);
+      sameName.push(root);
+    }
+    for (const r of [two, renamed, amb, other, unstamped, single, ...sameName]) fs.rmSync(r, { recursive: true, force: true });
   }
   {
     // [stale-export] the header spells the index's file in another case: on a case-insensitive disk that is one file, not
