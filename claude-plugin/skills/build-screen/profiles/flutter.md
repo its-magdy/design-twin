@@ -10,7 +10,12 @@ Output
 **Detect** — `pubspec.yaml` with a `flutter:` sdk dependency.
 
 **Layout (IR → Row/Column)**
-- `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing:, runSpacing:)`.
+- `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing: gap, runSpacing:)`
+  — a row: `runSpacing: rowGap`; a column: `Wrap(direction: Axis.vertical, runSpacing: columnGap)`. The
+  tracks' alignment is `runAlignment` (default `WrapAlignment.start`): the IR's `alignContent`, else from
+  `alignItems` (`start`/`center`/`end`); `WrapAlignment` has no stretch, so size the children to fill.
+  `baseline` → `WrapAlignment.start`: `Wrap` has no baseline alignment at all (`WrapCrossAlignment`, the
+  items within a track, is start/end/center), so the items within each track sit at `start` too.
 - `gap:N` → `spacing: N` (Flutter 3.27+) or `SizedBox(width/height: N)` between children.
 - `padding:[t,r,b,l]` (PHYSICAL) → `Padding(padding: EdgeInsetsDirectional.fromSTEB(l, t, r, b))`.
 - `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween/spaceEvenly/spaceAround`);

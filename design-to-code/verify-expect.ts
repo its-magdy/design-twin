@@ -122,10 +122,11 @@ const PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] 
 // axis, where the padding sets the wrap point and so shows. Flex only (a grid's tracks are not modelled). Known
 // miss: padding split across nested nodes is still compared node by node.
 // The counter-axis extent of a WRAPPING list's stacked lines (Figma layoutWrap "WRAP"; the export writes
-// layout.flexWrap "wrap" and counterAxisSpacing as layout.rowGap whatever the direction). Figma Plugin API
+// layout.flexWrap "wrap" and counterAxisSpacing as the CSS gap between the tracks: layout.rowGap for a row,
+// layout.columnGap for a column — see trackGap). Figma Plugin API
 // (counterAxisAlignContent): each track is sized by its largest child along the counter axis; under "AUTO"
 // counterAxisSpacing is the gap between tracks, under "SPACE_BETWEEN" the free space is split between tracks and
-// the spacing is zero once the tracks overflow (the producer then omits rowGap, so the gap reads as 0 — the
+// the spacing is zero once the tracks overflow (the producer then omits the track gap, so it reads as 0 — the
 // least the tracks need, which is what an overfull check wants). Children are packed greedily along the main axis
 // within the inner main size (the box's main size minus its main-axis padding, `gap` between items). Returns
 // undefined when a size is unknown — the caller then falls back to the largest child.
@@ -139,6 +140,15 @@ function wrapLines(mainSizes: ReadonlyArray<number | undefined>, crossSizes: Rea
     else { used = w; lines.push(h); }
   });
   return lines.reduce((s, v) => s + v, 0) + crossGap * Math.max(0, lines.length - 1);
+}
+
+// A wrapping list's gap between its tracks: rowGap between a row's wrapped rows, columnGap between a column's
+// wrapped columns (CSS row-gap/column-gap follow the axes, not flex-direction). An export from before the producer
+// told the two apart wrote rowGap for a column too — the producer never writes rowGap on a flex column, so a column's
+// rowGap is still read as its track gap when columnGap is absent.
+function trackGap(L: LayoutSpec, dir: "row" | "column"): number {
+  if (dir === "row") return typeof L.rowGap === "number" ? L.rowGap : 0;
+  return typeof L.columnGap === "number" ? L.columnGap : typeof L.rowGap === "number" ? L.rowGap : 0;
 }
 
 function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Array<{ sides: PadSide[]; why: string }> {
@@ -169,7 +179,7 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
         const mainSize = ax === "x" ? b.h : b.w;
         const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
         const mainSizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.h : c.box.w) : undefined));
-        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, typeof L.rowGap === "number" ? L.rowGap : 0) ?? Math.max(...sizes);
+        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
       } else content = Math.max(...sizes);
       if (a + z + content > size + 1) {
         // Figma still insets the first child by the START padding of a start-aligned box whose content

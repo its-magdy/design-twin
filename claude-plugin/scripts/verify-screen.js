@@ -2721,6 +2721,10 @@ function wrapLines(mainSizes, crossSizes, inner, gap, crossGap) {
   });
   return lines.reduce((s, v) => s + v, 0) + crossGap * Math.max(0, lines.length - 1);
 }
+function trackGap(L, dir) {
+  if (dir === "row") return typeof L.rowGap === "number" ? L.rowGap : 0;
+  return typeof L.columnGap === "number" ? L.columnGap : typeof L.rowGap === "number" ? L.rowGap : 0;
+}
 function paddingNotShown(n, L, pad) {
   const b = n.box;
   if (!b || L.display === "grid" || L.mode === "absolute") return [];
@@ -2747,7 +2751,7 @@ function paddingNotShown(n, L, pad) {
         const mainSize = ax === "x" ? b.h : b.w;
         const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
         const mainSizes = flow.map((c) => c.box ? ax === "x" ? c.box.h : c.box.w : void 0);
-        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, typeof L.rowGap === "number" ? L.rowGap : 0) ?? Math.max(...sizes);
+        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
       } else content = Math.max(...sizes);
       if (a + z + content > size + 1) {
         const al0 = main2 ? L.justifyContent : L.alignItems;

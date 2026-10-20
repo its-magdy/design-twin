@@ -482,6 +482,22 @@ const sandbox: Sandbox = context;
   const wrapAutoOut = await sandbox.serialize(wrapAuto, 0, false);
   ok("[WRAP+AUTO] counterAxisSpacing is a real row gap -> rowGap: 16, no alignContent",
     wrapAutoOut.layout !== undefined && wrapAutoOut.layout.rowGap === 16 && wrapAutoOut.layout.alignContent === undefined);
+  ok("[WRAP+AUTO] a wrapping row has no columnGap (its gap is the item spacing)", wrapAutoOut.layout?.columnGap === undefined && wrapAutoOut.layout?.gap === 8);
+  // layoutWrap is settable on VERTICAL frames too (plugin-api.d.ts 1.141): items flow down, then onto a new
+  // column, and counterAxisSpacing is the gap between those columns — CSS column-gap, since row-gap/column-gap
+  // follow the axes, not flex-direction (a column's row-gap is its main-axis gap).
+  const vwrapAuto = { type: "FRAME", name: "VWrapAuto", visible: true, id: "al:10", width: 100, height: 60,
+    layoutMode: "VERTICAL", layoutWrap: "WRAP", itemSpacing: 8, counterAxisSpacing: 16, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", counterAxisAlignContent: "AUTO", children: [] };
+  const vwrapAutoOut = await sandbox.serialize(vwrapAuto, 0, false);
+  ok("[VERTICAL WRAP+AUTO] counterAxisSpacing is the column gap -> columnGap: 16, no rowGap, gap: 8, flexDirection column",
+    vwrapAutoOut.layout !== undefined && vwrapAutoOut.layout.columnGap === 16 && vwrapAutoOut.layout.rowGap === undefined
+    && vwrapAutoOut.layout.gap === 8 && vwrapAutoOut.layout.flexDirection === "column" && vwrapAutoOut.layout.flexWrap === "wrap");
+  const vwrapBetween = { ...vwrapAuto, name: "VWrapBetween", id: "al:11", counterAxisAlignContent: "SPACE_BETWEEN" };
+  const vwrapBetweenOut = await sandbox.serialize(vwrapBetween, 0, false);
+  ok("[VERTICAL WRAP+SPACE_BETWEEN] counterAxisSpacing is slack -> no columnGap, no rowGap, alignContent: space-between",
+    vwrapBetweenOut.layout !== undefined && vwrapBetweenOut.layout.columnGap === undefined && vwrapBetweenOut.layout.rowGap === undefined
+    && vwrapBetweenOut.layout.alignContent === "space-between" && vwrapBetweenOut.layout.gap === 8);
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs?.[1]?.font.weight === "Bold");

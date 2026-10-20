@@ -150,11 +150,23 @@ Read these before writing ANY script against an export JSON (field names guessed
 - **`layout`** flex: `display:"flex"`, `flexDirection` `row|column`, `gap`, `padding:[t,r,b,l]`
   (physical sides — map to start/end for RTL), `justifyContent` (`center`/`flex-end`/`space-between`/
   `space-evenly`/`space-around`; absent = start), `alignItems` (`center`/`flex-end`/`baseline`; absent
-  = start), `flexWrap:"wrap"` + `rowGap` + `alignContent`, `reverseZ` (later children paint
-  underneath). Negative `gap` = overlap. `gap` is absent under `space-between`/`space-evenly`/
-  `space-around` — Figma ignores the stored spacing under those modes, so there is nothing to emit.
-  Likewise `rowGap` is absent when `alignContent` is `space-between` (wrapped rows are spread by
-  dividing the free space, not by the stored row spacing).
+  = start), `flexWrap:"wrap"` + `rowGap` (horizontal) / `columnGap` (vertical) + `alignContent`,
+  `reverseZ` (later children paint underneath). Negative `gap` = overlap. `gap` is always the spacing
+  between items along `flexDirection` — the main-axis gap, so map it to the main-axis longhand (a `row`'s
+  CSS `column-gap`, a `column`'s `row-gap`), not the `gap` shorthand, which also sets the cross-axis gap.
+  On a wrapping frame `rowGap`/`columnGap` is the spacing between
+  the wrapped tracks — between rows of a `row`, between columns of a `column` (CSS `row-gap`/
+  `column-gap` follow the axes, so a `column`'s `gap` is its `row-gap`). An absent track gap means 0:
+  set it to 0 explicitly wherever `gap` would otherwise reach the cross axis. `gap` is absent under
+  `space-between`/`space-evenly`/`space-around` — Figma ignores the stored spacing under those modes, so
+  there is nothing to emit. Likewise the track gap is absent when `alignContent` is `space-between`
+  (wrapped tracks are spread by dividing the free space, not by the stored track spacing). When
+  `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned
+  like `alignItems` (start when that is absent too), or stretched when every in-flow child is
+  `alignSelf:"stretch"` (in-flow: skip children with `absolute:true` — the export can still write their
+  `alignSelf`). `alignItems:"baseline"` on a
+  wrap aligns the items WITHIN each track; no platform aligns the tracks themselves to a baseline, so the
+  tracks pack at start.
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
 - **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout inside THIS node; its children

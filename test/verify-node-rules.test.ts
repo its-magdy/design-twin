@@ -524,6 +524,15 @@ console.log("a wrapping list's main-axis padding shows, its cross axis holds the
     box("20:8", { display: "flex", flexWrap: "wrap", alignItems: "center", alignContent: "space-between", gap: 8, padding: [20, 0, 20, 0] }, 130, 200, [[60, 24], [60, 24], [60, 24]]),
     // …and without space-between the centred, equal top/bottom padding moves nothing (unchanged rule)
     box("20:9", { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: [20, 0, 20, 0] }, 130, 200, [[60, 24], [60, 24], [60, 24]]),
+    // a wrapping COLUMN (Figma VERTICAL + WRAP): three 20×60 chips in a 100-tall box → 3 columns (60+8+60 > 100), and the
+    // gap between the columns is columnGap: 3×20 + 2×4 = 68, + 16 > 80 → the right padding cannot show
+    box("22:1", { display: "flex", flexDirection: "column", flexWrap: "wrap", gap: 8, columnGap: 4, padding: [0, 8, 0, 8] }, 80, 100, [[20, 60], [20, 60], [20, 60]]),
+    // …the same columns in 90px fit (68 + 16 ≤ 91): nothing skipped
+    box("22:2", { display: "flex", flexDirection: "column", flexWrap: "wrap", gap: 8, columnGap: 4, padding: [0, 8, 0, 8] }, 90, 100, [[20, 60], [20, 60], [20, 60]]),
+    // an export from before the producer wrote columnGap for a column carries the track gap as rowGap: still read
+    box("22:3", { display: "flex", flexDirection: "column", flexWrap: "wrap", gap: 8, rowGap: 4, padding: [0, 8, 0, 8] }, 80, 100, [[20, 60], [20, 60], [20, 60]]),
+    // a wrapping ROW's columnGap is not its track gap (rowGap is): 3 lines of 20 + 0 + 16 ≤ 80 → nothing skipped
+    box("22:4", { display: "flex", flexWrap: "wrap", gap: 8, columnGap: 20, padding: [8, 0, 8, 0] }, 100, 80, [[60, 20], [60, 20], [60, 20]]),
   ]);
   const skipOf = (id: string): string => JSON.stringify(spec(e, id)?.paddingSkip ?? null);
   safe("[wrap] a centred wrapping list with equal L/R padding: the padding sets the wrap point → not skipped", () => skipOf("20:1") === "null" && JSON.stringify(spec(e, "20:1")?.padding) === "[0,40,0,40]" && !ncOn(e, "20:1", /padding/));
@@ -535,6 +544,10 @@ console.log("a wrapping list's main-axis padding shows, its cross axis holds the
   safe("[wrap] alignContent space-between: centred items still put the lines against the padding → not skipped", () => skipOf("20:8") === "null" && !ncOn(e, "20:8", /padding/));
   safe("[wrap] centred wrapping lines without space-between: equal top/bottom padding moves nothing → skipped", () => skipOf("20:9") === '["top","bottom"]');
   safe("[wrap] lines pack within the inner width (main-axis padding subtracted): 2 lines of 44px + 16 > 50 → bottom skipped", () => skipOf("20:6") === '["bottom"]' && /44px/.test(ncOn(e, "20:6", /padding \(bottom\)/)?.why ?? ""));
+  safe("[wrap column] the gap between a column's wrapped columns is columnGap: 3 columns + 2×4 + 16 > 80 → right skipped", () => skipOf("22:1") === '["right"]' && /68px/.test(ncOn(e, "22:1", /padding \(right\)/)?.why ?? ""));
+  safe("[wrap column] the same columns in 90px fit: nothing skipped", () => skipOf("22:2") === "null");
+  safe("[wrap column] an older export's rowGap on a wrapping column is read as its column gap", () => skipOf("22:3") === '["right"]' && /68px/.test(ncOn(e, "22:3", /padding \(right\)/)?.why ?? ""));
+  safe("[wrap] a wrapping row's columnGap is not its track gap: 60 + 16 ≤ 80 → nothing skipped", () => skipOf("22:4") === "null");
 
   // a medium match cap survives an accepted size waiver
   const eC = expect1([{ type: "FRAME", id: "21:1", name: "Card", box: { w: 300, h: 120 }, fills: [{ type: "solid", color: "#f5f5f5" }] }]);

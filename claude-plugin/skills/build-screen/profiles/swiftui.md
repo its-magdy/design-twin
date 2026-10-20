@@ -11,6 +11,11 @@ Output
 **Layout (IR → stacks)**
 - `flexDirection:"row"` → `HStack`; `"column"` → `VStack`.
 - `gap:N` → `HStack(spacing: N)` / `VStack(spacing: N)`.
+- `flexWrap:"wrap"` → no built-in stack wraps: a custom `Layout` that flows the children along `flexDirection`,
+  `gap` between items and the track gap between lines (`rowGap` between a row's rows, `columnGap` between a
+  column's columns). The same `Layout` places the tracks in the cross axis: the IR's `alignContent`, else
+  from `alignItems` (start/center/end; stretched when every in-flow child is `alignSelf:"stretch"`;
+  `baseline` → start, the `Layout` aligning the items within each track on `dimensions(in:)[.firstTextBaseline]`).
 - `padding:[t,r,b,l]` → `.padding(EdgeInsets(top: t, leading: l, bottom: b, trailing: r))`. The
   left→`leading` / right→`trailing` mapping is **deliberate**: Figma's insets are physical, SwiftUI's are
   directional, so this is what mirrors the layout under RTL. Only use `.padding(.leading, …)` — never

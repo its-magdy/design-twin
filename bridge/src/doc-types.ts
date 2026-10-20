@@ -65,6 +65,7 @@ export interface LayoutSpec {
   justifyContent?: FlexAlign;
   alignItems?: FlexAlign;
   flexWrap?: "wrap";
+  /** The gap between rows: a grid's row gap, or a wrapping row's track gap (counterAxisSpacing). */
   rowGap?: number;
   alignContent?: FlexAlign;
   /** auto-layout was INFERRED (node.inferredAutoLayout) — not set by the designer. */
@@ -72,6 +73,7 @@ export interface LayoutSpec {
   reverseZ?: true;
   columns?: number;
   rows?: number;
+  /** The gap between columns: a grid's column gap, or a wrapping column's track gap (counterAxisSpacing). */
   columnGap?: number;
   columnSizes?: GridTrack[];
   rowSizes?: GridTrack[];

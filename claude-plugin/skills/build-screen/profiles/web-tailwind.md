@@ -9,7 +9,15 @@ Output
 
 **Layout (IR → Tailwind classes)**
 - `display:flex` → `flex`; `flexDirection:"column"` → `flex-col` (row is default).
-- `gap:N` → nearest scale (`gap-2` ≈ 8px) or `gap-[Npx]`; `flexWrap:"wrap"` → `flex-wrap`.
+- `gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column (not `gap-N`, which also
+  sets the cross axis); N is the nearest scale step (`gap-x-2` ≈ 8px) or `gap-x-[Npx]`. `flexWrap:"wrap"` →
+  `flex-wrap`, and its track gap: `rowGap` (a wrapping row) → `gap-y-N`, `columnGap` (a wrapping column) →
+  `gap-x-N`, N likewise the nearest scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
+  emit none, or `gap-y-0`/`gap-x-0` if a `gap-N` is in play. A wrap's tracks → `content-*`: its
+  `alignContent`, else from `alignItems` (`content-start`/`content-center`/`content-end`; `content-stretch`
+  when every in-flow child is `alignSelf:"stretch"`; `baseline` → `content-start`, with `items-baseline`
+  aligning the items within each track) — Tailwind has no default class here, so don't leave CSS's initial
+  `align-content: normal`, which behaves as `stretch` on a multi-line flex container.
 - `padding:[t,r,b,l]` → `pt-/pr-/pb-/pl-`; collapse to `px-`/`py-`/`p-` when symmetric.
 - `justifyContent` → `justify-start|center|end|between|evenly|around`; `alignItems` →
   `items-start|center|end`, and `"baseline"` → `items-baseline` (`align-items: baseline`).
