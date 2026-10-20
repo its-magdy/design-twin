@@ -9,7 +9,8 @@ Output
 
 **Layout (IR → CSS in `<screen>.module.css`)**
 - `display:flex` → `display:flex`; `flexDirection` → `flex-direction`.
-- `gap:N` → `gap:Npx`; `flexWrap:"wrap"` → `flex-wrap:wrap`.
+- `gap:N` → `gap:Npx`; `flexWrap:"wrap"` → `flex-wrap:wrap`, and its track gap after the `gap`:
+  `rowGap` (a wrapping row) → `row-gap`, `columnGap` (a wrapping column) → `column-gap`.
 - `padding:[t,r,b,l]` → `padding: t r b l` (px).
 - `justifyContent` → `justify-content`; `alignItems` → `align-items` (incl. `"baseline"` →
   `align-items: baseline`).

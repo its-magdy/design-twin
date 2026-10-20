@@ -10,7 +10,8 @@ Output
 **Detect** — `pubspec.yaml` with a `flutter:` sdk dependency.
 
 **Layout (IR → Row/Column)**
-- `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing:, runSpacing:)`.
+- `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing: gap, runSpacing:)`
+  — a row: `runSpacing: rowGap`; a column: `Wrap(direction: Axis.vertical, runSpacing: columnGap)`.
 - `gap:N` → `spacing: N` (Flutter 3.27+) or `SizedBox(width/height: N)` between children.
 - `padding:[t,r,b,l]` (PHYSICAL) → `Padding(padding: EdgeInsetsDirectional.fromSTEB(l, t, r, b))`.
 - `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween/spaceEvenly/spaceAround`);

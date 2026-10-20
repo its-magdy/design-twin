@@ -2565,8 +2565,9 @@ function walk2(ac, node, ancestors, ctx) {
     const L = node.layout;
     const spacing = [];
     if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
-    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
-    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
+    const isGrid = L.display === "grid";
+    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, isGrid ? "gridRowGap" : "counterAxisSpacing")]);
+    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, isGrid ? "gridColumnGap" : "counterAxisSpacing")]);
     if (Array.isArray(L.padding)) {
       const pad = L.padding;
       ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => {

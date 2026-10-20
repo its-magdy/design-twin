@@ -4,7 +4,8 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
 
 **Layout (IR → ?)** — map each field:
 - `display:flex` / `flexDirection` (row|column) → your container + direction construct.
-- `gap:N`, `flexWrap` → your spacing/wrap mechanism.
+- `gap:N`, `flexWrap` → your spacing/wrap mechanism (`gap` between items; a wrap's track gap is `rowGap` on a
+  row, `columnGap` on a column).
 - `padding:[top,right,bottom,left]` → your padding syntax.
 - `justifyContent`, `alignItems` → your main/cross-axis alignment.
 - `widthMode`/`heightMode` (`fill`|`hug`|`fixed`) → stretch / content-sized / fixed.

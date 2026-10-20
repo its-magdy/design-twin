@@ -529,6 +529,23 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   const plain = audit(g4([{ id: "5:1", type: "FRAME", name: "Items", layout: { display: "flex", padding: [13, 13, 13, 13] }, children: [] }]), { platform: "web" });
   check("…and the spacing tally counts only the real frame (the asset leaves add nothing)", tally(res) === tally(plain));
 
+  // a wrap's track gap is bound through counterAxisSpacing whichever key carries it (rowGap on a row, columnGap
+  // on a column); a grid's gaps through gridRowGap/gridColumnGap
+  const wrapCol = { display: "flex" as const, flexDirection: "column" as const, flexWrap: "wrap" as const, columnGap: 10 };
+  const gaps = audit(g4([{ id: "6:1", type: "FRAME", name: "Items", children: [
+    { id: "6:2", type: "FRAME", name: "column wrap bound", layout: wrapCol, tokens: { counterAxisSpacing: "Space 10" } },
+    { id: "6:3", type: "FRAME", name: "column wrap unbound", layout: wrapCol },
+    { id: "6:4", type: "FRAME", name: "row wrap bound", layout: { display: "flex", flexWrap: "wrap", rowGap: 10 }, tokens: { counterAxisSpacing: "Space 10" } },
+    { id: "6:5", type: "FRAME", name: "grid bound", layout: { display: "grid", rowGap: 10, columnGap: 10 }, tokens: { gridRowGap: "Space 10", gridColumnGap: "Space 10" } },
+    { id: "6:6", type: "FRAME", name: "grid bound to the wrong field", layout: { display: "grid", rowGap: 10 }, tokens: { counterAxisSpacing: "Space 10" } },
+  ] }]), { platform: "web" });
+  const gapOg = codes(gaps, "off-grid-spacing");
+  check("[wrap column] a columnGap bound through counterAxisSpacing is bound (no off-grid finding); unbound it is reported",
+    !gapOg.some((f) => f.nodeId === "6:2") && gapOg.some((f) => f.nodeId === "6:3" && /columnGap=10/.test(f.message)));
+  check("[wrap row] a rowGap bound through counterAxisSpacing is bound", !gapOg.some((f) => f.nodeId === "6:4"));
+  check("[grid] rowGap/columnGap bound through gridRowGap/gridColumnGap are bound; counterAxisSpacing does not bind a grid's rowGap",
+    !gapOg.some((f) => f.nodeId === "6:5") && gapOg.some((f) => f.nodeId === "6:6" && /rowGap=10/.test(f.message)));
+
   check("the .assets.json guard accepts heavy[].embeddedRaster and extra files[] fields, and rejects a non-number embeddedRaster",
     isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9, paths: 2, embeddedRaster: 1 }], files: [{ file: "assets/a.svg", node: "1:1", owner: "x", reuseKey: "k" }] })
     && isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9 }] })

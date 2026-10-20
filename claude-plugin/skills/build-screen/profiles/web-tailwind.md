@@ -9,7 +9,8 @@ Output
 
 **Layout (IR → Tailwind classes)**
 - `display:flex` → `flex`; `flexDirection:"column"` → `flex-col` (row is default).
-- `gap:N` → nearest scale (`gap-2` ≈ 8px) or `gap-[Npx]`; `flexWrap:"wrap"` → `flex-wrap`.
+- `gap:N` → nearest scale (`gap-2` ≈ 8px) or `gap-[Npx]`; `flexWrap:"wrap"` → `flex-wrap`, and its
+  track gap: `rowGap` (a wrapping row) → `gap-y-N`, `columnGap` (a wrapping column) → `gap-x-N`.
 - `padding:[t,r,b,l]` → `pt-/pr-/pb-/pl-`; collapse to `px-`/`py-`/`p-` when symmetric.
 - `justifyContent` → `justify-start|center|end|between|evenly|around`; `alignItems` →
   `items-start|center|end`, and `"baseline"` → `items-baseline` (`align-items: baseline`).

@@ -747,6 +747,21 @@ else {
   const tile = await at('[data-dt-node="70:70"]', '[data-dt-node="70:71"]');
   check(`[guard] the measured element's box is skipped even where an overlay is what elementFromPoint returns (got ${JSON.stringify(tile)})`,
     tile !== null && tile.hit === "i" && !tile.inAvoid);
+  // a wrapping column as the web profiles build it (gap, then the export's columnGap as column-gap): the items of a
+  // column sit `gap` apart and the wrapped columns sit columnGap apart — CSS row-gap/column-gap follow the axes
+  // (align-content packs the columns at the start, as Figma's counterAxisAlignContent AUTO does in a wider frame)
+  await pg.setContent(`<div style="display:flex;flex-direction:column;flex-wrap:wrap;align-content:flex-start;gap:8px;column-gap:16px;height:100px;width:200px">` +
+    `<i style="display:block;width:20px;height:60px"></i><i style="display:block;width:20px;height:30px"></i><i style="display:block;width:20px;height:60px"></i></div>`);
+  // [x, y, w, h] per item, flat
+  const flatBoxes: unknown = await pg.evaluate(`[...document.querySelectorAll("i")].flatMap((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })`);
+  const nums = Array.isArray(flatBoxes) ? flatBoxes.filter((v): v is number => typeof v === "number") : [];
+  const at4 = (i: number): { x: number; y: number; w: number; h: number } | null => {
+    const [x, y, w, h] = nums.slice(i * 4, i * 4 + 4);
+    return x !== undefined && y !== undefined && w !== undefined && h !== undefined ? { x, y, w, h } : null;
+  };
+  const c0 = at4(0), c1 = at4(1), c2 = at4(2);
+  check(`[wrap column] gap 8 + column-gap 16: items 8px apart down a column, the wrapped column 16px to the right (got ${JSON.stringify([c0, c1, c2])})`,
+    !!c0 && !!c1 && !!c2 && c1.y - (c0.y + c0.h) === 8 && c1.x === c0.x && c2.y === c0.y && c2.x - (c0.x + c0.w) === 16);
   await fhpBrowser.close();
 }
 const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);

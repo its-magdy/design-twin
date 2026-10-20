@@ -8,7 +8,9 @@ Safe area & insets · Accessibility & RTL · Accessibility naming · Motion · A
 Output
 
 **Layout (IR → Row/Column)**
-- `flexDirection:"row"` → `Row`; `"column"` → `Column`.
+- `flexDirection:"row"` → `Row`; `"column"` → `Column`. With `flexWrap:"wrap"` → `FlowRow` (`gap` →
+  `horizontalArrangement`, `rowGap` → `verticalArrangement = Arrangement.spacedBy(N.dp)`) / `FlowColumn`
+  (`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`).
 - `gap:N` → `horizontalArrangement = Arrangement.spacedBy(N.dp)` (Row) /
   `verticalArrangement = Arrangement.spacedBy(N.dp)` (Column). Not when `justifyContent` is one of the
   `Space*` arrangements below — those already distribute space, so `gap` is absent and `spacedBy`

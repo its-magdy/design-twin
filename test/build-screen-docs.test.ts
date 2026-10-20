@@ -1044,5 +1044,23 @@ console.log("build-screen docs:");
     && /a match only once spaces, `-` and `_` are ignored is one too/.test(skill)
     && /compared ignoring spaces, `-`, `_` and case .{0,200}Their hits are only a candidate list \(exit\s+1, the whitespace-insensitive ones first\)/.test(extractDocs));
 }
+console.log("build-screen docs (wrapped-track gap):");
+{
+  // Figma's counterAxisSpacing is the gap between wrapped tracks on a HORIZONTAL or VERTICAL frame; the export
+  // writes it as rowGap on a wrapping row and columnGap on a wrapping column (CSS gaps follow the axes).
+  const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
+  const prof = (n: string): string => flat(read(`claude-plugin/skills/build-screen/profiles/${n}.md`));
+  check("ir-fields: flexWrap + rowGap (horizontal) / columnGap (vertical); a column's gap is its row-gap",
+    /`flexWrap:"wrap"` \+ `rowGap` \(horizontal\) \/ `columnGap` \(vertical\)/.test(irf) && /a `column`'s `gap` is its `row-gap`/.test(irf)
+    && !/`flexWrap:"wrap"` \+ `rowGap` \+ `alignContent`/.test(irf));
+  check("web profiles: a wrapping column's columnGap → column-gap / gap-x, a wrapping row's rowGap → row-gap / gap-y",
+    /`rowGap` \(a wrapping row\) → `row-gap`, `columnGap` \(a wrapping column\) → `column-gap`/.test(cssm)
+    && /`rowGap` \(a wrapping row\) → `gap-y-N`, `columnGap` \(a wrapping column\) → `gap-x-N`/.test(tw));
+  check("native profiles: Flutter Wrap(direction: vertical, runSpacing: columnGap), Compose FlowColumn columnGap → horizontalArrangement, RN columnGap, SwiftUI Layout",
+    /`Wrap\(direction: Axis\.vertical, runSpacing: columnGap\)`/.test(prof("flutter"))
+    && /`FlowColumn` \(`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`\)/.test(prof("android-compose"))
+    && /`columnGap` \(a wrapping column\) → `columnGap`/.test(prof("react-native"))
+    && /`columnGap` between a column's columns/.test(prof("swiftui")));
+}
 
 report();

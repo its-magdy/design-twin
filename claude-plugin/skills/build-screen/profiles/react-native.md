@@ -9,7 +9,8 @@ Output
 
 **Layout (IR → `View` + `StyleSheet`)** — flexbox is native; **default `flexDirection` is `column`**.
 - `display:flex` → a `<View>`; `flexDirection:"row"` → `flexDirection:'row'` (omit for column).
-- `gap:N` → `gap:N` (RN ≥ 0.71) else margins; `flexWrap:"wrap"` → `flexWrap:'wrap'`.
+- `gap:N` → `gap:N` (RN ≥ 0.71) else margins; `flexWrap:"wrap"` → `flexWrap:'wrap'`, and its track
+  gap after the `gap`: `rowGap` (a wrapping row) → `rowGap`, `columnGap` (a wrapping column) → `columnGap`.
 - `padding:[t,r,b,l]` → `paddingTop/Right/Bottom/Left`.
 - `justifyContent`/`alignItems` → same prop names, string values (`alignItems:'baseline'` maps 1:1).
 - `widthMode:"fill"` → `flex:1`; `"hug"` → omit; `"fixed"` → `width:N`.

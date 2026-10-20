@@ -56,12 +56,19 @@ function flexIntent(src: FlexLike): LayoutSpec {
   if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
   if (src.layoutWrap === "WRAP") {
     l.flexWrap = "wrap";
-    // The counter-axis twin of the rule above. plugin-api.d.ts (1.139) on `counterAxisAlignContent`:
+    // The counter-axis twin of the rule above. plugin-api.d.ts (1.141) on `counterAxisAlignContent`:
     // "`counterAxisSpacing` is respected when `counterAxisAlignContent` is set to `"AUTO"`", and under
     // `"SPACE_BETWEEN"` "the free space within the auto-layout frame is divided up evenly between each
-    // track" — so the stored counterAxisSpacing is slack there too, and rowGap must not be emitted.
-    if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") l.rowGap = src.counterAxisSpacing;
-    // align-content for wrapped rows (AUTO = packed = default; SPACE_BETWEEN spreads them).
+    // track" — so the stored counterAxisSpacing is slack there too, and no track gap is emitted.
+    // counterAxisSpacing is "the distance between wrapped tracks" on a HORIZONTAL or VERTICAL frame
+    // (layoutWrap is settable on both since 1.141). CSS row-gap/column-gap follow the axes, not
+    // flex-direction: a row wrap's tracks are rows (row-gap), a column wrap's tracks are columns
+    // (column-gap) — and there row-gap is the main-axis `gap`.
+    if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") {
+      if (l.flexDirection === "column") l.columnGap = src.counterAxisSpacing;
+      else l.rowGap = src.counterAxisSpacing;
+    }
+    // align-content for wrapped tracks (AUTO = packed = default; SPACE_BETWEEN spreads them).
     if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
   }
   return l;

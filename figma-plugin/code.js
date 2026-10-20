@@ -1047,7 +1047,10 @@
     if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
     if (src.layoutWrap === "WRAP") {
       l.flexWrap = "wrap";
-      if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") l.rowGap = src.counterAxisSpacing;
+      if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") {
+        if (l.flexDirection === "column") l.columnGap = src.counterAxisSpacing;
+        else l.rowGap = src.counterAxisSpacing;
+      }
       if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
     }
     return l;

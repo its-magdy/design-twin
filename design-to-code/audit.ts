@@ -666,8 +666,11 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
     const L = node.layout;
     const spacing: Array<[string, number, boolean]> = [];
     if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
-    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, "counterAxisSpacing")]);
-    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, "gridColumnGap")]);
+    // rowGap/columnGap are a grid's gaps (gridRowGap/gridColumnGap) or a wrapping flex's track gap
+    // (counterAxisSpacing: rowGap on a row, columnGap on a column).
+    const isGrid = L.display === "grid";
+    if (typeof L.rowGap === "number") spacing.push(["rowGap", L.rowGap, hasTok(node, isGrid ? "gridRowGap" : "counterAxisSpacing")]);
+    if (typeof L.columnGap === "number") spacing.push(["columnGap", L.columnGap, hasTok(node, isGrid ? "gridColumnGap" : "counterAxisSpacing")]);
     if (Array.isArray(L.padding)) {
       const pad = L.padding;
       ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].forEach((k, j) => { if (pad[j]) spacing.push([k, pad[j], hasTok(node, k)]); });
