@@ -1,8 +1,8 @@
 // verify-status.ts — a verification run's status v2 as a reader sees it: its shape (isVerifyStatusV2), where its live
 // file is in the run cache (liveStatusFile), which sets have a run open there (openRunSets), and the commands that wait for
-// or end an open run (runCommands). verify-run.ts writes
-// statuses and re-exports all of this; a module of its own so readers that only ask which runs are open (resolve-screen,
-// plan-skeleton — a set whose only trace is an open run keeps its stem) do not bundle verify-run.
+// or end an open run (runCommands). verify-run.ts writes statuses and re-exports the status shape, liveStatusFile and
+// openRunSets; a module of its own so readers that only ask which runs are open (resolve-screen, plan-skeleton — a set
+// whose only trace is an open run keeps its stem) do not bundle verify-run.
 import path from "node:path";
 import fs from "node:fs";
 import { anyJson, readJson } from "./read-json.ts";

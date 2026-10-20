@@ -198,7 +198,7 @@ export function stemHolders(verifyDir: string, stems: readonly string[], open: r
     const set = onDisk.has(stem) ? undefined : open.find((n) => parseSetName(n)?.stem === stem);
     const st = set !== undefined ? readStatusFile(liveStatusFile(path.join(verifyDir, set))) : null;
     if (set === undefined || st === null || st === "v1") return stem;
-    return `an open run ${st.runId} under ${set} (no file in ${verifyDir} yet; end it: ${runCommands(path.join(verifyDir, set), st).endIt})`;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path.join(verifyDir, set), st).endIt})`;
   }).join(", ");
 }
 

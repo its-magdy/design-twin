@@ -665,9 +665,9 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
 
 /** Why a NEW plan (its --out not there yet) cannot be written at `out`, or null. A node has one plan, and it is named by
  *  the node: `<stem>.json`, the stem the verify dir (or a run open in its run cache) already names the node by, else
- *  `<Layer>__<id>` (nodeStem). Another
- *  plan in the same directory that describes the node — by its `nodeId`, else the id its file name carries, as
- *  verify-screen finds a frame's plans — is the one to merge into. An existing plan merges under any name. */
+ *  `<Layer>__<id>` (nodeStem). Another plan in the same directory that describes the node — by its `nodeId`, else the
+ *  id its file name carries, as verify-screen finds a frame's plans — is the one to merge into. An existing plan merges
+ *  under any name. */
 function newPlanProblem(out: string, nodeId: string | undefined, layerName: string): string | null {
   if (!nodeId) return "the screen export names no node id, and a new plan is named by its node — re-pull the screen";
   const dir = path.dirname(out);
