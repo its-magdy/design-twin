@@ -14,7 +14,9 @@ Output
   track gap: `rowGap` (a wrapping row) → `rowGap`, `columnGap` (a wrapping column) → `columnGap`. An absent
   track gap is 0 — emit none, or `0` if a `gap` style is in play. A wrap's tracks → `alignContent` (RN's
   default is `flex-start`, not CSS's stretching `normal`): its `alignContent`, else from `alignItems`
-  (`flex-start`/`center`/`flex-end`; `stretch` when every child is `alignSelf:"stretch"`).
+  (`flex-start`/`center`/`flex-end`; `stretch` when every in-flow child is `alignSelf:"stretch"`; `baseline`
+  → `flex-start` — `alignContent` has no baseline value, while `alignItems:'baseline'` aligns the items within
+  each track).
 - `padding:[t,r,b,l]` → `paddingTop/Right/Bottom/Left`.
 - `justifyContent`/`alignItems` → same prop names, string values (`alignItems:'baseline'` maps 1:1).
 - `widthMode:"fill"` → `flex:1`; `"hug"` → omit; `"fixed"` → `width:N`.

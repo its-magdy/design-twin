@@ -1077,20 +1077,59 @@ console.log("build-screen docs (wrapped-track gap):");
     && /not the `gap` style, which also sets the cross axis/.test(prof("react-native")) && /An absent track gap is 0/.test(prof("react-native")));
   check("_template: gap is the main-axis spacing; an absent track gap means 0",
     /`gap` is the main-axis spacing between items/.test(prof("_template")) && /absent means 0/.test(prof("_template")));
+  // The old guidance mapped `gap` to the both-axes shorthand (`gap:Npx`, `gap-[Npx]`, RN's `gap` style) — gone.
+  check("profiles: no `gap:N` → `gap:Npx` / `gap-[Npx]` / `gap-2` ≈ 8px / RN `gap:N` → `gap:N` shorthand guidance left",
+    !/`gap:N` → `gap:Npx`/.test(cssm) && !/`gap-\[Npx\]`/.test(tw) && !/`gap-2` ≈ 8px/.test(tw)
+    && !/`gap:N` → `gap:N`/.test(prof("react-native")) && !/`gap:N` → `gap:Npx`/.test(prof("react-native")));
   // CSS align-content `normal` behaves as `stretch` on a multi-line flex container (css-align-3 §5.1.3); Figma's
   // counterAxisAlignContent AUTO sizes each track to its largest child and aligns it by counterAxisAlignItems
   // (stretching only when every child is STRETCH), so an absent alignContent still has to be written out.
   check("ir-fields: an absent alignContent on a wrap packs and aligns the tracks like alignItems, or stretches when every child stretches",
-    /When `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned like `alignItems` \(start when that is absent too\), or stretched when every child is `alignSelf:"stretch"`/.test(irf));
-  check("web profiles: a wrap's tracks → align-content / content-* from alignItems, never the initial normal (which stretches)",
-    /`align-content`: its `alignContent`, else from `alignItems` \(`flex-start`\/`center`\/`flex-end`; `stretch` when every child is `alignSelf:"stretch"`\) — never leave the initial `normal`, which behaves as `stretch`/.test(cssm)
-    && /`content-\*`: its `alignContent`, else from `alignItems` \(`content-start`\/`content-center`\/`content-end`; `content-stretch` when every child is `alignSelf:"stretch"`\) — never leave the default `content-normal`, which behaves as `stretch`/.test(tw));
+    /When `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned like `alignItems` \(start when that is absent too\), or stretched when every in-flow child is `alignSelf:"stretch"` \(an absolutely positioned child has no `alignSelf`\)/.test(irf));
+  // The stretch condition counts in-flow children only: an absolutely positioned child carries no alignSelf.
+  check("ir-fields + profiles: stretch is 'every in-flow child', never 'every child'",
+    !/every child is `alignSelf/.test(irf) && ["web-css-modules", "web-tailwind", "react-native", "swiftui"].every((n) =>
+      /every in-flow child is `alignSelf:"stretch"`/.test(prof(n)) && !/every child is `alignSelf/.test(prof(n))));
+  // The IR can hold alignItems "baseline" on a wrapping row. No platform aligns the TRACKS to a baseline (RN
+  // alignContent, Flutter WrapAlignment, Compose arrangements have no baseline), so the tracks pack at start and
+  // baseline only aligns the items within a track.
+  check("ir-fields + _template: alignItems baseline on a wrap aligns the items within each track; the tracks pack at start",
+    /`alignItems:"baseline"` on a wrap aligns the items WITHIN each track; no platform aligns the tracks themselves to a baseline, so the tracks pack at start/.test(irf)
+    && /`alignItems:"baseline"` aligns the items within a track; no platform aligns the tracks to a baseline, so they pack at start/.test(prof("_template")));
+  check("native profiles: a wrap's baseline → tracks at start (RN flex-start, Flutter WrapAlignment.start, SwiftUI start, Compose packed start)",
+    /`baseline` → `flex-start` — `alignContent` has no baseline value, while `alignItems:'baseline'` aligns the items within each track/.test(prof("react-native"))
+    && /`baseline` → `WrapAlignment\.start`: `Wrap` has no baseline alignment at all \(`WrapCrossAlignment`, the items within a track, is start\/end\/center\)/.test(prof("flutter"))
+    && /`baseline` → start, the `Layout` aligning the items within each track on `dimensions\(in:\)\[\.firstTextBaseline\]`/.test(prof("swiftui"))
+    && /Nothing aligns the tracks to a baseline, so they pack at start/.test(prof("android-compose"))
+    && /\(start when absent, and for `baseline`\)/.test(prof("android-compose")));
+  check("web profiles: a wrap's tracks → align-content / content-* from alignItems (baseline → start), never the initial normal (which stretches)",
+    /`align-content`: its `alignContent`, else from `alignItems` \(`flex-start`\/`center`\/`flex-end`; `stretch` when every in-flow child is `alignSelf:"stretch"`; `baseline` → `flex-start`, with `align-items: baseline` aligning the items within each track\) — never leave the initial `normal`, which behaves as `stretch`/.test(cssm)
+    && /`content-\*`: its `alignContent`, else from `alignItems` \(`content-start`\/`content-center`\/`content-end`; `content-stretch` when every in-flow child is `alignSelf:"stretch"`; `baseline` → `content-start`, with `items-baseline` aligning the items within each track\)/.test(tw));
+  // Tailwind ships `content-normal` as an opt-in utility but applies no default class: the default is CSS's initial value.
+  check("web-tailwind: no 'default content-normal' — Tailwind has no default class; don't leave CSS's initial align-content: normal",
+    !/default `content-normal`/.test(tw)
+    && /Tailwind has no default class here, so don't leave CSS's initial `align-content: normal`, which behaves as `stretch` on a multi-line flex container/.test(tw));
   check("native profiles: RN alignContent (default flex-start), Flutter runAlignment (no stretch), Compose cross-axis spacedBy(N, Alignment), SwiftUI Layout, template",
     /`alignContent` \(RN's default is `flex-start`, not CSS's stretching `normal`\): its `alignContent`, else from `alignItems`/.test(prof("react-native"))
     && /`runAlignment` \(default `WrapAlignment\.start`\).{0,160}`WrapAlignment` has no stretch/.test(prof("flutter"))
-    && /`Arrangement\.spacedBy\(rowGap\.dp, Alignment\.Top\|CenterVertically\|Bottom\)` on `FlowRow`, `Arrangement\.spacedBy\(columnGap\.dp, Alignment\.Start\|CenterHorizontally\|End\)` on `FlowColumn`/.test(prof("android-compose"))
     && /same `Layout` places the tracks in the cross axis: the IR's `alignContent`, else from `alignItems`/.test(prof("swiftui"))
     && /your cross-axis line alignment: `alignContent`, else from `alignItems`; check its default/.test(prof("_template")));
+  // Compose (FlowRow / FlowColumn reference, developer.android.com): the tracks' cross-axis arrangement is
+  // FlowRow.verticalArrangement / FlowColumn.horizontalArrangement ("the arrangement of the layout's virtual rows /
+  // columns"); the items within a track use itemVerticalAlignment / itemHorizontalAlignment; FlowRowScope /
+  // FlowColumnScope carry fillMaxRowHeight / fillMaxColumnWidth.
+  const compose = prof("android-compose");
+  check("android-compose: the track arrangement branches — alignContent space-between → Arrangement.SpaceBetween, packed → spacedBy(N.dp, Alignment…)",
+    /`FlowRow`'s `verticalArrangement` \/ `FlowColumn`'s `horizontalArrangement` \(defaults `Arrangement\.Top` \/ `Arrangement\.Start`\)/.test(compose)
+    && /`alignContent:"space-between"` \(the only value the export writes; it comes with no track gap\) → `Arrangement\.SpaceBetween` there/.test(compose)
+    && /`alignContent` absent → the tracks are packed, from `alignItems`/.test(compose)
+    && /`Arrangement\.spacedBy\(rowGap\.dp, Alignment\.Top\|CenterVertically\|Bottom\)` on `FlowRow`, `Arrangement\.spacedBy\(columnGap\.dp, Alignment\.Start\|CenterHorizontally\|End\)` on `FlowColumn`/.test(compose));
+  check("android-compose: every in-flow child stretch → size the children (fillMaxRowHeight / fillMaxColumnWidth), the flow layouts can't stretch the tracks",
+    /every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks, so size the children instead: `Modifier\.fillMaxRowHeight\(\)` \(`FlowRowScope`\) \/ `Modifier\.fillMaxColumnWidth\(\)` \(`FlowColumnScope`\)/.test(compose));
+  check("android-compose: FlowRow/FlowColumn take itemVerticalAlignment / itemHorizontalAlignment, not verticalAlignment / horizontalAlignment (those are Row / Column)",
+    /`FlowRow`'s `itemVerticalAlignment` \/ `FlowColumn`'s `itemHorizontalAlignment` \(`FlowRow` and `FlowColumn` have no `verticalAlignment` \/ `horizontalAlignment` parameter\)/.test(compose)
+    && /`alignItems` → a `Row`'s `verticalAlignment` \/ a `Column`'s `horizontalAlignment`/.test(compose)
+    && !/the layout's `verticalAlignment`/.test(compose));
 }
 
 report();

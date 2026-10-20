@@ -11,17 +11,28 @@ Output
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`. With `flexWrap:"wrap"` → `FlowRow` (`gap` →
   `horizontalArrangement`, `rowGap` → `verticalArrangement = Arrangement.spacedBy(N.dp)`) / `FlowColumn`
   (`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`). The tracks' alignment is the
-  cross-axis arrangement (defaults `Arrangement.Top` / `Arrangement.Start`), so pass it to `spacedBy`:
-  `Arrangement.spacedBy(rowGap.dp, Alignment.Top|CenterVertically|Bottom)` on `FlowRow`,
-  `Arrangement.spacedBy(columnGap.dp, Alignment.Start|CenterHorizontally|End)` on `FlowColumn` — from the
-  IR's `alignContent`, else from `alignItems` (with an absent track gap, `0.dp`).
+  cross-axis arrangement — `FlowRow`'s `verticalArrangement` / `FlowColumn`'s `horizontalArrangement`
+  (defaults `Arrangement.Top` / `Arrangement.Start`) — and it branches on the IR:
+  - `alignContent:"space-between"` (the only value the export writes; it comes with no track gap) →
+    `Arrangement.SpaceBetween` there, the tracks spread over the container's cross size.
+  - `alignContent` absent → the tracks are packed, from `alignItems` (start when absent, and for `baseline`):
+    `Arrangement.spacedBy(rowGap.dp, Alignment.Top|CenterVertically|Bottom)` on `FlowRow`,
+    `Arrangement.spacedBy(columnGap.dp, Alignment.Start|CenterHorizontally|End)` on `FlowColumn` (with an
+    absent track gap, `0.dp`).
+  - every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks, so size the
+    children instead: `Modifier.fillMaxRowHeight()` (`FlowRowScope`) / `Modifier.fillMaxColumnWidth()`
+    (`FlowColumnScope`) on each; the tracks themselves stay content-sized.
+  - `alignItems` also aligns the items within each track: `FlowRow`'s `itemVerticalAlignment` /
+    `FlowColumn`'s `itemHorizontalAlignment` (`FlowRow` and `FlowColumn` have no `verticalAlignment` /
+    `horizontalAlignment` parameter); `"baseline"` → `Modifier.alignByBaseline()` on a `FlowRow`'s text
+    children. Nothing aligns the tracks to a baseline, so they pack at start.
 - `gap:N` → `horizontalArrangement = Arrangement.spacedBy(N.dp)` (Row) /
   `verticalArrangement = Arrangement.spacedBy(N.dp)` (Column). Not when `justifyContent` is one of the
   `Space*` arrangements below — those already distribute space, so `gap` is absent and `spacedBy`
   doesn't apply.
 - `padding:[t,r,b,l]` → `Modifier.padding(start = l.dp, top = t.dp, end = r.dp, bottom = b.dp)`.
-- `justifyContent` → `Arrangement.Start/Center/End/SpaceBetween/SpaceEvenly/SpaceAround`; `alignItems` → the layout's
-  `verticalAlignment`/`horizontalAlignment` (`Alignment.CenterVertically`, etc.);
+- `justifyContent` → `Arrangement.Start/Center/End/SpaceBetween/SpaceEvenly/SpaceAround`; `alignItems` → a `Row`'s
+  `verticalAlignment` / a `Column`'s `horizontalAlignment` (`Alignment.CenterVertically`, etc.);
   `alignItems:"baseline"` → drop the layout-wide alignment and put `Modifier.alignByBaseline()` on the
   `Row`'s text children instead.
 - `widthMode:"fill"` → depends on the axis: along a `Row`/`Column`'s **main** axis, fill means
