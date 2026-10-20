@@ -256,13 +256,13 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
 })());
 
 // a snapshot of ONE file is not a copy of the export it belongs to. --snapshot also
-// copies the sibling set: a design-system file's other 9 siblings (bridge/design-system-layout.js is
+// copies the sibling set: a design-system file's other 9 siblings (bridge/src/design-system-layout.ts is
 // the one definition of that 10-file set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.
 console.log("CLI — --snapshot copies the sibling set:");
 check("snapshotting ONE design-system file also snapshots its 9 siblings", (() => {
   // the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
-  // design-system/ subdirectory that holds the other 9 files (bridge/design-system-layout.js's own
+  // design-system/ subdirectory that holds the other 9 files (bridge/src/design-system-layout.ts's own
   // header comment) — not flat alongside them, which a fixture must not assume.
   const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
@@ -472,7 +472,7 @@ check("CLI end to end: ALL TEN design-system files diff one by one on the real f
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
-  // The 9 files that live INSIDE design-system/ (bridge/design-system-layout.js's DESIGN_SYSTEM_FILES,
+  // The 9 files that live INSIDE design-system/ (bridge/src/design-system-layout.ts's DESIGN_SYSTEM_FILES,
   // minus the manifest, which lives one level up). tokens.json/components.*.json/styles.animation.json
   // aren't in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
   // components.*.json by the catalog tests, and the real export predates styles.animation.json) —

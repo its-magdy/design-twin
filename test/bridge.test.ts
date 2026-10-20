@@ -1796,9 +1796,9 @@ void (async () => {
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).exportedAt ===
       "2026-08-12T00:00:00.000Z");
 
-  // --- the design-system split (bridge/design-system-layout.js) -------------------------------
+  // --- the design-system split (bridge/src/design-system-layout.ts) -------------------------------
   // The catalog is not one flat object: Figma's own model has three separate systems
-  // (VariableCollections+Variables / Paint|Text|Effect|GridStyle / Components), and library
+  // (VariableCollections+Variables / Paint|Text|Effect|Grid|CustomAnimationStyle / Components), and library
   // components are not nodes in this file at all.
   // The nine parts land in design-system/ — design/tokens.json and design/components.json at the
   // export ROOT are the user's hand-authored, non-regenerable config maps and must not be clobbered.
