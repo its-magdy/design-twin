@@ -435,24 +435,34 @@ export type MotionAnimations = Record<string, MotionAnimation> & MotionIndexedTr
  *  shape as a keyframe's `easing` (lower-cased curve type + params, or `{aliasOf: <name or id>}`). */
 export type MotionStylePropValue = string | number | boolean | NonNullable<MotionKeyframe["easing"]>;
 /** One Figma animation style with its configuration (AppliedFigmaAnimationStyle): the instance id, the
- *  style's name and styleId, duration (s), timelineOffset (s, omitted when 0) and per-prop values. The
- *  same shape is one entry of a custom animation style (CustomAnimationStyle.animationEntries). */
+ *  style's name and styleId, its description (absent when empty), duration (s), timelineOffset (s, omitted
+ *  when 0) and per-prop values. The same shape is one entry of a custom animation style
+ *  (CustomAnimationStyle.animationEntries). */
 export interface MotionStyleEntry {
   id: string;
   name: string;
   styleId: string;
+  description?: string;
   duration?: number;
   timelineOffset?: number;
   props?: Record<string, MotionStylePropValue>;
 }
 /** One node.animationStyles row (AppliedAnimationStyle). A Figma animation style is a MotionStyleEntry. */
-export interface MotionStyle extends MotionStyleEntry {
+export interface MotionStyle extends Omit<MotionStyleEntry, "id" | "name" | "styleId"> {
+  /** present on every row except an unknown-kind one with the field absent */
+  id?: string;
+  name?: string;
+  styleId?: string;
+  /** a row of an animation style kind this exporter does not know (a kind added to the Plugin API after
+   *  the typings it was built on): the applied row's `type`, lower-cased. Only the ids, name and
+   *  timelineOffset are exported, each only when present, since the row's shape is not guessed: it
+   *  carries no duration, props or entries, and a consumer treats it as an unknown animation style.
+   *  Absent on Figma and custom rows. */
+  kind?: string;
   /** a CustomAnimationStyle (applied type "CUSTOM"): the applied row has the ids, name and timelineOffset
    *  only (no duration/props); `description` and `entries` come from the style itself, looked up by
    *  styleId, and are absent when that lookup finds no custom animation style. */
   custom?: true;
-  /** the custom animation style's description (absent when empty or unreadable) */
-  description?: string;
   /** the Figma animations the custom animation style contains, in order. `[]` is a style that was read and
    *  has none; absent means the lookup found no custom animation style or its entries could not be read. */
   entries?: MotionStyleEntry[];

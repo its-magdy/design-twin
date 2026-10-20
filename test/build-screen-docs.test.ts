@@ -573,10 +573,11 @@ console.log("build-screen docs (assets):");
   check("README + export-layout: an embedded image's numbers (<use>/<image> transform, <pattern> x/y/width/height) compare relatively",
     [readme, exl].every((d) => /`<use>`\/`<image>`/.test(d) && /`<pattern>`'s\s+x\/y\/width\/height/.test(d) && /relatively, within 1 %/.test(d)));
   check("ir-fields: a hidden graphic's twin has the same variable modes", /same component and parent variants, same variable modes, size/.test(irf));
-  check("ir-fields: a motion styles[] row's shape; a custom: true row carries the style's entries[] (same shape) and description; entries: [] is an empty style, absent entries are unreadable",
-    /`styles\[\]` row is an applied animation style: `\{id, name, styleId, duration, timelineOffset, props\}`/.test(irf) &&
+  check("ir-fields: a motion styles[] row's shape; a custom: true row carries the style's entries[] (same shape) and description; entries: [] is an empty style, absent entries are unreadable; a `kind` row is an unknown style kind",
+    /`styles\[\]` row is an applied animation style: `\{id, name, styleId, description, duration, timelineOffset, props\}`/.test(irf) &&
     /`custom: true` is a custom animation style: the row itself has no `duration` or `props`; its `entries\[\]` are the animations the style plays, in order, each a row of that same shape, plus the style's `description`/.test(irf) &&
     /`entries: \[\]` is a style that plays no animations; with `entries` absent its animations could not be read/.test(irf) &&
+    /A row with a `kind` \(e\.g\. `"spring"`\) is an animation style kind this exporter doesn't know: only `id`, `name`, `styleId` and `timelineOffset` are exported/.test(irf) &&
     !/you have its name only/.test(irf) && !/read as its name only \(no duration or props\)/.test(irf));
   check("export-layout: styles.animation.json lists the custom animation styles, entries[] in the motion styles[] row form; entries: [] = none, absent = unreadable",
     /`styles\.grid\.json` \/ `styles\.animation\.json` — one file per style type/.test(exl) &&
