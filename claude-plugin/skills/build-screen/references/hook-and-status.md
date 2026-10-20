@@ -76,10 +76,10 @@ The hook records its result and a hash of every file in `files[]` — and of eve
 anchors/components map (`mapModule`: a project-relative file; one with no extension resolves like an import,
 `.tsx`/`.ts`/`.jsx`/`.js` then `/index.*`; an `@/`/`~/` alias or a package is not hashed — `--status` and the
 verify report name it once) — under `verification.hook`; `node "<scripts>/verify-build.js" --status
-design/plan/<screen>.json` derives the status:
+design/plan/<Layer>__<id>.json` derives the status:
 
 - `verified` only when the hook passed, no listed file changed since, **and** the screen's
-  `design/verify/<…>.report.json` (schema @2, `--compare` run from the project root) says `pass` and measured this
+  `design/verify/<Layer>__<id>.report.json` (schema @2, `--compare` run from the project root) says `pass` and measured this
   design and these files — compared by content hash, never by time, so a no-change re-pull or a `touch` changes
   nothing;
 - `verified-with-deviations` when it says `pass-with-deviations` instead;

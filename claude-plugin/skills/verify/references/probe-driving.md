@@ -102,7 +102,7 @@ it can; that evidence is graded on its own terms (below), and a probe miss never
 
 The agent drives every designed row the probe does not — navigate, `change_to`, hover and pressed rows, and an
 overlay row the probe left `ok: null` — and names the components it judges genuinely absent. Results go in
-`<Screen>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never
+`<Layer>__<id>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never
 written there directly — an object `{"interactions": [...], "components": [{"setName", "present": false,
 "detail"}], "inferred": [...]}` (`inferred` is optional) that the caller passes to `--compare` as `--interactions` (a bare JSON array of
 interaction rows also works). They never go into `measured.json`.

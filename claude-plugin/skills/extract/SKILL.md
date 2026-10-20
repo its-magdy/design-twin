@@ -233,13 +233,17 @@ root (no `pages/index.json`) prints `not an export root` and the root to pass in
 
 - A node id (e.g. `7314:87192`) is tried alone and, if it matches, wins outright — an id is unique.
 - Otherwise THREE exact checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed,
-  case-insensitive) — form ONE pool: any row matching any of them joins it. Exactly one row resolves; more than one
+  case-insensitive) — form ONE pool: any row matching any of them joins it. Exactly one row resolves — with a
+  `stem` line, the `<Layer>__<id>` its plan and verify set are named by (the name a verify set of that node already
+  has, so a frame renamed in Figma keeps it); more than one
   stops and prints every candidate (name, id, size, node count, `dtwin screenshot <id>`, and which field each
   matched on). The pool is what keeps a layer-name hit from hiding a second row titled the same — the empty-state
   sibling of "Members", layered `members`, is exactly this case.
-- With an empty pool, a looser case-insensitive substring search over `name`/`title`/`texts[]` runs, and its hits
-  are only a candidate list, even a single one: print the candidate(s) and ask the user to confirm by node id
-  before building, auditing or verifying it.
+- With an empty pool (and no node id the query carries, as a `<Layer>__<id>` name or a `?node-id=` URL does), the
+  same three fields are compared ignoring spaces, `-`, `_` and case ("OrderList" for "Order List"), then a looser
+  case-insensitive substring search over `name`/`title`/`texts[]` runs. Their hits are only a candidate list (exit
+  1, the whitespace-insensitive ones first), even a single one: two names that differ only by spacing may be two
+  screens, so print the candidate(s) and ask the user to confirm by node id before building, auditing or verifying it.
 - When not one index row carries a `title`, it says so: the export predates title indexing, and a re-pull of the
   screen (`dtwin pull --node <id>`) fixes it. A screen never pulled cannot be named by its title yet —
   `dtwin list`/`dtwin screenshot` show only Figma layer names — so the FIRST pull of a screen is by node id (from

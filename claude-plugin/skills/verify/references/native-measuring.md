@@ -68,16 +68,16 @@ Check these before you call anything wrong:
 
 Put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at the top level,
 so a report can never be read against a newer expectation than it was measured on. The file names no run: write it
-before sending `--status <Screen> --phase measured --run <id>`, which records its sha256 in your run — that record is
+before sending `--status <Layer>__<id> --phase measured --run <id>`, which records its sha256 in your run — that record is
 what ties it to the run (`--compare` judges a measured file that names no run by the run whose status is beside it,
 and a file that run did not record is `incomplete`). On a native stack everything —
-nodes, components, interactions — goes in `design/verify/<screen>.measured.json` (on web the probe writes
+nodes, components, interactions — goes in `design/verify/<Layer>__<id>.measured.json` (on web the probe writes
 `measured.json` and your rows go in the staged evidence file):
 
 ```json
 {"measuredAt": "<ISO from `date -u`>", "renderer": "playwright-chromium", "viewport": "1440x1236",
- "expectationSha256": "<shasum -a 256 design/verify/<Screen>.expected.json>",
- "artifacts": ["design/verify/<screen>.png"],
+ "expectationSha256": "<shasum -a 256 design/verify/<Layer>__<id>.expected.json>",
+ "artifacts": ["design/verify/<Layer>__<id>.png"],
  "nodes": [{"nodeId": "4210:1873", "styles": {"tag": "span", "fontSize": 20, "fontWeight": 600,
             "color": "rgb(3,213,171)", "backgroundColor": "rgba(0,0,0,0)", "borderRadius": 100,
             "x": 304, "y": 80, "width": 148, "height": 28, "text": "Active"}},

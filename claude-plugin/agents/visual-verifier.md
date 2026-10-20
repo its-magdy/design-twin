@@ -25,16 +25,18 @@ talked round.
   `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/native-measuring.md` — finding the element, the canonical keys,
   the traps that produced fabricated defects, the measured-file shape.
 
-Inputs you need (ask the caller once if missing): the screen name (`<Screen>` below is always the
-`<Layer>__<id>` basename of the screen file, never a nickname); the **expectation file**
-`design/verify/<Screen>.expected.json` (generated from the export — it carries every VISIBLE node
+Inputs you need (ask the caller once if missing): the verify set's name (`<Layer>__<id>` below is always the
+set `--expect` named after the frame's node — the expectation's basename without `.expected.json`, a variant's
+`<Layer>__<id>.<slug>` included — never a nickname); the **expectation file**
+`design/verify/<Layer>__<id>.expected.json` (generated from the export — it carries every VISIBLE node
 spec, instance and designed interaction, the `coordinates` convention, the canonical `measuredKeys`,
 and under `hidden` the ids of every layer the designer switched off); the reference PNG
 (`nodes[0].reference` in the screen export, a path relative to `design/export/`; its scale and offset live in the
-expectation's `referenceImage`, so never recompute the reference geometry); the plan at
-`design/plan/<screen>.json`; the run id; and how to reach the built screen (route / component / preview name). If
-you script against the export JSON, read `design/export/SCHEMA.md` first (the scripting quick keys: `text`, `box.w`,
-`hidden` on ancestors, `scroll`, `fixedChildren`). The plan's `route` is advisory free text; when the screen is a
+expectation's `referenceImage`, so never recompute the reference geometry); the plan
+(`design/plan/<Layer>__<id>.json`, or the multi-frame plan that describes the frame); the run id; and how to reach
+the built screen (route / component / preview name). If you script against the export JSON, read
+`design/export/SCHEMA.md` first (the scripting quick keys: `text`, `box.w`, `hidden` on ancestors, `scroll`,
+`fixedChildren`). The plan's `route` is advisory free text; when the screen is a
 section of the app chosen by component state (not by the URL), the plan's `navigate` steps reach it (§4).
 
 **Hidden layers do not exist for you.** Measure, hover, click and credit only ids that are not listed under
@@ -67,21 +69,21 @@ exit 3. It is only guaranteed with the bundled Chromium; `measured.json` records
 Report every step through the tool, never by hand-writing a status file:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase <phase> --run <id> [--detail "<one line>"]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase <phase> --run <id> [--detail "<one line>"]
 ```
 
 Use the run id the caller gave you; `run-protocol.md` has the phases, what an ended run refuses, and when to start
 a new run. Write `failed` with the reason if you give up. The caller waits with
-`verify-screen.js --wait <Screen> --run <id>` (exit 0 done, 1 failed/blocked, 5 timeout or no progress, 6 run cache
+`verify-screen.js --wait <Layer>__<id> --run <id>` (exit 0 done, 1 failed/blocked, 5 timeout or no progress, 6 run cache
 not accessible), which is why the status must move at every step.
 
 **Close every page and browser of the app you opened BEFORE running the probe or `--compare`**, and keep everything
-else you produce — `<Screen>.evidence.json`, state PNGs, scratch scripts — in the run cache
+else you produce — `<Layer>__<id>.evidence.json`, state PNGs, scratch scripts — in the run cache
 (`node_modules/.cache/designtwin-verify/`), never in the project tree while a page of the app is open. When your
 browser is closed, publish in one step:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase done --run <id> --publish <stageDir>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
 ```
 
 ## 2a. Process, permission and time limits
@@ -97,10 +99,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Screen> --phase 
 **On web the probe (§4) renders, waits for readiness and takes the screenshot itself; this section is for native stacks.**
 
 Render at the frame's exact size (`box.w`×`box.h` from the export; device scale 1 or note it), fonts
-loaded, animations off. Save to `design/verify/<screen>.png` — **always**; it is the canonical render,
+loaded, animations off. Save to `design/verify/<Layer>__<id>.png` — **always**; it is the canonical render,
 and `--compare` checks that every path in `artifacts` exists on disk and will not pass a report with no
-screenshot behind it (and `<screen>-dark.png`, `<screen>-rtl.png`, `<screen>-large-text.png`,
-`<screen>-<state>.png` where the app supports them).
+screenshot behind it (and `<Layer>__<id>-dark.png`, `<Layer>__<id>-rtl.png`, `<Layer>__<id>-large-text.png`,
+`<Layer>__<id>-<state>.png` where the app supports them).
 
 **Re-render right before you write each artifact, and take every measurement from that same load.**
 Your caller may keep editing while you run, and a dev server with hot reload picks those edits up mid-pass: a
@@ -117,8 +119,8 @@ page and browser of the app you opened (§2): the probe writes into `design/veri
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
-  --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> --run <id> \
-  [--steps design/plan/<screen>.json]
+  --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> \
+  [--steps design/plan/<Layer>__<id>.json]
 ```
 
 Pass the screen's plan as `--steps` (a plan with no `navigate` list runs no steps). After every load the probe waits
@@ -127,13 +129,16 @@ section is an exit 4, never measured; a page that shows at least half of the scr
 and no other screen's tagged root, is measured with the note "the screen root is not tagged" (report it). For a plan with `"tagging": {"off": true, …}` the probe has no
 default: pass `--ready <root selector>`, or `--ready none` (`probe-driving.md` has the step vocabulary, the readiness
 rules and which page loads are a step's own). Rebuild a preview or static
-build before measuring it. The probe writes `design/verify/<Screen>.measured.json` and `<Screen>.png`, including
+build before measuring it. The probe writes `design/verify/<Layer>__<id>.measured.json` and `<Layer>__<id>.png`, including
 `expectationSha256`, the probe's identity, `matchedBy` per node, `notMeasured` and the hover/focus states of every
 spec with a drawn state; with `--run <id>` it writes the `measuring` / `measured` status itself. Always pass your
 `--run <id>`: without it the probe starts a run of its own, and refuses (exit 2) beside yours. With `--run` it refuses
 (exit 2, nothing written) a run that has ended, and writes nothing while the status names ANOTHER run that has not
 ended — a newer run of the screen started since you were handed your id (or one that started, and ended, while it
 measured: `was replaced by run …`): stop and report it with the line the probe printed, and never write over that run.
+It also refuses (exit 2, before anything starts) an expectation with a legacy name or one named for another node than
+its frame: write `failed` with that line and hand back — `verify-screen --migrate` and a re-run `--expect` are the
+caller's.
 Rules:
 
 - **Never write your own probe, and never edit, patch or rewrite `measured.json`.** Its sha is the probe's
@@ -159,7 +164,7 @@ Rules:
   under the dialog contract in `probe-driving.md`). Do not re-drive a row it drove with `ok: true`.
 - **The rest of the designed interactions, and components you judge genuinely absent, are yours.** Drive navigate,
   `change_to`, hover and pressed rows and any row the probe left `ok: null`, under the evidence rules in
-  `probe-driving.md`, into `<Screen>.evidence.json` in the stage dir — never into `measured.json`. The probe
+  `probe-driving.md`, into `<Layer>__<id>.evidence.json` in the stage dir — never into `measured.json`. The probe
   measures hover and focus states only (focus is recorded only when the element really took it; programmatic focus
   may not match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in
   the evidence; whether a Tab stop shows a ring at all is the probe's `keyboard.focus-visible`); pressed states are
@@ -186,7 +191,7 @@ screen from a plain pass (verdict `incomplete`, "tag these elements"). Tag the e
 ## 5. Look, as well as measure
 
 Numbers do not catch everything. The probe also diffs its render against the reference PNG
-(informational, never the verdict). Open `<S>.diff.png` and read `report.visual.regions`; start at the
+(informational, never the verdict). Open `<Layer>__<id>.diff.png` and read `report.visual.regions`; start at the
 hot regions, then still compare the whole reference PNG and your render side by side — 1-px lines and
 borders, light greys and tints below the 0.2 threshold, and text-only changes rarely become regions.
 Report anything the measurement cannot express as a `note` (name the region and its `built` /

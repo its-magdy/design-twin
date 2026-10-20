@@ -161,6 +161,18 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `killall`, `kill -1`, …); a dependency or Playwright browser install; and `dangerouslyDisableSandbox`. The reason
   says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
   is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
+- **`verify-screen` / `verify-probe` exit 2: "legacy-named verify set … run verify-screen --migrate"** → the
+  project has verify sets from before sets were named by node (a nickname, `<Screen>@320`, `<Screen>-r1`). Every set
+  is now `<Layer>__<id>` (a variant `<Layer>__<id>.<slug>`); `--compare` and the probe refuse a legacy-named
+  expectation, and `--status` a node that has only legacy-named sets. From the project root run
+  `node "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
+  then `--migrate --apply`, which renames every file of each set (the live status too) and rewrites the paths a
+  plan's `verification` records. It skips a set whose node is unknown or ambiguous, that has an open run (end or
+  finish that run first), whose new name is taken, whose variant slug the grammar refuses, or that a plan records by
+  hand or finds by its name alone (add `"nodeId"` to that plan); rename those by hand. A run cut short leaves
+  `design/verify/.migrate-<S>.json`: the next `--migrate --apply` rolls it back first. **"--out takes the verify
+  directory"** / **"--force is gone"** → `--out` names the directory, never the set; a second set of one node is
+  `--expect --variant <slug>`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.

@@ -77,7 +77,7 @@ check("exit 4 names a closed or crashed page or browser and --check when it recu
   && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(flat(read("claude-plugin/skills/verify/SKILL.md")))
   && /the page or browser closed or crashed \(re-run once; if it recurs, run --check\) \(nothing written; with --run the/.test(flat(read("design-to-code/verify-probe.ts"))));
 check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
-check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Screen>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
+check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Layer>__<id>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
 check("build-screen step 5 names verify-probe.js and says web measurements are never hand-written", /verify-probe\.js/.test(step(5)) && /never a hand-written one/i.test(step(5)));
 check("references/verify.md: readiness on web is the probe's (fonts.ready, reduced motion, --ready), and networkidle is not used", /verify-probe\.js/.test(verifyRef) && /document\.fonts\.ready/.test(verifyRef) && /reduced motion/i.test(verifyRef) && /does not use `networkidle`/.test(verifyRef));
 
@@ -145,8 +145,8 @@ console.log("verify docs (run integrity + agent safety):");
     JSON.stringify(chain(verifier)) === JSON.stringify(phases) && JSON.stringify(chain(verifyRef)) === JSON.stringify(phases)
     && inDoc(verifySkill) === "ok" && !/`comparing`|`rendered`|`starting\|renderer-found/.test(verifier + verifyRef));
   check("status is written with verify-screen.js --status --phase --run (never by hand) and waited on with --wait --run, in the verifier, the verify skill, references/verify.md and build-screen",
-    [verifier, verifySkill, verifyRef].every((t) => /--status <Screen> --phase <(phase|p)> --run <id>|--status <screen> --phase <p> --run <id>/.test(t) && /--wait <(Screen|screen)> --run <id>/.test(t))
-    && /never by hand/.test(verifier) && /--wait <Screen> --run <id>/.test(skill) && !/"at": "<ISO timestamp>"|date -u \+%Y-%m-%dT%H:%M:%SZ`\. A/.test(verifier));
+    [verifier, verifySkill, verifyRef].every((t) => /--status <Layer>__<id> --phase <(phase|p)> --run <id>/.test(t) && /--wait <Layer>__<id> --run <id>/.test(t))
+    && /never by hand/.test(verifier) && /--wait <Layer>__<id> --run <id>/.test(skill) && !/"at": "<ISO timestamp>"|date -u \+%Y-%m-%dT%H:%M:%SZ`\. A/.test(verifier));
   check("the probe is given --run <id> and writes measuring/measured itself", /verify-probe\.js".{0,300}--run <id>/.test(verifier) && /verify-probe\.js.{0,300}--run <id>/.test(verifySkill));
   check("a probe without --run starts and ends a run of its own and refuses beside another open run (references/verify.md, the run protocol, the verifier); no 'unbound' measured file is left in the docs",
     /Without `--run` \(your own loop\) the probe starts a run of its own, prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3\/4/.test(verifyRef)
@@ -160,13 +160,13 @@ console.log("verify docs (run integrity + agent safety):");
     && /the run records the probe's pid, host and a deadline \(its start \+ `--max-time` \+ 120 s\): the next probe without `--run` ends it `failed` itself .{0,40}once that pid is gone on the same machine or, on any host, the deadline has passed/.test(verifyRef)
     && /Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it refuses, naming that probe's own run/.test(verifyRef)
     && /when a later probe did, it finds the status naming that run and writes nothing more \(exit 2, or 128 \+ the signal's number when a stop signal ended it, or 1 after an error\)/.test(verifyRef)
-    && /An own run that ends `done` replaces the published `design\/verify\/<Screen>\.status\.json` with its run's \(the pid and host stay in the run cache, never in that file\); one that ends `failed` publishes nothing/.test(verifyRef)
+    && /An own run that ends `done` replaces the published `design\/verify\/<Layer>__<id>\.status\.json` with its run's \(the pid and host stay in the run cache, never in that file\); one that ends `failed` publishes nothing/.test(verifyRef)
     && !/Each probe run replaces the published/.test(verifyRef)
     && !/never stays open/.test(verifyRef)
     && /`--wait` on an old id returns at once on that run's old `done` only until a later run replaces the status — after that it ends in exit 5, `stalled` once that run's status stops changing \(`--stall`\), at the latest on `--timeout`/.test(skill)
     && /then it ends in exit 5 — `stalled` once that run's status stops changing for `--stall`, at the latest on `--timeout`/.test(verifySkill)
     && !/waits out its `--timeout`/.test(skill + verifySkill)
-    && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Screen>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
+    && /Your own probe without `--run` is such a later run: it replaces the live status with its own run's, and the published `design\/verify\/<Layer>__<id>\.status\.json` too once that run ends `done` \(a `failed` one publishes nothing\)/.test(skill));
   check("--status without --new-run, and the probe's --run, write no run over ANOTHER run that has not ended, the probe at its start and at every status write (the run protocol, the verifier)",
     /Nor does `--status` \(without `--new-run`\) or the probe's `--run` write your run while the status names ANOTHER run that has not ended \(exit 2, nothing written, naming it and how to wait for it or end it — /.test(verifySkill)
     && /a probe's own run is named as one, with when and by which pid it started and whether that probe is gone or past its deadline: nobody waits for it, so the line gives only the command that ends it, for when no probe is running\)/.test(verifySkill)
@@ -178,7 +178,7 @@ console.log("verify docs (run integrity + agent safety):");
   check("run membership is the run id and the recorded sha, never a timestamp: a hand-written measured file naming no run is judged by the run beside it, which --status --phase measured records (verdict rules, native measuring)",
     /A measured file that names no run \(written by hand on a native stack, or by an older probe\) is judged by the run whose status is beside it/.test(verifySkill)
     && /No timestamp decides which run a file belongs to/.test(verifySkill) && !/measured after that run ended|measured AFTER that run ended/.test(verifySkill + verifyRef)
-    && /The file names no run: write it before sending `--status <Screen> --phase measured --run <id>`, which records its sha256 in your run/.test(verifier));
+    && /The file names no run: write it before sending `--status <Layer>__<id> --phase measured --run <id>`, which records its sha256 in your run/.test(verifier));
   // (phrases matched loosely: whitespace and line breaks collapse, case-insensitive where it is prose)
   const ws = (t: string): string => t.replace(/\s+/g, " ");
   check("the verifier stages evidence.json and state PNGs in node_modules/.cache/designtwin-verify/stage/<runId>/ and publishes with --phase done --publish; nothing written into the project while a page is open; watch-ignore is only a suggestion",
@@ -189,9 +189,9 @@ console.log("verify docs (run integrity + agent safety):");
   check("close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills (the verifier: refused by its hook), reuse the user's dev server",
     [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /(reuse|reusing) a dev server the user/i.test(t))
     && /never `pkill -f`, `killall`/i.test(verifySkill) && verifierGuarded && /never `pkill -f`/.test(verifyRef));
-  check("the live status lives in the run cache (node_modules/.cache/designtwin-verify/), so heartbeats never touch the project; done publishes design/verify/<S>.status.json (verifier, verify skill, references/verify.md, build-screen)",
-    [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<(Screen|screen)>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
-    && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<screen>\.status\.json` at `done`/.test(ws(skill)));
+  check("the live status lives in the run cache (node_modules/.cache/designtwin-verify/), so heartbeats never touch the project; done publishes design/verify/<Layer>__<id>.status.json (verifier, verify skill, references/verify.md, build-screen)",
+    [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<Layer>__<id>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
+    && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<Layer>__<id>\.status\.json` at `done`/.test(ws(skill)));
   check("done checks the measured file before it copies anything (verifier, verify skill, references/verify.md)",
     [verifier, verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
   check("'a safety check separate from auto mode blocked this request' is labelled a no-verdict denial that retrying will not fix (not a real block); the transient form is 'temporarily unavailable …, so auto mode cannot determine the safety of'",
@@ -249,8 +249,8 @@ console.log("verify docs (run integrity + agent safety):");
   check("the verifier says the probe measures in its own browser, so a write reloads the agent's OWN open page and its later interaction evidence",
     /the probe measures in its own browser, so what a write\s+reloads is YOUR page/.test(verifier) && /interaction evidence you record on it afterwards/.test(verifier) && !/the measurement records 1 document loaded/.test(verifier));
   // evidence is staged and published, never written into design/verify directly
-  check("the verify skill never has the agent write design/verify/<Screen>.evidence.json directly: staged, then published at done",
-    !/judges absent, in `design\/verify\/<Screen>\.evidence\.json`/.test(verifySkill) && /in `<Screen>\.evidence\.json` — staged in the run's stage dir and published into `design\/verify\/` at `done`, never written there directly/.test(verifySkill));
+  check("the verify skill never has the agent write design/verify/<Layer>__<id>.evidence.json directly: staged, then published at done",
+    !/judges absent, in `design\/verify\/<Layer>__<id>\.evidence\.json`/.test(verifySkill) && /in `<Layer>__<id>\.evidence\.json` — staged in the run's stage dir and published into `design\/verify\/` at `done`, never written there directly/.test(verifySkill));
   check("--wait exit 5 is 'timeout or no progress' everywhere (never 'no timeout/progress')",
     [verifier, verifySkill, verifyRef].every((t) => /5 timeout or no progress/.test(t) && !/no timeout\/progress/.test(t)));
   check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files); the verifier's hook refuses it",
@@ -331,7 +331,7 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
     && /a plan with no `navigate` list runs no steps, and the probe says so in a `note` line/.test(verifySkill) && /Pass the plan as `--steps` \(one with no `navigate` runs no steps\)/.test(skill)
     && !/only when (the plan|it) has a `navigate` list/.test(verifier + verifySkill + skill));
   check("the probe call in every doc shows --steps",
-    [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<screen>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
+    [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<Layer>__<id>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
   check("the shipped probe drives overlay/swap on_click/on_press and plan expect:dialog rows: reveals hover-hidden openers, mouse vs synthetic activation, never ok:false, destination tag inside",
     [verifier, verifySkill].every((t) => /`overlay` or `swap`|`overlay` \/ `swap`/.test(t) && /`on_click` \/ `on_press`/.test(t) && /`expect: "dialog"`/.test(t) && /hover-hidden opener/.test(t) && /`"synthetic"`/.test(t) && /never a user activation/.test(t)
       && /never `ok: false`|NEVER `ok: false`/.test(t) && /`data-dt-node` tag (on or )?INSIDE|tag INSIDE|on or inside/i.test(t)));
@@ -375,9 +375,12 @@ console.log("build-screen docs (dialog triggers + step matching):");
     /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifier) && /or on a NEWLY visible ancestor of\s+it — never one visible before the click/.test(verifier)
     && /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifySkill)
     && /or on an ancestor of it that became visible with it \(never one visible before the click\)/.test(skill) && /or on a newly visible ancestor of it/.test(verifyRef));
-  check("one plan rule: of several plans, the one listing files[]; --compare picks the same; the re-run names --plan (verify skill, build-screen)",
-    /or — when several do — the one\s+that lists `files\[\]`; `--compare` picks the plan by the same rule/.test(verifySkill) && /with the `--plan` it names, when it names one/.test(verifySkill)
-    && /of several, the one listing `files\[\]`/.test(skill));
+  check("one plan rule: a frame's plan is found by node id (nodeId, else the id in its <Layer>__<id>.json name); several are exit 2 unless --plan; --compare picks the same; the re-run names --plan; no files[] tie-break (verify skill, build-screen)",
+    /the ONE plan in `design\/plan\/` that describes the frame — its `nodeId`, else the id its\s+`<Layer>__<id>\.json` name carries; several are exit 2 before anything is written: keep one, or pass `--plan`;\s+`--compare` picks the plan by the same rule/.test(verifySkill)
+    && /with the `--plan` it names, when it names one/.test(verifySkill)
+    && /A plan describes a frame when its `nodeId` is the frame's id, else when its file name `<Layer>__<id>\.json` carries that id — never by its `screen` field or a nickname/.test(verifySkill)
+    && /the one plan that describes the frame — by\s+its `nodeId`, else the id in its file name; several are exit 2 unless `--plan` names one/.test(skill)
+    && ![verifySkill, skill].some((t) => /the one\s+(that )?list(s|ing) `files\[\]`/.test(t)));
   check("a plan with navigate and a probe run without --steps → an input note (verify skill)", /A plan with `navigate` and a\s+probe run without `--steps` gets an input note/.test(verifySkill));
   check("[known limit] probe rows bind only through the run's status chain; a hand-recorded measured file gains no pass power beyond the evidence rules + the destination tag (verify skill)",
     /Known limit: the binding is the run's status chain, nothing more/.test(verifySkill) && /its rows gain no pass power beyond what the evidence rules and the destination tag already demand/.test(verifySkill));
@@ -423,7 +426,7 @@ console.log("build-screen docs (same-URL documents + load wait):");
     /After every load and the steps the probe waits for the screen root's tag — `--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(verifier) && /an expired session bouncing to a login page/.test(verifier)
     && /its default `--ready`/.test(verifier) && /`--ready none` only to wait for nothing/.test(verifySkill) && /an expired session bouncing to a login page/.test(verifySkill)
     && /waits for `--ready` — by default the screen root's tag `\[data-dt-node="<frame id>"\]`/.test(verifyRef) && /the default `--ready` on the screen root's tag is what tells it apart/.test(verifyRef)
-    && /\[--steps design\/plan\/<screen>\.json\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
+    && /\[--steps design\/plan\/<Layer>__<id>\.json\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
     && ![verifier, verifySkill, verifyRef, skill].some((t) => /always pass `--ready|--ready '\[data-dt-node/.test(t)));
   check("the screen root carries its frame id (build-screen); an untagged root on a page that shows at least half of the screen's other tags is measured with a note (fewer: exit 4), and a tagging-off plan has no default — pass --ready <root selector> or --ready none (verifier, verify skill, build-screen)",
     /\*\*The screen root carries its frame id\*\*/.test(skill) && /finds the root by the frame's size and a\s+fill \(else the viewport stands in for it\), and says how in a note/.test(skill)
@@ -586,6 +589,7 @@ console.log("build-screen docs:");
     ["--lookup", "design-to-code/tokens.ts", "lookup:"],
     ["--check", "design-to-code/tokens.ts", "check:"],
     ["--map", "design-to-code/cross-check.ts", "map:"],
+    ["--variant", "design-to-code/verify-screen.ts", 'variant: { type: "string" }'],
   ];
   for (const [flag, file, reg] of flags) check(`${flag} is documented and registered in ${file}`, docs.includes(flag + " ") && src(file).includes(reg));
   check("FIGMA_BRIDGE_PORT + positional outDir + per-verb --help are stated (README, help skill, extract)",
@@ -601,7 +605,8 @@ console.log("build-screen docs:");
     return m.length > 0 && m.every((x) => /design\/plan/.test(x));
   }));
   check("MCP surface: 48,000-char inline cap, sourceFile, .prev, lastScreenExport/lastWrite, design_drift_lint `screens`", /48,000/.test(docs) && /sourceFile/.test(docs) && /\.json\.prev/.test(docs) && /lastScreenExport/.test(docs) && /lastWrite/.test(docs) && /design_drift_lint. takes `screens/.test(docs));
-  check("visual-verifier: <Screen> is the <Layer>__<id> basename", /`<Screen>` below is always the `<Layer>__<id>` basename/.test(verifier));
+  check("visual-verifier: <Layer>__<id> is the verify set --expect named after the frame's node (a variant's too), never a nickname",
+    /`<Layer>__<id>` below is always the set `--expect` named after the frame's node — the expectation's basename without `\.expected\.json`, a variant's `<Layer>__<id>\.<slug>` included — never a nickname/.test(verifier));
   // a bare code is the id of a NODE-LESS finding only (it does not cover `missing-font@1:5`).
   check("build-screen: a bare code is accepted only for a finding with no node (its id), not as a catch-all",
     /for a finding with no node, is its bare\s+code \(which is its id\)/.test(skill) && !/a bare code are still accepted/.test(skill));
@@ -878,8 +883,8 @@ console.log("build-screen docs:");
     /field: "reference"/.test(verifySkill) && /never waives or changes a delta/.test(verifySkill) && /field: "reference"/.test(skill) && /without\s+waiving a delta/.test(skill));
   check("build-screen: a line-height taller than its fixed text box is a deliberate choice (the expectation's 'text box height' row)",
     /line-height taller than its fixed text box.{0,160}choose deliberately/.test(skill) && /line-height taller than its fixed text box is a choice to make deliberately/.test(verifyRef));
-  check("verify skill: a replaced expectation keeps <Screen>.expected.prev.json (one generation) and says generator vs export; byte-identical says nothing about the build",
-    /<Screen>\.expected\.prev\.json/.test(verifySkill) && /one generation/.test(verifySkill) && /expectation generator changed/.test(verifySkill) && /Byte-identical to the expectation on disk" says nothing about the build/.test(verifySkill));
+  check("verify skill: a replaced expectation keeps <Layer>__<id>.expected.prev.json (one generation) and says generator vs export; byte-identical says nothing about the build",
+    /<Layer>__<id>\.expected\.prev\.json/.test(verifySkill) && /one generation/.test(verifySkill) && /expectation generator changed/.test(verifySkill) && /Byte-identical to the expectation on disk" says nothing about the build/.test(verifySkill));
   check("help, verify skill and visual-verifier: --browser-path <executable> (macOS inner binary, only guaranteed with the bundled Chromium; recorded as custom, never the path)",
     [helpSkill, verifySkill, verifier].every((d) => /--browser-path <executable>/.test(d) && /Contents\/MacOS/.test(d) && /only guaranteed with the bundled Chromium/.test(d)) && /`custom`, never the path/.test(verifySkill));
   const trouble = flat(read("claude-plugin/skills/help/references/troubleshooting.md"));
@@ -954,6 +959,40 @@ console.log("build-screen docs:");
     /If it refuses.{0,200}already has an audit report/.test(auditSkill) && /pass it as `--out`/.test(auditSkill) && /`--force`.{0,200}retire the old pair/.test(auditSkill));
   check("audit-design: the cross-check command carries --out (a bare run only prints), with the <Screen>__<id>.cross form the plan's crossCheckFile points at",
     /cross-check\.js" --design-system design\/export\/design-system \\? ?--out design\/audit\/<name>\.cross/.test(auditSkill) && /--out design\/audit\/<Screen>__<id>\.cross/.test(auditSkill) && /Without `--out` the cross-check report only prints/.test(auditSkill));
+}
+
+{
+  // One name per verify set, <Layer>__<id> (the frame's node): --out is a directory, a second set is a --variant,
+  // legacy names are --migrate's, plans are found by node id, a fold is a candidate.
+  console.log("verify docs (the canonical screen key):");
+  const trouble = flat(read("claude-plugin/skills/help/references/troubleshooting.md"));
+  const verifyDocs = [verifier, verifySkill, verifyRef, skill];
+  // <Screen> survives only as an export file's <Screen>__<id> and the legacy names --migrate renames
+  check("no verify doc names a verify set <Screen>/<screen>, passes --out design/verify/<set>, or tells anyone to pass --force (verifier, verify skill, references/verify.md, build-screen)",
+    verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1)/.test(t) && !/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
+  check("the verify skill: --out is the verify DIRECTORY, the set is named by the frame's node (the name a set of the node already has), any other --out basename is exit 2, and there is no --force",
+    /`--out` is the verify DIRECTORY \(default `design\/verify`; a new one ends in `\/`\), and the set in it is `<Layer>__<id>` — the name a set of that node there already has \(a frame renamed in Figma keeps writing the same set\)/.test(verifySkill)
+    && /any other `--out` basename is refused \(exit 2;/.test(verifySkill) && /There is no `--force`: it is a usage error \(exit 2\)/.test(verifySkill));
+  check("the verify skill: a second set of a node is --expect --variant <slug> (<Layer>__<id>.<slug>), with the slug grammar, reserved file tails and the \"-\" overlap rule",
+    /`--expect --variant <slug>` writes `<Layer>__<id>\.<slug>`/.test(verifySkill) && /lower-case letters and digits, words joined by single `-`, at most\s+32 characters/.test(verifySkill)
+    && /a file tail of the set \(`diff`, `report`, `measured`, …\) is no slug, nor one that extends another\s+variant of the node by `-`/.test(verifySkill));
+  check("--migrate is documented where legacy-named sets are met: dry run first, then --apply, and what it skips (verify skill, build-screen, help troubleshooting)",
+    /Run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-screen\.js" --migrate` first — a dry run that lists each rename\s+and each set it skips, and why — then `--migrate --apply`/.test(verifySkill)
+    && /it skips a set whose node is unknown or ambiguous, that has an\s+open run, whose new name is taken/.test(verifySkill)
+    && /`verify-screen\.js --migrate` \(a dry run\), then `--migrate --apply`/.test(skill) && /`--expect --variant <slug>`/.test(skill)
+    && /verify-screen\.js" --migrate` — a dry run that lists each rename and each set it skips, with why — then `--migrate --apply`/.test(trouble)
+    && /It skips a set whose node is unknown or ambiguous, that has an open run/.test(trouble));
+  check("--status/--wait take the set name, else the node id or exact layer name; a legacy-only node is refused at --status with --migrate --apply (the run protocol)",
+    /`--status` and `--wait` take that name as written, else the\s+screen's node id or exact layer name/.test(verifySkill)
+    && /`--status` refuses a node that has only legacy-named sets \(exit 2: run\s+`verify-screen\.js --migrate --apply`, then `--status <Layer>__<id>`\)/.test(verifySkill));
+  check("build-screen: a new plan is design/plan/<Layer>__<id>.json (resolve-screen's stem); another name or a second plan of the node is exit 2; an existing plan merges under any name",
+    /A new plan is named by its node: `design\/plan\/<Layer>__<id>\.json`, the `stem` resolve-screen printed/.test(skill)
+    && /Another name for a new plan, or a second plan of a node that already has\s+one, is refused \(exit 2, naming the file to use\); an existing plan is merged under whatever name it has/.test(skill));
+  check("resolve-screen: a resolve prints its stem (verify skill, build-screen, extract); a whitespace-insensitive match is a candidate, never a resolve (verify skill, build-screen, extract)",
+    [verifySkill, skill, extractDocs].every((t) => /`stem`/.test(t))
+    && /matches only once spaces, `-` and `_` are ignored .{0,60}is a candidate to confirm by node id too, never a resolve/.test(verifySkill)
+    && /a match only once spaces, `-` and `_` are ignored is one too/.test(skill)
+    && /compared ignoring spaces, `-`, `_` and case .{0,200}Their hits are only a candidate list \(exit\s+1, the whitespace-insensitive ones first\)/.test(extractDocs));
 }
 
 report();

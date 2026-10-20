@@ -26,8 +26,15 @@ A pass takes minutes and prints nothing, so the caller cannot tell progress from
 the tool, never by hand — the tool stamps `rev`, `at` and the file hashes itself, atomically:
 
 ```bash
-node "<scripts>/verify-screen.js" --status <Screen> --phase <p> --run <id> [--detail "<one line>"]
+node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase <p> --run <id> [--detail "<one line>"]
 ```
+
+`<Layer>__<id>` is the verify set's name (a variant's `<Layer>__<id>.<slug>` too), and the set has one status, keyed
+by that name in the expectation's directory. `--status` and `--wait` take that name as written, else the
+screen's node id or exact layer name, which they resolve to the node's set; a query that names no set is exit 2
+with its candidates, and `--status` refuses a node that has only legacy-named sets (exit 2: run
+`verify-screen.js --migrate --apply`, then `--status <Layer>__<id>`). A run already open under a legacy name can
+still be waited on and ended under that name; `--migrate` renames the set once the run has ended.
 
 Use the run id you were given. Only when you were given none does your first call use `--new-run` instead of `--run`
 (it prints `run <id> rev <n>`) — starting a new run while the caller holds an id forks it, and the caller's
@@ -52,7 +59,7 @@ Phases, in order: `queued` → `starting` → `renderer-found` → `renderer-rea
 
 `renderer-ready` is whatever "ready to capture" means on the stack — dev server answering, simulator booted,
 emulator up, test harness compiled. On web the probe writes `measuring` and `measured` itself when it is given
-`--run <id>`. `measured` and `done` check the file: `<Screen>.measured.json` must exist and name the current
+`--run <id>`. `measured` and `done` check the file: `<Layer>__<id>.measured.json` must exist and name the current
 expectation (on native, write it before sending `measured`). Write `failed` with the reason when you give up, so
 the last phase is never left hanging. The status (`designtwin/verify-status@2`) holds `runId`, `rev`, `phase`,
 `detail`, `at` and the shas of the expectation, measured and evidence files — and `replaced` (`runId`, `phase`, `at`)
@@ -61,7 +68,7 @@ when its record replaced another run that had ended.
 ## Waiting on a run
 
 ```bash
-node "<scripts>/verify-screen.js" --wait <Screen> --run <id>
+node "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>
 ```
 
 Exit 0 done and the measured file matches (and the evidence file, when the run published one), 1 failed or
@@ -82,9 +89,9 @@ advancing for minutes as the real hang.
 ## The run cache
 
 Heartbeats are free: every `--status` call writes the LIVE status in the run cache,
-`node_modules/.cache/designtwin-verify/<Screen>.status.json` (the path is printed), which no dev server watches —
+`node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json` (the path is printed), which no dev server watches —
 so a status write never touches the page being measured. `done` publishes the final status as
-`design/verify/<Screen>.status.json`, the durable record.
+`design/verify/<Layer>__<id>.status.json`, the durable record.
 
 The `node_modules` is the project's own: beside the nearest `package.json` at or above `design/verify` (the
 workspace root's in a hoisted monorepo; never past the repo's `.git`), created if missing. With no `package.json`
@@ -94,7 +101,7 @@ every `--status`, `--wait`, probe and `--compare` of one run the same way (all s
 Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it — the
 sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow writes
 there; the probe only prints the same as a warning and keeps its exit codes. Status writes of one screen take turns
-(a `<Screen>.status.json.lock` beside the live status, held for the moment of the write; one left by a killed
+(a `<Layer>__<id>.status.json.lock` beside the live status, held for the moment of the write; one left by a killed
 command is cleared by the next write): a `--status` still waiting on another write after 15 s refuses with exit 1 —
 run it again. `--status` and `--wait` resolve
 `--dir` (default `design/verify`) against the current directory; from anywhere but the project root pass `--dir`
@@ -122,12 +129,12 @@ build did not change although the code did.
 
 Never write into the project tree while a page of the app is open. A dev server watches the project: on a Vite +
 Tailwind v4 app, rewriting a file under `design/` while a Playwright session is connected fully reloads the very
-page being measured. Keep everything else the run produces (`<Screen>.evidence.json`, state PNGs) in the run's
+page being measured. Keep everything else the run produces (`<Layer>__<id>.evidence.json`, state PNGs) in the run's
 stage dir, `node_modules/.cache/designtwin-verify/stage/<runId>/` (`--status` prints it as `stage` and creates
 it), close the browser, then publish in one step:
 
 ```bash
-node "<scripts>/verify-screen.js" --status <Screen> --phase done --run <id> --publish <stageDir>
+node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
 ```
 
 `done` checks the measured file first, then copies: it refuses (exit 1, nothing copied) when `measured.json` is
@@ -184,14 +191,14 @@ the second ends the run `failed` itself (`status run <id> failed — …`), so t
 it reports the navigation log. One re-run, never a loop. After an exit 3 the verifier stops to ask the user and the
 run stays open at `measuring`: once the user has fixed the renderer the run resumes with the SAME `--run <id>` (never
 `--new-run`; a verifier started again for the answer is handed that id), and that probe is the run's second attempt.
-An orchestrator's `--wait <Screen> --run <id>` may end meanwhile in exit 5 `stalled` (the status has not changed for
+An orchestrator's `--wait <Layer>__<id> --run <id>` may end meanwhile in exit 5 `stalled` (the status has not changed for
 `--stall`): that is the user's answer pending, not a hang — relay the question if it has not reached the user, and
 `--wait` again with the same `--run <id>` once they have answered; never start a new run over it. A run id is one pass: a probe that succeeds in between
 does not reset the count. If the run ended meanwhile, or another run opened (or opened and ended) since, the probe leaves the status as it
 is and exits 2 (the attempt is not counted), like a probe of a run that had already ended; without `--run` its own run ends `failed` at the first exit 3/4 and the re-run is a
 new run. When the status write that counts an attempt is refused (the run cache is not writable, or another writer
 held its lock), the probe prints `status run <id> not counted — …` with the command that ends the run: re-run once
-as above, and if that attempt fails too, end the run yourself with that `verify-screen --status <Screen> --phase
+as above, and if that attempt fails too, end the run yourself with that `verify-screen --status <Layer>__<id> --phase
 failed --run <id>` command — the run would otherwise sit at its last phase. A run cache that is not writable refuses
 that command the same way, so then the line prints none: make the run cache writable first (the `warning  run cache
 … is not writable` line above it says how), then re-run once and end the run the same way if it fails again.
