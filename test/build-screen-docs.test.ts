@@ -1085,8 +1085,10 @@ console.log("build-screen docs (wrapped-track gap):");
   // counterAxisAlignContent AUTO sizes each track to its largest child and aligns it by counterAxisAlignItems
   // (stretching only when every child is STRETCH), so an absent alignContent still has to be written out.
   check("ir-fields: an absent alignContent on a wrap packs and aligns the tracks like alignItems, or stretches when every child stretches",
-    /When `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned like `alignItems` \(start when that is absent too\), or stretched when every in-flow child is `alignSelf:"stretch"` \(an absolutely positioned child has no `alignSelf`\)/.test(irf));
-  // The stretch condition counts in-flow children only: an absolutely positioned child carries no alignSelf.
+    /When `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned like `alignItems` \(start when that is absent too\), or stretched when every in-flow child is `alignSelf:"stretch"` \(in-flow: skip children with `absolute:true` — the export can still write their `alignSelf`\)/.test(irf)
+    && !/an absolutely positioned child has no `alignSelf`/.test(irf));
+  // The stretch condition counts in-flow children only; serialize.ts writes alignSelf on an absolute child too,
+  // so the doc names the absolute flag to skip rather than claiming the field is missing.
   check("ir-fields + profiles: stretch is 'every in-flow child', never 'every child'",
     !/every child is `alignSelf/.test(irf) && ["web-css-modules", "web-tailwind", "react-native", "swiftui"].every((n) =>
       /every in-flow child is `alignSelf:"stretch"`/.test(prof(n)) && !/every child is `alignSelf/.test(prof(n))));
@@ -1124,8 +1126,12 @@ console.log("build-screen docs (wrapped-track gap):");
     && /`alignContent:"space-between"` \(the only value the export writes; it comes with no track gap\) → `Arrangement\.SpaceBetween` there/.test(compose)
     && /`alignContent` absent → the tracks are packed, from `alignItems`/.test(compose)
     && /`Arrangement\.spacedBy\(rowGap\.dp, Alignment\.Top\|CenterVertically\|Bottom\)` on `FlowRow`, `Arrangement\.spacedBy\(columnGap\.dp, Alignment\.Start\|CenterHorizontally\|End\)` on `FlowColumn`/.test(compose));
-  check("android-compose: every in-flow child stretch → size the children (fillMaxRowHeight / fillMaxColumnWidth), the flow layouts can't stretch the tracks",
-    /every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks, so size the children instead: `Modifier\.fillMaxRowHeight\(\)` \(`FlowRowScope`\) \/ `Modifier\.fillMaxColumnWidth\(\)` \(`FlowColumnScope`\)/.test(compose));
+  // fillMaxRowHeight / fillMaxColumnWidth (ExperimentalLayoutApi) only fill to the track's largest item; they never
+  // grow the tracks into a fixed cross size the way Figma's AUTO stretch does.
+  check("android-compose: every in-flow child stretch → the fill modifiers only even items out within a track (opt-in); a fixed cross size needs a custom Layout",
+    /every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks\. `Modifier\.fillMaxRowHeight\(\)` \(`FlowRowScope`\) \/ `Modifier\.fillMaxColumnWidth\(\)` \(`FlowColumnScope`, both `@OptIn\(ExperimentalLayoutApi::class\)`\) only even the items out to their track's largest item/.test(compose)
+    && /When the frame has a fixed cross size the tracks must grow to fill \(Figma stretches them\), write a custom `Layout` that sizes the tracks and remeasures the children/.test(compose)
+    && !/so size the children instead/.test(compose));
   check("android-compose: FlowRow/FlowColumn take itemVerticalAlignment / itemHorizontalAlignment, not verticalAlignment / horizontalAlignment (those are Row / Column)",
     /`FlowRow`'s `itemVerticalAlignment` \/ `FlowColumn`'s `itemHorizontalAlignment` \(`FlowRow` and `FlowColumn` have no `verticalAlignment` \/ `horizontalAlignment` parameter\)/.test(compose)
     && /`alignItems` → a `Row`'s `verticalAlignment` \/ a `Column`'s `horizontalAlignment`/.test(compose)

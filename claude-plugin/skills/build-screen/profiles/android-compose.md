@@ -19,9 +19,11 @@ Output
     `Arrangement.spacedBy(rowGap.dp, Alignment.Top|CenterVertically|Bottom)` on `FlowRow`,
     `Arrangement.spacedBy(columnGap.dp, Alignment.Start|CenterHorizontally|End)` on `FlowColumn` (with an
     absent track gap, `0.dp`).
-  - every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks, so size the
-    children instead: `Modifier.fillMaxRowHeight()` (`FlowRowScope`) / `Modifier.fillMaxColumnWidth()`
-    (`FlowColumnScope`) on each; the tracks themselves stay content-sized.
+  - every in-flow child `alignSelf:"stretch"` → the flow layouts cannot stretch the tracks.
+    `Modifier.fillMaxRowHeight()` (`FlowRowScope`) / `Modifier.fillMaxColumnWidth()` (`FlowColumnScope`,
+    both `@OptIn(ExperimentalLayoutApi::class)`) only even the items out to their track's largest item; the
+    tracks stay content-sized. When the frame has a fixed cross size the tracks must grow to fill (Figma
+    stretches them), write a custom `Layout` that sizes the tracks and remeasures the children.
   - `alignItems` also aligns the items within each track: `FlowRow`'s `itemVerticalAlignment` /
     `FlowColumn`'s `itemHorizontalAlignment` (`FlowRow` and `FlowColumn` have no `verticalAlignment` /
     `horizontalAlignment` parameter); `"baseline"` → `Modifier.alignByBaseline()` on a `FlowRow`'s text

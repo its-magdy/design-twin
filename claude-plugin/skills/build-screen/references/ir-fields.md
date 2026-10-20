@@ -163,7 +163,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   (wrapped tracks are spread by dividing the free space, not by the stored track spacing). When
   `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned
   like `alignItems` (start when that is absent too), or stretched when every in-flow child is
-  `alignSelf:"stretch"` (an absolutely positioned child has no `alignSelf`). `alignItems:"baseline"` on a
+  `alignSelf:"stretch"` (in-flow: skip children with `absolute:true` — the export can still write their
+  `alignSelf`). `alignItems:"baseline"` on a
   wrap aligns the items WITHIN each track; no platform aligns the tracks themselves to a baseline, so the
   tracks pack at start.
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
