@@ -82,7 +82,7 @@ const cli = (p: Project, ...args: string[]) => spawnSync(process.execPath, [VS, 
 const recOf = (plan: Plan) => must(isVerificationRecord(plan.verification?.recorded) ? plan.verification?.recorded : undefined, "recorded@2");
 const SET_FILES = ["expected.json", "measured.json", "report.json", "report.md", "png", "status.json"];
 /** --migrate's way on for a plan whose record blocks the legacy set: record the node's <Layer>__<id> set, then --migrate. */
-const RECORDS_THE_NODE = /verify-screen --expect \(it writes the node's <Layer>__<id> set\), measure that set and run --compare --record-plan on it \(it replaces the block\), then --migrate retires this set \(a base set\) or renames it \(a variant\)/;
+const RECORDS_THE_NODE = /verify-screen --expect \(no --variant; it writes the node's <Layer>__<id> base set\), measure that set and run --compare --record-plan on it \(it replaces the block\), then --migrate retires this set \(a base set\) or renames it \(a variant\)/;
 /** A skip's lines for a plan whose record was edited: restore the block, or record the node's set (once, with
  *  "residuals go in deviations[]" once) — never verify-build's advice to re-record, which --compare refuses here. */
 const legacyAdvice = (why: readonly string[]): boolean => {
@@ -211,7 +211,7 @@ console.log("\nrefusals leave the disk as it was:");
     r.skipped.length === 1 && /reportSha256 does not name design\/verify\/Crates\.report\.json/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before));
   const sha = r.skipped[0]?.why[0] ?? "";
   check(`…and it says to restore the report, or --expect the node's set and record on THAT one — not to --compare the legacy set (got ${JSON.stringify(sha)})`,
-    /restore the report the record names/.test(sha) && /verify-screen --expect \(it writes the node's <Layer>__<id> set\)/.test(sha) && RECORDS_THE_NODE.test(sha) && !/re-run verify-screen --compare/.test(sha));
+    /restore the report the record names/.test(sha) && /verify-screen --expect \(no --variant; it writes the node's <Layer>__<id> base set\)/.test(sha) && RECORDS_THE_NODE.test(sha) && !/re-run verify-screen --compare/.test(sha));
   // the advice holds: with the node's set recorded, --migrate retires the legacy base set
   writeSet(p.put, "Crates__80_1");
   recordPlan(REL, rep, "design/verify/Crates__80_1.report.json", { cwd: p.root, now: NOW });

@@ -143,10 +143,11 @@ skip has its own way on: a set with an open run — end the run first; a plan th
 `"nodeId"` to that plan; a plan that still records a retired set's report — re-run `--compare --record-plan` on the
 node's existing `<Layer>__<id>` set, then `--migrate`; a plan of a set to rename whose record was edited by hand —
 restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded under that name); one whose
-record no longer names the report on disk — restore the report the record names; for either, instead run `--expect` (it
-writes the node's `<Layer>__<id>` set), measure that set and `--compare --record-plan` on it (it replaces the block),
-then `--migrate` retires the legacy set (a base set) or renames it (a variant);two legacy sets of one node that neither extends the other — retire the others by hand (`mv <S>.expected.json
-<S>.expected.json.retired`), as the dry run says; a node that is unknown or ambiguous, a new name that is taken, or a
+record no longer names the report on disk — restore the report the record names; for either, instead run `--expect` (no
+`--variant`; it writes the node's `<Layer>__<id>` base set), measure that set and `--compare --record-plan` on it (it
+replaces the block), then `--migrate` retires the legacy set (a base set) or renames it (a variant); two legacy sets of
+one node that neither extends the other — retire the others by hand (`mv <S>.expected.json <S>.expected.json.retired`),
+as the dry run says; a node that is unknown or ambiguous, a new name that is taken, or a
 variant slug that is reserved (`diff`, a file tail of a set), longer than 32 characters or overlaps another variant of
 the node — rename by hand. For any other skip, follow the line the dry run prints.
 

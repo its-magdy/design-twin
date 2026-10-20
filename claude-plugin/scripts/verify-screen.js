@@ -6405,12 +6405,12 @@ function namedFile(ref, field, planFile, d) {
   return /[\\/]/.test(ref) ? null : ref;
 }
 var respell = (ref, from, to) => ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to;
-var RECORD_THE_NODE = "run verify-screen --expect (it writes the node's <Layer>__<id> set), measure that set and run --compare --record-plan on it (it replaces the block), then --migrate retires this set (a base set) or renames it (a variant)";
+var RECORD_THE_NODE = "run verify-screen --expect (no --variant; it writes the node's <Layer>__<id> base set), measure that set and run --compare --record-plan on it (it replaces the block), then --migrate retires this set (a base set) or renames it (a variant)";
 function planBlocks(p, names, d) {
   const edits = recordedEditFacts(p.plan, d.cwd);
   if (edits.length) {
     return [
-      `${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) \u2014 restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]:`,
+      `${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) \u2014 restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]. The record's findings:`,
       ...edits.map((e) => `  ${e.fact}`)
     ];
   }
@@ -7153,7 +7153,7 @@ function main(argv) {
       Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
       records with a hand-edited record or finds by its name alone with no node id of the set's (add "nodeId" to it).
       Also skips a set whose plan's reportSha256 no longer names the report on disk, and two legacy sets of one node that
-      extend no other name (which one is the screen is your call). Each skip says what to do.
+      extend no other name (which one is the screen is your call). Most skips say what to do.
       Never rewrites a report, measured file or expectation; plans are never renamed.
       A run that dies part way leaves design/verify/.migrate-<S>.json (its journal): the next --migrate reports it and does
       nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes

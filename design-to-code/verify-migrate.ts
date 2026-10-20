@@ -276,7 +276,7 @@ const respell = (ref: string, from: string, to: string): string => (ref.endsWith
 /** The way on for a plan whose record cannot be re-recorded under the legacy name (verify-screen --compare refuses
  *  one): record the node's canonical set instead — --record-plan replaces the block whole, so the plan no longer names
  *  this set's report — and --migrate then retires a base set (its node has a base set now) or renames a variant. */
-const RECORD_THE_NODE = "run verify-screen --expect (it writes the node's <Layer>__<id> set), measure that set and run --compare --record-plan on it " +
+const RECORD_THE_NODE = "run verify-screen --expect (no --variant; it writes the node's <Layer>__<id> base set), measure that set and run --compare --record-plan on it " +
   "(it replaces the block), then --migrate retires this set (a base set) or renames it (a variant)";
 /** Why a plan cannot be rewritten for a move (its record edited by hand, or naming a report its sha no longer names).
  *  The record's findings are verify-build's facts without its advice (recordedEditFacts): that advice re-records, and
@@ -284,7 +284,7 @@ const RECORD_THE_NODE = "run verify-screen --expect (it writes the node's <Layer
 function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: string; verifyDir: string }): string[] {
   const edits = recordedEditFacts(p.plan, d.cwd);
   if (edits.length) {
-    return [`${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) — restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]:`,
+    return [`${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) — restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]. The record's findings:`,
       ...edits.map((e) => `  ${e.fact}`)];
   }
   const rec = recordedReport(p.plan);

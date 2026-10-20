@@ -976,7 +976,7 @@ console.log("build-screen docs:");
   const verifyDocs = [verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble, rootReadme, d2cReadme];
   // <Screen> survives only as an export file's <Screen>__<id> and the legacy names --migrate renames
   check("no verify-related doc names a verify set <Screen>/<screen>, passes --out design/verify/<set>, or tells anyone to pass --force (verifier, verify skill, references, build-screen, screen-builder, sync-design, troubleshooting, READMEs)",
-    verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1)/.test(t.replaceAll("beside `<Screen>`)", "").replaceAll("`<Screen>.dark`, ", "")) &&!/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
+    verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1)/.test(t.replaceAll("beside `<Screen>`)", "").replaceAll("`<Screen>.dark`, ", "")) && !/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
   check("the verify skill: --out is the verify DIRECTORY, the set is named by the frame's node (the name a set of the node already has), any other --out basename is exit 2, and there is no --force",
     /`--out` is the verify DIRECTORY/.test(verifySkill) && /the set in it is `<Layer>__<id>`/.test(verifySkill) && /the name a set of that node there\s+already has/.test(verifySkill)
     && /a frame renamed in Figma keeps writing the same set/.test(verifySkill)
@@ -1006,7 +1006,7 @@ console.log("build-screen docs:");
   // a legacy-named set is never sent to --compare --record-plan: --compare refuses it (verify-sets, verify-screen)
   check("--migrate skips: a hand-edited record is restored, a record whose sha misses the report is fixed by restoring the report or --expect + --compare --record-plan on the node's NEW set; only a retired set's plan is re-recorded (verify skill, troubleshooting)",
     [verifySkill, trouble].every((t) => /a plan of a set to rename whose record was edited by hand — restore the block \(`--compare` refuses a legacy-named set, so it cannot be re-recorded under that name\)/.test(t)
-      && /restore the report the record names; for either, instead run `--expect` \(it writes the node's `<Layer>__<id>` set\), measure (that set|it) and `--compare --record-plan` on it \(it replaces the block\), then `--migrate` retires the legacy set \(a base set\) or renames it \(a variant\)/.test(t)
+      && /restore the report the record names; for either, instead run `--expect` \(no `--variant`; it writes the node's `<Layer>__<id>` base set\), measure (that set|it) and `--compare --record-plan` on it \(it replaces the block\), then `--migrate` retires the legacy set \(a base set\) or renames it \(a variant\)/.test(t)
       && !/retires the legacy set;/.test(t)
       && /still records a retired set's report — re-run `--compare --record-plan` on the node's existing `<Layer>__<id>` set/.test(t)
       && !/or whose record was edited by hand/.test(t) && !/re-run `--compare --record-plan`, then `--migrate`/.test(t)));
