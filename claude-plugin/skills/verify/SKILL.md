@@ -134,16 +134,18 @@ and the probe refuse a legacy-named expectation (exit 2), and `--status` refuses
 sets. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --migrate` first — a dry run that lists each rename
 and each set it skips, and why — then `--migrate --apply`. It moves every file of a set (the live status too) and
 rewrites the paths a plan's `verification` records. A legacy variant — a set that extends another set name of its
-node (`<Screen>@320`, `<Screen>.dark`, `<Screen>-r1` beside `<Screen>`) — becomes `<Layer>__<id>.<slug>`; a lone
-`<Screen>-r1` is a base set, not a variant. Only a legacy BASE set beside an existing `<Layer>__<id>` base set of its
+node (`<Screen>@320`, `<Screen>.dark`, `<Screen>-r1` beside `<Screen>`), or the frame's layer name with a suffix after
+`.` or `@` even with no other set (a lone `<Screen>.dark`, `<Screen>@320`) — becomes `<Layer>__<id>.<slug>`; a lone
+`<Screen>-r1` is a base set, not a variant (a `-` suffix counts only beside another set: layer names hold dashes).
+Only a legacy BASE set beside an existing `<Layer>__<id>` base set of its
 node is retired (`<old>.expected.json.retired`; its other files stay). A set it skips, the dry run says why, and each
 skip has its own way on: a set with an open run — end the run first; a plan that finds the set by its name alone — add
 `"nodeId"` to that plan; a plan that still records a retired set's report — re-run `--compare --record-plan` on the
 node's existing `<Layer>__<id>` set, then `--migrate`; a plan of a set to rename whose record was edited by hand —
-restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded); one whose record no longer
-names the report on disk — restore the report the record names, or run `--expect` (it writes the node's
-`<Layer>__<id>` set), measure that set and `--compare --record-plan` on it, then `--migrate` retires the legacy set;
-two legacy sets of one node that neither extends the other — retire the others by hand (`mv <S>.expected.json
+restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded under that name); one whose
+record no longer names the report on disk — restore the report the record names; for either, instead run `--expect` (it
+writes the node's `<Layer>__<id>` set), measure that set and `--compare --record-plan` on it (it replaces the block),
+then `--migrate` retires the legacy set (a base set) or renames it (a variant);two legacy sets of one node that neither extends the other — retire the others by hand (`mv <S>.expected.json
 <S>.expected.json.retired`), as the dry run says; a node that is unknown or ambiguous, a new name that is taken, or a
 variant slug that is reserved (`diff`, a file tail of a set), longer than 32 characters or overlaps another variant of
 the node — rename by hand. For any other skip, follow the line the dry run prints.
