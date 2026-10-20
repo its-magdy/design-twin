@@ -53,7 +53,7 @@ writes the real path here, not there).
    sibling plan from the same build may not have one). Once resolved, the plan of its node — `design/plan/<stem>.json`
    (`<Layer>__<id>`), or the plan whose `nodeId` is the screen's (a multi-frame plan, or one named before a rename
    in Figma) — is the record of the first build (a screen that is not its plan's `nodeId`, a modal in its primary
-   screen's plan, is found by no tool: pass that plan as `--plan` to the verify tools):
+   screen's plan, is found by no tool: pass that plan as `--plan` to `--expect`/`--compare` and as the probe's `--steps`):
    `files[]` is where the code lives, `anchors{}` maps node ids to the file and symbol each became (absent on plans written before anchors were recorded), `tokens[]` and
    `components[]` are the decisions already made (keep them — a re-sync must not quietly re-decide
    which token `#5B5FC7` is). The export's screen files are `pages/<Page>/<Screen>__<node-id>.json`

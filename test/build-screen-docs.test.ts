@@ -976,11 +976,14 @@ console.log("build-screen docs:");
   const verifyDocs = [verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble, rootReadme, d2cReadme];
   // <Screen> survives only as an export file's <Screen>__<id> and the legacy names --migrate renames
   check("no verify-related doc names a verify set <Screen>/<screen>, passes --out design/verify/<set>, or tells anyone to pass --force (verifier, verify skill, references, build-screen, screen-builder, sync-design, troubleshooting, READMEs)",
-    verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1)/.test(t) && !/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
+    verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1|\.dark|`\))/.test(t) && !/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
   check("the verify skill: --out is the verify DIRECTORY, the set is named by the frame's node (the name a set of the node already has), any other --out basename is exit 2, and there is no --force",
     /`--out` is the verify DIRECTORY/.test(verifySkill) && /the set in it is `<Layer>__<id>`/.test(verifySkill) && /the name a set of that node there\s+already has/.test(verifySkill)
     && /a frame renamed in Figma keeps writing the same set/.test(verifySkill)
     && /any other `--out` basename is refused \(exit 2/.test(verifySkill) && /There is no `--force`/.test(verifySkill));
+  check("the verify skill: --out defaults to design/verify, and a new directory ends in `/`",
+    /\(default `design\/verify`; a new one ends in `\/`\)/.test(verifySkill));
+  check("the verify skill: --force is a usage error (exit 2)", /There is no `--force`: it is a usage error \(exit 2\)/.test(verifySkill));
   check("the verify skill: a second set of a node is --expect --variant <slug> (<Layer>__<id>.<slug>), with the slug grammar, reserved file tails and the \"-\" overlap rule",
     /--variant <slug>` writes `<Layer>__<id>\.<slug>`/.test(verifySkill) && /lower-case letters and digits/.test(verifySkill) && /single `-`/.test(verifySkill) && /at most\s+32 characters/.test(verifySkill)
     && /a file tail of the set \(`diff`, `report`/.test(verifySkill) && /extends another\s+variant of the node by `-`/.test(verifySkill));
@@ -994,8 +997,20 @@ console.log("build-screen docs:");
       && /rename by hand/.test(t) && /name that is taken/.test(t) && /(variant )?slug that is reserved/.test(t) && /overlaps another/.test(t))
     && ![verifySkill, trouble].some((t) => /stay for you to rename by hand|rename those by hand/.test(t)));
   check("--migrate retires only a legacy BASE set beside an existing <Layer>__<id> base set (its expectation gets .retired); a legacy variant becomes <Layer>__<id>.<slug> (verify skill, troubleshooting)",
-    [verifySkill, trouble].every((t) => /legacy base set beside an existing `<Layer>__<id>` base\s+set/i.test(t) && /\.retired|`\.retired`/.test(t) && /legacy variant.{0,80}becomes\s+`<Layer>__<id>\.<slug>`/.test(t))
+    [verifySkill, trouble].every((t) => /legacy base set beside an existing `<Layer>__<id>` base\s+set/i.test(t) && /\.retired|`\.retired`/.test(t) && /legacy variant.{0,200}becomes\s+`<Layer>__<id>\.<slug>`/.test(t))
     && !/A legacy set whose node already has its/.test(verifySkill + trouble));
+  check("the verify skill: a legacy variant is a set that extends another set name of its node (`<Screen>@320`, `<Screen>.dark`, `<Screen>-r1` beside `<Screen>`); a lone `<Screen>-r1` is a base set",
+    /a set that extends another set name of its node \(`<Screen>@320`, `<Screen>\.dark`, `<Screen>-r1` beside `<Screen>`\)/.test(verifySkill) && /a lone `<Screen>-r1` is a base set, not a variant/.test(verifySkill));
+  // a legacy-named set is never sent to --compare --record-plan: --compare refuses it (verify-sets, verify-screen)
+  check("--migrate skips: a hand-edited record is restored, a record whose sha misses the report is fixed by restoring the report or --expect + --compare --record-plan on the node's NEW set; only a retired set's plan is re-recorded (verify skill, troubleshooting)",
+    [verifySkill, trouble].every((t) => /a plan of a set to rename whose record was edited by hand — restore the block \(`--compare` refuses a legacy-named set, so it cannot be re-recorded\)/.test(t)
+      && /restore the report the record names, or run `--expect` \(it writes the node's `<Layer>__<id>` set\), measure (that set|it) and `--compare --record-plan` on it, then `--migrate` retires the legacy set/.test(t)
+      && /still records a retired set's report — re-run `--compare --record-plan` on the node's existing `<Layer>__<id>` set/.test(t)
+      && !/or whose record was edited by hand/.test(t) && !/re-run `--compare --record-plan`, then `--migrate`/.test(t)));
+  check("sync-design: a plan the tools do not find is passed as --plan to --expect/--compare and as the probe's --steps (the probe has no --plan)",
+    /pass that plan as `--plan` to `--expect`\/`--compare` and as the probe's `--steps`/.test(syncDoc) && !/pass that plan as `--plan` to the verify tools/.test(syncDoc));
+  check("--migrate skips: two legacy sets of one node that neither extends the other (retire the others by hand), a slug longer than 32 characters beside the reserved one, and \"follow the line the dry run prints\" for any other (verify skill, troubleshooting)",
+    [verifySkill, trouble].every((t) => /two legacy sets of one node that neither extends the other — retire the others by hand/.test(t) && /reserved[^;]{0,40}longer than 32\s+characters/.test(t) && /For any other skip, follow the line the dry run prints/.test(t)));
   const planDocs = { verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble };
   check("no verify-related doc writes `--steps design/plan/<Layer>__<id>.json` or hands verify-build `design/plan/<Layer>__<id>.json` as if every plan had the canonical name: the plan path found earlier is `<plan.json>`",
     Object.values(planDocs).every((t) => !/--steps\s+design\/plan\//.test(t) && !/verify-build\.js"( --status)? design\/plan\/<Layer>/.test(t) && !/\(`design\/plan\/<Layer>__<id>\.json`, or the multi-frame plan/.test(t))

@@ -171,9 +171,14 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   plan's `verification` records. Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its
   expectation gets `.retired`); a legacy variant becomes `<Layer>__<id>.<slug>`. A set it skips, the dry run says why,
   and each has its own way on: an open run — end or finish that run first; a plan that finds the set by its name
-  alone — add `"nodeId"` to that plan; a plan that still records the old report, or whose record was edited by hand —
-  re-run `--compare --record-plan`, then `--migrate`; a node that is unknown or ambiguous, a new name that is taken,
-  or a variant slug that is reserved or overlaps another — rename by hand. A run cut short leaves
+  alone — add `"nodeId"` to that plan; a plan that still records a retired set's report — re-run `--compare
+  --record-plan` on the node's existing `<Layer>__<id>` set, then `--migrate`; a plan of a set to rename whose record
+  was edited by hand — restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded); one
+  whose record no longer names the report on disk — restore the report the record names, or run `--expect` (it writes
+  the node's `<Layer>__<id>` set), measure it and `--compare --record-plan` on it, then `--migrate` retires the legacy
+  set; two legacy sets of one node that neither extends the other — retire the others by hand, as the dry run says; a
+  node that is unknown or ambiguous, a new name that is taken, or a variant slug that is reserved, longer than 32
+  characters or overlaps another — rename by hand. For any other skip, follow the line the dry run prints. A run cut short leaves
   `design/verify/.migrate-<S>.json`: the next `--migrate --apply` rolls it back first. **"--out takes the verify
   directory"** / **"--force is gone"** → `--out` names the directory, never the set; a second set of one node is
   `--expect --variant <slug>`.
