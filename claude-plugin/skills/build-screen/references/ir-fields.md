@@ -160,7 +160,9 @@ Read these before writing ANY script against an export JSON (field names guessed
   set it to 0 explicitly wherever `gap` would otherwise reach the cross axis. `gap` is absent under
   `space-between`/`space-evenly`/`space-around` — Figma ignores the stored spacing under those modes, so
   there is nothing to emit. Likewise the track gap is absent when `alignContent` is `space-between`
-  (wrapped tracks are spread by dividing the free space, not by the stored track spacing).
+  (wrapped tracks are spread by dividing the free space, not by the stored track spacing). When
+  `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned
+  like `alignItems` (start when that is absent too), or stretched when every child is `alignSelf:"stretch"`.
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
 - **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout inside THIS node; its children

@@ -10,7 +10,11 @@ Output
 **Layout (IR → Row/Column)**
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`. With `flexWrap:"wrap"` → `FlowRow` (`gap` →
   `horizontalArrangement`, `rowGap` → `verticalArrangement = Arrangement.spacedBy(N.dp)`) / `FlowColumn`
-  (`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`).
+  (`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`). The tracks' alignment is the
+  cross-axis arrangement (defaults `Arrangement.Top` / `Arrangement.Start`), so pass it to `spacedBy`:
+  `Arrangement.spacedBy(rowGap.dp, Alignment.Top|CenterVertically|Bottom)` on `FlowRow`,
+  `Arrangement.spacedBy(columnGap.dp, Alignment.Start|CenterHorizontally|End)` on `FlowColumn` — from the
+  IR's `alignContent`, else from `alignItems` (with an absent track gap, `0.dp`).
 - `gap:N` → `horizontalArrangement = Arrangement.spacedBy(N.dp)` (Row) /
   `verticalArrangement = Arrangement.spacedBy(N.dp)` (Column). Not when `justifyContent` is one of the
   `Space*` arrangements below — those already distribute space, so `gap` is absent and `spacedBy`

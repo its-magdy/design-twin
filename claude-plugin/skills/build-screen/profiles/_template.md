@@ -6,7 +6,8 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
 - `display:flex` / `flexDirection` (row|column) → your container + direction construct.
 - `gap:N`, `flexWrap` → your spacing/wrap mechanism (`gap` is the main-axis spacing between items; a wrap's
   track gap is `rowGap` on a row, `columnGap` on a column, and absent means 0 — don't let a both-axes `gap`
-  fill it).
+  fill it). A wrap's tracks → your cross-axis line alignment: `alignContent`, else from `alignItems`;
+  check its default (CSS's `normal` stretches the lines).
 - `padding:[top,right,bottom,left]` → your padding syntax.
 - `justifyContent`, `alignItems` → your main/cross-axis alignment.
 - `widthMode`/`heightMode` (`fill`|`hug`|`fixed`) → stretch / content-sized / fixed.

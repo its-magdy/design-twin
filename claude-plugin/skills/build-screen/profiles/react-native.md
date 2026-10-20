@@ -12,7 +12,9 @@ Output
 - `gap:N` is the main-axis gap → `columnGap:N` on a row, `rowGap:N` on a column (RN ≥ 0.71; else margins;
   not the `gap` style, which also sets the cross axis). `flexWrap:"wrap"` → `flexWrap:'wrap'`, and its
   track gap: `rowGap` (a wrapping row) → `rowGap`, `columnGap` (a wrapping column) → `columnGap`. An absent
-  track gap is 0 — emit none, or `0` if a `gap` style is in play.
+  track gap is 0 — emit none, or `0` if a `gap` style is in play. A wrap's tracks → `alignContent` (RN's
+  default is `flex-start`, not CSS's stretching `normal`): its `alignContent`, else from `alignItems`
+  (`flex-start`/`center`/`flex-end`; `stretch` when every child is `alignSelf:"stretch"`).
 - `padding:[t,r,b,l]` → `paddingTop/Right/Bottom/Left`.
 - `justifyContent`/`alignItems` → same prop names, string values (`alignItems:'baseline'` maps 1:1).
 - `widthMode:"fill"` → `flex:1`; `"hug"` → omit; `"fixed"` → `width:N`.

@@ -1077,6 +1077,20 @@ console.log("build-screen docs (wrapped-track gap):");
     && /not the `gap` style, which also sets the cross axis/.test(prof("react-native")) && /An absent track gap is 0/.test(prof("react-native")));
   check("_template: gap is the main-axis spacing; an absent track gap means 0",
     /`gap` is the main-axis spacing between items/.test(prof("_template")) && /absent means 0/.test(prof("_template")));
+  // CSS align-content `normal` behaves as `stretch` on a multi-line flex container (css-align-3 §5.1.3); Figma's
+  // counterAxisAlignContent AUTO sizes each track to its largest child and aligns it by counterAxisAlignItems
+  // (stretching only when every child is STRETCH), so an absent alignContent still has to be written out.
+  check("ir-fields: an absent alignContent on a wrap packs and aligns the tracks like alignItems, or stretches when every child stretches",
+    /When `alignContent` is absent on a wrap, the tracks are sized to their largest item and packed and aligned like `alignItems` \(start when that is absent too\), or stretched when every child is `alignSelf:"stretch"`/.test(irf));
+  check("web profiles: a wrap's tracks → align-content / content-* from alignItems, never the initial normal (which stretches)",
+    /`align-content`: its `alignContent`, else from `alignItems` \(`flex-start`\/`center`\/`flex-end`; `stretch` when every child is `alignSelf:"stretch"`\) — never leave the initial `normal`, which behaves as `stretch`/.test(cssm)
+    && /`content-\*`: its `alignContent`, else from `alignItems` \(`content-start`\/`content-center`\/`content-end`; `content-stretch` when every child is `alignSelf:"stretch"`\) — never leave the default `content-normal`, which behaves as `stretch`/.test(tw));
+  check("native profiles: RN alignContent (default flex-start), Flutter runAlignment (no stretch), Compose cross-axis spacedBy(N, Alignment), SwiftUI Layout, template",
+    /`alignContent` \(RN's default is `flex-start`, not CSS's stretching `normal`\): its `alignContent`, else from `alignItems`/.test(prof("react-native"))
+    && /`runAlignment` \(default `WrapAlignment\.start`\).{0,160}`WrapAlignment` has no stretch/.test(prof("flutter"))
+    && /`Arrangement\.spacedBy\(rowGap\.dp, Alignment\.Top\|CenterVertically\|Bottom\)` on `FlowRow`, `Arrangement\.spacedBy\(columnGap\.dp, Alignment\.Start\|CenterHorizontally\|End\)` on `FlowColumn`/.test(prof("android-compose"))
+    && /same `Layout` places the tracks in the cross axis: the IR's `alignContent`, else from `alignItems`/.test(prof("swiftui"))
+    && /your cross-axis line alignment: `alignContent`, else from `alignItems`; check its default/.test(prof("_template")));
 }
 
 report();

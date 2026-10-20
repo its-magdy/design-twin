@@ -13,7 +13,10 @@ Output
   sets the cross axis); N is the nearest scale step (`gap-x-2` ≈ 8px) or `gap-x-[Npx]`. `flexWrap:"wrap"` →
   `flex-wrap`, and its track gap: `rowGap` (a wrapping row) → `gap-y-N`, `columnGap` (a wrapping column) →
   `gap-x-N`, N likewise the nearest scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
-  emit none, or `gap-y-0`/`gap-x-0` if a `gap-N` is in play.
+  emit none, or `gap-y-0`/`gap-x-0` if a `gap-N` is in play. A wrap's tracks → `content-*`: its
+  `alignContent`, else from `alignItems` (`content-start`/`content-center`/`content-end`; `content-stretch`
+  when every child is `alignSelf:"stretch"`) — never leave the default `content-normal`, which behaves as
+  `stretch` on a multi-line flex container.
 - `padding:[t,r,b,l]` → `pt-/pr-/pb-/pl-`; collapse to `px-`/`py-`/`p-` when symmetric.
 - `justifyContent` → `justify-start|center|end|between|evenly|around`; `alignItems` →
   `items-start|center|end`, and `"baseline"` → `items-baseline` (`align-items: baseline`).
