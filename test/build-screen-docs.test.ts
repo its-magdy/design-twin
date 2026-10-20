@@ -1061,6 +1061,22 @@ console.log("build-screen docs (wrapped-track gap):");
     && /`FlowColumn` \(`gap` → `verticalArrangement`, `columnGap` → `horizontalArrangement`\)/.test(prof("android-compose"))
     && /`columnGap` \(a wrapping column\) → `columnGap`/.test(prof("react-native"))
     && /`columnGap` between a column's columns/.test(prof("swiftui")));
+  // IR `gap` is the main-axis gap. The CSS / RN `gap` shorthand also sets the cross axis, so a wrap whose track
+  // gap is absent (counterAxisSpacing 0, or SPACE_BETWEEN) would get itemSpacing between its tracks.
+  check("ir-fields: gap is the main-axis gap (a row's column-gap, a column's row-gap, not the shorthand); an absent track gap means 0",
+    /the main-axis gap, so map it to the main-axis longhand \(a `row`'s CSS `column-gap`, a `column`'s `row-gap`\), not the `gap` shorthand, which also sets the cross-axis gap/.test(irf)
+    && /An absent track gap means 0: set it to 0 explicitly wherever `gap` would otherwise reach the cross axis/.test(irf));
+  check("web-css-modules: gap → column-gap (row) / row-gap (column), not the shorthand; an absent track gap is 0",
+    /`gap:N` is the main-axis gap → `column-gap:Npx` on a row, `row-gap:Npx` on a column \(not the `gap` shorthand, which also sets the cross axis\)/.test(cssm)
+    && /An absent track gap is 0/.test(cssm));
+  check("web-tailwind: gap → gap-x-N (row) / gap-y-N (column), not gap-N; a track gap says nearest scale step or gap-y-[Npx]/gap-x-[Npx]",
+    /`gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column \(not `gap-N`, which also sets the cross axis\)/.test(tw)
+    && /N likewise the nearest scale step or `gap-y-\[Npx\]`\/`gap-x-\[Npx\]`/.test(tw) && /An absent track gap is 0/.test(tw));
+  check("react-native: gap → columnGap (row) / rowGap (column), not the gap style; an absent track gap is 0",
+    /`gap:N` is the main-axis gap → `columnGap:N` on a row, `rowGap:N` on a column/.test(prof("react-native"))
+    && /not the `gap` style, which also sets the cross axis/.test(prof("react-native")) && /An absent track gap is 0/.test(prof("react-native")));
+  check("_template: gap is the main-axis spacing; an absent track gap means 0",
+    /`gap` is the main-axis spacing between items/.test(prof("_template")) && /absent means 0/.test(prof("_template")));
 }
 
 report();

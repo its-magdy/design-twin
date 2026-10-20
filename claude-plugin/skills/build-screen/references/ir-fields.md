@@ -152,9 +152,12 @@ Read these before writing ANY script against an export JSON (field names guessed
   `space-evenly`/`space-around`; absent = start), `alignItems` (`center`/`flex-end`/`baseline`; absent
   = start), `flexWrap:"wrap"` + `rowGap` (horizontal) / `columnGap` (vertical) + `alignContent`,
   `reverseZ` (later children paint underneath). Negative `gap` = overlap. `gap` is always the spacing
-  between items along `flexDirection`; on a wrapping frame `rowGap`/`columnGap` is the spacing between
+  between items along `flexDirection` — the main-axis gap, so map it to the main-axis longhand (a `row`'s
+  CSS `column-gap`, a `column`'s `row-gap`), not the `gap` shorthand, which also sets the cross-axis gap.
+  On a wrapping frame `rowGap`/`columnGap` is the spacing between
   the wrapped tracks — between rows of a `row`, between columns of a `column` (CSS `row-gap`/
-  `column-gap` follow the axes, so a `column`'s `gap` is its `row-gap`). `gap` is absent under
+  `column-gap` follow the axes, so a `column`'s `gap` is its `row-gap`). An absent track gap means 0:
+  set it to 0 explicitly wherever `gap` would otherwise reach the cross axis. `gap` is absent under
   `space-between`/`space-evenly`/`space-around` — Figma ignores the stored spacing under those modes, so
   there is nothing to emit. Likewise the track gap is absent when `alignContent` is `space-between`
   (wrapped tracks are spread by dividing the free space, not by the stored track spacing).
