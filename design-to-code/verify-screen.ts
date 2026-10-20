@@ -264,6 +264,8 @@ function main(argv: string[]): number | Promise<number> {
     "      (<S>.expected.json.retired; its other files stay under <S>).\n" +
     "      Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan\n" +
     "      records with a hand-edited record or finds by its name alone with no node id of the set's (add \"nodeId\" to it).\n" +
+    "      Also skips a set whose plan's reportSha256 no longer names the report on disk, and two legacy sets of one node that\n" +
+    "      extend no other name (which one is the screen is your call). Each skip says what to do.\n" +
     "      Never rewrites a report, measured file or expectation; plans are never renamed.\n" +
     "      A run that dies part way leaves design/verify/.migrate-<S>.json (its journal): the next --migrate reports it and does\n" +
     "      nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes\n" +

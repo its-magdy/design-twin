@@ -252,7 +252,11 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
 // with ONE message naming them — not one per @2 key it lacks (one holding nothing but such keys is not a record, and
 // says so). A schema-less block that holds a @2-only key still blocks, with ONE message for the keys it lacks (plus one
 // per key it holds that was edited). These messages are saved in the plan (verification.hook.blocking): scripts are
-// named in words.
+// named in words. Each is a fact and its repair advice (RecordedEdit; recordedEdits joins them with " — "): the advice
+// re-records, which only a canonical set can — verify-screen --migrate prints the facts with its own advice
+// (verify-migrate.ts planBlocks).
+/** One finding about a recorded block: what is wrong, and how verify-build says to repair it. */
+export interface RecordedEdit { fact: string; advice: string }
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
 // The report a record's reportSha256 still names, parsed — null when there is none to compare with: no report on disk
@@ -275,7 +279,7 @@ function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string):
 // One old record can differ untouched: the first writer hashed the file on disk, so a --compare that rewrote the same
 // report meanwhile left that run's sha beside this run's facts. The message names both causes; re-recording, which
 // rewrites the block in the current format, settles either.
-function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
+function recordedV1Edits(rec: JsonObject, cwd: string): RecordedEdit[] {
   const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
   if (!report || typeof rec.report !== "string") return [];
   const said = recordFacts(report, rec.report);
@@ -284,9 +288,15 @@ function recordedV1Edits(rec: JsonObject, cwd: string): string[] {
   const counts = rec.counts;
   if (!isJsonObject(counts)) edited.push("counts");
   else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) — re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+  return edited.map((k) => ({ fact: `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote)`,
+    advice: "re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]" }));
 }
+/** The blocking findings about a plan's recorded block, as verify-build says them (fact — advice). */
 function recordedEdits(plan: Plan, cwd: string): string[] {
+  return recordedEditFacts(plan, cwd).map((e) => `${e.fact} — ${e.advice}`);
+}
+/** The same findings, each its fact and verify-build's advice apart ([] when the block is the tool's, untouched). */
+function recordedEditFacts(plan: Plan, cwd: string): RecordedEdit[] {
   const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
   if (!isJsonObject(rec)) return [];
   const added = recordV1HandKeys(rec);
@@ -295,11 +305,10 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
     const them = added.length > 1 ? "them" : "it";
     // (no first-format key at all: the block is not a record, so it is not "a record with keys added")
     if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
-      return [`verification.recorded holds only ${named}, which no record writes — remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); ` +
-        "residuals go in deviations[], anything else in notes"];
-    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes — ` +
-      `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); ` +
-      "residuals go in deviations[], anything else in notes"];
+      return [{ fact: `verification.recorded holds only ${named}, which no record writes`,
+        advice: `remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes` }];
+    return [{ fact: `verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes`,
+      advice: `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes` }];
   }
   if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
   const all = recordProblems(rec);
@@ -316,12 +325,13 @@ function recordedEdits(plan: Plan, cwd: string): string[] {
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  const advice = "re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]";
+  const out = edited.map((k): RecordedEdit => ({ fact: `verification.recorded.${k} is tool-owned and was edited`, advice }));
   if (lacks.length) {
     const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
-    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} — re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+    out.push({ fact: `verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")}`, advice });
   }
   return out;
 }
 
-export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEdits, recordedV1Edits, reportFileText, reportRecordNames, updatePlan, verificationFacts };
+export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, reportRecordNames, updatePlan, verificationFacts };
