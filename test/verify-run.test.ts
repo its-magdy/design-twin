@@ -800,6 +800,32 @@ await block("[key] status-only run:", async () => {
     ex.status === 0 && fs.existsSync(path.join(dir, "Old__3_3.expected.json")) && !fs.existsSync(path.join(dir, "New__3_3.expected.json")));
 });
 
+console.log("[key] a status-only run whose node another set holds: the end-it command a refusal prints for it ends it:");
+await block("[key] status-only run beside another set:", async () => {
+  if (POSIX_SH === null) { console.log("  (skipped: no sh on PATH — the printed commands are POSIX-shell quoted, run through Git Bash on Windows)"); return; }
+  const sh = POSIX_SH;
+  const { cwd, dir, cli } = project();
+  writeIndex(cwd, [{ name: "New Racks", id: "5:5" }]);
+  const openBase = path.join(dir, "New_Racks__5_5"), openLive = VR.liveStatusFile(openBase);
+  VR.writeStatus(openBase, { runId: "run-t", phase: "queued", by: "agent" });
+  // meanwhile a set of the node is written under another stem: New_Racks__5_5 is a second name for the node now
+  fs.writeFileSync(path.join(dir, "Old_Racks__5_5.expected.json"), JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "5:5", name: "Old Racks" }, nodes: [] }));
+  const refused = cli("--status", "Old_Racks__5_5", "--phase", "queued", "--new-run");
+  const endIt = /end it: (.+?)\)\)/.exec(refused.stderr)?.[1] ?? "";
+  safe(`[key] --status Old_Racks__5_5 → exit 2, naming run-t under New_Racks__5_5 with the command that ends it (got ${refused.status}: ${refused.stderr.trim()})`, () =>
+    refused.status === 2 && endIt.includes("--status New_Racks__5_5 --phase failed --run run-t --dir "));
+  const notEnd = cli("--status", "New_Racks__5_5", "--phase", "measuring", "--run", "run-t");
+  const otherRun = cli("--status", "New_Racks__5_5", "--phase", "failed", "--run", "run-other");
+  safe(`[key] …under that name, a write that does not end run-t (another phase, another run) → exit 2, nothing written (got ${notEnd.status} / ${otherRun.status})`, () =>
+    notEnd.status === 2 && otherRun.status === 2 && readStatusFile(openLive)?.rev === 1);
+  const ran = spawnSync(sh, ["-c", endIt], { cwd: os.tmpdir(), encoding: "utf8" });
+  safe(`[key] REQUIRED: the printed end-it command, run as printed → exit 0, run-t ended failed (got ${ran.status}: ${ran.stderr.trim()})`, () =>
+    ran.status === 0 && readStatusFile(openLive)?.runId === "run-t" && readStatusFile(openLive)?.phase === "failed" && readStatusFile(openLive)?.rev === 2
+    && /note {2}another verify set holds New_Racks__5_5's node — only run run-t's end is written under New_Racks__5_5/.test(ran.stderr));
+  const after = cli("--status", "Old_Racks__5_5", "--phase", "queued", "--new-run");
+  safe(`[key] …then the node's one set takes a new run (got ${after.status}: ${after.stderr.trim()})`, () => after.status === 0);
+});
+
 console.log("[key] --status --new-run under a set name the export index does not give its node:");
 await block("[key] fresh set name:", async () => {
   const { cwd, dir, cli } = project();

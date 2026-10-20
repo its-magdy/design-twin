@@ -391,7 +391,8 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
  * (--migrate first); and at --status --new-run a set name with no files and no status whose node the export index names
  * by another stem (the set --expect would write is that one). A legacy set's own name is refused too (--migrate renames
  * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait --run <its id>), or ended
- * (--status --run <its id> with done/failed/blocked) under the old name.
+ * (--status --run <its id> with done/failed/blocked) under the old name. So is a set name whose node another stem holds
+ * now, except that its open run is ended under it (--status --run <its id> with done/failed/blocked).
  */
 type RunAt = { kind: "wait"; run: string | undefined } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
 function runBase(screen: string, dir: string | undefined, at: RunAt): { base: string; notes: string[] } | { error: string } {
@@ -409,6 +410,13 @@ function runBase(screen: string, dir: string | undefined, at: RunAt): { base: st
       const { waitIt, endIt } = runCommands(path.join(verifyDir, S), open);
       return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) — only that run's end is ` +
         `written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
+    }
+    // a set name another stem of its node is refused for, while a run is open under it: only that run's end is written
+    // there — the command a refusal that names the run prints (stemHolders); the run id is checked again under the lock
+    const name = asPath ? path.basename(screen) : screen;
+    const own = at.kind === "status" && !at.newRun && TERMINAL_PHASES.includes(at.phase) && opts.openSets.includes(name) ? readStatus(path.join(verifyDir, name)) : null;
+    if (own !== null && own !== "v1" && own.runId === at.run) {
+      return { base: path.join(verifyDir, name), notes: [`note  another verify set holds ${name}'s node — only run ${own.runId}'s end is written under ${name}`] };
     }
     return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
   }

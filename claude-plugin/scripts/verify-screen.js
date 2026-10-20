@@ -1980,6 +1980,11 @@ function runBase(screen, dir, at) {
       const { waitIt, endIt } = runCommands(path12.join(verifyDir, S), open);
       return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) \u2014 only that run's end is written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
     }
+    const name = asPath ? path12.basename(screen) : screen;
+    const own = at.kind === "status" && !at.newRun && TERMINAL_PHASES.includes(at.phase) && opts.openSets.includes(name) ? readStatus(path12.join(verifyDir, name)) : null;
+    if (own !== null && own !== "v1" && own.runId === at.run) {
+      return { base: path12.join(verifyDir, name), notes: [`note  another verify set holds ${name}'s node \u2014 only run ${own.runId}'s end is written under ${name}`] };
+    }
     return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
   }
   if (at.kind === "status" && at.newRun && k.via === "set name" && !k.existing && readStatus(path12.join(verifyDir, k.name)) === null) {
