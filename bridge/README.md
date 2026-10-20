@@ -247,8 +247,8 @@ silently ignored — a typo must never fall through to a full pull.
 A full pull writes `design/export/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
 `files` pointers, `counts`) over the catalog split under `design/export/design-system/`, one file per Figma
 concept: `tokens.json` (variable collections → modes → variables), one file per style type —
-`styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate
-Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
+`styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`/`styles.animation.json` — (the
+separate Paint/Text/Effect/Grid style system, plus custom animation styles), `components.local.json` (components that are real nodes in this
 file — a `COMPONENT_SET`'s heavy per-variant node trees, or a standalone `COMPONENT`'s own node tree,
 are NOT inlined here; they live in a sibling `design-system/components/<name>__<id>.json`, pointed at
 by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `design-to-code/get-component.ts`

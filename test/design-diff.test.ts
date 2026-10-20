@@ -468,17 +468,19 @@ check("markdown renders styles/hygiene kinds without throwing, and names the rig
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
-check("CLI end to end: ALL NINE design-system files diff one by one on the real fixtures (incl. the manifest)", (() => {
+check("CLI end to end: ALL TEN design-system files diff one by one on the real fixtures (incl. the manifest)", (() => {
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
-  // The 8 files that live INSIDE design-system/ (bridge/design-system-layout.js's DESIGN_SYSTEM_FILES,
-  // minus the manifest, which lives one level up). tokens.json/components.*.json aren't
-  // in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
-  // components.*.json by the catalog tests) — minimal stand-ins are enough here, since this check is
-  // about ALL NINE names resolving and diffing, not re-proving each format's own logic again.
-  const inDsDir = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "components.local.json", "components.library.json", "hygiene.json"];
+  // The 9 files that live INSIDE design-system/ (bridge/design-system-layout.js's DESIGN_SYSTEM_FILES,
+  // minus the manifest, which lives one level up). tokens.json/components.*.json/styles.animation.json
+  // aren't in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
+  // components.*.json by the catalog tests, and the real export predates styles.animation.json) —
+  // minimal stand-ins are enough here, since this check is about ALL TEN names resolving and diffing,
+  // not re-proving each format's own logic again.
+  const inDsDir = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "styles.animation.json", "components.local.json", "components.library.json", "hygiene.json"];
   fs.writeFileSync(path.join(dsDir, "tokens.json"), JSON.stringify({ variables: [] }));
+  fs.writeFileSync(path.join(dsDir, "styles.animation.json"), JSON.stringify({ styles: [] }));
   fs.writeFileSync(path.join(dsDir, "components.local.json"), JSON.stringify({ components: [] }));
   fs.writeFileSync(path.join(dsDir, "components.library.json"), JSON.stringify({ components: [] }));
   for (const f of ["styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"]) {
@@ -486,22 +488,22 @@ check("CLI end to end: ALL NINE design-system files diff one by one on the real 
   }
   // The manifest (design-system.json) at the export ROOT — real fixture, from the same export.
   fs.writeFileSync(path.join(root, "design", "export", "design-system.json"), fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest4", "design-system.json")));
-  const allNine = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
+  const allTen = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
 
   let allOk = true;
-  for (const rel of allNine) {
+  for (const rel of allTen) {
     const r = cli(root, rel);
     if (r.status !== 0 && !(r.status === 2 && /no snapshot/.test(r.stderr))) allOk = false; // first run has no baseline yet — that's a separate, already-tested exit 2
   }
   // Snapshot ONLY the manifest (mirrors a real repro: "on a copy of a real export,
-  // after --snapshot of all nine files") — siblingFilesOf() must pull in the other 8 on its own, and
+  // after --snapshot of all ten files") — siblingFilesOf() must pull in the other 9 on its own, and
   // must never print a spurious "not found" for any of them, since every one of them is
   // right there on disk.
   const snap = cli(root, "--snapshot", path.join("design", "export", "design-system.json"));
   const spuriousNotFound = /not found — nothing to snapshot/.test(snap.stderr);
 
   let allDiffOk = true;
-  for (const rel of allNine) {
+  for (const rel of allTen) {
     const r = cli(root, rel);
     if (r.status !== 0) allDiffOk = false;
   }

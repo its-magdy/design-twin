@@ -3,7 +3,7 @@
 import type {
   IrNode, MainComponentRef, InstanceOverride, CatalogComponent, CatalogVariant, ComponentPropDef,
   DesignSystemDoc, StyleMeta, RadiusCorners, LayoutGridSpec, PaintStyle as IrPaintStyle, TextStyle as IrTextStyle,
-  EffectStyle as IrEffectStyle, GridStyle as IrGridStyle,
+  EffectStyle as IrEffectStyle, GridStyle as IrGridStyle, AnimationStyle as IrAnimationStyle,
 } from "../../bridge/src/doc-types.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { OVERRIDE_CAP } from "../../bridge/src/instance-overrides.ts";
@@ -16,6 +16,7 @@ import { simplifyGrid } from "./layout";
 import { lineH, letterS } from "./text";
 import { dumpVariables, resolveBoundMap } from "./variables";
 import { collectLibraryComponents } from "./libraries";
+import { customAnimationEntries } from "./motion";
 
 // INSTANCE -> its main component, resolved via getMainComponentAsync (mainComponent itself is
 // write-only in the Plugin API's typings). Returns the join keys needed to resolve back to the
@@ -356,12 +357,15 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   const asLibrary = !!(opts && opts.asLibrary);
   // getLocal*StylesAsync can throw on some file states — default to [] rather than aborting the build.
   const safeList = async <T>(fn: () => Promise<T[]>): Promise<T[]> => { try { return await fn(); } catch (e) { return []; } };
-  // Four independent style-list reads — fetch them concurrently rather than one after another.
-  const [paint, text, effect, grid] = await Promise.all([
+  // Five independent style-list reads — fetch them concurrently rather than one after another. The grid
+  // and custom-animation reads are guarded for a runtime that predates them.
+  const [paint, text, effect, grid, animation] = await Promise.all([
     safeList(() => figma.getLocalPaintStylesAsync()),
     safeList(() => figma.getLocalTextStylesAsync()),
     safeList(() => figma.getLocalEffectStylesAsync()),
     safeList(() => (figma.getLocalGridStylesAsync ? figma.getLocalGridStylesAsync() : Promise.resolve<GridStyle[]>([]))),
+    safeList(() => (figma.getLocalCustomAnimationStylesAsync
+      ? figma.getLocalCustomAnimationStylesAsync() : Promise.resolve<CustomAnimationStyle[]>([]))),
   ]);
 
   const hygiene: string[] = [];
@@ -476,6 +480,17 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
         name: s.name,
         ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g): g is LayoutGridSpec => !!g) : undefined),
         ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+        ...ifDefined("description", s.description || undefined),
+        ...(await styleMeta(s)),
+      }))
+    ),
+    // Custom animation styles: the Figma animations each one contains (CustomAnimationStyle.
+    // animationEntries), in the same compact form a node's applied animation style takes (motion.ts).
+    // Their props can bind EASING variables, so they resolve before dumpVariables too.
+    animation: await Promise.all(
+      animation.map(async (s): Promise<IrAnimationStyle> => ({
+        name: s.name,
+        ...ifDefined("entries", await customAnimationEntries(s)),
         ...ifDefined("description", s.description || undefined),
         ...(await styleMeta(s)),
       }))

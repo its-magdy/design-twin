@@ -72,6 +72,7 @@ interface FakeFigma {
   getLocalTextStylesAsync(): Promise<FakeNode[]>;
   getLocalEffectStylesAsync(): Promise<FakeNode[]>;
   getLocalGridStylesAsync(): Promise<FakeNode[]>;
+  getLocalCustomAnimationStylesAsync?(): Promise<FakeNode[]>;
   variables: {
     getLocalVariablesAsync(): Promise<FakeVariable[]>;
     getLocalVariableCollectionsAsync(): Promise<FakeCollection[]>;
@@ -302,8 +303,10 @@ const scrollFrame = {
       { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
   },
   // AppliedAnimationStyle is discriminated on `type` (typings 1.141): the first entry has NO `type` (a
-  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, the third
-  // a CUSTOM one (a CustomAnimationStyle: ids, name and timelineOffset only — no duration/props).
+  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, the rest
+  // CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props).
+  // A CUSTOM row is expanded from the style its styleId resolves to (getStyleByIdAsync below): cas1
+  // resolves (twice — one fetch), the others do not resolve to a readable custom animation style.
   animationStyles: [{
     id: "applied1", styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0,
     // AnimationStyleConfiguration.props (AnimationStylePropValue = string|number|boolean|MotionEasing|VariableAlias):
@@ -317,6 +320,16 @@ const scrollFrame = {
     type: "FIGMA", id: "applied2", styleId: "as2", name: "Slide Up", duration: 0.45, timelineOffset: 0.1, props: { distance: 16 },
   }, {
     type: "CUSTOM", id: "applied3", styleId: "cas1", name: "Brand Entrance", timelineOffset: 0.25,
+  }, {
+    type: "CUSTOM", id: "applied4", styleId: "cas_missing", name: "Gone",
+  }, {
+    type: "CUSTOM", id: "applied5", styleId: "s_accent", name: "Wrong Kind",
+  }, {
+    type: "CUSTOM", id: "applied6", styleId: "cas_throw", name: "Lookup Throws", timelineOffset: 0.5,
+  }, {
+    type: "CUSTOM", id: "applied7", styleId: "cas_broken", name: "Broken",
+  }, {
+    type: "CUSTOM", id: "applied8", styleId: "cas1", name: "Brand Entrance", timelineOffset: 0,
   }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -344,6 +357,28 @@ const buttonComponent = {
   },
 };
 
+// Custom animation styles (CustomAnimationStyle, typings 1.141): what an applied CUSTOM row's styleId
+// resolves to, and what the catalog lists. cas1 carries a description and two entries (AnimationEntry =
+// AppliedFigmaAnimationStyle); cas_broken's animationEntries read throws. `customStyleFetches` counts
+// cas1 lookups so the per-run memo is observable.
+let customStyleFetches = 0;
+const customAnimStyle: FakeNode = {
+  type: "CUSTOM_ANIMATION", id: "cas1", key: "caskey1", name: "Brand Entrance", description: "Hero entrance sequence",
+  remote: false, documentationLinks: [], getPublishStatusAsync: async () => "CURRENT",
+  animationEntries: [
+    { type: "FIGMA", id: "entry1", styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0, props: { easing: { type: "EASE_OUT" } } },
+    { type: "FIGMA", id: "entry2", styleId: "as2", name: "Slide Up", duration: 0.456, timelineOffset: 0.2,
+      props: { distance: 16, color: { type: "VARIABLE_ALIAS", id: "VariableID:2" } } },
+  ],
+};
+const brokenAnimStyle: FakeNode = {
+  type: "CUSTOM_ANIMATION", id: "cas_broken", name: "Broken", description: "",
+  get animationEntries(): never { throw new Error("animation entries unreadable"); },
+};
+// cas1's entries as both the motion read and the catalog emit them (motion.ts animationStyleEntry).
+const CAS1_ENTRIES = '{"id":"entry1","name":"Fade In","styleId":"as1","duration":0.3,"props":{"easing":{"type":"ease_out"}}},' +
+  '{"id":"entry2","name":"Slide Up","styleId":"as2","duration":0.46,"timelineOffset":0.2,"props":{"distance":16,"color":{"aliasOf":"easing/emphasized"}}}';
+
 // ---- mock figma ----
 const noop = () => {};
 const figma: FakeFigma = {
@@ -362,11 +397,19 @@ const figma: FakeFigma = {
   // Source-image resolution: intrinsic pixel size + original uploaded bytes, keyed by image hash.
   getImageByHash: (hash: string) => (hash === "abc123" ? { getSizeAsync: async () => ({ width: 800, height: 600 }), getBytesAsync: async () => new Uint8Array([1, 2, 3, 4]) } : null),
   getNodeByIdAsync: async (id: string) => (id === "frame_2" ? { name: "Details" } : null),
-  getStyleByIdAsync: async (id: string) => { const styles: Record<string, FakeNode> = { s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" } }; return styles[id] || null; },
+  getStyleByIdAsync: async (id: string) => {
+    if (id === "cas1") { customStyleFetches++; return customAnimStyle; }
+    if (id === "cas_throw") throw new Error("style lookup failed");
+    const styles: Record<string, FakeNode> = { s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" }, cas_broken: brokenAnimStyle,
+      // a PAINT style with a description: a CUSTOM row pointing at it must not pick that description up
+      s_accent: { type: "PAINT", name: "Brand/Accent", description: "Accent paint" } };
+    return styles[id] || null;
+  },
   getLocalPaintStylesAsync: async () => [{ name: "Brand/Primary", id: "s_brand", key: "paintkey123", paints: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], boundVariables: { paints: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, documentationLinks: [{ uri: "https://docs.example.com/brand" }], description: "", getPublishStatusAsync: async () => "CHANGED" }],
   getLocalTextStylesAsync: async () => [{ name: "Body/Regular", fontSize: 16, fontName: { family: "Inter", style: "Regular" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 8, paragraphIndent: 4, leadingTrim: "CAP_HEIGHT", listSpacing: 6, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, description: "" }],
   getLocalEffectStylesAsync: async () => [],
   getLocalGridStylesAsync: async () => [{ name: "Grid/12col", layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 20, sectionSize: 60 }], description: "" }],
+  getLocalCustomAnimationStylesAsync: async () => [customAnimStyle, brokenAnimStyle],
   variables: {
     getLocalVariablesAsync: async () => Object.values(VARS),
     getLocalVariableCollectionsAsync: async () => COLLECTIONS,
@@ -632,6 +675,19 @@ const sandbox: Sandbox = context;
   ok("paint style carries color value", paintStyle0Paint0 !== undefined && flatPaint(paintStyle0Paint0).color === "#1a4de6");
   const gridStyle0Grid0 = ds.styles.grid[0]?.grids?.[0];
   ok("grid style exported", gridStyle0Grid0 !== undefined && gridStyle0Grid0.count === 12);
+  ok("custom animation style catalogued: name, entries (same form as an applied style), description, key, id",
+    JSON.stringify(ds.styles.animation[0]) === '{"name":"Brand Entrance","entries":[' + CAS1_ENTRIES + '],"description":"Hero entrance sequence","key":"caskey1","id":"cas1"}');
+  ok("custom animation style whose animationEntries read throws: catalogued without entries (no partial list), empty description dropped",
+    JSON.stringify(ds.styles.animation[1]) === '{"name":"Broken","id":"cas_broken"}' && ds.styles.animation.length === 2);
+  {
+    // A runtime without getLocalCustomAnimationStylesAsync: an empty list, the rest of the catalog intact.
+    const listCustom = must(figma.getLocalCustomAnimationStylesAsync, "figma.getLocalCustomAnimationStylesAsync");
+    delete figma.getLocalCustomAnimationStylesAsync;
+    const dsOld = await sandbox.buildDesignSystem();
+    figma.getLocalCustomAnimationStylesAsync = listCustom;
+    ok("no getLocalCustomAnimationStylesAsync (older runtime): styles.animation is [] and the other style kinds still export",
+      Array.isArray(dsOld.styles.animation) && dsOld.styles.animation.length === 0 && dsOld.styles.grid.length === 1);
+  }
 
   // collectDesignSystemOnly — the --design-system / figma_export_design_system path: no page/frame
   // walk, no assets, just { designSystem }. Exercises the actual collector (not just buildDesignSystem
@@ -899,6 +955,7 @@ const sandbox: Sandbox = context;
   ok("own-scope plugin data captured (opt-in)", !!(tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary"));
   ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0]?.text === "16" && sel2.screen.measurements[0]?.start?.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
+  customStyleFetches = 0;
   const sel3 = await sandbox.collectSelection({ motion: true });
   const m3 = must(sel3.screen.nodes[0], "sel3.screen.nodes[0]").motion;
   ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0]?.duration === 0.5));
@@ -918,8 +975,19 @@ const sandbox: Sandbox = context;
     '{"id":"applied1","name":"Fade In","styleId":"as1","duration":0.3,"props":{"distance":24,"easing":{"type":"ease_out"},"color":{"aliasOf":"easing/emphasized"}}}');
   ok("motion applied animation style type FIGMA: duration, timelineOffset, props (no custom marker)", JSON.stringify(m3?.styles?.[1]) ===
     '{"id":"applied2","name":"Slide Up","styleId":"as2","duration":0.45,"timelineOffset":0.1,"props":{"distance":16}}');
-  ok("motion applied animation style type CUSTOM: ids, name, custom marker, timelineOffset only", JSON.stringify(m3?.styles?.[2]) ===
-    '{"id":"applied3","name":"Brand Entrance","styleId":"cas1","custom":true,"timelineOffset":0.25}');
+  ok("motion applied animation style type CUSTOM: ids, name, custom marker, timelineOffset, then the resolved style's description + entries", JSON.stringify(m3?.styles?.[2]) ===
+    '{"id":"applied3","name":"Brand Entrance","styleId":"cas1","custom":true,"timelineOffset":0.25,"description":"Hero entrance sequence","entries":[' + CAS1_ENTRIES + ']}');
+  ok("motion CUSTOM style whose styleId resolves to nothing: the applied row only", JSON.stringify(m3?.styles?.[3]) ===
+    '{"id":"applied4","name":"Gone","styleId":"cas_missing","custom":true}');
+  ok("motion CUSTOM style whose styleId resolves to a non-animation style: the applied row only", JSON.stringify(m3?.styles?.[4]) ===
+    '{"id":"applied5","name":"Wrong Kind","styleId":"s_accent","custom":true}');
+  ok("motion CUSTOM style whose lookup throws: the applied row only (timelineOffset kept)", JSON.stringify(m3?.styles?.[5]) ===
+    '{"id":"applied6","name":"Lookup Throws","styleId":"cas_throw","custom":true,"timelineOffset":0.5}');
+  ok("motion CUSTOM style whose animationEntries read throws: no entries, empty description dropped", JSON.stringify(m3?.styles?.[6]) ===
+    '{"id":"applied7","name":"Broken","styleId":"cas_broken","custom":true}');
+  ok("motion CUSTOM style applied twice: both rows expanded, the style fetched once per run", JSON.stringify(m3?.styles?.[7]) ===
+    '{"id":"applied8","name":"Brand Entrance","styleId":"cas1","custom":true,"description":"Hero entrance sequence","entries":[' + CAS1_ENTRIES + ']}' &&
+    customStyleFetches === 1);
   const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&

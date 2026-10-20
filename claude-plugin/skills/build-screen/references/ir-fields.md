@@ -307,8 +307,11 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`flows[]`** (top level) — `{page, pageId, nodeId, name}` prototype entry points → candidate routes.
 - Ignore triggers with no code meaning (`mediaHitTime` scrub points) rather than guessing.
 - **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API. A
-  `styles[]` row is an applied animation style; one with `custom: true` is a custom animation style, read as its name
-  only (no duration or props).
+  `styles[]` row is an applied animation style: `{id, name, styleId, duration, timelineOffset, props}`, `duration`
+  and `timelineOffset` in SECONDS (`timelineOffset` absent = 0). One with `custom: true` is a custom animation style:
+  the row itself has no `duration` or `props`; its `entries[]` are the animations the style plays, in order, each a
+  row of that same shape, plus the style's `description`. With no `entries` the style could not be read: you have
+  its name only.
 
 ## Images and vectors
 

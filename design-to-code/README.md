@@ -42,7 +42,7 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 ```
 # 1. Export the design system from Figma (existing plugin flow) -> design/export/design-system.json manifest
 #    + design/export/design-system/{tokens,styles.paint,styles.text,styles.effect,styles.grid,
-#                            components.local,components.library,hygiene}.json
+#                            styles.animation,components.local,components.library,hygiene}.json
 #    NOTE: pass the SPLIT files below, never design-system.json — that is a slim pointer
 #    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):

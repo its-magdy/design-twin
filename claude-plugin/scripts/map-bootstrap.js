@@ -642,6 +642,7 @@ var STYLES_PAINT = "styles.paint.json";
 var STYLES_TEXT = "styles.text.json";
 var STYLES_EFFECT = "styles.effect.json";
 var STYLES_GRID = "styles.grid.json";
+var STYLES_ANIMATION = "styles.animation.json";
 var COMPONENTS_LOCAL = "components.local.json";
 var COMPONENTS_LIBRARY = "components.library.json";
 var HYGIENE = "hygiene.json";
@@ -652,6 +653,7 @@ var DESIGN_SYSTEM_FILES = {
   STYLES_TEXT,
   STYLES_EFFECT,
   STYLES_GRID,
+  STYLES_ANIMATION,
   COMPONENTS_LOCAL,
   COMPONENTS_LIBRARY,
   COMPONENTS_DIR,
@@ -662,7 +664,7 @@ var DESIGN_SYSTEM_FILES = {
 // bridge/src/library-layout.ts
 var ROOT = "libraries";
 var INDEX = "index.json";
-var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, STYLES_ANIMATION: STYLES_ANIMATION2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
 var COMPONENTS = "components.json";
 
 // design-to-code/design-system-dir.ts
