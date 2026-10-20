@@ -414,23 +414,37 @@ export type MotionAnimations = Record<string, MotionAnimation> & MotionIndexedTr
  *  a plain string/number/boolean, or — for a MotionEasing / VariableAlias value — the same compacted
  *  shape as a keyframe's `easing` (lower-cased curve type + params, or `{aliasOf: <name or id>}`). */
 export type MotionStylePropValue = string | number | boolean | NonNullable<MotionKeyframe["easing"]>;
+/** One Figma animation style with its configuration (AppliedFigmaAnimationStyle): the instance id, the
+ *  style's name and styleId, duration (s), timelineOffset (s, omitted when 0) and per-prop values. The
+ *  same shape is one entry of a custom animation style (CustomAnimationStyle.animationEntries). */
+export interface MotionStyleEntry {
+  id: string;
+  name: string;
+  styleId: string;
+  duration?: number;
+  timelineOffset?: number;
+  props?: Record<string, MotionStylePropValue>;
+}
+/** One node.animationStyles row (AppliedAnimationStyle). A Figma animation style is a MotionStyleEntry. */
+export interface MotionStyle extends MotionStyleEntry {
+  /** a CustomAnimationStyle (applied type "CUSTOM"): the applied row has the ids, name and timelineOffset
+   *  only (no duration/props); `description` and `entries` come from the style itself, looked up by
+   *  styleId, and are absent when that lookup finds no custom animation style. */
+  custom?: true;
+  /** the custom animation style's description (absent when empty or unreadable) */
+  description?: string;
+  /** the Figma animations the custom animation style contains, in order. `[]` is a style that was read and
+   *  has none; absent means the lookup found no custom animation style or its entries could not be read. */
+  entries?: MotionStyleEntry[];
+}
 export interface NodeMotion {
   timelines?: Array<{ id: string; duration: number }>;
   manualTracks?: MotionTracks;
   animations?: MotionAnimations;
   /** node.animationStyles (AppliedAnimationStyle[]): the applied instance id, the style's name/styleId,
-   *  and its configuration (duration, timelineOffset, per-prop values). */
-  styles?: Array<{
-    id: string;
-    name: string;
-    styleId: string;
-    /** a CustomAnimationStyle (applied type "CUSTOM"): only the ids, name and timelineOffset — no
-     *  duration/props. Its animationEntries need an async style lookup and are not expanded here. */
-    custom?: true;
-    duration?: number;
-    timelineOffset?: number;
-    props?: Record<string, MotionStylePropValue>;
-  }>;
+   *  and its configuration (duration, timelineOffset, per-prop values); a custom one is expanded from
+   *  its CustomAnimationStyle (MotionStyle). */
+  styles?: MotionStyle[];
 }
 export interface IrNode extends Partial<TextFields> {
   type: IrNodeType;
@@ -717,13 +731,13 @@ export interface DesignSystemStamp {
 /** design-system.json — the slim POINTER manifest (never a payload; catalog-input.ts refuses it). */
 export interface DesignSystemManifest extends DesignSystemStamp {
   files: {
-    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string;
+    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string; stylesAnimation: string;
     componentsLocal: string; componentsLibrary: string; hygiene: string;
     /** only when a COMPONENT_SET detail file was written */
     componentsDir?: string;
   };
   counts: {
-    collections: number; variables: number; stylesPaint: number; stylesText: number; stylesEffect: number; stylesGrid: number;
+    collections: number; variables: number; stylesPaint: number; stylesText: number; stylesEffect: number; stylesGrid: number; stylesAnimation: number;
     components: number; libraryComponents: number; hygiene: number;
   };
 }
@@ -844,12 +858,16 @@ export interface TextStyle extends StyleMeta {
 }
 export interface EffectStyle extends StyleMeta { name: string; effects?: Effect[] }
 export interface GridStyle extends StyleMeta { name: string; grids?: LayoutGridSpec[] }
-/** design-system/styles.<paint|text|effect|grid>.json */
-export interface StylesDoc<S = PaintStyle | TextStyle | EffectStyle | GridStyle> extends DesignSystemStamp { styles: S[] }
+/** A local custom animation style (CustomAnimationStyle): the Figma animations it contains, in order.
+ *  `entries: []` is a style with none; `entries` is absent when the list could not be read. */
+export interface AnimationStyle extends StyleMeta { name: string; entries?: MotionStyleEntry[] }
+/** design-system/styles.<paint|text|effect|grid|animation>.json */
+export interface StylesDoc<S = PaintStyle | TextStyle | EffectStyle | GridStyle | AnimationStyle> extends DesignSystemStamp { styles: S[] }
 export type PaintStylesDoc = StylesDoc<PaintStyle>;
 export type TextStylesDoc = StylesDoc<TextStyle>;
 export type EffectStylesDoc = StylesDoc<EffectStyle>;
 export type GridStylesDoc = StylesDoc<GridStyle>;
+export type AnimationStylesDoc = StylesDoc<AnimationStyle>;
 /** design-system/hygiene.json */
 export interface HygieneDoc extends DesignSystemStamp { hygiene: string[] }
 
@@ -944,6 +962,8 @@ export interface DesignSystemStyles {
   text?: TextStyle[];
   effect?: EffectStyle[];
   grid?: GridStyle[];
+  /** local custom animation styles (CustomAnimationStyle) */
+  animation?: AnimationStyle[];
 }
 
 /**
@@ -972,6 +992,7 @@ export interface LibraryCounts {
   stylesText: number;
   stylesEffect: number;
   stylesGrid: number;
+  stylesAnimation: number;
   components: number;
   hygiene: number;
 }
@@ -980,7 +1001,7 @@ export interface LibraryCounts {
  *  + `publish` (a per-status count, absent when nothing carries a publish status). */
 export interface LibraryManifest extends LibraryStamp {
   files: {
-    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string;
+    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string; stylesAnimation: string;
     components: string; hygiene: string;
   };
   counts: LibraryCounts;

@@ -251,6 +251,7 @@
   var STYLES_TEXT = "styles.text.json";
   var STYLES_EFFECT = "styles.effect.json";
   var STYLES_GRID = "styles.grid.json";
+  var STYLES_ANIMATION = "styles.animation.json";
   var COMPONENTS_LOCAL = "components.local.json";
   var COMPONENTS_LIBRARY = "components.library.json";
   var HYGIENE = "hygiene.json";
@@ -311,12 +312,14 @@
     const stylesText = Array.isArray(styles.text) ? styles.text : [];
     const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
     const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
+    const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
     const files = [
       { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
       { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
       { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
       { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
       { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
+      { path: join(STYLES_ANIMATION), data: { ...stamp, styles: stylesAnimation } },
       { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
       { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
       { path: join(HYGIENE), data: { ...stamp, hygiene } },
@@ -329,6 +332,7 @@
       stylesText: stylesText.length,
       stylesEffect: stylesEffect.length,
       stylesGrid: stylesGrid.length,
+      stylesAnimation: stylesAnimation.length,
       components: local.length,
       libraryComponents: library.length,
       hygiene: hygiene.length
@@ -341,6 +345,7 @@
         stylesText: join(STYLES_TEXT),
         stylesEffect: join(STYLES_EFFECT),
         stylesGrid: join(STYLES_GRID),
+        stylesAnimation: join(STYLES_ANIMATION),
         componentsLocal: join(COMPONENTS_LOCAL),
         componentsLibrary: join(COMPONENTS_LIBRARY),
         hygiene: join(HYGIENE)
@@ -2157,6 +2162,197 @@
     return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings: warnings2 };
   }
 
+  // src/motion.ts
+  function keyframeValue(kv) {
+    if (!kv || typeof kv !== "object") return kv;
+    switch (kv.type) {
+      case "FLOAT":
+        return round(kv.value);
+      case "COLOR":
+        return kv.value ? rgbaToHex(kv.value) : void 0;
+      case "VECTOR":
+        return kv.value ? { ...xy(kv.value) } : void 0;
+      case "CIRCLE":
+        return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
+      case "LINE":
+        return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
+      case "BOOL":
+      case "TEXT_DATA":
+      case "CIRCLE_POINT":
+        return kv.value;
+      // no transformation needed
+      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
+      // same keys, same order, same JSON.
+      case "COLOR_POINT": {
+        const cp = kv.value;
+        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
+      }
+      default: {
+        const unknownMember = kv;
+        return asJson(unknownMember.value);
+      }
+    }
+  }
+  async function aliasValue2(id) {
+    return { aliasOf: await varName(id) || id };
+  }
+  async function motionEasing(ez) {
+    if (!ez || !ez.type) return void 0;
+    if (ez.type === "VARIABLE_ALIAS") return aliasValue2(ez.id);
+    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
+  }
+  async function keyframes(list) {
+    if (!isList(list) || !list.length) return void 0;
+    return Promise.all(list.map(async (k) => {
+      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
+      const ez = await motionEasing(k.easing);
+      if (ez) o.easing = ez;
+      return o;
+    }));
+  }
+  async function manualTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    const kf = await keyframes(binding.keyframes);
+    if (kf) o.keyframes = kf;
+    return o;
+  }
+  async function animationTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
+    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+    if (isList(binding.tracks) && binding.tracks.length) {
+      o.tracks = await Promise.all(binding.tracks.map(async (t) => {
+        const to = {};
+        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
+        const kf = await keyframes(t.keyframes);
+        if (kf) to.keyframes = kf;
+        return to;
+      }));
+    }
+    return o;
+  }
+  async function stylePropValue(v) {
+    if (v === void 0 || v === null) return void 0;
+    if (typeof v === "object") return motionEasing(v);
+    return v;
+  }
+  function isPropertyBindings(t) {
+    return "properties" in t;
+  }
+  async function bindingMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const entries = Object.entries(map);
+    const converted = await Promise.all(entries.map(([, binding]) => conv(binding)));
+    const out = {};
+    entries.forEach(([key], i) => putNonEmpty(out, key, converted[i]));
+    return nonEmpty(out);
+  }
+  async function paintMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      if (isPropertyBindings(entry)) {
+        const properties = await bindingMap(entry.properties, conv);
+        if (properties) out[index] = { properties };
+      } else {
+        putNonEmpty(out, index, await conv(entry));
+      }
+    }
+    return nonEmpty(out);
+  }
+  async function effectMap(map, conv) {
+    var _a;
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      const { properties, ...fields } = entry;
+      const extra = {};
+      putNonEmpty(extra, "properties", await bindingMap(properties, conv));
+      putNonEmpty(out, index, Object.assign((_a = await bindingMap(fields, conv)) != null ? _a : {}, extra));
+    }
+    return nonEmpty(out);
+  }
+  async function motionMap(map, conv) {
+    var _a;
+    if (!map || typeof map !== "object") return void 0;
+    const { fills, strokes, effects, ...scalars } = map;
+    const indexed = {};
+    putNonEmpty(indexed, "fills", await paintMap(fills, conv));
+    putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
+    putNonEmpty(indexed, "effects", await effectMap(effects, conv));
+    return nonEmpty(Object.assign((_a = await bindingMap(scalars, conv)) != null ? _a : {}, indexed));
+  }
+  async function collectMotion(node) {
+    const out = {};
+    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
+      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
+    }
+    if ("manualKeyframeTracks" in node) {
+      const tracks = await motionMap(node.manualKeyframeTracks, manualTrack);
+      if (tracks) out.manualTracks = tracks;
+    }
+    if ("animations" in node) {
+      const anims = await motionMap(node.animations, animationTrack);
+      if (anims) out.animations = anims;
+    }
+    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
+      out.styles = await Promise.all(node.animationStyles.map(async (s) => {
+        if (s.type === "CUSTOM") {
+          const o = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
+          if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+          return Object.assign(o, await customStyleDetail(s.styleId));
+        }
+        return animationStyleEntry(s);
+      }));
+    }
+    return nonEmpty(out);
+  }
+  async function animationStyleEntry(s) {
+    const o = { id: s.id, name: s.name, styleId: s.styleId };
+    if (typeof s.duration === "number") o.duration = round(s.duration);
+    if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+    if (s.props) {
+      const entries = Object.entries(s.props);
+      const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
+      const props = {};
+      entries.forEach(([key], i) => {
+        const c = converted[i];
+        if (c !== void 0) props[key] = c;
+      });
+      if (Object.keys(props).length) o.props = props;
+    }
+    return o;
+  }
+  async function customAnimationEntries(style) {
+    try {
+      const list = style.animationEntries;
+      if (!isList(list)) return void 0;
+      return await Promise.all(list.map(animationStyleEntry));
+    } catch (e) {
+      return void 0;
+    }
+  }
+  async function customStyleDetail(styleId) {
+    const style = await styleNameLookup.obj(styleId);
+    if (!style || style.type !== "CUSTOM_ANIMATION") return {};
+    try {
+      const detail = {};
+      if (typeof style.description === "string" && style.description) detail.description = style.description;
+      const entries = await customAnimationEntries(style);
+      if (entries) detail.entries = entries;
+      return detail;
+    } catch (e) {
+      return {};
+    }
+  }
+
   // src/components.ts
   async function instanceComponentRef(node) {
     if (node.type !== "INSTANCE") return void 0;
@@ -2413,11 +2609,12 @@
         return [];
       }
     };
-    const [paint, text, effect, grid] = await Promise.all([
+    const [paint, text, effect, grid, animation] = await Promise.all([
       safeList(() => figma.getLocalPaintStylesAsync()),
       safeList(() => figma.getLocalTextStylesAsync()),
       safeList(() => figma.getLocalEffectStylesAsync()),
-      safeList(() => figma.getLocalGridStylesAsync ? figma.getLocalGridStylesAsync() : Promise.resolve([]))
+      safeList(() => figma.getLocalGridStylesAsync ? figma.getLocalGridStylesAsync() : Promise.resolve([])),
+      safeList(() => figma.getLocalCustomAnimationStylesAsync ? figma.getLocalCustomAnimationStylesAsync() : Promise.resolve([]))
     ]);
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete");
@@ -2507,6 +2704,17 @@
           ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)
         }))
+      ),
+      // Custom animation styles: the Figma animations each one contains (CustomAnimationStyle.
+      // animationEntries), in the same compact form a node's applied animation style takes (motion.ts).
+      // Their props can bind EASING variables, so they resolve before dumpVariables too.
+      animation: await Promise.all(
+        animation.map(async (s) => ({
+          name: s.name,
+          ...ifDefined("entries", await customAnimationEntries(s)),
+          ...ifDefined("description", s.description || void 0),
+          ...await styleMeta(s)
+        }))
       )
     };
     const vars = await dumpVariables(opts);
@@ -2538,172 +2746,6 @@
       hygiene: vars.hygiene.concat(hygiene)
       // variable hygiene first, then component hygiene
     };
-  }
-
-  // src/motion.ts
-  function keyframeValue(kv) {
-    if (!kv || typeof kv !== "object") return kv;
-    switch (kv.type) {
-      case "FLOAT":
-        return round(kv.value);
-      case "COLOR":
-        return kv.value ? rgbaToHex(kv.value) : void 0;
-      case "VECTOR":
-        return kv.value ? { ...xy(kv.value) } : void 0;
-      case "CIRCLE":
-        return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
-      case "LINE":
-        return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
-      case "BOOL":
-      case "TEXT_DATA":
-      case "CIRCLE_POINT":
-        return kv.value;
-      // no transformation needed
-      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
-      // same keys, same order, same JSON.
-      case "COLOR_POINT": {
-        const cp = kv.value;
-        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
-      }
-      default: {
-        const unknownMember = kv;
-        return asJson(unknownMember.value);
-      }
-    }
-  }
-  async function aliasValue2(id) {
-    return { aliasOf: await varName(id) || id };
-  }
-  async function motionEasing(ez) {
-    if (!ez || !ez.type) return void 0;
-    if (ez.type === "VARIABLE_ALIAS") return aliasValue2(ez.id);
-    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
-  }
-  async function keyframes(list) {
-    if (!isList(list) || !list.length) return void 0;
-    return Promise.all(list.map(async (k) => {
-      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
-      const ez = await motionEasing(k.easing);
-      if (ez) o.easing = ez;
-      return o;
-    }));
-  }
-  async function manualTrack(binding) {
-    if (!binding || typeof binding !== "object") return void 0;
-    const o = {};
-    const base = keyframeValue(binding.baseValue);
-    if (base !== void 0) o.base = base;
-    const kf = await keyframes(binding.keyframes);
-    if (kf) o.keyframes = kf;
-    return o;
-  }
-  async function animationTrack(binding) {
-    if (!binding || typeof binding !== "object") return void 0;
-    const o = {};
-    const base = keyframeValue(binding.baseValue);
-    if (base !== void 0) o.base = base;
-    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-    if (isList(binding.tracks) && binding.tracks.length) {
-      o.tracks = await Promise.all(binding.tracks.map(async (t) => {
-        const to = {};
-        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
-        const kf = await keyframes(t.keyframes);
-        if (kf) to.keyframes = kf;
-        return to;
-      }));
-    }
-    return o;
-  }
-  async function stylePropValue(v) {
-    if (v === void 0 || v === null) return void 0;
-    if (typeof v === "object") return motionEasing(v);
-    return v;
-  }
-  function isPropertyBindings(t) {
-    return "properties" in t;
-  }
-  async function bindingMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const entries = Object.entries(map);
-    const converted = await Promise.all(entries.map(([, binding]) => conv(binding)));
-    const out = {};
-    entries.forEach(([key], i) => putNonEmpty(out, key, converted[i]));
-    return nonEmpty(out);
-  }
-  async function paintMap(map, conv) {
-    if (!map || typeof map !== "object") return void 0;
-    const out = {};
-    for (const [index, entry] of Object.entries(map)) {
-      if (!entry || typeof entry !== "object") continue;
-      if (isPropertyBindings(entry)) {
-        const properties = await bindingMap(entry.properties, conv);
-        if (properties) out[index] = { properties };
-      } else {
-        putNonEmpty(out, index, await conv(entry));
-      }
-    }
-    return nonEmpty(out);
-  }
-  async function effectMap(map, conv) {
-    var _a;
-    if (!map || typeof map !== "object") return void 0;
-    const out = {};
-    for (const [index, entry] of Object.entries(map)) {
-      if (!entry || typeof entry !== "object") continue;
-      const { properties, ...fields } = entry;
-      const extra = {};
-      putNonEmpty(extra, "properties", await bindingMap(properties, conv));
-      putNonEmpty(out, index, Object.assign((_a = await bindingMap(fields, conv)) != null ? _a : {}, extra));
-    }
-    return nonEmpty(out);
-  }
-  async function motionMap(map, conv) {
-    var _a;
-    if (!map || typeof map !== "object") return void 0;
-    const { fills, strokes, effects, ...scalars } = map;
-    const indexed = {};
-    putNonEmpty(indexed, "fills", await paintMap(fills, conv));
-    putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
-    putNonEmpty(indexed, "effects", await effectMap(effects, conv));
-    return nonEmpty(Object.assign((_a = await bindingMap(scalars, conv)) != null ? _a : {}, indexed));
-  }
-  async function collectMotion(node) {
-    const out = {};
-    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
-      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
-    }
-    if ("manualKeyframeTracks" in node) {
-      const tracks = await motionMap(node.manualKeyframeTracks, manualTrack);
-      if (tracks) out.manualTracks = tracks;
-    }
-    if ("animations" in node) {
-      const anims = await motionMap(node.animations, animationTrack);
-      if (anims) out.animations = anims;
-    }
-    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
-      out.styles = await Promise.all(node.animationStyles.map(async (s) => {
-        const o = { id: s.id, name: s.name, styleId: s.styleId };
-        if (s.type === "CUSTOM") {
-          o.custom = true;
-          if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-          return o;
-        }
-        if (typeof s.duration === "number") o.duration = round(s.duration);
-        if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-        if (s.props) {
-          const entries = Object.entries(s.props);
-          const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
-          const props = {};
-          entries.forEach(([key], i) => {
-            const c = converted[i];
-            if (c !== void 0) props[key] = c;
-          });
-          if (Object.keys(props).length) o.props = props;
-        }
-        return o;
-      }));
-    }
-    return nonEmpty(out);
   }
 
   // src/serialize.ts

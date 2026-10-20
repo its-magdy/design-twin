@@ -33,7 +33,7 @@ is the calling convention, spelled out under the diagram.
                                                        │ ws://localhost:PORT
     figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
           design/export/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
-          styles.effect,styles.grid,components.local,components.library,hygiene}.json ·
+          styles.effect,styles.grid,styles.animation,components.local,components.library,hygiene}.json ·
           design-system/components/<name>__<id>.json (one per COMPONENT_SET or standalone COMPONENT,
           holding the node tree(s) stripped out of components.local.json's variantsFile/nodeFile pointer) ·
           pages/index.json · pages/<page>/index.json +

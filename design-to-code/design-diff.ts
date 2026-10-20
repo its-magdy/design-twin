@@ -43,7 +43,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type {
   Box, CatalogBrief, CatalogComponent, CatalogDiff, ComponentsCatalog, DesignSystemManifest, DiffCategory, DiffNodeRef, DiffReport, DiffResult, DirDiffResult,
-  EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
+  AnimationStyle, EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
   StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
 import { bag, isJsonObject } from "./types.ts";
@@ -296,14 +296,14 @@ function diffCatalog(oldDoc: ComponentsCatalog, newDoc: ComponentsCatalog): Cata
 }
 const CATALOG_IGNORED = new Set(["page", "pageId", "box", "renderBox"]);
 
-// The four style files (styles.paint/text/effect/grid.json — bridge/src/design-system-layout.ts) share one
+// The five style files (styles.paint/text/effect/grid/animation.json — bridge/src/design-system-layout.ts) share one
 // shape: `{ exportedAt, file, colorProfile, styles: [{ name, key, id, ...fields }] }`.
-// The export-directory diff (sync-design) covers each of these (and hygiene.json below), so all five
+// The export-directory diff (sync-design) covers each of these (and hygiene.json below), so all six
 // must be diffable rather than exit 2 with "nothing here can be diffed" — otherwise a typography-only or
 // effect-only design-system change would be undetectable. Keyed
-// by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle all
-// have one), falling back to `name` for a style that somehow has none.
-type AnyStyle = PaintStyle | TextStyle | EffectStyle | GridStyle;
+// by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle/
+// CustomAnimationStyle all have one), falling back to `name` for a style that somehow has none.
+type AnyStyle = PaintStyle | TextStyle | EffectStyle | GridStyle | AnimationStyle;
 function styleKey(s: { key?: string; name?: string } | null | undefined): string {
   return (s && typeof s.key === "string" && s.key) ? "k:" + s.key : "n:" + String((s && s.name) || "");
 }
@@ -604,7 +604,7 @@ function previous(file: string, against: string | undefined, cwd: string = proce
 }
 
 // The design-system files a --design-system pull writes, as bridge/src/design-system-layout.ts names
-// them (the per-component detail directory is not a file to diff): the eight parts under
+// them (the per-component detail directory is not a file to diff): the nine parts under
 // design-system/ and the manifest, design-system.json, which stays at the export root beside it.
 const DS_FILE_NAMES = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 const dsFilePath = (exportRoot: string, name: string): string => name === DESIGN_SYSTEM_FILES.MANIFEST ? path.join(exportRoot, name) : path.join(exportRoot, DESIGN_SYSTEM_DIR, name);
@@ -796,7 +796,7 @@ function main(argv: string[]): number {
     if (!requested.length) { console.error(USAGE); return 2; }
     // A snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
     // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
-    // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 8
+    // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 9
     // sibling files, so a diff run later against it can't see a change that landed in a sibling (a
     // token that moved collection, an asset that changed) and the asset sidecar covered "36 of 39
     // entries" on a real run because assetPaths() only walks the tree, missing anything a sibling
@@ -804,7 +804,7 @@ function main(argv: string[]): number {
     //   - a screen export -> its .vars.json, its OWN .assets.json (the real per-screen manifest,
     //     not the synthetic asset-hash sidecar this function writes below), and the pages/index.json
     //     it is indexed under (read-only evidence, never a diff target itself).
-    //   - any of the 9 design-system/ files -> the other 8 (bridge/src/design-system-layout.ts is the
+    //   - any of the 10 design-system/ files -> the other 9 (bridge/src/design-system-layout.ts is the
     //     one definition of that set, so this can never drift from what a --design-system pull
     //     actually writes).
     // An export directory is the set the directory diff reads: variables.json and every

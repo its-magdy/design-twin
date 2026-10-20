@@ -10,12 +10,14 @@
 //      - Variables live in VariableCollections; a collection owns `modes` and `variableIds`, and every
 //        Variable defines a value per mode (resolvedType COLOR/FLOAT/STRING/BOOLEAN).
 //        -> tokens.json
-//      - Styles are the older, separate system: PaintStyle/TextStyle/EffectStyle/GridStyle, each its
-//        own BaseStyle object with its own id/name/description. Variables can be BOUND into a style's
-//        fields (`boundVariables`), which is a reference between the two systems, not a merger.
-//        -> styles.paint.json / styles.text.json / styles.effect.json / styles.grid.json (see below —
-//        split the same way tokens/components/hygiene are, and for the same reason: a caller after only
-//        typography does not have to load every gradient and shadow in the file to get it)
+//      - Styles are the older, separate system: PaintStyle/TextStyle/EffectStyle/GridStyle and
+//        CustomAnimationStyle, each its own BaseStyle object with its own id/name/description.
+//        Variables can be BOUND into a style's fields (`boundVariables`), which is a reference between
+//        the two systems, not a merger.
+//        -> styles.paint.json / styles.text.json / styles.effect.json / styles.grid.json /
+//        styles.animation.json (see below — split the same way tokens/components/hygiene are, and for
+//        the same reason: a caller after only typography does not have to load every gradient and
+//        shadow in the file to get it)
 //      - Components/ComponentSets are a third concept, with variant properties of their own.
 //        -> components.local.json / components.library.json
 //    The component split is a correctness fix, not just tidiness: entries flagged `remote: true` are
@@ -46,14 +48,14 @@ import type { PageLayoutFile } from "./pages-layout.ts";
 import { ifDefined } from "./json-util.ts";
 import type {
   DesignSystemStamp, DesignSystemManifest, TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc,
-  HygieneDoc, CatalogVariant, CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles,
+  AnimationStylesDoc, HygieneDoc, CatalogVariant, CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles,
   DesignSystemDoc,
 } from "./doc-types.ts";
 
-/** Every document the split writes, in `files` order: tokens, the four style files, the two
+/** Every document the split writes, in `files` order: tokens, the five style files, the two
  *  component catalogs, hygiene, any per-component detail files, and the slim manifest (last). */
 export type DesignSystemFileData =
-  | TokensDoc | PaintStylesDoc | TextStylesDoc | EffectStylesDoc | GridStylesDoc | ComponentsCatalog | HygieneDoc
+  | TokensDoc | PaintStylesDoc | TextStylesDoc | EffectStylesDoc | GridStylesDoc | AnimationStylesDoc | ComponentsCatalog | HygieneDoc
   | ComponentDetailFile | DesignSystemManifest;
 
 export interface DesignSystemLayout {
@@ -73,6 +75,7 @@ const STYLES_PAINT = "styles.paint.json";
 const STYLES_TEXT = "styles.text.json";
 const STYLES_EFFECT = "styles.effect.json";
 const STYLES_GRID = "styles.grid.json";
+const STYLES_ANIMATION = "styles.animation.json"; // local custom animation styles
 const COMPONENTS_LOCAL = "components.local.json";
 const COMPONENTS_LIBRARY = "components.library.json";
 const HYGIENE = "hygiene.json";
@@ -156,6 +159,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   const stylesText = Array.isArray(styles.text) ? styles.text : [];
   const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
   const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
+  const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
 
   const files: Array<PageLayoutFile<DesignSystemFileData>> = [
     { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
@@ -163,6 +167,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
     { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
     { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
+    { path: join(STYLES_ANIMATION), data: { ...stamp, styles: stylesAnimation } },
     { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
     { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
     { path: join(HYGIENE), data: { ...stamp, hygiene } },
@@ -176,6 +181,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     stylesText: stylesText.length,
     stylesEffect: stylesEffect.length,
     stylesGrid: stylesGrid.length,
+    stylesAnimation: stylesAnimation.length,
     components: local.length,
     libraryComponents: library.length,
     hygiene: hygiene.length,
@@ -192,6 +198,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
       stylesText: join(STYLES_TEXT),
       stylesEffect: join(STYLES_EFFECT),
       stylesGrid: join(STYLES_GRID),
+      stylesAnimation: join(STYLES_ANIMATION),
       componentsLocal: join(COMPONENTS_LOCAL),
       componentsLibrary: join(COMPONENTS_LIBRARY),
       hygiene: join(HYGIENE),
@@ -199,9 +206,9 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     counts,
   };
   // componentsDir is a POINTER, and a pointer that resolves to nothing is worse than an absent key:
-  // a tool walking `files` verbatim got ENOENT on the one entry of nine that had never been written
-  // in a live pull. The directory only exists when a COMPONENT_SET actually produced a detail file
-  // (variantVisuals is opt-in), so the key only exists then too.
+  // a tool walking `files` verbatim gets ENOENT on the one entry that was never written. The
+  // directory only exists when a COMPONENT_SET actually produced a detail file (variantVisuals is
+  // opt-in), so the key only exists then too.
   // Note the trailing separator: without it `design-system/components.local.json` — which is ALWAYS
   // written — matches the prefix `design-system/components` and the key never gets omitted.
   const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
@@ -218,10 +225,10 @@ export const DESIGN_SYSTEM_DIR: string = DIR;
 // Object.values<string>(DESIGN_SYSTEM_FILES) types as string[] (design-diff lists the sibling files).
 /** Every file/dir name the split uses — the manifest's own name included (MANIFEST). */
 export type DesignSystemFileNames = {
-  TOKENS: string; STYLES_PAINT: string; STYLES_TEXT: string; STYLES_EFFECT: string; STYLES_GRID: string;
+  TOKENS: string; STYLES_PAINT: string; STYLES_TEXT: string; STYLES_EFFECT: string; STYLES_GRID: string; STYLES_ANIMATION: string;
   COMPONENTS_LOCAL: string; COMPONENTS_LIBRARY: string; COMPONENTS_DIR: string; HYGIENE: string; MANIFEST: string;
 };
 export const DESIGN_SYSTEM_FILES: DesignSystemFileNames = {
-  TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
+  TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, STYLES_ANIMATION, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
   COMPONENTS_DIR, HYGIENE, MANIFEST,
 };

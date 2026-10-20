@@ -3,10 +3,10 @@
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
 import type {
   JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, MotionIndexedTracks, MotionPaintTrack, MotionEffectTracks, NodeMotion,
-  MotionStylePropValue, VariableAlias as IrVariableAlias,
+  MotionStylePropValue, MotionStyle, MotionStyleEntry, VariableAlias as IrVariableAlias,
 } from "../../bridge/src/doc-types.ts";
 import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
-import { varName } from "./state";
+import { varName, styleNameLookup } from "./state";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
@@ -214,31 +214,71 @@ export async function collectMotion(node: SceneNode): Promise<NodeMotion | undef
     if (anims) out.animations = anims;
   }
   if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
-    out.styles = await Promise.all(node.animationStyles.map(async (s) => {
-      const o: NonNullable<NodeMotion["styles"]>[number] = { id: s.id, name: s.name, styleId: s.styleId };
+    out.styles = await Promise.all(node.animationStyles.map(async (s): Promise<MotionStyle> => {
       // AppliedAnimationStyle is discriminated on `type` (typings 1.141): "FIGMA" carries duration/props,
       // "CUSTOM" (a CustomAnimationStyle applied to this node) carries only the ids and timelineOffset. A
       // runtime older than the CUSTOM kind sends no `type` at all, which the typings define as FIGMA — so
       // only an explicit "CUSTOM" takes the custom branch.
       if (s.type === "CUSTOM") {
-        o.custom = true;
+        const o: MotionStyle = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-        return o;
+        return Object.assign(o, await customStyleDetail(s.styleId));
       }
-      if (typeof s.duration === "number") o.duration = round(s.duration);
-      if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
-      if (s.props) {
-        const entries = Object.entries(s.props);
-        const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
-        const props: Record<string, MotionStylePropValue> = {};
-        entries.forEach(([key], i) => {
-          const c = converted[i];
-          if (c !== undefined) props[key] = c;
-        });
-        if (Object.keys(props).length) o.props = props;
-      }
-      return o;
+      return animationStyleEntry(s);
     }));
   }
   return nonEmpty(out);
+}
+
+// An applied Figma animation style, or one entry of a custom animation style (AnimationEntry is the same
+// AppliedFigmaAnimationStyle shape) -> {id, name, styleId, duration?, timelineOffset?, props?}. A zero
+// timelineOffset is the default and is omitted.
+export async function animationStyleEntry(s: AppliedFigmaAnimationStyle): Promise<MotionStyleEntry> {
+  const o: MotionStyleEntry = { id: s.id, name: s.name, styleId: s.styleId };
+  if (typeof s.duration === "number") o.duration = round(s.duration);
+  if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+  if (s.props) {
+    const entries = Object.entries(s.props);
+    const converted = await Promise.all(entries.map(([, v]) => stylePropValue(v)));
+    const props: Record<string, MotionStylePropValue> = {};
+    entries.forEach(([key], i) => {
+      const c = converted[i];
+      if (c !== undefined) props[key] = c;
+    });
+    if (Object.keys(props).length) o.props = props;
+  }
+  return o;
+}
+
+// CustomAnimationStyle.animationEntries (the Figma animations the style contains, in order) -> their
+// compact rows. A readable list returns its rows, and an empty list returns [] (a style with no animations);
+// undefined means the list could not be read (not a list, or the read throws). A caller never emits a partial
+// list, and an empty style stays distinct from an unreadable one.
+export async function customAnimationEntries(style: CustomAnimationStyle): Promise<MotionStyleEntry[] | undefined> {
+  try {
+    const list = style.animationEntries;
+    if (!isList(list)) return undefined;
+    return await Promise.all(list.map(animationStyleEntry));
+  } catch (e) {
+    return undefined;
+  }
+}
+
+// An applied CUSTOM style's styleId -> what the CustomAnimationStyle itself carries: its description and
+// its animation entries. The lookup goes through state.ts's styleNameLookup memo (figma.getStyleByIdAsync,
+// one fetch per styleId per run, a throw or rejection normalised to null), since one custom style is
+// typically applied on many nodes. A null result, a style of another type, or a failed read adds nothing,
+// leaving the applied row's own ids, name and timelineOffset.
+async function customStyleDetail(styleId: string): Promise<Pick<MotionStyle, "description" | "entries">> {
+  const style = await styleNameLookup.obj(styleId);
+  if (!style || style.type !== "CUSTOM_ANIMATION") return {};
+  try {
+    const detail: Pick<MotionStyle, "description" | "entries"> = {};
+    if (typeof style.description === "string" && style.description) detail.description = style.description;
+    const entries = await customAnimationEntries(style);
+    if (entries) detail.entries = entries;
+    return detail;
+  } catch (e) {
+    return {};
+  }
 }

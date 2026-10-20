@@ -273,8 +273,8 @@ appear only when the design contains them):
 **`design-system.json`** is a slim manifest (`exportedAt`/`file`/`colorProfile`, `files` pointers,
 `counts`); the catalog itself is split under `design-system/` along Figma's own taxonomy —
 `tokens.json` (collections → modes → variables), one file per style type — `styles.paint.json`/
-`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate Paint/Text/Effect/Grid
-style system), `components.local.json` / `components.library.json`, `hygiene.json`:
+`styles.text.json`/`styles.effect.json`/`styles.grid.json`/`styles.animation.json` — (the separate
+Paint/Text/Effect/Grid style system, plus custom animation styles), `components.local.json` / `components.library.json`, `hygiene.json`:
 - `design-system/tokens.json` → `collections[]` + `variables[]` with `tier` (primitive/semantic), `scopes`, `codeSyntax {WEB,ANDROID,iOS}` (when set), and
   alias values re-keyed by mode name; COLOR values as hex (alpha preserved)
 - `design-system/components.local.json` → `components[]` with `id`, `page`/`pageId`, `description`, and

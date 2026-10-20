@@ -22,7 +22,7 @@ import { screenPaths } from "../bridge/src/pages-layout.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
-  ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
+  AnimationStylesDoc, ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
   HygieneDoc, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
   TextStylesDoc, TokensDoc, Asset,
 } from "../bridge/src/doc-types.ts";
@@ -1661,7 +1661,8 @@ void (async () => {
       source: { role: "library", libraryName: "NIMA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
       collections: [collection({ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" })],
       variables: [variable({ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" })],
-      styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [] },
+      styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [],
+        animation: [{ name: "Entrance", key: "ak1", entries: [{ id: "e1", name: "Fade In", styleId: "as1", duration: 0.3 }] }] },
       // A main consumed from ANOTHER library: not this library's to claim.
       components: [component({ name: "Button", type: "COMPONENT", key: "ck1", publish: "current" }), component({ name: "Foreign", type: "COMPONENT", key: "ck2", remote: true })],
       hygiene: [],
@@ -1689,6 +1690,12 @@ void (async () => {
 
     const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8")) as LibraryManifest;
     ok("[lib-layout] the directory self-describes via index.json", !!(idx.files && idx.files.tokens && idx.counts.variables === 1));
+    const libAnim = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "styles.animation.json"), "utf8")) as AnimationStylesDoc & { source?: { role?: string } };
+    ok("[lib-layout] styles.animation.json holds the custom animation styles (entries kept), stamped like its siblings",
+      libAnim.styles.length === 1 && libAnim.styles[0]?.key === "ak1" && libAnim.styles[0]?.entries?.[0]?.styleId === "as1" &&
+      libAnim.exportedAt === libDoc.exportedAt && libAnim.source?.role === "library");
+    ok("[lib-layout] index.json points at styles.animation.json and counts it",
+      idx.files.stylesAnimation === "libraries/" + dirName + "/styles.animation.json" && idx.counts.stylesAnimation === 1);
     ok("[lib-layout] index summarises publish status", idx.publish && (idx.publish.current ?? 0) >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
 
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
@@ -1741,7 +1748,7 @@ void (async () => {
       colorProfile: "srgb",
       collections: [collection({ name: "Core", modes: ["Light"] })],
       variables: [variable({ name: "color/bg", type: "COLOR", values: {} })],
-      styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [] },
+      styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [], animation: [{ name: "Entrance", key: "ak1" }, { name: "Exit" }] },
       components: [
         { key: "k1", name: "Button", type: "COMPONENT", id: "2:1", page: "Home", pageId: "1:0" },
         { key: "k2", name: "Card", type: "COMPONENT", remote: true, derivedFrom: "instances" },
@@ -1789,21 +1796,23 @@ void (async () => {
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).exportedAt ===
       "2026-08-12T00:00:00.000Z");
 
-  // --- the design-system split (bridge/design-system-layout.js) -------------------------------
+  // --- the design-system split (bridge/src/design-system-layout.ts) -------------------------------
   // The catalog is not one flat object: Figma's own model has three separate systems
-  // (VariableCollections+Variables / Paint|Text|Effect|GridStyle / Components), and library
+  // (VariableCollections+Variables / Paint|Text|Effect|Grid|CustomAnimationStyle / Components), and library
   // components are not nodes in this file at all.
-  // The eight parts land in design-system/ — design/tokens.json and design/components.json at the
+  // The nine parts land in design-system/ — design/tokens.json and design/components.json at the
   // export ROOT are the user's hand-authored, non-regenerable config maps and must not be clobbered.
   const readDS = <T,>(n: string): T => JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", n), "utf8")) as T;
   ok("[ds-split] tokens.json carries the collections + variables, and nothing else's payload",
     // de-any: styles/components are asserted ABSENT from tokens.json — they are not fields of TokensDoc, so they are named here.
     (() => { const t = readDS<TokensDoc & { styles?: unknown; components?: unknown }>("tokens.json");
       return t.collections?.length === 1 && t.variables?.length === 1 && !t.styles && !t.components; })());
-  ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid",
+  ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid/animation",
     (() => { const p = readDS<PaintStylesDoc>("styles.paint.json").styles, t = readDS<TextStylesDoc>("styles.text.json").styles,
-        e = readDS<EffectStylesDoc>("styles.effect.json").styles, g = readDS<GridStylesDoc>("styles.grid.json").styles;
-      return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g); })());
+        e = readDS<EffectStylesDoc>("styles.effect.json").styles, g = readDS<GridStylesDoc>("styles.grid.json").styles,
+        a = readDS<AnimationStylesDoc>("styles.animation.json").styles;
+      return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g) &&
+        a.length === 2 && a[0]?.key === "ak1" && a[1]?.name === "Exit"; })());
   ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
     (() => { const c = readDS<ComponentsCatalog>("components.local.json").components;
       const c0 = must(c[0], "components.local.json components[0]");
@@ -1841,18 +1850,19 @@ void (async () => {
       return c.length === 1 && c0.key === "k2" && c0.remote === true && c0.id === undefined; })());
   ok("[ds-split] hygiene.json is the lint report on its own", readDS<HygieneDoc>("hygiene.json").hygiene.length === 1);
   ok("[ds-split] every split file repeats the freshness stamp, so drift-lint/figma_status work off any of them",
-    ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json",
+    ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json", "styles.animation.json",
      "components.local.json", "components.library.json", "hygiene.json"]
       .every((n) => readDS<DesignSystemStamp>(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS<DesignSystemStamp>(n).file === "Demo"));
   ok("[ds-split] design-system.json is a slim manifest: stamp + pointers, no bulk data",
     // de-any: variables/components/styles are asserted ABSENT from the slim manifest — not fields of DesignSystemManifest.
     (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest & { variables?: unknown; components?: unknown; styles?: unknown };
       return m.file === "Demo" && m.colorProfile === "srgb" && m.files.tokens === "design-system/tokens.json" &&
-        m.files.componentsLibrary === "design-system/components.library.json" && !m.variables && !m.components && !m.styles; })());
+        m.files.componentsLibrary === "design-system/components.library.json" &&
+        m.files.stylesAnimation === "design-system/styles.animation.json" && !m.variables && !m.components && !m.styles; })());
   ok("[ds-split] the manifest counts local and library components, and each style bucket, separately",
     (() => { const c = (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).counts;
       return c.variables === 1 && c.components === 3 && c.libraryComponents === 1 && c.hygiene === 1 &&
-        c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0; })());
+        c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0 && c.stylesAnimation === 2; })());
 
   // --- the --design-system / figma_export_design_system result shape: { designSystem } only, no
   // layersDoc/assets. This is what OUT.writeExport receives on that path (figma-pull.js's
