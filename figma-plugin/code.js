@@ -2333,7 +2333,7 @@
   async function customAnimationEntries(style) {
     try {
       const list = style.animationEntries;
-      if (!isList(list) || !list.length) return void 0;
+      if (!isList(list)) return void 0;
       return await Promise.all(list.map(animationStyleEntry));
     } catch (e) {
       return void 0;

@@ -53,7 +53,8 @@ above — to learn the system before building.
   array. Figma's style system is SEPARATE from variables; a style can bind variables into its fields,
   but it is its own object. `styles.animation.json` lists the file's custom animation styles, each with
   `entries[]`: the Figma animations it plays, in order, in the same form as a motion `styles[]` row
-  (`{id, name, styleId, duration, timelineOffset, props}`; see ir-fields).
+  (`{id, name, styleId, duration, timelineOffset, props}`; see ir-fields). `entries: []` is a style with
+  no animations; `entries` absent means they could not be read.
 - **`design-system/components.local.json`** — the `components` catalog for components that really
   live in this file, each prop `{key,type,options,default}` (`options` = a variant's states). Each
   entry also carries `visuals: {fills,strokes,effects,radius,opacity,blendMode}` — the

@@ -431,9 +431,10 @@ export interface MotionStyle extends MotionStyleEntry {
    *  only (no duration/props); `description` and `entries` come from the style itself, looked up by
    *  styleId, and are absent when that lookup finds no custom animation style. */
   custom?: true;
-  /** the custom animation style's description (absent when empty) */
+  /** the custom animation style's description (absent when empty or unreadable) */
   description?: string;
-  /** the Figma animations the custom animation style contains, in order */
+  /** the Figma animations the custom animation style contains, in order. `[]` is a style that was read and
+   *  has none; absent means the lookup found no custom animation style or its entries could not be read. */
   entries?: MotionStyleEntry[];
 }
 export interface NodeMotion {
@@ -857,7 +858,8 @@ export interface TextStyle extends StyleMeta {
 }
 export interface EffectStyle extends StyleMeta { name: string; effects?: Effect[] }
 export interface GridStyle extends StyleMeta { name: string; grids?: LayoutGridSpec[] }
-/** A local custom animation style (CustomAnimationStyle): the Figma animations it contains, in order. */
+/** A local custom animation style (CustomAnimationStyle): the Figma animations it contains, in order.
+ *  `entries: []` is a style with none; `entries` is absent when the list could not be read. */
 export interface AnimationStyle extends StyleMeta { name: string; entries?: MotionStyleEntry[] }
 /** design-system/styles.<paint|text|effect|grid|animation>.json */
 export interface StylesDoc<S = PaintStyle | TextStyle | EffectStyle | GridStyle | AnimationStyle> extends DesignSystemStamp { styles: S[] }

@@ -251,11 +251,13 @@ export async function animationStyleEntry(s: AppliedFigmaAnimationStyle): Promis
 }
 
 // CustomAnimationStyle.animationEntries (the Figma animations the style contains, in order) -> their
-// compact rows; undefined when the style has none or the read throws, so a caller never emits a partial list.
+// compact rows. A readable list returns its rows, and an empty list returns [] (a style with no animations);
+// undefined means the list could not be read (not a list, or the read throws). A caller never emits a partial
+// list, and an empty style stays distinct from an unreadable one.
 export async function customAnimationEntries(style: CustomAnimationStyle): Promise<MotionStyleEntry[] | undefined> {
   try {
     const list = style.animationEntries;
-    if (!isList(list) || !list.length) return undefined;
+    if (!isList(list)) return undefined;
     return await Promise.all(list.map(animationStyleEntry));
   } catch (e) {
     return undefined;

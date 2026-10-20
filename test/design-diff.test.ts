@@ -256,13 +256,13 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
 })());
 
 // a snapshot of ONE file is not a copy of the export it belongs to. --snapshot also
-// copies the sibling set: a design-system file's other 8 siblings (bridge/design-system-layout.js is
-// the one definition of that 9-file set), and a screen's .vars.json/.assets.json plus the shared
+// copies the sibling set: a design-system file's other 9 siblings (bridge/design-system-layout.js is
+// the one definition of that 10-file set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.
 console.log("CLI — --snapshot copies the sibling set:");
-check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
+check("snapshotting ONE design-system file also snapshots its 9 siblings", (() => {
   // the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
-  // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
+  // design-system/ subdirectory that holds the other 9 files (bridge/design-system-layout.js's own
   // header comment) — not flat alongside them, which a fixture must not assume.
   const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
@@ -404,7 +404,7 @@ check("a file of an unknown kind exits 2 with the reason", (() => { const root =
 
 // ---------------------------------------------------------------- style + hygiene diffs
 // The export-directory diff (sync-design) reads EVERY design-system file a --design-system pull writes,
-// including the four styles.*.json and hygiene.json — and none of the five exits 2 with "nothing here
+// including the five styles.*.json and hygiene.json — and none of the six exits 2 with "nothing here
 // can be diffed", so a typography-only or effect-only design-system change (or a new/resolved hygiene
 // warning) is detected, not undetectable as the skill warns it would be without them. Fixtures are the
 // REAL design-system files from a real export (test/fixtures/livetest4/design-system/).

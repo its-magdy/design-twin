@@ -72,7 +72,7 @@ writes the real path here, not there).
    ```
    The screen file brings its `.vars.json`, `.assets.json` and `pages/index.json` with it; the export
    directory `design/export` stands for the merged `variables.json`, every design-system file a
-   `--design-system` pull rewrites (the `design-system.json` manifest and the eight files under
+   `--design-system` pull rewrites (the `design-system.json` manifest and the nine files under
    `design-system/`) and every `--as-library` export under `libraries/` — whichever of them this
    project has. A typography-only or hygiene-only design
    system change is only detectable if those files were snapshotted too, which is why the directory,

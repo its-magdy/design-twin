@@ -796,7 +796,7 @@ function main(argv: string[]): number {
     if (!requested.length) { console.error(USAGE); return 2; }
     // A snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
     // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
-    // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 8
+    // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 9
     // sibling files, so a diff run later against it can't see a change that landed in a sibling (a
     // token that moved collection, an asset that changed) and the asset sidecar covered "36 of 39
     // entries" on a real run because assetPaths() only walks the tree, missing anything a sibling
@@ -804,7 +804,7 @@ function main(argv: string[]): number {
     //   - a screen export -> its .vars.json, its OWN .assets.json (the real per-screen manifest,
     //     not the synthetic asset-hash sidecar this function writes below), and the pages/index.json
     //     it is indexed under (read-only evidence, never a diff target itself).
-    //   - any of the 9 design-system/ files -> the other 8 (bridge/src/design-system-layout.ts is the
+    //   - any of the 10 design-system/ files -> the other 9 (bridge/src/design-system-layout.ts is the
     //     one definition of that set, so this can never drift from what a --design-system pull
     //     actually writes).
     // An export directory is the set the directory diff reads: variables.json and every

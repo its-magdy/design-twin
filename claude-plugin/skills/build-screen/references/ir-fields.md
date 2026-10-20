@@ -310,8 +310,8 @@ Undesigned states use the audit's default (derived from tokens) and are reported
   `styles[]` row is an applied animation style: `{id, name, styleId, duration, timelineOffset, props}`, `duration`
   and `timelineOffset` in SECONDS (`timelineOffset` absent = 0). One with `custom: true` is a custom animation style:
   the row itself has no `duration` or `props`; its `entries[]` are the animations the style plays, in order, each a
-  row of that same shape, plus the style's `description`. With no `entries` the style could not be read: you have
-  its name only.
+  row of that same shape, plus the style's `description` when it has one. `entries: []` is a style that plays no
+  animations; with `entries` absent its animations could not be read, so treat them as unknown.
 
 ## Images and vectors
 

@@ -330,6 +330,8 @@ const scrollFrame = {
     type: "CUSTOM", id: "applied7", styleId: "cas_broken", name: "Broken",
   }, {
     type: "CUSTOM", id: "applied8", styleId: "cas1", name: "Brand Entrance", timelineOffset: 0,
+  }, {
+    type: "CUSTOM", id: "applied9", styleId: "cas_empty", name: "Empty",
   }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -375,6 +377,13 @@ const brokenAnimStyle: FakeNode = {
   type: "CUSTOM_ANIMATION", id: "cas_broken", name: "Broken", description: "",
   get animationEntries(): never { throw new Error("animation entries unreadable"); },
 };
+// cas_empty's animationEntries read succeeds and is an empty list: a style with no animations, which must
+// stay distinct from cas_broken's unreadable one.
+const emptyAnimStyle: FakeNode = {
+  type: "CUSTOM_ANIMATION", id: "cas_empty", key: "caskey_empty", name: "Empty", description: "",
+  remote: false, documentationLinks: [], getPublishStatusAsync: async () => "CURRENT",
+  animationEntries: [],
+};
 // cas1's entries as both the motion read and the catalog emit them (motion.ts animationStyleEntry).
 const CAS1_ENTRIES = '{"id":"entry1","name":"Fade In","styleId":"as1","duration":0.3,"props":{"easing":{"type":"ease_out"}}},' +
   '{"id":"entry2","name":"Slide Up","styleId":"as2","duration":0.46,"timelineOffset":0.2,"props":{"distance":16,"color":{"aliasOf":"easing/emphasized"}}}';
@@ -400,7 +409,7 @@ const figma: FakeFigma = {
   getStyleByIdAsync: async (id: string) => {
     if (id === "cas1") { customStyleFetches++; return customAnimStyle; }
     if (id === "cas_throw") throw new Error("style lookup failed");
-    const styles: Record<string, FakeNode> = { s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" }, cas_broken: brokenAnimStyle,
+    const styles: Record<string, FakeNode> = { s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" }, cas_broken: brokenAnimStyle, cas_empty: emptyAnimStyle,
       // a PAINT style with a description: a CUSTOM row pointing at it must not pick that description up
       s_accent: { type: "PAINT", name: "Brand/Accent", description: "Accent paint" } };
     return styles[id] || null;
@@ -409,7 +418,7 @@ const figma: FakeFigma = {
   getLocalTextStylesAsync: async () => [{ name: "Body/Regular", fontSize: 16, fontName: { family: "Inter", style: "Regular" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 8, paragraphIndent: 4, leadingTrim: "CAP_HEIGHT", listSpacing: 6, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, description: "" }],
   getLocalEffectStylesAsync: async () => [],
   getLocalGridStylesAsync: async () => [{ name: "Grid/12col", layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 20, sectionSize: 60 }], description: "" }],
-  getLocalCustomAnimationStylesAsync: async () => [customAnimStyle, brokenAnimStyle],
+  getLocalCustomAnimationStylesAsync: async () => [customAnimStyle, brokenAnimStyle, emptyAnimStyle],
   variables: {
     getLocalVariablesAsync: async () => Object.values(VARS),
     getLocalVariableCollectionsAsync: async () => COLLECTIONS,
@@ -678,7 +687,9 @@ const sandbox: Sandbox = context;
   ok("custom animation style catalogued: name, entries (same form as an applied style), description, key, id",
     JSON.stringify(ds.styles.animation[0]) === '{"name":"Brand Entrance","entries":[' + CAS1_ENTRIES + '],"description":"Hero entrance sequence","key":"caskey1","id":"cas1"}');
   ok("custom animation style whose animationEntries read throws: catalogued without entries (no partial list), empty description dropped",
-    JSON.stringify(ds.styles.animation[1]) === '{"name":"Broken","id":"cas_broken"}' && ds.styles.animation.length === 2);
+    JSON.stringify(ds.styles.animation[1]) === '{"name":"Broken","id":"cas_broken"}' && ds.styles.animation.length === 3);
+  ok("custom animation style whose animationEntries list is empty: catalogued with entries: [] (an empty style, not an unreadable one)",
+    JSON.stringify(ds.styles.animation[2]) === '{"name":"Empty","entries":[],"key":"caskey_empty","id":"cas_empty"}');
   {
     // A runtime without getLocalCustomAnimationStylesAsync: an empty list, the rest of the catalog intact.
     const listCustom = must(figma.getLocalCustomAnimationStylesAsync, "figma.getLocalCustomAnimationStylesAsync");
@@ -988,6 +999,8 @@ const sandbox: Sandbox = context;
   ok("motion CUSTOM style applied twice: both rows expanded, the style fetched once per run", JSON.stringify(m3?.styles?.[7]) ===
     '{"id":"applied8","name":"Brand Entrance","styleId":"cas1","custom":true,"description":"Hero entrance sequence","entries":[' + CAS1_ENTRIES + ']}' &&
     customStyleFetches === 1);
+  ok("motion CUSTOM style whose animationEntries list is empty: entries: [] (read and empty, distinct from the unreadable row above)", JSON.stringify(m3?.styles?.[8]) ===
+    '{"id":"applied9","name":"Empty","styleId":"cas_empty","custom":true,"entries":[]}');
   const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
@@ -1353,6 +1366,28 @@ const sandbox: Sandbox = context;
   ok("dangling-alias warning names the unresolved id", aliasHyg.some((h) => /v_deleted/.test(h)));
   delete VARS.v_aliases_lib;
   delete VARS.v_dangling;
+
+  // ---- a library EASING variable referenced ONLY by a catalogued custom animation style ----
+  // buildDesignSystem resolves the animation styles BEFORE dumpVariables: resolving an entry's props records
+  // the variable ids it binds, and dumpVariables pulls the referenced library variables in from that record.
+  // The style below is catalog-only (no node applies it) and binds a non-local variable nothing else
+  // references, so the variable reaches the dump only if the animation build ran first.
+  EXTRA.v_libease = { id: "v_libease", name: "brand/ease-lib", resolvedType: "EASING", variableCollectionId: "c_lib",
+    scopes: [], codeSyntax: {}, remote: true, valuesByMode: { m_l: { type: "EASE_IN" }, m_d: { type: "EASE_IN" } } };
+  const easeOnlyStyle: FakeNode = {
+    type: "CUSTOM_ANIMATION", id: "cas_ease", key: "caskey_ease", name: "Library Ease", description: "",
+    remote: false, documentationLinks: [], getPublishStatusAsync: async () => "CURRENT",
+    animationEntries: [{ type: "FIGMA", id: "entry_ease", styleId: "as3", name: "Fade", duration: 0.2,
+      props: { easing: { type: "VARIABLE_ALIAS", id: "v_libease" } } }],
+  };
+  const prevListCustom = must(figma.getLocalCustomAnimationStylesAsync, "figma.getLocalCustomAnimationStylesAsync");
+  figma.getLocalCustomAnimationStylesAsync = async () => [easeOnlyStyle];
+  const dsEase = await sandbox.buildDesignSystem();
+  figma.getLocalCustomAnimationStylesAsync = prevListCustom;
+  delete EXTRA.v_libease;
+  const easeVar = dsEase.variables.find((v) => v.name === "brand/ease-lib");
+  ok("a library EASING variable referenced only by a catalogued custom animation style entry is pulled into the exported variables",
+    !!easeVar && easeVar.remote === true && JSON.stringify(dsEase.styles.animation[0]?.entries?.[0]?.props) === '{"easing":{"aliasOf":"brand/ease-lib"}}');
 
   // ---- COMPOSED colour variables (plugin-typings 1.139, Figma Update 139) ----
   // VariableComposedColor = {color: RGB|RGBA, opacity: VariableAlias} | {color: VariableAlias, opacity: number|VariableAlias}.
