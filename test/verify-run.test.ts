@@ -870,6 +870,9 @@ await block("[key] legacy set, open run:", async () => {
   const end = cli("--status", "Shed", "--phase", "failed", "--run", "run-legacy", "--detail", "verifier gone");
   safe(`[key] --status Shed --phase failed --run run-legacy ends the run → exit 0 (got ${end.status}: ${end.stderr.trim()})`, () =>
     end.status === 0 && readStatusFile(VR.liveStatusFile(legacyBase))?.phase === "failed");
+  const wEnded = cli("--wait", "Shed", "--run", "run-legacy", "--timeout", "5", "--interval", "0.1");
+  safe(`[key] --wait Shed --run run-legacy after the run ended → its outcome (exit 1, failed, the detail), not a --migrate refusal (got ${wEnded.status}: ${wEnded.stderr.trim()})`, () =>
+    wEnded.status === 1 && /run run-legacy failed \(rev 2, .*\): verifier gone/.test(wEnded.stderr) && /note {2}Shed is a legacy-named verify set — verify-screen --migrate renames it/.test(wEnded.stderr));
   const mig = cli("--migrate", "--apply");
   safe(`[key] …then --migrate --apply renames Shed to Sheds__2_2 (got ${mig.status}: ${mig.stdout.trim()} ${mig.stderr.trim()})`, () =>
     mig.status === 0 && fs.existsSync(path.join(dir, "Sheds__2_2.expected.json")) && !fs.existsSync(path.join(dir, "Shed.expected.json")));

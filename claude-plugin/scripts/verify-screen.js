@@ -1973,10 +1973,12 @@ function runBase(screen, dir, at) {
   const k = setKey(asPath ? path12.basename(screen) : screen, opts);
   if (k.status === "unresolved") {
     const open = k.legacySet !== void 0 ? readStatus(path12.join(verifyDir, k.legacySet)) : null;
-    if (k.legacySet !== void 0 && open !== null && open !== "v1" && !TERMINAL_PHASES.includes(open.phase)) {
+    const waited = open !== null && open !== "v1" && at.kind === "wait" && at.run === open.runId;
+    if (k.legacySet !== void 0 && open !== null && open !== "v1" && (waited || !TERMINAL_PHASES.includes(open.phase))) {
       const S = k.legacySet;
       const ends = at.kind === "wait" ? at.run === void 0 || at.run === open.runId : !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
-      if (ends) return { base: path12.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set \u2014 once run ${open.runId} ends, verify-screen --migrate renames it`] };
+      const once = TERMINAL_PHASES.includes(open.phase) ? "" : ` once run ${open.runId} ends,`;
+      if (ends) return { base: path12.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set \u2014${once} verify-screen --migrate renames it`] };
       const { waitIt, endIt } = runCommands(path12.join(verifyDir, S), open);
       return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) \u2014 only that run's end is written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
     }
