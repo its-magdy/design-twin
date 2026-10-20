@@ -2680,6 +2680,11 @@
     if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
       out.styles = await Promise.all(node.animationStyles.map(async (s) => {
         const o = { id: s.id, name: s.name, styleId: s.styleId };
+        if (s.type === "CUSTOM") {
+          o.custom = true;
+          if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+          return o;
+        }
         if (typeof s.duration === "number") o.duration = round(s.duration);
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
         if (s.props) {

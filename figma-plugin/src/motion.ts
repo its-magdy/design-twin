@@ -216,6 +216,15 @@ export async function collectMotion(node: SceneNode): Promise<NodeMotion | undef
   if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
     out.styles = await Promise.all(node.animationStyles.map(async (s) => {
       const o: NonNullable<NodeMotion["styles"]>[number] = { id: s.id, name: s.name, styleId: s.styleId };
+      // AppliedAnimationStyle is discriminated on `type` (typings 1.141): "FIGMA" carries duration/props,
+      // "CUSTOM" (a CustomAnimationStyle applied to this node) carries only the ids and timelineOffset. A
+      // runtime older than the CUSTOM kind sends no `type` at all, which the typings define as FIGMA — so
+      // only an explicit "CUSTOM" takes the custom branch.
+      if (s.type === "CUSTOM") {
+        o.custom = true;
+        if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+        return o;
+      }
       if (typeof s.duration === "number") o.duration = round(s.duration);
       if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
       if (s.props) {
