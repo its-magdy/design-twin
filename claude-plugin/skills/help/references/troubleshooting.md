@@ -158,7 +158,8 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (`hooks/hooks.json` → `scripts/verifier-guard.js`) refused one of the `visual-verifier` agent's own calls; it
   applies to that agent only. It refuses a write outside `design/verify/` and the run cache
   (`node_modules/.cache/designtwin-verify/`), or to a file the verify tools own; a pattern kill (`pkill`,
-  `killall`, `kill -1`, …); a dependency or Playwright browser install; and `dangerouslyDisableSandbox`. The reason
+  `killall`, `kill -1`, …); a dependency or Playwright browser install; `verify-screen --migrate` (it renames verify
+  sets and rewrites plans — the caller's call); and `dangerouslyDisableSandbox`. The reason
   says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
   is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
 - **`verify-screen` / `verify-probe` exit 2: "legacy-named verify set … run verify-screen --migrate"** → the

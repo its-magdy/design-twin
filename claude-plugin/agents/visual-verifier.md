@@ -88,7 +88,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --p
 
 ## 2a. Process, permission and time limits
 
-- **Enforced by the plugin's hook** (`scripts/verifier-guard.js`, PreToolUse), each refusal a real block with its reason: a write outside `design/verify/` and the run cache (or to a tool-owned file there), a pattern kill (`pkill`, `killall`, …), a dependency or Playwright browser install (`npm install`/`ci`, `npx playwright install`) and `dangerouslyDisableSandbox`.
+- **Enforced by the plugin's hook** (`scripts/verifier-guard.js`, PreToolUse), each refusal a real block with its reason: a write outside `design/verify/` and the run cache (or to a tool-owned file there), a pattern kill (`pkill`, `killall`, …), a dependency or Playwright browser install (`npm install`/`ci`, `npx playwright install`), `verify-screen --migrate` (renaming verify sets is the caller's call) and `dangerouslyDisableSandbox`.
 - **Close only what you opened; stop only a PID you started and recorded.** Reuse a dev server the user already runs
   rather than starting a second.
 - **A permission denial is not a sandbox violation.** Never ask the caller to approve a bypass. The three kinds of
