@@ -1146,5 +1146,12 @@ console.log("build-screen docs (wrapped-track gap):");
     && /`alignItems` → a `Row`'s `verticalAlignment` \/ a `Column`'s `horizontalAlignment`/.test(compose)
     && !/the layout's `verticalAlignment`/.test(compose));
 }
+console.log("build-screen docs (shader property definitions):");
+{
+  const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
+  check("ir-fields: a shader's `propertyDefs[defId].name` names an input, `type` is lowercased, and the map is absent without Figma metadata",
+    /\*\*`propertyDefs`\*\* `\{defId: \{name, type, default\?, description\?\}\}` names those inputs — read `propertyDefs\[defId\]\.name` to name a shader input/.test(irf)
+    && /can list inputs `properties` omits/.test(irf) && /absent when Figma supplied no definitions/.test(irf));
+}
 
 report();

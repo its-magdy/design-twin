@@ -1428,15 +1428,32 @@
     if ("x" in v) return xy(v);
     return { color: rgbaToHex(v) };
   }
-  async function putShaderProperties(o, props) {
-    if (!props || typeof props !== "object") return;
+  async function shaderDefs(meta) {
+    if (!meta || typeof meta !== "object") return void 0;
+    const out = {};
+    for (const [defId, d] of Object.entries(meta)) {
+      if (!d || typeof d.name !== "string" || typeof d.type !== "string") continue;
+      const def = { name: d.name, type: lower(d.type) };
+      if (d.defaultValue !== void 0) {
+        const dv = await shaderValue(d.defaultValue, defId, {});
+        if (dv !== void 0) def.default = dv;
+      }
+      if (typeof d.description === "string" && d.description) def.description = d.description;
+      out[defId] = def;
+    }
+    return out;
+  }
+  async function putShaderProperties(o, props, meta) {
     const out = {};
     const tokens = {};
-    for (const [defId, pv] of Object.entries(props)) {
-      const v = await shaderValue(pv, defId, tokens);
-      if (v !== void 0) out[defId] = v;
+    if (props && typeof props === "object") {
+      for (const [defId, pv] of Object.entries(props)) {
+        const v = await shaderValue(pv, defId, tokens);
+        if (v !== void 0) out[defId] = v;
+      }
     }
     putNonEmpty(o, "properties", out);
+    putNonEmpty(o, "propertyDefs", await shaderDefs(meta));
     putNonEmpty(o, "tokens", tokens);
   }
   async function simplifyFills(fills) {
@@ -1481,7 +1498,7 @@
         } else if (f.type === "SHADER") {
           const sp = paintExtras(f, { type: "shader" });
           if (f.id) sp.shaderId = f.id;
-          await putShaderProperties(sp, f.properties);
+          await putShaderProperties(sp, f.properties, f.propertyMetadata);
           o = sp;
         } else {
           const future = f;
@@ -1625,7 +1642,7 @@
     const out = await Promise.all(
       vis.map(async (e) => {
         const o = effectBody(e);
-        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
+        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties, e.propertyMetadata);
         const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : void 0);
         if (bv) o.tokens = o.tokens ? { ...o.tokens, ...bv } : bv;
         return o;

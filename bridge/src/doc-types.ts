@@ -148,7 +148,16 @@ export type ShaderPropValue =
   | { x: number; y: number; radius: number; angle?: number }
   | { x: number; y: number; color?: string }
   | { stops: Array<{ pos: number; color?: string }> };
-export interface ShaderPaint extends PaintBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
+/** One entry of a shader paint/effect's `propertyDefs` (paint.ts putShaderProperties), keyed by the same
+ *  property-definition id as `properties`. `name` is the author-defined input name; `type` is Figma's
+ *  declared input type lowercased (`boolean`, `text`, `number`, `image`, `instance_swap`, `slot`, `color`,
+ *  `point`, `line`, `circle`, `circle_point`, `color_point`, `gradient`); `default` is normalised like a
+ *  `properties` value (omitted when the default is variable-bound); `description` is omitted when empty.
+ *  Definitions are emitted for every input the shader declares, whether or not `properties` assigns it. */
+export interface ShaderPropDef { name: string; type: string; default?: ShaderPropValue; description?: string }
+export interface ShaderPaint extends PaintBase {
+  type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue>; propertyDefs?: Record<string, ShaderPropDef>;
+}
 export type Paint = SolidPaint | GradientPaint | MediaPaint | PatternPaint | ShaderPaint;
 
 /** `strokes` is an OBJECT (paint.ts simplifyStrokes), never an array of paints. */
@@ -205,7 +214,9 @@ export interface GlassEffect extends EffectBase {
   lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number; radius?: number;
 }
 export interface TextureEffect extends EffectBase { type: "texture"; noiseSize?: number; noiseSizeVector?: XY; radius?: number; clipToShape?: boolean }
-export interface ShaderEffect extends EffectBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
+export interface ShaderEffect extends EffectBase {
+  type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue>; propertyDefs?: Record<string, ShaderPropDef>;
+}
 export type Effect = ShadowEffect | BlurEffect | NoiseEffect | GlassEffect | TextureEffect | ShaderEffect;
 
 // ---- text (text.ts)

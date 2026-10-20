@@ -2663,6 +2663,42 @@ const sandbox: Sandbox = context;
         { type: "shader", shaderId: "shd_glow", properties: { "g:amt": 0.75, "g:tint": { color: "#00000040" } }, tokens: { "g:bound": "color/primary" } },
         { type: "shader", shaderId: "shd_plain" }]));
 
+    // 1c. propertyMetadata -> propertyDefs on a shader paint AND a shader effect: name, lowercased type, default
+    // normalised like a value (hex / 2dp), a bound default and an empty description dropped, a definition with
+    // no assignment still listed; absent / empty / nameless metadata -> no propertyDefs key.
+    const defsMeta = {
+      "d:speed": { name: "Speed", type: "NUMBER", defaultValue: 0.12345, description: "Pulses per second" },
+      "d:tint": { name: "Tint", type: "COLOR", defaultValue: { r: 1, g: 0, b: 0 }, description: "" },
+      "d:origin": { name: "Origin", type: "CIRCLE_POINT", defaultValue: alias("v_primary") },
+      "d:swap": { name: "Swap", type: "INSTANCE_SWAP" },
+      "d:nameless": { type: "TEXT" },
+    };
+    const defsOut = {
+      "d:speed": { name: "Speed", type: "number", default: 0.12, description: "Pulses per second" },
+      "d:tint": { name: "Tint", type: "color", default: { color: "#ff0000" } },
+      "d:origin": { name: "Origin", type: "circle_point" },
+      "d:swap": { name: "Swap", type: "instance_swap" },
+    };
+    const defsFill = await sandbox.serialize(shape("un:30", { fills: [
+      { type: "SHADER", visible: true, id: "shd_d", properties: { "d:speed": 0.5 }, propertyMetadata: defsMeta },
+      { type: "SHADER", visible: true, id: "shd_only", propertyMetadata: { "d:swap": defsMeta["d:swap"] } },
+      { type: "SHADER", visible: true, id: "shd_empty", properties: { "d:speed": 1 }, propertyMetadata: {} }] }), 0, false);
+    ok("[UNREAD] shader fill: propertyMetadata -> propertyDefs (lowercased type, default normalised, bound default and empty description dropped, " +
+      "unassigned definition kept, nameless entry skipped); metadata without properties -> propertyDefs only; empty metadata -> unchanged shape",
+      JSON.stringify(defsFill.fills) === JSON.stringify([
+        { type: "shader", shaderId: "shd_d", properties: { "d:speed": 0.5 }, propertyDefs: defsOut },
+        { type: "shader", shaderId: "shd_only", propertyDefs: { "d:swap": { name: "Swap", type: "instance_swap" } } },
+        { type: "shader", shaderId: "shd_empty", properties: { "d:speed": 1 } }]));
+    const defsFx = await sandbox.serialize(shape("un:31", { effects: [
+      { type: "SHADER", visible: true, id: "shd_e", properties: { "d:speed": 0.5, "d:bound": alias("v_primary") }, propertyMetadata: defsMeta },
+      { type: "SHADER", visible: true, id: "shd_e_only", propertyMetadata: { "d:swap": defsMeta["d:swap"] } },
+      { type: "SHADER", visible: true, id: "shd_e_none", properties: { "d:speed": 1 } }] }), 0, false);
+    ok("[UNREAD] shader effect: propertyMetadata -> propertyDefs next to properties and tokens; metadata alone -> propertyDefs only; none -> unchanged shape",
+      JSON.stringify(defsFx.effects) === JSON.stringify([
+        { type: "shader", shaderId: "shd_e", properties: { "d:speed": 0.5 }, propertyDefs: defsOut, tokens: { "d:bound": "color/primary" } },
+        { type: "shader", shaderId: "shd_e_only", propertyDefs: { "d:swap": { name: "Swap", type: "instance_swap" } } },
+        { type: "shader", shaderId: "shd_e_none", properties: { "d:speed": 1 } }]));
+
     // 2. complexStrokeProperties -> strokes.complex (BASIC = default -> absent).
     const stroked = (id: string, csp?: Record<string, unknown>) => sandbox.serialize(shape(id, {
       strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], strokeWeight: 2, strokeAlign: "CENTER",
