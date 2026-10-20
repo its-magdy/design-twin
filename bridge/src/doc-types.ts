@@ -422,6 +422,9 @@ export interface NodeMotion {
     id: string;
     name: string;
     styleId: string;
+    /** a CustomAnimationStyle (applied type "CUSTOM"): only the ids, name and timelineOffset — no
+     *  duration/props. Its animationEntries need an async style lookup and are not expanded here. */
+    custom?: true;
     duration?: number;
     timelineOffset?: number;
     props?: Record<string, MotionStylePropValue>;

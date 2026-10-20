@@ -301,6 +301,9 @@ const scrollFrame = {
     effects: { 0: { OFFSET_Y: { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 0.6, tracks: [{ id: "aek", keyframeOperation: "OFFSET", keyframes: [
       { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
   },
+  // AppliedAnimationStyle is discriminated on `type` (typings 1.141): the first entry has NO `type` (a
+  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, the third
+  // a CUSTOM one (a CustomAnimationStyle: ids, name and timelineOffset only — no duration/props).
   animationStyles: [{
     id: "applied1", styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0,
     // AnimationStyleConfiguration.props (AnimationStylePropValue = string|number|boolean|MotionEasing|VariableAlias):
@@ -310,6 +313,10 @@ const scrollFrame = {
       easing: { type: "EASE_OUT" },
       color: { type: "VARIABLE_ALIAS", id: "VariableID:2" },
     },
+  }, {
+    type: "FIGMA", id: "applied2", styleId: "as2", name: "Slide Up", duration: 0.45, timelineOffset: 0.1, props: { distance: 16 },
+  }, {
+    type: "CUSTOM", id: "applied3", styleId: "cas1", name: "Brand Entrance", timelineOffset: 0.25,
   }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -891,6 +898,12 @@ const sandbox: Sandbox = context;
     JSON.stringify(style0 && style0.props && style0.props.easing) === '{"type":"ease_out"}');
   ok("motion applied animation style props: VariableAlias value resolves to {aliasOf: <variable name>} (unified with variables.ts)",
     JSON.stringify(style0 && style0.props && style0.props.color) === '{"aliasOf":"easing/emphasized"}');
+  ok("motion applied animation style without a `type` reads as FIGMA (byte-identical, no custom marker)", JSON.stringify(style0) ===
+    '{"id":"applied1","name":"Fade In","styleId":"as1","duration":0.3,"props":{"distance":24,"easing":{"type":"ease_out"},"color":{"aliasOf":"easing/emphasized"}}}');
+  ok("motion applied animation style type FIGMA: duration, timelineOffset, props (no custom marker)", JSON.stringify(m3?.styles?.[1]) ===
+    '{"id":"applied2","name":"Slide Up","styleId":"as2","duration":0.45,"timelineOffset":0.1,"props":{"distance":16}}');
+  ok("motion applied animation style type CUSTOM: ids, name, custom marker, timelineOffset only", JSON.stringify(m3?.styles?.[2]) ===
+    '{"id":"applied3","name":"Brand Entrance","styleId":"cas1","custom":true,"timelineOffset":0.25}');
   const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
