@@ -6394,12 +6394,12 @@ function namedFile(ref, field, planFile, d) {
 var respell = (ref, from, to) => ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to;
 function planBlocks(p, names, d) {
   const edits = recordedEdits(p.plan, d.cwd);
-  if (edits.length) return [`${p.rel} has a hand-edited record \u2014 fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  if (edits.length) return [`${p.rel} has a hand-edited record \u2014 restore the block (undo the edit); verify-screen --compare refuses a legacy-named set, so it cannot be re-recorded here:`, ...edits.map((e) => `  ${e.split(" \u2014 re-run ")[0]}`)];
   const rec = recordedReport(p.plan);
   if (rec) {
     const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
-      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 restore the report the record names; or run verify-screen --expect (it writes the node's <Layer>__<id> set), measure that set and run --compare --record-plan on it, then --migrate retires this legacy set. Renaming now would hide the difference`];
     }
   }
   return [];
@@ -7129,7 +7129,7 @@ function main(argv) {
       renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> \u2014 a variant of
       it to <Layer>__<id>.<slug> \u2014 with every file of the set (the live status too), and rewrites the paths a plan's
       verification.recorded (report, a11y.report, artifacts), verification.a11y.report and verification.artifacts name.
-      A dry run unless --apply. A legacy set whose node already has its <Layer>__<id> set has its expectation retired
+      A dry run unless --apply. A legacy base set whose node already has its <Layer>__<id> base set has its expectation retired
       (<S>.expected.json.retired; its other files stay under <S>).
       Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
       records with a hand-edited record or finds by its name alone with no node id of the set's (add "nodeId" to it).

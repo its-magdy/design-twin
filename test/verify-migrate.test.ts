@@ -159,6 +159,9 @@ console.log("\nrefusals leave the disk as it was:");
   check(`a plan with a hand-edited record: the set is skipped with the block (got ${JSON.stringify(r.skipped)})`,
     r.skipped.length === 1 && /hand-edited record/.test(r.skipped[0]?.why[0] ?? "") && (r.skipped[0]?.why ?? []).some((w) => /verification\.recorded\.verdict is tool-owned/.test(w)) && err.some((l) => l.startsWith("skip    design/verify/Crates:")));
   check("…nothing renamed, the plan untouched", JSON.stringify(p.ls()) === JSON.stringify(before) && p.planText() === planBefore);
+  const edited = (r.skipped[0]?.why ?? []).join("\n");
+  check(`…and it says to restore the block, never to --compare --record-plan the legacy set (that refuses it) (got ${JSON.stringify(r.skipped[0]?.why[0])})`,
+    /restore the block/.test(edited) && !/re-run verify-screen --compare/.test(edited) && !/--compare --record-plan/.test(edited));
   const c = cli(p, "--migrate", "--apply");
   check(`…and the CLI exits 1 (got ${c.status})`, c.status === 1);
   fs.rmSync(p.root, { recursive: true, force: true });
@@ -170,6 +173,9 @@ console.log("\nrefusals leave the disk as it was:");
   const { r } = run(p, true);
   check(`a record whose reportSha256 no longer names the report on disk: skipped (a rename would hide it) (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
     r.skipped.length === 1 && /reportSha256 does not name design\/verify\/Crates\.report\.json/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before));
+  const sha = r.skipped[0]?.why[0] ?? "";
+  check(`…and it says to restore the report, or --expect the node's set and record on THAT one — not to --compare the legacy set (got ${JSON.stringify(sha)})`,
+    /restore the report the record names/.test(sha) && /verify-screen --expect \(it writes the node's <Layer>__<id> set\)/.test(sha) && /--compare --record-plan on it, then --migrate/.test(sha) && !/re-run verify-screen --compare/.test(sha));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
@@ -570,6 +576,8 @@ console.log("\nthe CLI's usage:");
   const h = cli(p, "--help");
   check(`--apply without --migrate, --migrate with --out or a file: exit 2 (got ${a.status}, ${b.status}, ${c.status})`, a.status === 2 && b.status === 2 && c.status === 2 && /--migrate takes none of --out/.test(b.stderr));
   check("--help lists --migrate [--apply] [--dir design/verify]", h.status === 0 && /--migrate \[--apply\] \[--dir design\/verify\]/.test(h.stdout));
+  check("…and says a legacy BASE set beside its node's base set is the one retired",
+    /A legacy base set whose node already has its <Layer>__<id> base set has its expectation\s+retired/.test(h.stdout) && !/A legacy set whose node/.test(h.stdout));
   check("…and its exit codes: 1 for a skip, a refusal or an interrupted migration awaiting its rollback",
     /exit \(--migrate\): 0 nothing skipped · 1 a set skipped or refused, or an interrupted migration awaits its rollback \(a dry run,\s+or --apply whose rollback could not finish\) · 2 usage\./.test(h.stdout));
   const d = cli(p, "--migrate", "--dir", "design/nowhere");

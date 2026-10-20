@@ -276,12 +276,12 @@ const respell = (ref: string, from: string, to: string): string => (ref.endsWith
 /** Why a plan cannot be rewritten for a move (its record edited by hand, or naming a report its sha no longer names). */
 function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: string; verifyDir: string }): string[] {
   const edits = recordedEdits(p.plan, d.cwd);
-  if (edits.length) return [`${p.rel} has a hand-edited record — fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  if (edits.length) return [`${p.rel} has a hand-edited record — restore the block (undo the edit); verify-screen --compare refuses a legacy-named set, so it cannot be re-recorded here:`, ...edits.map((e) => `  ${e.split(" — re-run ")[0]}`)]; // verify-build's advice (re-record) is for a canonical set; --compare refuses this one
   const rec = recordedReport(p.plan);
   if (rec) {
     const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
-      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — restore the report the record names; or run verify-screen --expect (it writes the node's <Layer>__<id> set), measure that set and run --compare --record-plan on it, then --migrate retires this legacy set. Renaming now would hide the difference`];
     }
   }
   return [];

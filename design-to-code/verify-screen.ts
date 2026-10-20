@@ -260,7 +260,7 @@ function main(argv: string[]): number | Promise<number> {
     "      renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> — a variant of\n" +
     "      it to <Layer>__<id>.<slug> — with every file of the set (the live status too), and rewrites the paths a plan's\n" +
     "      verification.recorded (report, a11y.report, artifacts), verification.a11y.report and verification.artifacts name.\n" +
-    "      A dry run unless --apply. A legacy set whose node already has its <Layer>__<id> set has its expectation retired\n" +
+    "      A dry run unless --apply. A legacy base set whose node already has its <Layer>__<id> base set has its expectation retired\n" +
     "      (<S>.expected.json.retired; its other files stay under <S>).\n" +
     "      Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan\n" +
     "      records with a hand-edited record or finds by its name alone with no node id of the set's (add \"nodeId\" to it).\n" +
