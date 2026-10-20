@@ -67,10 +67,11 @@ function mediaPaint(f: ImagePaint | VideoPaint, type: IrMediaPaint["type"], hash
 // or `defId.color` / `defId.stops.N.color` for a bound colour inside a point or gradient) and is itself
 // omitted — the "names, not values" rule `tokens` follows everywhere. `properties` keeps the opaque
 // defIds as keys (stable across renames); `propertyMetadata` becomes the sibling `propertyDefs` map
-// {defId: {name, type (lowercased), default?, description?}} so a reader can name each input. A default
-// goes through the same shaderValue conversion; a variable-bound default has no token key to live under
-// (`tokens` names assigned values), so it is omitted. An empty description is dropped; the whole map is
-// omitted when the runtime supplies no metadata.
+// {defId: {name, type (lowercased), default?, description?, tokens?}} so a reader can name each input. A
+// default goes through the same shaderValue conversion; a variable-bound default (or a bound colour inside
+// a point/gradient default) is omitted from `default` and named under that definition's own `tokens`
+// (keys `default`, `default.color`, `default.stops.N.color`, mirroring the paint-level scheme). An empty
+// description is dropped; the whole map is omitted when the runtime supplies no metadata.
 type ShaderColor = RGB | RGBA | VariableAlias;
 async function shaderColor(c: ShaderColor, tokenKey: string, tokens: TokenMap): Promise<string | undefined> {
   if (isVariableAlias(c)) {
@@ -83,6 +84,7 @@ async function shaderColor(c: ShaderColor, tokenKey: string, tokens: TokenMap): 
 async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenMap): Promise<IrShaderPropValue | undefined> {
   if (typeof v === "boolean" || typeof v === "string") return v;
   if (typeof v === "number") return round(v);
+  if (v == null || typeof v !== "object") return undefined; // a null/undefined value (the runtime can hand one over)
   if (isVariableAlias(v)) {
     const name = await resolveVar(v);
     if (name) tokens[defId] = name;
@@ -104,7 +106,8 @@ async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenM
   }
   if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
   if ("x" in v) return xy(v);
-  return { color: rgbaToHex(v) }; // RGB | RGBA
+  if ("r" in v && "g" in v && "b" in v) return { color: rgbaToHex(v) }; // RGB | RGBA
+  return undefined; // an object of no known shape is omitted
 }
 /** The shader's property definitions as `{defId: {name, type, default?, description?}}`; undefined when none. */
 async function shaderDefs(meta: { readonly [defId: string]: ShaderPropertyDefinition } | undefined): Promise<Record<string, IrShaderPropDef> | undefined> {
@@ -113,9 +116,11 @@ async function shaderDefs(meta: { readonly [defId: string]: ShaderPropertyDefini
   for (const [defId, d] of Object.entries(meta)) {
     if (!d || typeof d.name !== "string" || typeof d.type !== "string") continue;
     const def: IrShaderPropDef = { name: d.name, type: lower(d.type) };
-    if (d.defaultValue !== undefined) {
-      const dv = await shaderValue(d.defaultValue, defId, {}); // a bound default drops (no token key for it)
+    if (d.defaultValue != null) {
+      const dt: TokenMap = {}; // a bound default (or a bound colour inside one) is named here, not valued
+      const dv = await shaderValue(d.defaultValue, "default", dt);
       if (dv !== undefined) def.default = dv;
+      putNonEmpty(def, "tokens", dt);
     }
     if (typeof d.description === "string" && d.description) def.description = d.description;
     out[defId] = def;

@@ -2664,7 +2664,7 @@ const sandbox: Sandbox = context;
         { type: "shader", shaderId: "shd_plain" }]));
 
     // 1c. propertyMetadata -> propertyDefs on a shader paint AND a shader effect: name, lowercased type, default
-    // normalised like a value (hex / 2dp), a bound default and an empty description dropped, a definition with
+    // normalised like a value (hex / 2dp), a bound default named under tokens and an empty description dropped, a definition with
     // no assignment still listed; absent / empty / nameless metadata -> no propertyDefs key.
     const defsMeta = {
       "d:speed": { name: "Speed", type: "NUMBER", defaultValue: 0.12345, description: "Pulses per second" },
@@ -2676,14 +2676,14 @@ const sandbox: Sandbox = context;
     const defsOut = {
       "d:speed": { name: "Speed", type: "number", default: 0.12, description: "Pulses per second" },
       "d:tint": { name: "Tint", type: "color", default: { color: "#ff0000" } },
-      "d:origin": { name: "Origin", type: "circle_point" },
+      "d:origin": { name: "Origin", type: "circle_point", tokens: { default: "color/primary" } },
       "d:swap": { name: "Swap", type: "instance_swap" },
     };
     const defsFill = await sandbox.serialize(shape("un:30", { fills: [
       { type: "SHADER", visible: true, id: "shd_d", properties: { "d:speed": 0.5 }, propertyMetadata: defsMeta },
       { type: "SHADER", visible: true, id: "shd_only", propertyMetadata: { "d:swap": defsMeta["d:swap"] } },
       { type: "SHADER", visible: true, id: "shd_empty", properties: { "d:speed": 1 }, propertyMetadata: {} }] }), 0, false);
-    ok("[UNREAD] shader fill: propertyMetadata -> propertyDefs (lowercased type, default normalised, bound default and empty description dropped, " +
+    ok("[UNREAD] shader fill: propertyMetadata -> propertyDefs (lowercased type, default normalised, bound default named under tokens, empty description dropped, " +
       "unassigned definition kept, nameless entry skipped); metadata without properties -> propertyDefs only; empty metadata -> unchanged shape",
       JSON.stringify(defsFill.fills) === JSON.stringify([
         { type: "shader", shaderId: "shd_d", properties: { "d:speed": 0.5 }, propertyDefs: defsOut },
@@ -2698,6 +2698,43 @@ const sandbox: Sandbox = context;
         { type: "shader", shaderId: "shd_e", properties: { "d:speed": 0.5 }, propertyDefs: defsOut, tokens: { "d:bound": "color/primary" } },
         { type: "shader", shaderId: "shd_e_only", propertyDefs: { "d:swap": { name: "Swap", type: "instance_swap" } } },
         { type: "shader", shaderId: "shd_e_none", properties: { "d:speed": 1 } }]));
+
+    // 1d. compound / bound / malformed DEFAULTS inside propertyDefs: the default is normalised like a value; a bound
+    // default (or a bound colour inside one) is named under that definition's own tokens (default, default.color,
+    // default.stops.N.color), never dropped silently; a null default and an unrecognised object are omitted
+    // without failing the node.
+    const cdefMeta = {
+      "c:point": { name: "Point", type: "POINT", defaultValue: { x: 0.333, y: 0.5 } },
+      "c:line": { name: "Line", type: "LINE", defaultValue: { x: 0, y: 0, x2: 1, y2: 0.556 } },
+      "c:circle": { name: "Circle", type: "CIRCLE", defaultValue: { x: 0.5, y: 0.5, radius: 0.25 } },
+      "c:colorpt": { name: "Colour point", type: "COLOR_POINT", defaultValue: { x: 0.1, y: 0.2, color: alias("v_primary") } },
+      "c:colorptPlain": { name: "Plain colour point", type: "COLOR_POINT", defaultValue: { x: 0.1, y: 0.2, color: { r: 0, g: 1, b: 0 } } },
+      "c:grad": { name: "Gradient", type: "GRADIENT", defaultValue: { stops: [{ position: 0, color: { r: 1, g: 1, b: 1 } }, { position: 1, color: alias("v_blue600") }] } },
+      "c:bound": { name: "Bound", type: "NUMBER", defaultValue: alias("v_allscope") },
+      "c:null": { name: "Null", type: "TEXT", defaultValue: null },
+      "c:weird": { name: "Weird", type: "TEXT", defaultValue: { unexpected: 1 } },
+    };
+    const cdefOut = {
+      "c:point": { name: "Point", type: "point", default: { x: 0.33, y: 0.5 } },
+      "c:line": { name: "Line", type: "line", default: { x: 0, y: 0, x2: 1, y2: 0.56 } },
+      "c:circle": { name: "Circle", type: "circle", default: { x: 0.5, y: 0.5, radius: 0.25 } },
+      "c:colorpt": { name: "Colour point", type: "color_point", default: { x: 0.1, y: 0.2 }, tokens: { "default.color": "color/primary" } },
+      "c:colorptPlain": { name: "Plain colour point", type: "color_point", default: { x: 0.1, y: 0.2, color: "#00ff00" } },
+      "c:grad": { name: "Gradient", type: "gradient", default: { stops: [{ pos: 0, color: "#ffffff" }, { pos: 1 }] }, tokens: { "default.stops.1.color": "blue/600" } },
+      "c:bound": { name: "Bound", type: "number", tokens: { default: "misc/bad" } },
+      "c:null": { name: "Null", type: "text" },
+      "c:weird": { name: "Weird", type: "text" },
+    };
+    const cdefFill = await sandbox.serialize(shape("un:32", { fills: [
+      { type: "SHADER", visible: true, id: "shd_c", propertyMetadata: cdefMeta }] }), 0, false);
+    ok("[UNREAD] shader fill propertyDefs: point / line / circle defaults normalised; a bound colour point or gradient default keeps its " +
+      "plain part and names the variable under the definition's tokens; a plain bound default has no default and tokens {default}; " +
+      "a null default and an unrecognised object are omitted without throwing",
+      JSON.stringify(cdefFill.fills) === JSON.stringify([{ type: "shader", shaderId: "shd_c", propertyDefs: cdefOut }]));
+    const cdefProps = await sandbox.serialize(shape("un:33", { fills: [
+      { type: "SHADER", visible: true, id: "shd_p", properties: { "p:null": null, "p:weird": { unexpected: 1 }, "p:ok": 2 } }] }), 0, false);
+    ok("[UNREAD] shader fill properties: a null value and an unrecognised object are omitted (no throw, no NaN colour); other values kept",
+      JSON.stringify(cdefProps.fills) === JSON.stringify([{ type: "shader", shaderId: "shd_p", properties: { "p:ok": 2 } }]));
 
     // 2. complexStrokeProperties -> strokes.complex (BASIC = default -> absent).
     const stroked = (id: string, csp?: Record<string, unknown>) => sandbox.serialize(shape(id, {

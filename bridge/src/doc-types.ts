@@ -152,9 +152,16 @@ export type ShaderPropValue =
  *  property-definition id as `properties`. `name` is the author-defined input name; `type` is Figma's
  *  declared input type lowercased (`boolean`, `text`, `number`, `image`, `instance_swap`, `slot`, `color`,
  *  `point`, `line`, `circle`, `circle_point`, `color_point`, `gradient`); `default` is normalised like a
- *  `properties` value (omitted when the default is variable-bound); `description` is omitted when empty.
- *  Definitions are emitted for every input the shader declares, whether or not `properties` assigns it. */
-export interface ShaderPropDef { name: string; type: string; default?: ShaderPropValue; description?: string }
+ *  `properties` value (a variable-bound default, or a bound colour inside one, is left out of `default`
+ *  and named in this definition's `tokens` under `default`, `default.color` or `default.stops.N.color`);
+ *  `description` is omitted when empty. Definitions are emitted for every input the shader declares,
+ *  whether or not `properties` assigns it. */
+export type ShaderPropType =
+  | "boolean" | "text" | "number" | "image" | "instance_swap" | "slot" | "color" | "point" | "line" | "circle"
+  | "circle_point" | "color_point" | "gradient";
+export interface ShaderPropDef {
+  name: string; type: ShaderPropType | (string & {}); default?: ShaderPropValue; description?: string; tokens?: TokenMap;
+}
 export interface ShaderPaint extends PaintBase {
   type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue>; propertyDefs?: Record<string, ShaderPropDef>;
 }

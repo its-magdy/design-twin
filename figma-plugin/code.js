@@ -1405,6 +1405,7 @@
   async function shaderValue(v, defId, tokens) {
     if (typeof v === "boolean" || typeof v === "string") return v;
     if (typeof v === "number") return round(v);
+    if (v == null || typeof v !== "object") return void 0;
     if (isVariableAlias(v)) {
       const name = await resolveVar(v);
       if (name) tokens[defId] = name;
@@ -1426,7 +1427,8 @@
     }
     if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
     if ("x" in v) return xy(v);
-    return { color: rgbaToHex(v) };
+    if ("r" in v && "g" in v && "b" in v) return { color: rgbaToHex(v) };
+    return void 0;
   }
   async function shaderDefs(meta) {
     if (!meta || typeof meta !== "object") return void 0;
@@ -1434,9 +1436,11 @@
     for (const [defId, d] of Object.entries(meta)) {
       if (!d || typeof d.name !== "string" || typeof d.type !== "string") continue;
       const def = { name: d.name, type: lower(d.type) };
-      if (d.defaultValue !== void 0) {
-        const dv = await shaderValue(d.defaultValue, defId, {});
+      if (d.defaultValue != null) {
+        const dt = {};
+        const dv = await shaderValue(d.defaultValue, "default", dt);
         if (dv !== void 0) def.default = dv;
+        putNonEmpty(def, "tokens", dt);
       }
       if (typeof d.description === "string" && d.description) def.description = d.description;
       out[defId] = def;
