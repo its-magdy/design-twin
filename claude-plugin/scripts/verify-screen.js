@@ -1136,9 +1136,15 @@ function recordedV1Edits(rec, cwd) {
   const counts = rec.counts;
   if (!isJsonObject(counts)) edited.push("counts");
   else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
-  return edited.map((k) => `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote) \u2014 re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]`);
+  return edited.map((k) => ({
+    fact: `verification.recorded.${k} is not what the report its reportSha256 names says (a hand edit, or an older record of a report another --compare rewrote)`,
+    advice: "re-run verify-screen --compare --record-plan (it rewrites the block in the current format), or restore the block; residuals go in deviations[]"
+  }));
 }
 function recordedEdits(plan, cwd) {
+  return recordedEditFacts(plan, cwd).map((e) => `${e.fact} \u2014 ${e.advice}`);
+}
+function recordedEditFacts(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec)) return [];
   const added = recordV1HandKeys(rec);
@@ -1146,8 +1152,14 @@ function recordedEdits(plan, cwd) {
     const named = added.map((k) => `\`${k}\``).join(", ");
     const them = added.length > 1 ? "them" : "it";
     if (!Object.keys(rec).some((k) => RECORD_V1_KEYS.includes(k)))
-      return [`verification.recorded holds only ${named}, which no record writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes`];
-    return [`verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes \u2014 remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes`];
+      return [{
+        fact: `verification.recorded holds only ${named}, which no record writes`,
+        advice: `remove ${them}, or re-run verify-screen --compare --record-plan (it writes the block); residuals go in deviations[], anything else in notes`
+      }];
+    return [{
+      fact: `verification.recorded is a record in the first format (no schema) with ${named} added by hand, which verify-screen --compare --record-plan never writes`,
+      advice: `remove ${them}, or re-run verify-screen --compare --record-plan (it rewrites the block in the current format and drops ${them}); residuals go in deviations[], anything else in notes`
+    }];
   }
   if (!isRecordV2Shaped(rec)) return recordedV1Edits(rec, cwd);
   const all = recordProblems(rec);
@@ -1161,10 +1173,11 @@ function recordedEdits(plan, cwd) {
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
-  const out = edited.map((k) => `verification.recorded.${k} is tool-owned and was edited \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+  const advice = "re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]";
+  const out = edited.map((k) => ({ fact: `verification.recorded.${k} is tool-owned and was edited`, advice }));
   if (lacks.length) {
     const held = recordV2OnlyKeys(rec).map((k) => `\`${k}\``).join(", ");
-    out.push(`verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")} \u2014 re-run verify-screen --compare --record-plan (or restore the block); residuals go in deviations[]`);
+    out.push({ fact: `verification.recorded has no schema but holds ${held}, which only a @2 record writes; it lacks ${lacks.map((k) => `\`${k}\``).join(", ")}`, advice });
   }
   return out;
 }
@@ -6392,14 +6405,20 @@ function namedFile(ref, field, planFile, d) {
   return /[\\/]/.test(ref) ? null : ref;
 }
 var respell = (ref, from, to) => ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to;
+var RECORD_THE_NODE = "run verify-screen --expect (no --variant; it writes the node's <Layer>__<id> base set), measure that set and run --compare --record-plan on it (it replaces the block), then --migrate retires this set (a base set) or renames it (a variant)";
 function planBlocks(p, names, d) {
-  const edits = recordedEdits(p.plan, d.cwd);
-  if (edits.length) return [`${p.rel} has a hand-edited record \u2014 fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  const edits = recordedEditFacts(p.plan, d.cwd);
+  if (edits.length) {
+    return [
+      `${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) \u2014 restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]. The record's findings:`,
+      ...edits.map((e) => `  ${e.fact}`)
+    ];
+  }
   const rec = recordedReport(p.plan);
   if (rec) {
     const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
-      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) \u2014 restore the report the record names; or ${RECORD_THE_NODE}. Renaming now would hide the difference`];
     }
   }
   return [];
@@ -7129,10 +7148,12 @@ function main(argv) {
       renames each legacy-named verify set (a nickname, <Screen>@320, <Screen>-r1) to its screen's key <Layer>__<id> \u2014 a variant of
       it to <Layer>__<id>.<slug> \u2014 with every file of the set (the live status too), and rewrites the paths a plan's
       verification.recorded (report, a11y.report, artifacts), verification.a11y.report and verification.artifacts name.
-      A dry run unless --apply. A legacy set whose node already has its <Layer>__<id> set has its expectation retired
+      A dry run unless --apply. A legacy base set whose node already has its <Layer>__<id> base set has its expectation retired
       (<S>.expected.json.retired; its other files stay under <S>).
       Skips a set (says why) whose node is unknown or ambiguous, with an open run, whose new name is taken, or that a plan
       records with a hand-edited record or finds by its name alone with no node id of the set's (add "nodeId" to it).
+      Also skips a set whose plan's reportSha256 no longer names the report on disk, and two legacy sets of one node that
+      extend no other name (which one is the screen is your call). Most skips say what to do.
       Never rewrites a report, measured file or expectation; plans are never renamed.
       A run that dies part way leaves design/verify/.migrate-<S>.json (its journal): the next --migrate reports it and does
       nothing else; --migrate --apply rolls it back first (files to their old names, each plan it rewrote to its old bytes

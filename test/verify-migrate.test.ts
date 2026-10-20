@@ -81,6 +81,15 @@ const run = (p: Project, apply: boolean, extra: Partial<MigrateOpts> = {}): { r:
 const cli = (p: Project, ...args: string[]) => spawnSync(process.execPath, [VS, ...args], { cwd: p.root, encoding: "utf8" });
 const recOf = (plan: Plan) => must(isVerificationRecord(plan.verification?.recorded) ? plan.verification?.recorded : undefined, "recorded@2");
 const SET_FILES = ["expected.json", "measured.json", "report.json", "report.md", "png", "status.json"];
+/** --migrate's way on for a plan whose record blocks the legacy set: record the node's <Layer>__<id> set, then --migrate. */
+const RECORDS_THE_NODE = /verify-screen --expect \(no --variant; it writes the node's <Layer>__<id> base set\), measure that set and run --compare --record-plan on it \(it replaces the block\), then --migrate retires this set \(a base set\) or renames it \(a variant\)/;
+/** A skip's lines for a plan whose record was edited: restore the block, or record the node's set (once, with
+ *  "residuals go in deviations[]" once) — never verify-build's advice to re-record, which --compare refuses here. */
+const legacyAdvice = (why: readonly string[]): boolean => {
+  const t = why.join("\n").replaceAll("`why — re-run it`", "`<key>`");
+  return /^design\/plan\/Crates\.json has a hand-edited record, and it cannot be re-recorded under this legacy name/.test(t) && /restore the block \(undo the edit\)/.test(t) && RECORDS_THE_NODE.test(t)
+    && (t.match(/residuals go in deviations/g) ?? []).length === 1 && !/re-run|or restore the block|remove (it|them)/.test(t) && !/--compare --record-plan(?! on it | never writes)/.test(t);
+};
 
 console.log("dry run (the default):");
 {
@@ -159,8 +168,38 @@ console.log("\nrefusals leave the disk as it was:");
   check(`a plan with a hand-edited record: the set is skipped with the block (got ${JSON.stringify(r.skipped)})`,
     r.skipped.length === 1 && /hand-edited record/.test(r.skipped[0]?.why[0] ?? "") && (r.skipped[0]?.why ?? []).some((w) => /verification\.recorded\.verdict is tool-owned/.test(w)) && err.some((l) => l.startsWith("skip    design/verify/Crates:")));
   check("…nothing renamed, the plan untouched", JSON.stringify(p.ls()) === JSON.stringify(before) && p.planText() === planBefore);
+  const edited = r.skipped[0]?.why ?? [];
+  check(`…and it says to restore the block, or to record the node's <Layer>__<id> set — never to --compare --record-plan the legacy set (that refuses it) (got ${JSON.stringify(edited)})`,
+    legacyAdvice(edited) && edited.some((w) => w === "  verification.recorded.verdict is tool-owned and was edited"));
   const c = cli(p, "--migrate", "--apply");
   check(`…and the CLI exits 1 (got ${c.status})`, c.status === 1);
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  // a record in the first format (no schema) with a key added by hand: verify-build says "remove it, or re-run
+  // --compare --record-plan" — --migrate gives the facts with its own advice
+  const p = project("Crates", { record: false });
+  const plan0 = p.plan();
+  const recorded = { by: "verify-screen --record-plan", at: NOW, report: "design/verify/Crates.report.json", reportSha256: sha256(repText),
+    verdict: rep.verdict, headline: rep.headline, counts: { high: 0, medium: 0, low: 0, accepted: 0, notMeasured: 0, inferred: 0 }, "why — re-run it": "x" };
+  fs.writeFileSync(path.join(p.root, REL), JSON.stringify({ ...plan0, verification: { ...plan0.verification, recorded } }, null, 2) + "\n");
+  const { r } = run(p, false);
+  const why = r.skipped[0]?.why ?? [];
+  check(`a first-format record with a hand-added key: skipped, the key named whole (a key holding " — re-run " is not cut) (got ${JSON.stringify(why)})`,
+    r.skipped.length === 1 && why.some((w) => w === "  verification.recorded is a record in the first format (no schema) with `why — re-run it` added by hand, which verify-screen --compare --record-plan never writes"));
+  check("…and it never advises --compare --record-plan on the legacy set", legacyAdvice(why));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  // a block holding nothing a record writes, the set named by the plan's hand-written artifacts
+  const p = project("Crates", { record: false });
+  const plan0 = p.plan();
+  fs.writeFileSync(path.join(p.root, REL), JSON.stringify({ ...plan0, verification: { ...plan0.verification, recorded: { note: "x" }, artifacts: ["design/verify/Crates.png"] } }, null, 2) + "\n");
+  const { r } = run(p, false);
+  const why = r.skipped[0]?.why ?? [];
+  check(`a block that holds only a hand key: skipped with the fact alone (got ${JSON.stringify(why)})`,
+    r.skipped.length === 1 && why.some((w) => w === "  verification.recorded holds only `note`, which no record writes"));
+  check("…and it never advises --compare --record-plan on the legacy set", legacyAdvice(why));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
@@ -170,6 +209,32 @@ console.log("\nrefusals leave the disk as it was:");
   const { r } = run(p, true);
   check(`a record whose reportSha256 no longer names the report on disk: skipped (a rename would hide it) (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
     r.skipped.length === 1 && /reportSha256 does not name design\/verify\/Crates\.report\.json/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before));
+  const sha = r.skipped[0]?.why[0] ?? "";
+  check(`…and it says to restore the report, or --expect the node's set and record on THAT one — not to --compare the legacy set (got ${JSON.stringify(sha)})`,
+    /restore the report the record names/.test(sha) && /verify-screen --expect \(no --variant; it writes the node's <Layer>__<id> base set\)/.test(sha) && RECORDS_THE_NODE.test(sha) && !/re-run verify-screen --compare/.test(sha));
+  // the advice holds: with the node's set recorded, --migrate retires the legacy base set
+  writeSet(p.put, "Crates__80_1");
+  recordPlan(REL, rep, "design/verify/Crates__80_1.report.json", { cwd: p.root, now: NOW });
+  const after = run(p, false);
+  check(`…and once the node's <Layer>__<id> set is recorded, the legacy base set is retired (got ${JSON.stringify(after.r.steps)})`,
+    after.r.steps.length === 1 && after.r.steps[0]?.kind === "retire");
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  // a lone legacy variant (`Crates.dark`, the layer name and a suffix) whose record no longer names its report
+  const p = project("Crates.dark");
+  fs.writeFileSync(path.join(p.root, "design/verify/Crates.dark.report.json"), repText.replace("\n}\n", ',\n  "extra": 1\n}\n'));
+  const { r } = run(p, false);
+  const sha = r.skipped[0]?.why[0] ?? "";
+  check(`a legacy variant whose record's sha misses its report: skipped, and the advice says --migrate renames a variant (got ${JSON.stringify(sha)})`,
+    r.skipped.length === 1 && /reportSha256 does not name design\/verify\/Crates\.dark\.report\.json/.test(sha) && RECORDS_THE_NODE.test(sha));
+  // the advice holds for a variant too: recording the node's base set replaces the block, and the variant is renamed
+  writeSet(p.put, "Crates__80_1");
+  recordPlan(REL, rep, "design/verify/Crates__80_1.report.json", { cwd: p.root, now: NOW });
+  const after = run(p, false);
+  const s = after.r.steps[0];
+  check(`…and once the node's <Layer>__<id> set is recorded, the variant is renamed to <Layer>__<id>.<slug> (got ${JSON.stringify(after.r.steps.map((x) => x.kind === "skip" ? x.why : x.kind))})`,
+    after.r.steps.length === 1 && s?.kind === "rename" && s.to === "Crates__80_1.dark");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
@@ -570,6 +635,10 @@ console.log("\nthe CLI's usage:");
   const h = cli(p, "--help");
   check(`--apply without --migrate, --migrate with --out or a file: exit 2 (got ${a.status}, ${b.status}, ${c.status})`, a.status === 2 && b.status === 2 && c.status === 2 && /--migrate takes none of --out/.test(b.stderr));
   check("--help lists --migrate [--apply] [--dir design/verify]", h.status === 0 && /--migrate \[--apply\] \[--dir design\/verify\]/.test(h.stdout));
+  check("…and says a legacy BASE set beside its node's base set is the one retired",
+    /A legacy base set whose node already has its <Layer>__<id> base set has its expectation\s+retired/.test(h.stdout) && !/A legacy set whose node/.test(h.stdout));
+  check("…and its skip list names the record whose reportSha256 misses the report and the two legacy sets of one node that extend no other name",
+    /skips a set whose plan's reportSha256 no longer names the report on disk/.test(h.stdout) && /two legacy sets of one node that\s+extend no other name/.test(h.stdout));
   check("…and its exit codes: 1 for a skip, a refusal or an interrupted migration awaiting its rollback",
     /exit \(--migrate\): 0 nothing skipped · 1 a set skipped or refused, or an interrupted migration awaits its rollback \(a dry run,\s+or --apply whose rollback could not finish\) · 2 usage\./.test(h.stdout));
   const d = cli(p, "--migrate", "--dir", "design/nowhere");

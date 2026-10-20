@@ -89,7 +89,7 @@ so tag the root with the frame id.
 A dialog opened by a row action with no prototype reaction, say, goes in `plan.interactions` as
 `{nodeId, trigger, expect: "dialog" | "url" | "selector:<css>", destinationId}` (`destinationId` required for
 `dialog`, and a `dialog` row's trigger is `on_click` or `on_press` — the probe opens it by clicking an enabled,
-non-submitting opener); `--expect` merges them (`--plan <plan.json>`, or the one plan that describes the frame — of
-several, the one listing `files[]`) and drops, with the reason, any row it cannot grade. Change `plan.interactions`
-afterwards and `--compare` is `incomplete` until `--expect` is re-run. `--compare` checks the plan file `--expect`
+non-submitting opener); `--expect` merges them (`--plan <plan.json>`, or the one plan that describes the frame — by
+its `nodeId`, else the id in its file name; several are exit 2 unless `--plan` names one) and drops, with the reason,
+any row it cannot grade. Change `plan.interactions` afterwards and `--compare` is `incomplete` until `--expect` is re-run. `--compare` checks the plan file `--expect`
 merged from while it exists (if that file moved, pass its new path as `--plan`).

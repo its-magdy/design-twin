@@ -25,7 +25,7 @@ run, so they are listed but never graded `fail`. Every measured file the probe w
 or — without `--run`, build-screen's own loop — a run the probe starts and ends itself (`done`, or `failed` on an exit
 3/4), so it is judged by that run like any other. A measured file that names no run (written by hand on a native
 stack, or by an older probe) is judged by the run whose status is beside it: `incomplete` unless that run is at
-`measured` or `done` and its status records this very file (its sha256 — `--status <Screen> --phase measured --run
+`measured` or `done` and its status records this very file (its sha256 — `--status <Layer>__<id> --phase measured --run
 <id>` records it). No timestamp decides which run a file belongs to. With no status beside it at all there is no run to
 judge it by: nothing is said, and its interaction rows are agent evidence.
 
@@ -59,8 +59,9 @@ stays inert — see step 6).
 The export cannot carry every control a design implies, so the plan's `interactions[]` rows —
 `{nodeId, trigger, expect: "dialog" | "url" | "selector:<css>", destinationId}` (`destinationId` required for
 `dialog`, whose trigger must be `on_click` or `on_press`) — are merged into the expectation at `--expect`
-(`--plan <plan.json>`, else the ONE plan in `design/plan/` that describes the frame, or — when several do — the one
-that lists `files[]`; `--compare` picks the plan by the same rule, except that the plan file `--expect` merged from
+(`--plan <plan.json>`, else the ONE plan in `design/plan/` that describes the frame — its `nodeId`, else the id its
+`<Layer>__<id>.json` name carries; several are exit 2 before anything is written: keep one, or pass `--plan`;
+`--compare` picks the plan by the same rule, except that the plan file `--expect` merged from
 wins while it still exists — an input note says so — and when that file is gone the reason names both plans and
 asks for `--compare … --plan <its path now>` or `--expect … --plan <the plan you intend>`). A row naming no visible
 export node, an unknown `expect`, a `dialog` without `destinationId` or on another trigger, or one duplicating an

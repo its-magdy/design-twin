@@ -61,8 +61,9 @@ its export directly in `design/` — every path below works either way, just dro
   The Figma layer name and the visible on-screen title are often different strings ("build the Members screen"
   when no layer is named that): resolve with
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`, which prints the one
-  screen it resolved or stops and prints the candidates — confirm a candidate by node id with the user rather than
-  building from a guess.
+  screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (an existing plan keeps its own name) — or stops
+  and prints the candidates (a match only once spaces, `-` and `_` are ignored is one too) — confirm a candidate by
+  node id with the user rather than building from a guess.
 - **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.
   `assets/<id>_ref.png`), held by the `reference` field: **`nodes[0].reference`** in a single-screen
   pull (the field sits on the node), or the **root `reference`** of a page-walk layer file — check the right one
@@ -193,8 +194,12 @@ Copy this checklist into your notes and keep it updated:
 
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-skeleton.js" <screen json> <screen .vars.json> \
-     design/export/design-system --out design/plan/<screen>.json [--route /<route>] [--seed-from design/plan/<sibling>.json]
+     design/export/design-system --out design/plan/<Layer>__<id>.json [--route /<route>] [--seed-from design/plan/<sibling>.json]
    ```
+
+   A new plan is named by its node: `design/plan/<Layer>__<id>.json`, the `stem` resolve-screen printed (the one the
+   node's verify set already has, if any). Another name for a new plan, or a second plan of a node that already has
+   one, is refused (exit 2, naming the file to use); an existing plan is merged under whatever name it has.
 
    It writes what the export already knows: the header (`screenName`, `nodeId`, `file`) every skill
    finds the plan by; `tokens[]` — every bound variable with its Figma `key`, its `value` in this
@@ -385,15 +390,25 @@ Copy this checklist into your notes and keep it updated:
      into `design/verify/`, and a dev server reloads a page still open on it):
 
      ```
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify/<Screen>
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json \
-       --url <url> --out design/verify/<Screen> [--steps design/plan/<screen>.json]   # web: renders, measures every node, writes <Screen>.measured.json + .png
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json \
+       --url <url> --out design/verify [--steps <plan.json>]   # web: renders, measures every node, writes <Layer>__<id>.measured.json + .png
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
-       design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json --out design/verify/<Screen>
+       design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json --out design/verify
      ```
 
-     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan as
-     `--steps` (one with no `navigate` runs no steps); after every load the probe waits for the screen root's tag
+     `--out` is the verify directory; the set is named by the frame's node (`<Layer>__<id>`, never a name you
+     pick), and a second set of the node — another theme or width — is `--expect --variant <slug>`
+     (`<Layer>__<id>.<slug>`). There is no `--force`. A legacy-named set of the node (a nickname, `<Screen>@320`,
+     `<Screen>-r1`) is a note at `--expect`, which writes the `<Layer>__<id>` set beside it; `--compare` and the probe
+     refuse a legacy-named expectation. Rename the old sets with `verify-screen.js --migrate` (a dry run), then
+     `--migrate --apply` (the verify skill, step 2, has what it skips).
+     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan
+     found in step 2 as `--steps <plan.json>` (and as `verify-build`'s argument): only a NEW plan is named
+     `design/plan/<Layer>__<id>.json`; an existing plan keeps whatever name it has, and a variant set
+     (`<Layer>__<id>.<slug>`) uses its node's plan — no slugged plan exists. A frame that is not its plan's
+     `nodeId` (a modal in its primary screen's plan) is found by no tool: pass `--plan <that plan>` to `--expect`
+     and `--compare`, and that plan as `--steps`. A plan with no `navigate` runs no steps; after every load the probe waits for the screen root's tag
      (`--ready` defaults to `[data-dt-node="<frame id>"]`: a step's click can land on another page — a login bounce —
      and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
      and the plan's `expect: "dialog"` rows itself (evidence only: `ok: true` or `ok: null`, never `ok: false`);
@@ -424,14 +439,14 @@ Copy this checklist into your notes and keep it updated:
    - **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
      **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
      `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json`.
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>`.
    - **Status is computed, never stored**:
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<screen>.json` derives it from the
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>` derives it from the
      hook's result, the hashes of `files[]` and the verify report. Write `status` yourself only as `"abandoned"`
      or `"awaiting-user"` (and back to `"pending"`); `hook-and-status.md` lists every status and what blocks.
 
-6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
-   <screen>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
+6. **Report** (short): files created/changed; components reused vs generated (from the plan's
+   `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
    states designed vs defaulted (with the defaults used); approximations; **every name you invented**
    (any token/component/asset the export did not name — list each with what you called it and where
    it lives, so the user can rename it before it spreads); verification evidence (what was rendered
@@ -443,7 +458,7 @@ Copy this checklist into your notes and keep it updated:
    one. Report the evidence (`verification.recorded.mode` — or `verification.mode` where nothing records it —, what you rendered, the `--compare` verdict and coverage line)
    and the expected status:
 
-   > Verification: rendered (`<renderer>`, `design/verify/<screen>.png`); `--compare` verdict `pass`,
+   > Verification: rendered (`<renderer>`, `design/verify/<Layer>__<id>.png`); `--compare` verdict `pass`,
    > 180/254 nodes measured. Expected computed status after the Stop hook: `verified`.
 
    With `pass-with-deviations`, expect `verified-with-deviations` and list each accepted delta (node,
@@ -464,20 +479,20 @@ returned, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` an
 status — not the one a builder expected.
 
 For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** agent over checking your own work:
-hand it `design/verify/<Screen>.expected.json`; it renders, measures every node, drives the designed interactions
-and writes `design/verify/<Screen>.measured.json` — measurements, not a verdict. You run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json [--interactions design/verify/<Screen>.evidence.json] --record-plan --out design/verify/<Screen>`
+hand it `design/verify/<Layer>__<id>.expected.json`; it renders, measures every node, drives the designed interactions
+and writes `design/verify/<Layer>__<id>.measured.json` — measurements, not a verdict. You run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json [--interactions design/verify/<Layer>__<id>.evidence.json] --record-plan --out design/verify`
 on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
 `verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
-gets a NEW run (`--status <Screen> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
+gets a NEW run (`--status <Layer>__<id> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
 more writes, and `--wait` on an old id returns at once on that run's old `done` only until a later run replaces the
 status — after that it ends in exit 5, `stalled` once that run's status stops changing (`--stall`), at the latest on
 `--timeout`. Your own probe without `--run` is such a later run: it
-replaces the live status with its own run's, and the published `design/verify/<Screen>.status.json` too once that run
+replaces the live status with its own run's, and the published `design/verify/<Layer>__<id>.status.json` too once that run
 ends `done` (a `failed` one publishes nothing).
 
 It runs for minutes and reports progress into the run cache (`node_modules/.cache/designtwin-verify/`; published as
-`design/verify/<screen>.status.json` at `done`). **Wait with `verify-screen.js --wait <Screen> --run <id>` rather than
+`design/verify/<Layer>__<id>.status.json` at `done`). **Wait with `verify-screen.js --wait <Layer>__<id> --run <id>` rather than
 assuming it hung** (exit 0 done, 1 failed or `blocked` on permissions, 5 timeout or no progress, 6 run cache not
 accessible); the run protocol has the rest, including why it takes longer inside a build than on its own.
 

@@ -190,7 +190,7 @@ Plain-language requests work too, for example "is this design ready to build?" o
   targets, contrast, font scaling, theming, RTL, and effects that won't translate to your stack. It
   ends with a verdict and a list of questions for the designer, each with a default answer.
 - **verify** renders the screen and compares every visible node's type, colour, radius, spacing, size
-  and position with the design. The verdict is computed from `design/verify/<Screen>.report.json`, so
+  and position with the design. The verdict is computed from `design/verify/<Layer>__<id>.report.json`, so
   a pass is never just asserted. Anything nobody probed is reported as `not-probed`, never as passed.
 - **sync-design** keeps the hand edits you made after the build. Commit `design/` so a previous export exists to diff against.
 

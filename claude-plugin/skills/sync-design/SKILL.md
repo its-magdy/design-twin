@@ -48,12 +48,13 @@ writes the real path here, not there).
 
 1. **Find what was built.** First resolve which screen the user means:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`. It prints the one
-   screen it resolved, or stops and prints the candidates — show those and ask, rather than syncing against a guess
-   or resolving through `design/plan/*.json`'s free-text `screen` field (a human's string, and a sibling plan
-   from the same build may not have one). Once
-   resolved, `design/plan/<screen>.json` is the
-   record of the first build: `files[]` is where the code lives, `anchors{}` maps node ids to the
-   file and symbol each became (absent on plans written before anchors were recorded), `tokens[]` and
+   screen it resolved and its `stem`, or stops and prints the candidates — show those and ask, rather than syncing
+   against a guess or resolving through `design/plan/*.json`'s free-text `screen` field (a human's string, and a
+   sibling plan from the same build may not have one). Once resolved, the plan of its node — `design/plan/<stem>.json`
+   (`<Layer>__<id>`), or the plan whose `nodeId` is the screen's (a multi-frame plan, or one named before a rename
+   in Figma) — is the record of the first build (a screen that is not its plan's `nodeId`, a modal in its primary
+   screen's plan, is found by no tool: pass that plan as `--plan` to `--expect`/`--compare` and as the probe's `--steps`):
+   `files[]` is where the code lives, `anchors{}` maps node ids to the file and symbol each became (absent on plans written before anchors were recorded), `tokens[]` and
    `components[]` are the decisions already made (keep them — a re-sync must not quietly re-decide
    which token `#5B5FC7` is). The export's screen files are `pages/<Page>/<Screen>__<node-id>.json`
    whichever pull produced them, so there is one shape to look for.
@@ -160,8 +161,8 @@ writes the real path here, not there).
 5. **Patch only what changed.** You do not need to set the plan's `status` back to `"pending"` by
    hand: editing any file listed in the plan's `files[]` re-opens it on its own (the Stop hook hashes
    those files, and a changed hash makes `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` compute `"stale"`, not
-   `"verified"`). Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<screen>.json`
-   to confirm; the Stop hook checks this work like any build regardless — make the patch with Write/Edit, not
+   `"verified"`). Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>`
+   (the plan found in step 1, under whatever name it has) to confirm; the Stop hook checks this work like any build regardless — make the patch with Write/Edit, not
    `sed`/`cp`/a redirect, which it does not read (build-screen's `hook-and-status.md`). A re-export also reopens
    every waiver in the plan's `waivers[]` (each is bound to the export's content hash): re-run the
    verify compare and ask the user again about each delta the report lists under `waivers.reopened` —

@@ -63,7 +63,7 @@ import { errCode, errMsg } from "../bridge/src/errmsg.ts";
 import { nodeIdFromStem, safe, screenStem } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
-import { formatPlan, parsePlanText, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
+import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
 import { MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
@@ -273,15 +273,25 @@ function namedFile(ref: string, field: RefField, planFile: string, d: { cwd: str
 /** `ref` with its file name `from` replaced by `to`, spelt as it was (its directory part kept). */
 const respell = (ref: string, from: string, to: string): string => (ref.endsWith(from) ? ref.slice(0, ref.length - from.length) + to : to);
 
-/** Why a plan cannot be rewritten for a move (its record edited by hand, or naming a report its sha no longer names). */
+/** The way on for a plan whose record cannot be re-recorded under the legacy name (verify-screen --compare refuses
+ *  one): record the node's canonical set instead — --record-plan replaces the block whole, so the plan no longer names
+ *  this set's report — and --migrate then retires a base set (its node has a base set now) or renames a variant. */
+const RECORD_THE_NODE = "run verify-screen --expect (no --variant; it writes the node's <Layer>__<id> base set), measure that set and run --compare --record-plan on it " +
+  "(it replaces the block), then --migrate retires this set (a base set) or renames it (a variant)";
+/** Why a plan cannot be rewritten for a move (its record edited by hand, or naming a report its sha no longer names).
+ *  The record's findings are verify-build's facts without its advice (recordedEditFacts): that advice re-records, and
+ *  --compare refuses a legacy-named set. */
 function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: string; verifyDir: string }): string[] {
-  const edits = recordedEdits(p.plan, d.cwd);
-  if (edits.length) return [`${p.rel} has a hand-edited record — fix it first (re-run verify-screen --compare --record-plan, or restore the block):`, ...edits.map((e) => `  ${e}`)];
+  const edits = recordedEditFacts(p.plan, d.cwd);
+  if (edits.length) {
+    return [`${p.rel} has a hand-edited record, and it cannot be re-recorded under this legacy name (verify-screen --compare refuses one) — restore the block (undo the edit); or ${RECORD_THE_NODE}; residuals go in deviations[]. The record's findings:`,
+      ...edits.map((e) => `  ${e.fact}`)];
+  }
   const rec = recordedReport(p.plan);
   if (rec) {
     const name = namedFile(rec.report, "verification.recorded.report", p.file, d);
     if (name !== null && names.has(name) && reportRecordNames(rec.report, rec.sha, d.cwd) === null) {
-      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — re-run verify-screen --compare --record-plan first; renaming now would hide the difference`];
+      return [`${p.rel}: verification.recorded.reportSha256 does not name ${rec.report} as it is on disk (an older record, or the report changed) — restore the report the record names; or ${RECORD_THE_NODE}. Renaming now would hide the difference`];
     }
   }
   return [];

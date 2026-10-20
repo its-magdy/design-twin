@@ -84,7 +84,7 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    width, colors (resolve the token; compare hex). Feed back concrete deltas — "title line box 34→28pt",
    "card gap 12→16" — not "spacing looks off".
 3. **Pixels.** Web: the probe diffs its render against the reference — read `report.visual` and open
-   `<S>.diff.png`; start at the hot regions, then still compare the whole reference and build side by side
+   `<Layer>__<id>.diff.png`; start at the hot regions, then still compare the whole reference and build side by side
    (1-px lines, light greys/tints and text-only changes rarely become regions). The diff is pixelmatch-style
    YIQ with anti-aliasing detection and shift tolerance; informational, never the verdict; a 1–3 % text-edge
    floor is normal. Other stacks: side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
@@ -106,7 +106,7 @@ wrong text styles traced to exactly that — a component carrying the comment "h
 
 `--compare` has **no browser**: it diffs the measured computed styles against the spec with explicit tolerances and
 grades the interaction results the probe recorded (in `measured.json`'s `interactions[]`, or a separate
-`--interactions <file>`), then writes `design/verify/<Screen>.report.json`. Driving each designed interaction is the
+`--interactions <file>`), then writes `design/verify/<Layer>__<id>.report.json`. Driving each designed interaction is the
 probe's job (the `visual-verifier` agent drives the rest and records the selector it drove); anything nobody drove
 is reported `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass` or `pass-with-deviations`
 (nothing open, and ≥1 delta the user accepted or interaction the user descoped — waivers and descopes are the user's
@@ -115,10 +115,10 @@ word, recorded through the verify skill). That verdict is computed, and it is wh
 Every measured file the probe writes names its run. Without `--run` (your own loop) the probe starts a run of its own,
 prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3/4 — so `--compare` judges your
 measurement by that run, and a re-run is a new run. It never measures beside another open run of the screen: while a
-`visual-verifier` or verify-skill run is in flight (it writes the same `design/verify/<Screen>.*` files) the probe
+`visual-verifier` or verify-skill run is in flight (it writes the same `design/verify/<Layer>__<id>.*` files) the probe
 refuses with exit 2 before starting anything — wait for that run
-(`node "<scripts>/verify-screen.js" --wait <Screen> --run <id>`), or, only if nothing is running it any more (its agent
-stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Screen> --phase failed --run <id>`.
+(`node "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase failed --run <id>`.
 
 Every non-zero exit, an error, or a stop signal (Ctrl-C, a command timeout's SIGTERM, a closed terminal) ends your own
 run `failed` before the probe exits. Two cases leave it at `measuring` — a probe killed outright (SIGKILL), and an exit
@@ -127,10 +127,10 @@ probe's pid, host and a deadline (its start + `--max-time` + 120 s): the next pr
 itself (it says so on stderr) once that pid is gone on the same machine or, on any host, the deadline has passed, and
 goes on. Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it
 refuses, naming that probe's own run, when and by which pid it started; if no probe is running, end it with the
-`--status <Screen> --phase failed --run <id>` command it prints. A probe that was stopped or slept past its deadline
+`--status <Layer>__<id> --phase failed --run <id>` command it prints. A probe that was stopped or slept past its deadline
 finishes in its run when nobody took it over; when a later probe did, it finds the status naming that run and writes
 nothing more (exit 2, or 128 + the signal's number when a stop signal ended it, or 1 after an error). An own run that
-ends `done` replaces the published `design/verify/<Screen>.status.json` with its run's (the pid and host stay in the
+ends `done` replaces the published `design/verify/<Layer>__<id>.status.json` with its run's (the pid and host stay in the
 run cache, never in that file); one that ends `failed` publishes nothing — only the live status says so.
 
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond

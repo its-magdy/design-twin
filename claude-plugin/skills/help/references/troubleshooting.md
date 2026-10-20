@@ -158,9 +158,31 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (`hooks/hooks.json` → `scripts/verifier-guard.js`) refused one of the `visual-verifier` agent's own calls; it
   applies to that agent only. It refuses a write outside `design/verify/` and the run cache
   (`node_modules/.cache/designtwin-verify/`), or to a file the verify tools own; a pattern kill (`pkill`,
-  `killall`, `kill -1`, …); a dependency or Playwright browser install; and `dangerouslyDisableSandbox`. The reason
+  `killall`, `kill -1`, …); a dependency or Playwright browser install; `verify-screen --migrate` (it renames verify
+  sets and rewrites plans — the caller's call); and `dangerouslyDisableSandbox`. The reason
   says what to do instead. This is by design, not a fault to work round: a needed install (e.g. the probe's exit 3)
   is the user's to run, and the verifier stops its own server with `kill <pid>`, `kill -- -<pgid>` or `pkill -P <pid>`.
+- **`verify-screen` / `verify-probe` exit 2: "legacy-named verify set … run verify-screen --migrate"** → the
+  project has verify sets from before sets were named by node (a nickname, `<Screen>@320`, `<Screen>-r1`). Every set
+  is now `<Layer>__<id>` (a variant `<Layer>__<id>.<slug>`); `--compare` and the probe refuse a legacy-named
+  expectation, and `--status` a node that has only legacy-named sets. From the project root run
+  `node "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
+  then `--migrate --apply`, which renames every file of each set (the live status too) and rewrites the paths a
+  plan's `verification` records. Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its
+  expectation gets `.retired`); a legacy variant becomes `<Layer>__<id>.<slug>`. A set it skips, the dry run says why,
+  and each has its own way on: an open run — end or finish that run first; a plan that finds the set by its name
+  alone — add `"nodeId"` to that plan; a plan that still records a retired set's report — re-run `--compare
+  --record-plan` on the node's existing `<Layer>__<id>` set, then `--migrate`; a plan of a set to rename whose record
+  was edited by hand — restore the block (`--compare` refuses a legacy-named set, so it cannot be re-recorded under that
+  name); one whose record no longer names the report on disk — restore the report the record names; for either,
+  instead run `--expect` (no `--variant`; it writes the node's `<Layer>__<id>` base set), measure it and `--compare
+  --record-plan` on it (it replaces the block), then `--migrate` retires the legacy set (a base set) or renames it (a
+  variant); two legacy sets of one node that neither extends the other — retire the others by hand, as the dry run
+  says; a node that is unknown or ambiguous, a new name that is taken, or a variant slug that is reserved, longer than
+  32 characters or overlaps another — rename by hand. For any other skip, follow the line the dry run prints. A run cut
+  short leaves `design/verify/.migrate-<S>.json`: the next `--migrate --apply` rolls it back first. **"--out takes the verify
+  directory"** / **"--force is gone"** → `--out` names the directory, never the set; a second set of one node is
+  `--expect --variant <slug>`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.
