@@ -24,29 +24,40 @@
 // wrapper's shadow ring, a layered !important, a control mounted on hover, a foreign ticker, transition:all under a strict CSP.
 //
 // Concurrency (test/pool.ts): every probe / verify-screen run is queued up front (P, the longest first) and runs
-// poolSize() at a time (DT_E2E_POOL overrides; 2 under CI) — each still its own `node verify-probe.js` + chromium with its
-// own --out; the checks stay in file order, each awaiting its run. An ordered chain (--status --new-run → probe --run → --status
+// poolSize() at a time (DT_E2E_POOL overrides; 2 under CI) — each still its own `node verify-probe.js` + chromium, measuring
+// from a verify dir of its own (design/verify/<Case>/, a copy of its expectation: a set has one status base, so two runs of
+// one set in one dir would refuse each other); the checks stay in file order, each awaiting its run. An ordered chain (--status --new-run → probe --run → --status
 // done → --compare; a run → its --compare) is one queued task. The gotoSteps and wide runs stay pooled: their --max-time caps
 // (25 s, 30 s) leave wide margins over a run that takes a few seconds under load.
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
+import path from "node:path";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { READY, ix, loadNote, out, startDriveFixture, stepsSha, type Run } from "./drive-e2e-fixture.ts";
+import { READY, ix, loadNote, out, startDriveFixture, stepsSha, type Run, type VerifyCase } from "./drive-e2e-fixture.ts";
+import { must } from "./fixtures.ts";
 import { limit, poolSize } from "./pool.ts";
 
-const { url, edge, probe, vs, read, readReport, written, writes, writesOf, EXPECTED, QUIET, finish } =
+const { url, edge, probe, vs, read, readReport, written, writes, writesOf, verifyCase, EXPECTED, QUIET, finish } =
   await startDriveFixture("dt-probe-drive-e2e-", "verify-probe drive e2e — the built bundles in a real chromium, from a temp project:");
+// each run's verify dir (design/verify/<name>/, a copy of its expectation), made when the run is queued: kase → the copy
+// to pass as --expected (no --out: the files go beside it), baseOf → where the run wrote (<that dir>/<set>)
+const cases = new Map<string, VerifyCase>();
+const kase = (name: string, src: string): string => { const c = verifyCase(name, src); cases.set(name, c); return c.expected; };
+const baseOf = (name: string): string => must(cases.get(name), `the verify dir of the run ${name}`).base;
+/** a probe run whose arguments (and so its verify dir) are built now, run when the pool gets to it */
+const later = (args: string[]) => (): Promise<Run> => probe(args);
 const res = (r: VerifyReport | null, id: string): NonNullable<VerifyReport["interactions"]>[number] | undefined => (r?.interactions || []).find((i) => i.nodeId === id);
 
 // ---- the runs (P): every one independent, queued now (the longest first) and run poolSize() at a time, each awaited where its checks are
 const POOL = poolSize();
 const q = limit(POOL);
 const SLOW_NAV = [0, 120, 160, 200, 400, 1500] as const;
-const ownPxOut = (mode: string): string => out(`OwnPixels-${mode.replace(/[^\w-]/g, "_")}`);
-const ownPxRun = (mode: string): Promise<Run> => probe(["--expected", EXPECTED, "--url", edge(mode), "--out", ownPxOut(mode), "--max-time", "90000"]);
+const ownPxCase = (mode: string): string => `OwnPixels-${mode.replace(/[^\w-]/g, "_")}`;
+const ownPxRun = (mode: string): (() => Promise<Run>) => later(["--expected", kase(ownPxCase(mode), EXPECTED), "--url", edge(mode), "--max-time", "90000"]);
+const WIDE = kase("Wide", EXPECTED);
 console.log(`pool ${POOL} (DT_E2E_POOL to override)`);
 // own-content-3's 70:48 label sits 8000 elements deep (deeper than a recursive walk survives). On Windows chromium crashes
 // loading any DOM 2000 deep (page.goto: Page crashed, before the probe runs), so there the label sits 1 deep: the page's
@@ -55,73 +66,74 @@ const NO_DEEP_DOM = process.platform === "win32" ? "chromium on Windows crashes 
 const OWN_CONTENT_3 = NO_DEEP_DOM === null ? "own-content-3" : "own-content-3&depth=1";
 const P = {
   // the main run again with the behaviour battery on (the longest run: first) — its check compares with main's
-  bedsOn: q(() => probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", out("BedsOn"), "--behaviour", "on"])),
+  bedsOn: q(later(["--expected", kase("BedsOn", EXPECTED), "--url", url(), "--steps", "steps.json", "--ready", READY, "--behaviour", "on"])),
   // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare, in that order
   main: q(async () => {
-    const st = await vs(["--status", "Beds", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
+    const st = await vs(["--status", "Beds__70_1", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
     const runId = /^run (\S+) rev 1$/m.exec(st.stdout)?.[1] ?? "";
     const r2 = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, ...(runId ? ["--run", runId] : [])]);
-    const done = await vs(["--status", "Beds", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
-    const c2 = await vs(["--compare", EXPECTED, out("Beds") + ".measured.json", "--out", out("Beds")]);
+    const done = await vs(["--status", "Beds__70_1", "--phase", "done", "--run", runId, "--dir", "design/verify"]);
+    const c2 = await vs(["--compare", EXPECTED, out("Beds__70_1") + ".measured.json", "--out", "design/verify"]);
     return { runId, r2, done, c2 };
   }),
   // (--ready none here and on clickNavSlow: they check the load wait alone, with no --ready — the default is the frame tag)
-  noToken: q(() => probe(["--expected", QUIET, "--url", edge("no-token"), "--out", out("NoToken"), "--steps", "steps-no-token.json", "--ready", "none", "--max-time", "60000"])),
-  churnDomGoto: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("ChurnDomGoto"), "--steps", "steps-goto-churn.json", "--max-time", "60000"])),
-  gotoHang: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("GotoHang"), "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
-  hangFirst: q(() => probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", out("HangFirst"), "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
-  ownContent3: q(() => probe(["--expected", EXPECTED, "--url", edge(OWN_CONTENT_3), "--out", out("OwnContent3"), "--max-time", "90000"])),
+  noToken: q(later(["--expected", kase("NoToken", QUIET), "--url", edge("no-token"), "--steps", "steps-no-token.json", "--ready", "none", "--max-time", "60000"])),
+  churnDomGoto: q(later(["--expected", kase("ChurnDomGoto", QUIET), "--url", edge("link-step"), "--steps", "steps-goto-churn.json", "--max-time", "60000"])),
+  gotoHang: q(later(["--expected", kase("GotoHang", QUIET), "--url", edge("link-step"), "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
+  hangFirst: q(later(["--expected", kase("HangFirst", QUIET), "--url", edge("hang-first"), "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"])),
+  ownContent3: q(later(["--expected", kase("OwnContent3", EXPECTED), "--url", edge(OWN_CONTENT_3), "--max-time", "90000"])),
   // the run, then its --compare
   wide: q(async () => {
-    const r5 = await probe(["--expected", EXPECTED, "--url", url("wide"), "--out", out("Wide"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
-    const c5 = await vs(["--compare", EXPECTED, out("Wide") + ".measured.json", "--out", out("Wide")]);
+    const r5 = await probe(["--expected", WIDE, "--url", url("wide"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]);
+    // (its own copy of the expectation, so --compare reads this run's status; the report goes beside it, not over main's)
+    const c5 = await vs(["--compare", WIDE, baseOf("Wide") + ".measured.json", "--out", path.dirname(WIDE)]);
     return { r5, c5 };
   }),
-  slowImg: q(() => probe(["--expected", QUIET, "--url", `${edge("slow-img")}&d=13000`, "--out", out("SlowImg"), "--timeout", "30000", "--max-time", "60000"])),
-  lateReady: q(() => probe(["--expected", QUIET, "--url", edge("late-ready"), "--out", out("LateReady"), "--ready", READY, "--timeout", "30000", "--max-time", "60000"])),
-  readyNever: q(() => probe(["--expected", QUIET, "--url", `${edge("late-ready")}&d=99999999`, "--out", out("ReadyNever"), "--ready", READY, "--timeout", "12000", "--max-time", "60000"])),
-  hangLate: q(() => probe(["--expected", QUIET, "--url", edge("hang-late"), "--out", out("HangLate"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
-  churnDom: q(() => probe(["--expected", QUIET, "--url", edge("churn-dom"), "--out", out("ChurnDom"), "--max-time", "60000"])),
-  gotoSteps: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("GotoSteps"), "--steps", "steps-goto.json", "--ready", READY, "--max-time", "25000"])),
-  ownContent2: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content-2"), "--out", out("OwnContent2"), "--max-time", "90000"])),
-  px1: q(() => ownPxRun("own-pixels-1")),
-  ownContent: q(() => probe(["--expected", EXPECTED, "--url", edge("own-content"), "--out", out("OwnContent"), "--max-time", "90000"])),
-  px2: q(() => ownPxRun("own-pixels-2")),
-  coveredTall: q(() => probe(["--expected", EXPECTED, "--url", edge("covered-tall"), "--out", out("CoveredTall"), "--max-time", "60000"])),
-  px4: q(() => ownPxRun("own-pixels-4")),
-  px3: q(() => ownPxRun("own-pixels-3")),
-  clickHidden: q(() => probe(["--expected", EXPECTED, "--url", edge("click-hidden"), "--out", out("ClickHidden"), "--max-time", "90000"])),
-  clickHidden2: q(() => probe(["--expected", EXPECTED, "--url", edge("click-hidden-2"), "--out", out("ClickHidden2"), "--max-time", "90000"])),
-  pxTall: q(() => ownPxRun("tall-shell")),
-  ancestor: q(() => probe(["--expected", EXPECTED, "--url", edge("ancestor"), "--out", out("Ancestor"), "--max-time", "90000"])),
-  pxCsp: q(() => ownPxRun("own-pixels-csp&csp=1")),
-  cardCentre: q(() => probe(["--expected", EXPECTED, "--url", edge("card-centre"), "--out", out("CardCentre"), "--max-time", "90000"])),
-  remount: q(() => probe(["--expected", EXPECTED, "--url", edge("remount"), "--out", out("Remount"), "--max-time", "90000"])),
-  wrapperOpener: q(() => probe(["--expected", EXPECTED, "--url", edge("wrapper-submit"), "--out", out("WrapperSubmitOpener"), "--max-time", "90000"])),
-  reload: q(() => probe(["--expected", QUIET, "--url", url("reload-on-first-hover"), "--out", out("Reload"), "--steps", "design/plan/Beds__70_1.json", "--ready", READY, "--max-time", "60000"])),
-  ambiguous: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Ambiguous"), "--steps", "steps-ambiguous.json"])),
-  clickNavSlow: q(() => probe(["--expected", QUIET, "--url", edge("clicknav-slow"), "--out", out("ClickNavSlow"), "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"])),
-  noSteps: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoSteps"), "--ready", READY, "--timeout", "3000"])),
-  noStepsDefault: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("NoStepsDefault"), "--timeout", "3000"])),
-  waitMany: q(() => probe(["--expected", QUIET, "--url", url(), "--out", out("WaitMany"), "--steps", "steps-waitfor-many.json"])),
-  linkLateAway: q(() => probe(["--expected", QUIET, "--url", edge("link-inplace-late-away"), "--out", out("LinkLateAway"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
-  linkStep: q(() => probe(["--expected", QUIET, "--url", edge("link-step"), "--out", out("LinkStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"])),
-  sameLink: q(() => probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds`, "--out", out("SameLink"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
-  sameLinkTop: q(() => probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds&target=_top`, "--out", out("SameLinkTop"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
-  absEscape: q(() => probe(["--expected", QUIET, "--url", edge("abs-escape"), "--out", out("AbsEscape"), "--max-time", "60000"])),
-  cbCreators: q(() => probe(["--expected", QUIET, "--url", edge("cb-creators"), "--out", out("CbCreators"), "--max-time", "60000"])),
-  wrapperStep: q(() => probe(["--expected", QUIET, "--url", edge("wrapper-submit"), "--out", out("WrapperSubmitStep"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
-  tallWrapper: q(() => probe(["--expected", QUIET, "--url", edge("tall-wrapper"), "--out", out("TallWrapper"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
-  submit: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Submit"), "--steps", "steps-submit.json"])),
-  inlineWrap: q(() => probe(["--expected", QUIET, "--url", edge("inline-wrap"), "--out", out("InlineWrap"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
-  fill: q(() => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Fill"), "--steps", "steps-fill.json"])),
+  slowImg: q(later(["--expected", kase("SlowImg", QUIET), "--url", `${edge("slow-img")}&d=13000`, "--timeout", "30000", "--max-time", "60000"])),
+  lateReady: q(later(["--expected", kase("LateReady", QUIET), "--url", edge("late-ready"), "--ready", READY, "--timeout", "30000", "--max-time", "60000"])),
+  readyNever: q(later(["--expected", kase("ReadyNever", QUIET), "--url", `${edge("late-ready")}&d=99999999`, "--ready", READY, "--timeout", "12000", "--max-time", "60000"])),
+  hangLate: q(later(["--expected", kase("HangLate", QUIET), "--url", edge("hang-late"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  churnDom: q(later(["--expected", kase("ChurnDom", QUIET), "--url", edge("churn-dom"), "--max-time", "60000"])),
+  gotoSteps: q(later(["--expected", kase("GotoSteps", EXPECTED), "--url", url(), "--steps", "steps-goto.json", "--ready", READY, "--max-time", "25000"])),
+  ownContent2: q(later(["--expected", kase("OwnContent2", EXPECTED), "--url", edge("own-content-2"), "--max-time", "90000"])),
+  px1: q(ownPxRun("own-pixels-1")),
+  ownContent: q(later(["--expected", kase("OwnContent", EXPECTED), "--url", edge("own-content"), "--max-time", "90000"])),
+  px2: q(ownPxRun("own-pixels-2")),
+  coveredTall: q(later(["--expected", kase("CoveredTall", EXPECTED), "--url", edge("covered-tall"), "--max-time", "60000"])),
+  px4: q(ownPxRun("own-pixels-4")),
+  px3: q(ownPxRun("own-pixels-3")),
+  clickHidden: q(later(["--expected", kase("ClickHidden", EXPECTED), "--url", edge("click-hidden"), "--max-time", "90000"])),
+  clickHidden2: q(later(["--expected", kase("ClickHidden2", EXPECTED), "--url", edge("click-hidden-2"), "--max-time", "90000"])),
+  pxTall: q(ownPxRun("tall-shell")),
+  ancestor: q(later(["--expected", kase("Ancestor", EXPECTED), "--url", edge("ancestor"), "--max-time", "90000"])),
+  pxCsp: q(ownPxRun("own-pixels-csp&csp=1")),
+  cardCentre: q(later(["--expected", kase("CardCentre", EXPECTED), "--url", edge("card-centre"), "--max-time", "90000"])),
+  remount: q(later(["--expected", kase("Remount", EXPECTED), "--url", edge("remount"), "--max-time", "90000"])),
+  wrapperOpener: q(later(["--expected", kase("WrapperSubmitOpener", EXPECTED), "--url", edge("wrapper-submit"), "--max-time", "90000"])),
+  reload: q(later(["--expected", kase("Reload", QUIET), "--url", url("reload-on-first-hover"), "--steps", "design/plan/Beds__70_1.json", "--ready", READY, "--max-time", "60000"])),
+  ambiguous: q(later(["--expected", kase("Ambiguous", EXPECTED), "--url", url(), "--steps", "steps-ambiguous.json"])),
+  clickNavSlow: q(later(["--expected", kase("ClickNavSlow", QUIET), "--url", edge("clicknav-slow"), "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"])),
+  noSteps: q(later(["--expected", kase("NoSteps", EXPECTED), "--url", url(), "--ready", READY, "--timeout", "3000"])),
+  noStepsDefault: q(later(["--expected", kase("NoStepsDefault", EXPECTED), "--url", url(), "--timeout", "3000"])),
+  waitMany: q(later(["--expected", kase("WaitMany", QUIET), "--url", url(), "--steps", "steps-waitfor-many.json"])),
+  linkLateAway: q(later(["--expected", kase("LinkLateAway", QUIET), "--url", edge("link-inplace-late-away"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  linkStep: q(later(["--expected", kase("LinkStep", QUIET), "--url", edge("link-step"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"])),
+  sameLink: q(later(["--expected", kase("SameLink", QUIET), "--url", `${edge("same-link")}&section=beds`, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  sameLinkTop: q(later(["--expected", kase("SameLinkTop", QUIET), "--url", `${edge("same-link")}&section=beds&target=_top`, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"])),
+  absEscape: q(later(["--expected", kase("AbsEscape", QUIET), "--url", edge("abs-escape"), "--max-time", "60000"])),
+  cbCreators: q(later(["--expected", kase("CbCreators", QUIET), "--url", edge("cb-creators"), "--max-time", "60000"])),
+  wrapperStep: q(later(["--expected", kase("WrapperSubmitStep", QUIET), "--url", edge("wrapper-submit"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  tallWrapper: q(later(["--expected", kase("TallWrapper", QUIET), "--url", edge("tall-wrapper"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  submit: q(later(["--expected", kase("Submit", EXPECTED), "--url", url(), "--steps", "steps-submit.json"])),
+  inlineWrap: q(later(["--expected", kase("InlineWrap", QUIET), "--url", edge("inline-wrap"), "--steps", "steps-click-only.json", "--max-time", "60000"])),
+  fill: q(later(["--expected", kase("Fill", EXPECTED), "--url", url(), "--steps", "steps-fill.json"])),
 };
 // a click step navigating to another URL `delay` ms after the click (its ownership does not ride on the timing)
-const slowNav = SLOW_NAV.map((delay) => ({ delay, run: q(() => probe(["--expected", QUIET, "--url", `${edge("slow-nav")}&delay=${delay}`, "--out", out(`SlowNav${delay}`), "--steps", "steps-reload-step.json", "--max-time", "60000"])) }));
+const slowNav = SLOW_NAV.map((delay) => ({ delay, run: q(later(["--expected", kase(`SlowNav${delay}`, QUIET), "--url", `${edge("slow-nav")}&delay=${delay}`, "--steps", "steps-reload-step.json", "--max-time", "60000"])) }));
 
 // ---- the screen behind a click
 const r1 = await P.noSteps;
-check("[ready-only] no --steps + --ready on the section's root (only there after a click) → exit 4, nothing written", r1.status === 4 && !written(out("NoSteps")));
+check("[ready-only] no --steps + --ready on the section's root (only there after a click) → exit 4, nothing written", r1.status === 4 && !written(baseOf("NoSteps")));
 // the same with no --ready at all: the probe waits for the frame's tag by default, so the default section is never measured
 const r1d = await P.noStepsDefault;
 // the default section shows the shared nav tagged with this frame's ids — a few of its tags, never enough to be taken
@@ -130,11 +142,11 @@ check("[ready-default] no --steps and no --ready → the default --ready (the fr
   r1d.status === 4 && r1d.stderr.includes("ready  [data-dt-node=\"70:1\"] (the frame's tag, the default;")
   && /--ready '\[data-dt-node="70:1"\]' never became visible \(the page shows \d+ of the expectation's \d+ own tags — fewer than half\)/.test(r1d.stderr)
   && r1d.stderr.includes("[data-dt-node=\"70:1\"] is the default --ready (the frame's tag), and the page shows too few of the expectation's own tags to be the screen")
-  && r1d.stderr.includes("a screen that is a section of the app is reached with --steps <plan.json>") && !written(out("NoStepsDefault")));
+  && r1d.stderr.includes("a screen that is a section of the app is reached with --steps <plan.json>") && !written(baseOf("NoStepsDefault")));
 
 // the main run, bound to a verify run: --status --new-run → probe --run → --status done → --compare (one queued task: P.main)
 const { runId, r2, done, c2 } = await P.main;
-const m2 = read(out("Beds"));
+const m2 = read(out("Beds__70_1"));
 if (r2.status !== 0) console.log(r2.stderr);
 check("[steps] --steps (click the sidebar button, waitFor the root) → exit 0, measured.json written", r2.status === 0 && m2 !== null);
 check("[steps] measured.reach: 2 steps, sha256 of their canonical JSON, source '--steps steps.json', the url after the steps",
@@ -169,7 +181,7 @@ check("[page-width] measured.page at the design width: scrollWidth = clientWidth
   m2?.page?.scrollWidth === 1024 && m2.page.clientWidth === 1024 && m2.page.viewport.w === 1024 && !m2.page.scrollable && m2.page.offenders.length === 0 && m2.page.overflowX === "visible" && m2.page.compatMode === "CSS1Compat");
 
 if (done.status !== 0) console.log(done.stderr);
-const rep2 = readReport(out("Beds"));
+const rep2 = readReport(out("Beds__70_1"));
 if (rep2 === null) console.log(c2.stderr);
 check("[hover-action] --compare: the hover-revealed overlay passes (not 'not-probed': the drive reaches it)", res(rep2, "70:44")?.result === "pass");
 check("[plan-only] --compare: the plan row is graded (source plan) and passes", res(rep2, "70:50")?.result === "pass" && res(rep2, "70:50")?.source === "plan");
@@ -182,7 +194,7 @@ check("--compare: inputs.reach (2 steps, matches the plan's navigate)", rep2?.in
 
 // the behaviour battery runs AFTER the drive, in its own pages — the same run with behaviour on records the same
 // interaction evidence (hover-revealed, role=dialog, untagged, dead, reloading, covered, plan-only, panel openers)
-const bOn = out("BedsOn");
+const bOn = baseOf("BedsOn");
 const rOn = await P.bedsOn;
 const mOn = read(bOn);
 if (rOn.status !== 0) console.log(rOn.stderr);
@@ -191,7 +203,7 @@ check("[behaviour] --behaviour on: exit 0, measured.behaviour ran, and measured.
   && m2?.behaviour?.ran === false);
 
 // a step that loads a page (goto) is the probe's own navigation; a small --max-time leaves no driving budget
-const b3 = out("GotoSteps");
+const b3 = baseOf("GotoSteps");
 const r3 = await P.gotoSteps;
 const m3 = read(b3);
 if (r3.status !== 0) console.log(r3.stderr);
@@ -202,7 +214,7 @@ check("budget: --max-time 25 s leaves ≤ 10 s of driving → rows cut: ok:null,
 // (Budget25000 / Budget30000 and the replaceState run: the tail suite)
 
 // a reload during measurement → one full re-run, which replays the steps (the plan's navigate as --steps)
-const b4 = out("Reload");
+const b4 = baseOf("Reload");
 const r4 = await P.reload;
 const m4 = read(b4);
 if (r4.status !== 0) console.log(r4.stderr);
@@ -211,7 +223,7 @@ check("[reload] a reload on the first hover → exit 0, re-runs 1, the steps rep
 check("--steps <plan>: the plan's navigate list, source names the plan file, the same sha", m4?.reach?.source === "--steps design/plan/Beds__70_1.json" && m4.reach.sha256 === stepsSha);
 
 // a sideways overflow only in the section the steps reach
-const b5 = out("Wide");
+const b5 = baseOf("Wide");
 const { r5, c5 } = await P.wide;
 const m5 = read(b5);
 if (r5.status !== 0) console.log(r5.stderr);
@@ -225,21 +237,21 @@ check("[overflow] --compare: one HIGH overflowX delta on the root frame (expecte
 // steps that must fail: ambiguous, a submit, a step outside the vocabulary
 const r6 = await P.ambiguous;
 check("[step-match] a step matching 2 visible elements → exit 4 'matched 2', the step and the navigation log printed, nothing written",
-  r6.status === 4 && /step 1 \{click: "\.nav-btn"\} matched 2 visible element/.test(r6.stderr) && /navigation log/.test(r6.stderr) && !written(out("Ambiguous")));
+  r6.status === 4 && /step 1 \{click: "\.nav-btn"\} matched 2 visible element/.test(r6.stderr) && /navigation log/.test(r6.stderr) && !written(baseOf("Ambiguous")));
 const r7 = await P.submit;
-check("[step-submit] a step clicking a form's typeless button → exit 4 'never submit', nothing written", r7.status === 4 && /never submit/.test(r7.stderr) && !written(out("Submit")));
+check("[step-submit] a step clicking a form's typeless button → exit 4 'never submit', nothing written", r7.status === 4 && /never submit/.test(r7.stderr) && !written(baseOf("Submit")));
 const r8 = await P.fill;
-check("a {fill} step → exit 2 naming it (the vocabulary is click / waitFor / goto)", r8.status === 2 && /\{fill: …\} is not a step/.test(r8.stderr) && !written(out("Fill")));
+check("a {fill} step → exit 2 naming it (the vocabulary is click / waitFor / goto)", r8.status === 2 && /\{fill: …\} is not a step/.test(r8.stderr) && !written(baseOf("Fill")));
 
 // a waitFor is met by one or more visible matches (a click still needs exactly one: the [step-match] check above)
-const b10 = out("WaitMany");
+const b10 = baseOf("WaitMany");
 const r10 = await P.waitMany;
 if (r10.status !== 0) console.log(r10.stderr);
 check("a waitFor step matching 7 visible elements → met (exit 0, reach 2 steps)", r10.status === 0 && read(b10)?.reach?.steps.length === 2);
 
 // ---- edge-page repros (plot-ledger-edge.html)
 // (ReloadSettle, ReloadSettleNoReady, ReloadStep, GotoReload, ReloadLate: the tail suite)
-const b13 = out("LinkStep");
+const b13 = baseOf("LinkStep");
 const r13 = await P.linkStep;
 const m13 = read(b13);
 if (r13.status !== 0) console.log(r13.stderr);
@@ -248,7 +260,7 @@ check("a step whose click follows a link → that load is the step's own: afterI
 // (SlowReach: the tail suite)
 
 // an ancestor-tagged opener, with no write made
-const b15 = out("Ancestor");
+const b15 = baseOf("Ancestor");
 const r15 = await P.ancestor;
 const m15 = read(b15);
 if (r15.status !== 0) console.log(r15.stderr);
@@ -265,7 +277,7 @@ const w15 = writesOf(edge("ancestor"));
 check(`no opener's handler ran a write (server saw: ${w15.join(", ") || "nothing"})`, r15.status === 0 && w15.length === 0);
 
 // the drive's click point (the opener's centre) is another control inside the opener → never clicked
-const bCC = out("CardCentre");
+const bCC = baseOf("CardCentre");
 const rCC = await P.cardCentre;
 const mCC = read(bCC);
 if (rCC.status !== 0) console.log(rCC.stderr);
@@ -283,7 +295,7 @@ check(`the drive pressed no Delete (server saw: ${wCC.join(", ") || "nothing"})`
 // span without tabindex, a shadow-DOM button (also through slotted text), an iframe — never clicked; a plain cell is still driven
 const notDrivenFor = (m: VerifyMeasured | null, id: string, ctl: string): boolean => ix(m, id)?.ok === null && ix(m, id)?.activation === undefined
   && (ix(m, id)?.detail || "").startsWith(`the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element`);
-const bCH = out("ClickHidden");
+const bCH = baseOf("ClickHidden");
 const rCH = await P.clickHidden;
 const mCH = read(bCH);
 if (rCH.status !== 0) console.log(rCH.stderr);
@@ -300,7 +312,7 @@ check(`the drive toggled no checkbox and pressed no Delete (server saw: ${wCH.jo
 // a card's own content the check must see (display:contents text, shadow text, a ::before label, a
 // background-image logo) → its centred Delete is never clicked; a cell's text that shows nothing (an opacity-0 tooltip, a
 // clip-path-only sr-only label, an opacity-0 wrapper, an aria-hidden scale(0) tooltip) → its button is the opener's: driven
-const bOC = out("OwnContent");
+const bOC = baseOf("OwnContent");
 const rOC = await P.ownContent;
 const mOC = read(bOC);
 if (rOC.status !== 0) console.log(rOC.stderr);
@@ -313,7 +325,7 @@ check(`the drive pressed no Delete (server saw: ${wOC.join(", ") || "nothing"})`
 
 // a covered opener's synthetic click starts from the drive's own scroll — its evidence never depends on how many
 // Playwright click retries (each scrolling with another alignment) fitted into the 2 s
-const bCT = out("CoveredTall");
+const bCT = baseOf("CoveredTall");
 const rCT = await P.coveredTall;
 const eCT = ix(read(bCT), "70:49");
 if (rCT.status !== 0) console.log(rCT.stderr);
@@ -324,7 +336,7 @@ check(`a covered opener in view on a tall page → synthetic click from the driv
 // view, labels escaping a 1 × 1 overflow:hidden wrapper (absolute, fixed), an empty ::before logo on a background-image, a CSS-mask
 // icon, a colour swatch → the centred Delete is never clicked; a hover tint over a whole cell and a filled wrapper around its sole
 // button are the cell's own chrome → driven
-const bO2 = out("OwnContent2");
+const bO2 = baseOf("OwnContent2");
 const rO2 = await P.ownContent2;
 const mO2 = read(bO2);
 if (rO2.status !== 0) console.log(rO2.stderr);
@@ -342,7 +354,7 @@ check(`the drive pressed no Delete (server saw: ${wO2.join(", ") || "nothing"})`
 // an sr-only label off the document's start edge shows nothing; an empty ::before status dot on a
 // background colour is content, an empty ::after tint over the whole cell and an out-of-flow opacity-0 ::after tooltip are not;
 // a label 8000 elements deep is found without a stack overflow
-const bO3 = out("OwnContent3");
+const bO3 = baseOf("OwnContent3");
 const rO3 = await P.ownContent3;
 const mO3 = read(bO3);
 if (rO3.status !== 0) console.log(rO3.stderr);
@@ -365,7 +377,7 @@ check(`the drive pressed no Delete (server saw: ${wO3.join(", ") || "nothing"})`
 // an activating control anywhere on the click point's path wins over a merely focusable element below it; an
 // <object> / <embed> is a nested browsing context → never clicked (a write from inside them carries the subframe's own URL:
 // charged to every run)
-const bR6c = out("ClickHidden2");
+const bR6c = baseOf("ClickHidden2");
 const rR6c = await P.clickHidden2;
 const mR6c = read(bR6c);
 if (rR6c.status !== 0) console.log(rR6c.stderr);
@@ -386,7 +398,7 @@ check(`the drive pressed no Delete inside the openers (server saw: ${wR6c.join("
 const ownPx = async (mode: string, pending: Promise<Run>): Promise<{ m: VerifyMeasured | null; status: number | null; writes: string[] }> => {
   const r = await pending;
   if (r.status !== 0) console.log(r.stderr);
-  return { m: read(ownPxOut(mode)), status: r.status, writes: writesOf(edge(mode)) };
+  return { m: read(baseOf(ownPxCase(mode))), status: r.status, writes: writesOf(edge(mode)) };
 };
 const DEL = "<button aria-label=\"Delete bed\">";
 const byPixels = (m: VerifyMeasured | null, id: string): boolean => notDrivenFor(m, id, DEL) && /paints something of its own beside it/.test(ix(m, id)?.detail ?? "");
@@ -450,7 +462,7 @@ check("a cell in the same shell (70:53) → driven, ok:true, mouse", drivenOk(pT
 check(`the drive pressed no Delete (server saw: ${pT.writes.join(", ") || "nothing"})`, pT.status === 0 && pT.m !== null && pT.writes.length === 0);
 
 // an absolute strip escaping a static overflow:hidden wrapper widens the page and is named; a clipped one is not
-const b16 = out("AbsEscape");
+const b16 = baseOf("AbsEscape");
 const r16 = await P.absEscape;
 const m16 = read(b16);
 if (r16.status !== 0) console.log(r16.stderr);
@@ -461,7 +473,7 @@ check("an absolute element inside a static overflow:hidden wrapper → page scro
 // a click step whose page navigates to ANOTHER URL only later (an app that awaits a request first) — that navigation
 // is the step's own however late it starts: no re-run, not after the initial load. 0 and 120 ms are guards.
 for (const { delay, run: pending } of slowNav) {
-  const b = out(`SlowNav${delay}`);
+  const b = baseOf(`SlowNav${delay}`);
   const r = await pending;
   const m = read(b);
   if (r.status !== 0) console.log(r.stderr);
@@ -469,7 +481,7 @@ for (const { delay, run: pending } of slowNav) {
     r.status === 0 && m?.frame?.via === "tag" && m.frame.nodeId === "70:1" && m.navigation?.afterInitialLoad === 0 && m.navigation.reruns === 0 && /section=beds/.test(m.reach?.url ?? ""));
 }
 // the click's navigation commits at once into a document that stays half-loaded (quiet) for 2.5 s — waited for
-const bM = out("ClickNavSlow");
+const bM = baseOf("ClickNavSlow");
 const rM = await P.clickNavSlow;
 const mM = read(bM);
 if (rM.status !== 0) console.log(rM.stderr);
@@ -477,11 +489,11 @@ check("a step's navigation into a half-loaded document (no --ready) → its load
   rM.status === 0 && mM?.frame?.via === "tag" && (mM.nodes || []).some((n) => n.nodeId === "70:2" && n.matchedBy === "tag") && mM.navigation?.afterInitialLoad === 0);
 // (ClickReloads and TokenSwitch: the tail suite)
 // a tagged wrapper whose click point is a typeless <button> in a <form> — as a step, and as an opener
-const bC = out("WrapperSubmitStep");
+const bC = baseOf("WrapperSubmitStep");
 const rC = await P.wrapperStep;
 check("a step clicking a tagged wrapper whose click point is a form's typeless button → exit 4 'never submit' (at its click point), nothing written",
   rC.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\) — a step must navigate, never submit/.test(rC.stderr) && !written(bC));
-const bC2 = out("WrapperSubmitOpener");
+const bC2 = baseOf("WrapperSubmitOpener");
 const rC2 = await P.wrapperOpener;
 const eC2 = ix(read(bC2), "70:47");
 check("an opener that is a tagged wrapper around a form's typeless button → ok:null 'opener would submit a form (… at its click point)', not clicked",
@@ -489,13 +501,13 @@ check("an opener that is a tagged wrapper around a form's typeless button → ok
 const wC = writesOf(edge("wrapper-submit"));
 check(`no form was submitted (server saw: ${wC.join(", ") || "nothing"})`, wC.length === 0);
 // a destination wrapper the app re-mounts in place around an unrelated dialog is not newly visible → not inside
-const bB = out("Remount");
+const bB = baseOf("Remount");
 const rB = await P.remount;
 const eB = ix(read(bB), "70:47");
 check("an unrelated dialog inside a destination wrapper re-mounted in the same place → destination NOT inside, ok:null",
   rB.status === 0 && eB?.ok === null && eB.detectedBy === "[role=dialog]" && eB.destination?.inside === false);
 // containing-block creators beyond transform
-const bD = out("CbCreators");
+const bD = baseOf("CbCreators");
 const rD = await P.cbCreators;
 const mD = read(bD);
 if (rD.status !== 0) console.log(rD.stderr);
@@ -506,7 +518,7 @@ check("position:fixed under a transformed ancestor widens the page and is named;
 // (ClickReloadsSync / ClickReloads100 / ClickReloadsOnce and HangImg: the tail suite)
 // a tagged wrapper taller than the viewport — Playwright clicks the middle of what shows, where a form's typeless
 // button is (the middle of the whole box is empty) → refused as a step
-const bT = out("TallWrapper");
+const bT = baseOf("TallWrapper");
 const rT = await P.tallWrapper;
 const wT = writesOf(edge("tall-wrapper"));
 check(`a step clicking a wrapper taller than the viewport whose on-screen middle is a form's typeless button → exit 4 'never submit' (at its click point), nothing written, nothing submitted (server saw: ${wT.join(", ") || "nothing"})`,
@@ -516,14 +528,14 @@ check(`a step clicking a wrapper taller than the viewport whose on-screen middle
 const loadNoteAfter = (m: VerifyMeasured | null, sec: number): boolean => (m?.notes || []).some((n) => n.includes(`the page had not finished loading when the goto gave up after ${sec}s`));
 // a click on a link to the URL the page already shows (here a URL tab, the tag on a span inside the <a>) is a refresh
 // step — its load is the step's own (not a lost state, a re-run, or exit 4 "changed it in place")
-const bSL = out("SameLink");
+const bSL = baseOf("SameLink");
 const rSL = await P.sameLink;
 const mSL = read(bSL);
 if (rSL.status !== 0) console.log(rSL.stderr);
 check("a step clicking a link to the URL the page shows (a URL tab) → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (not exit 4 'changed it in place')",
   rSL.status === 0 && mSL?.navigation?.afterInitialLoad === 0 && mSL.navigation.reruns === 0 && mSL.frame?.via === "tag" && mSL.frame.nodeId === "70:1");
 // a late click navigation into a document that never finishes loading → its own 10 s, then measured with the note
-const bHL = out("HangLate");
+const bHL = baseOf("HangLate");
 const rHL = await P.hangLate;
 const sHL = rHL.ms;
 const mHL = read(bHL);
@@ -533,13 +545,13 @@ check(`a click navigating 400 ms later into a document that never finishes loadi
 // (LateSlow and the ReloadHang guard: the tail suite)
 // the probe's own load (--url, a goto step) of a document that never finishes loading is waited for up
 // to --timeout, then (it committed) measured with the note — not "could not load"
-const bHF = out("HangFirst");
+const bHF = baseOf("HangFirst");
 const rHF = await P.hangFirst;
 const mHF = read(bHF);
 if (rHF.status !== 0) console.log(rHF.stderr);
 check("--url a document that never finishes loading (--timeout 15 s) → its load waited for up to --timeout, then exit 0, the root by tag, the note 'after 15s' (not 'could not load', then a note after 10 s)",
   rHF.status === 0 && mHF?.frame?.via === "tag" && mHF.frame.nodeId === "70:1" && loadNoteAfter(mHF, 15));
-const bGH = out("GotoHang");
+const bGH = baseOf("GotoHang");
 const rGH = await P.gotoHang;
 const mGH = read(bGH);
 if (rGH.status !== 0) console.log(rGH.stderr);
@@ -547,14 +559,14 @@ check("a goto step to a document that never finishes loading → waited for up t
   rGH.status === 0 && mGH?.navigation?.afterInitialLoad === 0 && mGH.frame?.via === "tag" && mGH.frame.nodeId === "70:1" && loadNoteAfter(mGH, 15));
 // (LateLoad: the tail suite)
 // with no per-document token ("" on every document) a timed-out document's note is never shared with the next one
-const bNT = out("NoToken");
+const bNT = baseOf("NoToken");
 const rNT = await P.noToken;
 const mNT = read(bNT);
 if (rNT.status !== 0) console.log(rNT.stderr);
 check("no token on any document: after one document's load timed out, the next step's half-loaded document is still waited for (not skipped as that known timed-out one) → exit 0, the root by tag, its heading measured",
   rNT.status === 0 && mNT?.frame?.via === "tag" && mNT.frame.nodeId === "70:1" && (mNT.nodes || []).some((n) => n.nodeId === "70:2"));
 // Playwright clicks the middle of the FIRST content quad (a wrapping inline element's first line), not of its box
-const bIW = out("InlineWrap");
+const bIW = baseOf("InlineWrap");
 const rIW = await P.inlineWrap;
 const wIW = writesOf(edge("inline-wrap"));
 check(`a step clicking an inline span whose first line is a form's typeless button (its box's middle is not) → exit 4 'never submit' at its click point, nothing written, nothing submitted (server saw: ${wIW.join(", ") || "nothing"})`,
@@ -563,31 +575,31 @@ check(`a step clicking an inline span whose first line is a form's typeless butt
 // ---- slow, churning and same-URL documents
 const notes = (m: VerifyMeasured | null): string[] => m?.notes || [];
 // the probe's own load never reads as "moved" — a DOM that never goes quiet is measured with the no-navigation note
-const bCD = out("ChurnDom");
+const bCD = baseOf("ChurnDom");
 const rCD = await P.churnDom;
 const mCD = read(bCD);
 if (rCD.status !== 0) console.log(rCD.stderr);
 check("a DOM that never goes quiet on the --url page (no navigation) → exit 0, the root by tag, 'the DOM was still changing after 10s (no navigation)' (not exit 4 'kept navigating')",
   rCD.status === 0 && mCD?.frame?.via === "tag" && notes(mCD).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
-const bCG = out("ChurnDomGoto");
+const bCG = baseOf("ChurnDomGoto");
 const rCG = await P.churnDomGoto;
 const mCG = read(bCG);
 if (rCG.status !== 0) console.log(rCG.stderr);
 check("the same after a goto step → exit 0, afterInitialLoad 0, the still-changing note (not exit 4 'kept navigating')",
   rCG.status === 0 && mCG?.navigation?.afterInitialLoad === 0 && notes(mCG).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
 // --ready on the --url page keeps the full --timeout (the screen appears at 12 s)
-const bLR = out("LateReady");
+const bLR = baseOf("LateReady");
 const rLR = await P.lateReady;
 const mLR = read(bLR);
 if (rLR.status !== 0) console.log(rLR.stderr);
 check("--ready that appears 12 s after load with --timeout 30000 → exit 0, the root by tag (not exit 4 'kept navigating' at 10 s)",
   rLR.status === 0 && mLR?.frame?.via === "tag" && mLR.frame.nodeId === "70:1");
-const bRN = out("ReadyNever");
+const bRN = baseOf("ReadyNever");
 const rRN = await P.readyNever;
 check("a --ready that never appears → exit 4 \"--ready … never became visible\" at --timeout, not 'kept navigating', nothing written",
   rRN.status === 4 && /--ready '\[data-dt-node="70:1"\]' never became visible/.test(rRN.stderr) && !/kept navigating/.test(rRN.stderr) && !written(bRN));
 // a slow-but-finishing page (an image answered at 13 s, --timeout 30000) is measured fully loaded, with no note
-const bSI = out("SlowImg");
+const bSI = baseOf("SlowImg");
 const rSI = await P.slowImg;
 const mSI = read(bSI);
 if (rSI.status !== 0) console.log(rSI.stderr);
@@ -595,14 +607,14 @@ check("an image finishing 13 s after the --url load (--timeout 30000) → its lo
   rSI.status === 0 && mSI?.frame?.via === "tag" && !notes(mSI).some((n) => /had not finished loading/.test(n)));
 // (SlowStay and LinkInplaceReload / LinkEmptyReload: the tail suite)
 // a same-URL link handled in place whose app navigates AWAY 1.2 s later — still the step's own navigation
-const bLA = out("LinkLateAway");
+const bLA = baseOf("LinkLateAway");
 const rLA = await P.linkLateAway;
 const mLA = read(bLA);
 if (rLA.status !== 0) console.log(rLA.stderr);
 check("a same-URL link handled in place, then a navigation to another URL 1.2 s later → the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (not exit 4 'reloaded … again')",
   rLA.status === 0 && mLA?.navigation?.afterInitialLoad === 0 && mLA.navigation.reruns === 0 && mLA.frame?.via === "tag");
 // target=_top is the same tab — a refresh link
-const bTT = out("SameLinkTop");
+const bTT = baseOf("SameLinkTop");
 const rTT = await P.sameLinkTop;
 const mTT = read(bTT);
 if (rTT.status !== 0) console.log(rTT.stderr);

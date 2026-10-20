@@ -324,10 +324,12 @@ export interface CompareOptions {
   anchors?: Record<string, PlanAnchor> | null;
   /** recorded as report.inputs.waivers: the plan file and waiversHash() of it */
   waiversInput?: { plan: string; sha256: string } | null;
-  /** the run's status file beside the measured file — an unfinished run, or one naming another measured
-   *  file, makes the verdict incomplete. A v1 (hand-written) status is never trusted, never judged. null = looked
-   *  for and none found: a measured file naming its runId is then unrecorded; undefined = not looked for. */
-  status?: { file: string; status: VerifyStatusV2 | "v1" } | null;
+  /** the set's run status (the CLI reads its one status base, beside the expectation) — an unfinished run, or one naming
+   *  another measured file, makes the verdict incomplete. A v1 (hand-written) status is never trusted, never judged. null = looked
+   *  for and none found: a measured file naming its runId is then unrecorded; undefined = not looked for. `screen` = the
+   *  set's name the CLI keyed the status by (basename of its base) — the name the advice's --status commands use: a
+   *  migrated set's status still says its old name in `status.screen` */
+  status?: { file: string; status: VerifyStatusV2 | "v1"; screen?: string } | null;
   /** the plan for this frame as found NOW: its interactions[] hash against the expectation's planInteractions;
    *  its navigate[] against the probe's measured.reach (report.inputs.reach.matchesPlan). `choice` = how the CLI
    *  picked it (choosePlan) — the re-run advice names --plan when the plan was not the frame's only one */
@@ -1487,6 +1489,9 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
   // nothing recorded it as that run's (the probe's status write was refused, or another run has started since).
   // Only when compare looked for one (opts.status null or set; undefined = an in-process caller that passed none).
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
+  // the set the advice's --status commands name: the one the CLI keyed the status by (never the status's own `screen`)
+  const screen = opts.status?.screen;
+  const S = screen !== undefined ? shellArg(screen) : "<Layer>__<id>";
   if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ` +
       `${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} ` +
@@ -1495,7 +1500,7 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
       // record of this run replaces that run in the status, and nothing here tells whether this run itself ended (a
       // later probe that took it over ended it) — a record would revive it, and over a `failed` / `blocked` it would
       // hide that outcome too
-      `${!st ? `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`
+      `${!st ? `record it with --status ${S} --phase measured --run ${measuredRun}, or re-measure`
         : st.phase === "done" ? "measure again"
         : TERMINAL_PHASES.includes(st.phase) ? `measure again (a record of run ${measuredRun} now would hide run ${st.runId}'s ${st.phase} outcome)`
         : `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)`}`);
@@ -1506,7 +1511,6 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
     // never a timestamp.
     const stFile = opts.status ? opts.status.file : "status.json";
     // the next step for a hand-written file beside an ended run: record it in a run of its own
-    const S = shellArg(st.screen);
     const record = measuredRun === undefined && TERMINAL_PHASES.includes(st.phase)
       ? ` — a measured file that names no run is tied to a run by recording it: --status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>` : "";
     if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
@@ -1836,11 +1840,11 @@ function planInteractionsCheck(cx: CompareCtx): Pick<Graded, "planNow" | "planIn
   const planNow = opts.plan || null;
   const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : undefined;
   const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
-  // name --plan when the plan was not simply the frame's only one (picked by --plan, among several, or as the
-  // expectation's recorded plan), or the expectation merged another plan's rows — a plain re-run of --expect could
+  // name --plan when the plan was not simply the frame's only one (picked by --plan, or as the expectation's recorded
+  // plan), or the expectation merged another plan's rows — a plain re-run of --expect could
   // otherwise pick a different plan
   const otherPlan = recordedPi !== undefined && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
-  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "files" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
+  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
   const gone = opts.recordedPlanGone || null;
   const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
   const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null
@@ -1951,7 +1955,7 @@ function verdictOf(
   if (planInteractionsChanged) reasons.push(planInteractionsChanged);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
-  if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
+  if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Layer>__<id>.png and list it in artifacts)");
   for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states ` +
     `it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' — the canonical key is '${f.field}')` : ""}`);
   if (notMeasured.length) reasons.push(`${notMeasured.length} of ${nodesExpected} node spec(s) were never measured`);

@@ -581,21 +581,23 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
   if (!/--record-plan/.test(usage.stdout + usage.stderr)) {
     console.log("  - SKIPPED: verify-screen has no --record-plan flag yet — the CLI cases (no plan → exit 2, no report written) are not run");
   } else {
+    // (the CLI names the report by the expectation's set: <Layer>__<id>)
+    const SET = "design/verify/Crates__80_1", CLI_REPORT = `${SET}.report.json`;
     const root = project();
     fs.rmSync(path.join(root, "design", "plan"), { recursive: true });
-    fs.writeFileSync(path.join(root, "design/verify/Crates.expected.json"), JSON.stringify(exp, null, 2));
-    fs.writeFileSync(path.join(root, "design/verify/Crates.measured.json"), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes }));
-    fs.rmSync(path.join(root, REPORT));
-    const r = spawnSync(process.execPath, [VS, "--compare", "design/verify/Crates.expected.json", "design/verify/Crates.measured.json", "--record-plan"], { cwd: root, encoding: "utf8" });
-    check(`--record-plan with no plan → exit 2 before comparing, no report written (got exit ${r.status})`, r.status === 2 && !fs.existsSync(path.join(root, REPORT)));
+    fs.writeFileSync(path.join(root, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
+    fs.writeFileSync(path.join(root, `${SET}.measured.json`), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes }));
+    fs.rmSync(path.join(root, CLI_REPORT), { force: true });
+    const r = spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--record-plan"], { cwd: root, encoding: "utf8" });
+    check(`--record-plan with no plan → exit 2 before comparing, no report written (got exit ${r.status})`, r.status === 2 && !fs.existsSync(path.join(root, CLI_REPORT)));
     const root2 = project();
-    fs.writeFileSync(path.join(root2, "design/verify/Crates.expected.json"), JSON.stringify(exp, null, 2));
-    fs.writeFileSync(path.join(root2, "design/verify/Crates.measured.json"), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes, behaviour }));
-    const r2 = spawnSync(process.execPath, [VS, "--compare", "design/verify/Crates.expected.json", "design/verify/Crates.measured.json", "--plan", REL, "--record-plan"], { cwd: root2, encoding: "utf8" });
-    const written = readFixture(path.join(root2, REPORT), isVerifyReport);
+    fs.writeFileSync(path.join(root2, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
+    fs.writeFileSync(path.join(root2, `${SET}.measured.json`), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes, behaviour }));
+    const r2 = spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root2, encoding: "utf8" });
+    const written = readFixture(path.join(root2, CLI_REPORT), isVerifyReport);
     const rec = planOf(root2).verification?.recorded;
     check(`--compare --record-plan --plan <plan>: the report is written and the plan records its sha256 (exit ${r2.status}, verdict ${String(written.verdict)})`,
-      !!rec && rec.verdict === written.verdict && rec.headline === written.headline && rec.reportSha256 === sha256(fs.readFileSync(path.join(root2, REPORT))) && rec.report === REPORT);
+      !!rec && rec.verdict === written.verdict && rec.headline === written.headline && rec.reportSha256 === sha256(fs.readFileSync(path.join(root2, CLI_REPORT))) && rec.report === CLI_REPORT);
     // round trip: whatever the measured file holds, a fresh --compare --record-plan writes a record the hook accepts
     // (a value of the wrong kind is left out of the record, never written as is — else the hook blocks and re-recording
     // writes the same block again)
@@ -607,9 +609,9 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
     ];
     for (const [what, file, shape] of cases) {
       const root3 = project();
-      fs.writeFileSync(path.join(root3, "design/verify/Crates.expected.json"), JSON.stringify(exp, null, 2));
-      fs.writeFileSync(path.join(root3, "design/verify/Crates.measured.json"), JSON.stringify(file));
-      const run = () => spawnSync(process.execPath, [VS, "--compare", "design/verify/Crates.expected.json", "design/verify/Crates.measured.json", "--plan", REL, "--record-plan"], { cwd: root3, encoding: "utf8" });
+      fs.writeFileSync(path.join(root3, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
+      fs.writeFileSync(path.join(root3, `${SET}.measured.json`), JSON.stringify(file));
+      const run = () => spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root3, encoding: "utf8" });
       const c1 = run();
       const rec3: unknown = planOf(root3).verification?.recorded;
       const blocks1 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));

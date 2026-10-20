@@ -483,7 +483,7 @@ function checkVerification(plan: Plan, cwd: string): string[] {
     // (both shape errors in one round: a plan can have both as objects, and this is only a warning)
     const wrongShape: string[] = [];
     if (f.artifacts !== undefined && !Array.isArray(f.artifacts))
-      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} — e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
     if (f.deltas !== undefined && !Array.isArray(f.deltas))
       wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
     if (wrongShape.length) return f.deltas === undefined ? [...wrongShape, `${at}.deltas is missing — list the residual differences against the reference ([] if none were found)`] : wrongShape;
@@ -587,9 +587,9 @@ function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cw
   return { ref: null, missing: want };
 }
 // ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
-// failed elements ("+N more" rows count N), so it says "failures". A re-run with the same --out overwrites its report, so a run's
+// failed elements ("+N more" rows count N), so it says "failures". A re-run of a set overwrites its report, so a run's
 // older rounds are gone. Every OTHER report file locateReports matched (design/verify/ is flat, so
-// another file is another --out — a narrow-width or dark-theme variant, a nodeId-named run, or one left from an earlier name)
+// another file is another set — a variant <Layer>__<id>.<slug> (a narrow width, a dark theme), or a legacy-named one)
 // warns on its own failures: one warning per other report file, so no FAIL is silenced; the disagreement and "did not run"
 // warnings stay with the one report above.
 function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, ctx: { cwd?: string; planFile?: string } = {}): string[] {
@@ -1135,6 +1135,10 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   if (!exp) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) — the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
+    if (exp.staleFile) {
+      const now = path.relative(cwd, exp.file).split(path.sep).join("/");
+      warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} — read ${now}; re-run plan-skeleton --out to refresh the header`);
+    }
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");

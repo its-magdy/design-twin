@@ -2,8 +2,8 @@
 
 
 // design-to-code/resolve-screen.ts
-import fs5 from "node:fs";
-import path4 from "node:path";
+import fs8 from "node:fs";
+import path6 from "node:path";
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -238,6 +238,7 @@ import fs from "node:fs";
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
 // design-to-code/read-json.ts
+var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
   if (code === "ENOENT") return { error: "does not exist", missing: true };
@@ -339,6 +340,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function cliArity(tool, positionals, min, max, usage) {
   if (positionals.length < min) {
@@ -389,11 +391,155 @@ function listPlans(dir) {
 }
 
 // design-to-code/verify-sets.ts
-import fs4 from "node:fs";
+import fs7 from "node:fs";
+import path5 from "node:path";
+
+// design-to-code/verify-status.ts
+import path4 from "node:path";
+import fs6 from "node:fs";
+
+// design-to-code/run-cache.ts
+import fs5 from "node:fs";
+import os from "node:os";
 import path3 from "node:path";
-var VARIANT_RE = /^[a-z0-9-]+$/;
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+// bridge/src/file-lock.ts
+import fs4 from "node:fs";
+var LIVE_STALE_MS = 2 * 6e4;
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs4.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/run-cache.ts
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs5.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs5.existsSync(p);
+function realpath(p) {
+  if (typeof fs5.realpathSync.native === "function") {
+    try {
+      return fs5.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs5.realpathSync(p);
+}
+function canonical(p) {
+  const abs = path3.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path3.dirname(abs);
+    return parent === abs ? abs : path3.join(canonical(parent), path3.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path3.join(d, ".pnp.cjs")) || exists(path3.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path3.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path3.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path3.dirname(d)) {
+    if (exists(path3.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) return null;
+  }
+  if (isDir(path3.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path3.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path3.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path3.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path3.relative(root, v).split(path3.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path3.sep).join("/") ? cache : path3.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path3.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+
+// design-to-code/verify-status.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path4.join(runCacheDir(path4.dirname(base)), path4.basename(base) + ".status.json");
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path4.basename(base)), id = shellArg(open.runId), dir = shellArg(path4.resolve(path4.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function openRunSets(verifyDir) {
+  const SUFFIX = ".status.json";
+  let files;
+  try {
+    files = fs6.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path4.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
+}
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => VARIANT_RE.test(s);
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
 function parseSetName(name) {
   const dot = name.indexOf(".");
   const stem = dot < 0 ? name : name.slice(0, dot);
@@ -404,12 +550,13 @@ function parseSetName(name) {
   if (variant !== null && !isVariantSlug(variant)) return null;
   return { stem, nodeId, variant };
 }
+var TRAILING_SEP = path5.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs4.readdirSync(verifyDir);
+    files = fs7.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -426,9 +573,9 @@ function verifySets(verifyDir) {
 }
 function setFacts(verifyDir, name) {
   const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path3.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(path5.join(verifyDir, name + ".expected.json"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path3.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(path5.join(verifyDir, name + ".report.json"), isJsonObject);
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 function setNodeId(verifyDir, name) {
@@ -436,20 +583,29 @@ function setNodeId(verifyDir, name) {
   if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
   return f.expectedId ?? f.reportId;
 }
-function canonicalStemsFor(verifyDir, nodeId) {
+function canonicalStemsFor(verifyDir, nodeId, open = []) {
   const stems = /* @__PURE__ */ new Set();
-  for (const name of verifySets(verifyDir)) {
+  for (const name of [...verifySets(verifyDir), ...open]) {
     const p = parseSetName(name);
     if (p && p.nodeId === nodeId) stems.add(p.stem);
   }
   return [...stems].sort();
 }
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path5.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path5.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
 function legacySetsFor(verifyDir, nodeId) {
   return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
 }
-function nodeStem(verifyDir, nodeId, layerName) {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId) : [];
-  if (stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stems.join(", ")}) \u2014 keep one` };
+function nodeStem(verifyDir, nodeId, layerName, open = []) {
+  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
+  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) \u2014 keep one` };
   const have = stems[0];
   return { stem: have ?? screenStem(layerName, nodeId), existing: have !== void 0, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
 }
@@ -466,25 +622,25 @@ function queryIds(q) {
   return out;
 }
 function findExportRoot(dir) {
-  const has = (d) => fs5.existsSync(path4.join(d, "pages", "index.json"));
-  const abs = path4.resolve(dir);
-  for (let d = path4.dirname(abs); ; d = path4.dirname(d)) {
+  const has = (d) => fs8.existsSync(path6.join(d, "pages", "index.json"));
+  const abs = path6.resolve(dir);
+  for (let d = path6.dirname(abs); ; d = path6.dirname(d)) {
     if (has(d)) return d;
-    if (path4.dirname(d) === d) break;
+    if (path6.dirname(d) === d) break;
   }
   for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
-    if (has(path4.join(abs, sub))) return path4.join(abs, sub);
+    if (has(path6.join(abs, sub))) return path6.join(abs, sub);
   }
   return null;
 }
 function allRows(exportDir) {
-  const rootFile = path4.join(exportDir, "pages", "index.json");
+  const rootFile = path6.join(exportDir, "pages", "index.json");
   const root = readJsonOrNull(rootFile, isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = pd.dir ? readJsonOrNull(path4.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    const idx = pd.dir ? readJsonOrNull(path6.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
     if (idx) rows.push(...idx.layers);
   }
   return rows;
@@ -493,7 +649,7 @@ function planRows(planDir) {
   if (!planDir) return [];
   const out = [];
   for (const f of listPlans(planDir)) {
-    const doc = readJsonOrNull(path4.join(planDir, f), isPlan);
+    const doc = readJsonOrNull(path6.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
@@ -513,6 +669,7 @@ function describe(row, matchedVia) {
   return out;
 }
 var fold = (s) => String(s || "").trim().toLowerCase();
+var FOLD_STAGE = "whitespace-insensitive match (layer name / title / plan header)";
 var foldCompact = (s) => String(s || "").replace(/[\s_-]+/g, "").toLowerCase();
 var FILE_TAIL_RE = /(?:\.(?:measured|expected|vars))?\.json$|\.png$/i;
 var PATH_DIR_RE = /^design[\\/]|[\\/](?:plan|verify|export)[\\/]/i;
@@ -531,7 +688,7 @@ function resolveScreen(exportDir, query, opts) {
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
-  if (!fs5.existsSync(path4.join(exportDir, "pages", "index.json"))) {
+  if (!fs8.existsSync(path6.join(exportDir, "pages", "index.json"))) {
     return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
   const byId = (id) => {
@@ -569,6 +726,7 @@ function resolveScreen(exportDir, query, opts) {
     const hit = byId(id);
     if (hit) return { status: "resolved", row: hit, stage: "node id", kind: "carried id" };
   }
+  let folded = [];
   for (const qCompact of compactKeys(q)) {
     const planCompactIds = new Set(
       plans.filter((p) => foldCompact(p.screenName) === qCompact || foldCompact(p.route) === qCompact).map((p) => p.nodeId).filter((id) => !!id)
@@ -584,22 +742,19 @@ function resolveScreen(exportDir, query, opts) {
       if (planCompactIds.has(r.id)) joinCompact(r, "plan screenName/route ignoring spaces");
     }
     const compactRows = [...compact.values()];
-    const one = compactRows.length === 1 ? compactRows[0] : void 0;
-    if (one) return { status: "resolved", row: one.row, stage: [...one.via].join(" + "), kind: "folded" };
-    if (compactRows.length > 1) {
-      return {
-        status: "ambiguous",
-        stage: "whitespace-insensitive match (layer name / title / plan header)",
-        candidates: compactRows.map((u) => describe(u.row, [...u.via]))
-      };
+    if (compactRows.length) {
+      folded = compactRows.map((u) => describe(u.row, [...u.via]));
+      break;
     }
   }
   const textMatches = rows.filter(
     (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))
   );
-  if (textMatches.length) {
+  if (folded.length || textMatches.length) {
+    const foldedIds = new Set(folded.map((c) => c.id));
+    const candidates = [...folded, ...textMatches.filter((r) => !foldedIds.has(r.id)).map((r) => describe(r))];
     return Object.assign(
-      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe(r)) },
+      { status: "needs-confirmation", stage: folded.length ? FOLD_STAGE : "text search", candidates },
       noTitles ? { noTitles: true } : null
     );
   }
@@ -625,7 +780,8 @@ function main(argv) {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
-    const k = nodeStem(fs5.existsSync(VERIFY_DIR) ? path4.resolve(VERIFY_DIR) : null, res.row.id, res.row.name);
+    const verifyDir = path6.resolve(VERIFY_DIR);
+    const k = nodeStem(verifyDir, res.row.id, res.row.name, openRunSets(verifyDir));
     console.log(`stem ${"why" in k ? screenStem(res.row.name, res.row.id) : k.stem}`);
     if ("why" in k) console.error(`note   ${k.why}`);
     else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} \u2014 verify-screen --migrate renames them to ${k.stem}`);
@@ -638,7 +794,7 @@ function main(argv) {
     return 1;
   }
   if (res.status === "needs-confirmation") {
-    console.error(`error  '${query}' matched only by text search \u2014 confirm with the node id (never resolved automatically from a substring hit):`);
+    console.error(res.stage === "text search" ? `error  '${query}' matched only by text search \u2014 confirm with the node id (never resolved automatically from a substring hit):` : `error  '${query}' matched only ignoring spaces/-/_ \u2014 confirm with the node id (never resolved automatically from a near-match):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
     return 1;

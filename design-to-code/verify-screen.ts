@@ -25,8 +25,9 @@
 // verify-shared.ts so the expectation format and the comparison never drift; the expectation is built in verify-expect.ts,
 // compared in verify-compare.ts and rendered in verify-report-md.ts. This file reads the inputs, writes the artefacts and
 // routes the modes:
-//   node verify-screen.js --expect  <screen.json>... --out design/verify/<Screen>
-//   node verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>
+//   node verify-screen.js --expect  <screen.json>... [--out design/verify]
+//   node verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out design/verify]
+// --out is the verify directory; the set's name is its node's (`<Layer>__<id>`, verify-sets.ts), never the caller's.
 //
 // There is NO browser here. `--compare` diffs two JSON files; the rendering, measuring and
 // interaction-driving are the probe's job (the visual-verifier agent, or any script), and what it did
@@ -43,10 +44,11 @@ import {
   readableMeasured,
 } from "./doc-guards.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
+import { STATUS_PHASES, TERMINAL_PHASES, openRunSets, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
+import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
-import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
@@ -63,14 +65,8 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
+import { endsInSep, expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
-// Defaulting `--out` to the input's own basename only helps when the caller actually uses that default.
-// An explicit `--out <nickname>` — which both the verify skill's own `<Screen>` placeholder and
-// build-screen's `<Layer>__<id>` convention invite, under two different names for the SAME node — would
-// write a second, complete artefact set with no warning.
-// Scans a directory's own `*.expected.json` files (never a subdirectory — one screen, one flat
-// design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
-// about to be written. Returns that file's path, or null.
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
 // finished; younger: a run is measuring right now; v1: a hand-written status, not checked. done (or none): nothing to say.
@@ -93,48 +89,78 @@ function runStatusNote(base: string, now = Date.now()): string | null {
   return `a run of ${name} (run ${st.runId}) is in progress — phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1000)} s ago` : ""}; it measures against the expectation it started with`;
 }
 
-// a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so no scan
-// (findExistingExpectedFor, verify-build's report lookup, the run's expectation) ever takes it for a live one.
+// a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so nothing that
+// reads a verify dir's sets (verify-sets.ts, verify-build's report lookup, the run's expectation) takes it for a live one.
 const PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 
-function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTarget: string): string | null {
-  if (!nodeId || !fs.existsSync(dir)) return null;
-  for (const f of fs.readdirSync(dir)) {
-    if (!f.endsWith(".expected.json")) continue;
-    const full = path.join(dir, f);
-    if (path.resolve(full) === path.resolve(ownTarget)) continue;
-    // an expectation this repo wrote — only frame.nodeId is looked at
-    const doc = readJsonOrNull(full, isJsonObject);
-    if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
-  }
-  return null;
+/** The verify directory --expect names the node's stem in (nodeStem) before the set's name is known: --out when it is
+ *  an existing directory, ends in a separator or is design/verify; the parent of the older `<dir>/<set>` spelling;
+ *  design/verify without --out. outBaseOf then decides, by the set's name, whether --out is taken at all. */
+function expectDirOf(out: string | undefined): string {
+  if (out === undefined) return VERIFY_DIR;
+  let dir = false;
+  try { dir = fs.statSync(out).isDirectory(); } catch { /* not there */ }
+  if (dir || path.resolve(out) === path.resolve(VERIFY_DIR)) return out;
+  if (endsInSep(out)) return trimSep(out);
+  return path.dirname(out);
 }
 
-// The plan(s) under design/plan/ (relative to the working directory) that describe this frame: by the frame's
-// node id (plan.nodeId, or a `<Layer>__<id>` file name) or by name (the plan's own stem, or its export's).
-function plansFor(frameId: string | undefined, stem: string): Array<{ file: string; plan: Plan }> {
+/** Where an artefact the measured file lists under its set's OLD name is now — `<dir>/<set><rest>` — when the set was
+ *  renamed (verify-screen --migrate) after the run that wrote it; else null. Every condition holds or nothing is taken:
+ *  the listed file is gone; the run's status (v2) names the set by another name (`screen`, the old one, which no live set
+ *  of the dir holds now, in any case); the measured file is that run's (its runId) and the very file the run recorded (its sha); the
+ *  listed file was in the set's own dir and carries the old name's prefix (`<old>.` / `<old>-`); the renamed file exists.
+ *  Never a screenshot of another set, never one that is not on disk. */
+function migratedArtifact(listed: string, o: { setName: string; verifyDir: string; status: VerifyStatusV2 | "v1" | null; measuredRun: string | undefined; measuredSha: string }): string | null {
+  const st = o.status;
+  if (fs.existsSync(listed) || st === null || st === "v1" || st.screen === o.setName) return null;
+  if (o.measuredRun === undefined || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
+  if (path.resolve(path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
+  const base = path.basename(listed);
+  if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
+  // in any case: on a case-insensitive disk `garden.*` are `Garden.*` — a live set under the old name in another case owns them
+  const old = st.screen.toLowerCase();
+  if (verifySets(o.verifyDir).some((n) => n.toLowerCase() === old)) return null;
+  // the listed path's own directory spelling, the new name in place of the old
+  const candidate = listed.slice(0, listed.length - base.length) + o.setName + base.slice(st.screen.length);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+// The plans under design/plan/ (relative to the working directory) of node `nodeId`, by node id only: a plan's `nodeId`,
+// else (none given) the id its `<Layer>__<id>` file name carries — never its screen or file name (a name is no identity,
+// and `nodeId` wins when the two disagree). `idless`: the plans that name no node either way (none of them can be
+// matched — each one says to add "nodeId").
+function plansForNode(nodeId: string | undefined): { hits: Array<{ file: string; plan: Plan }>; idless: string[] } {
   const hits: Array<{ file: string; plan: Plan }> = [];
+  const idless: string[] = [];
   for (const f of listPlans(PLAN_DIR)) {
     // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
     const p = readJsonOrNull(path.join(PLAN_DIR, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || nodeIdFromStem(path.basename(f, ".json")) === frameId);
-    const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
-    if (byId || byName) hits.push({ file: path.join(PLAN_DIR, f).split(path.sep).join("/"), plan: p });
+    const file = path.join(PLAN_DIR, f).split(path.sep).join("/");
+    const id = p.nodeId || nodeIdFromStem(path.basename(f, ".json"));
+    if (!id) idless.push(file);
+    else if (nodeId !== undefined && id === nodeId) hits.push({ file, plan: p });
   }
-  return hits;
+  return { hits, idless };
 }
+/** What the "no plan describes this frame" note adds about the plans that name no node. */
+const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node — add "nodeId")` : "";
 
-/** ONE plan-selection rule for --expect and --compare (they must pick the same plan, or the plan's
- *  interactions[] hash can never agree and the run stays incomplete). --plan; else the one plan in design/plan/ that
- *  describes this frame; else, among several, the one that lists files[]; else none (`all` names the candidates). */
-function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined, stem: string): { hit?: ChosenPlan; all: Array<{ file: string; plan: Plan }> } {
-  if (flagged) return { hit: { ...flagged, choice: "flag" }, all: [flagged] };
-  const all = plansFor(frameId, stem);
-  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all };
-  const withFiles = all.filter((h) => h.plan.files);
-  if (withFiles.length === 1 && withFiles[0]) return { hit: { ...withFiles[0], choice: "files" }, all };
-  return { all };
+/** ONE plan-selection rule for --expect and --compare (they must pick the same plan, or the plan's interactions[] hash can
+ *  never agree and the run stays incomplete): --plan (the other plans of the node named in `note`); else the one plan
+ *  in design/plan/ of the frame's node (plansForNode); several are a data error (`error`: keep one, or pass --plan — a
+ *  multi-frame plan); none is no plan. */
+function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined):
+  { hit?: ChosenPlan; all: Array<{ file: string; plan: Plan }>; idless: string[]; note?: string; error?: string } {
+  const { hits: all, idless } = plansForNode(frameId);
+  if (flagged) {
+    const others = all.filter((h) => !samePlanFile(h.file, flagged.file));
+    return { hit: { ...flagged, choice: "flag" }, all, idless, ...(others.length ? { note: `using ${flagged.file} (--plan); design/plan/ also describes node ${frameId ?? "?"} in ${others.map((h) => h.file).join(", ")}` } : {}) };
+  }
+  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all, idless };
+  if (all.length > 1) return { all, idless, error: `${all.length} plans in design/plan/ describe node ${frameId ?? "?"} (${all.map((h) => h.file).join(", ")}) — keep one, or pass --plan <plan.json> (a multi-frame plan)` };
+  return { all, idless };
 }
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
@@ -164,29 +190,33 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
   return { error: `no delta in the report for ${id}${sel.field !== undefined ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 
-export { selectForAccept, findExistingExpectedFor };
+export { selectForAccept };
 
 // ---------------------------------------------------------------- CLI
 function main(argv: string[]): number | Promise<number> {
   const USAGE =
     "usage:\n" +
-    `  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]\n` +
-    "      writes <Screen>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
+    `  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]\n` +
+    "      writes <Layer>__<id>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
     "      The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]\n" +
     "      ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot\n" +
     "      be graded is dropped with why. Their hash binds the expectation: change them → re-run --expect.\n" +
-    "      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n" +
-    "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
-    "      directory — pass --force to write a second one anyway. Replacing one that differs keeps the old bytes as\n" +
-    "      <Screen>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
-    "      content). It notes a last run of <Screen> that failed, was blocked or never finished (its files are partial).\n" +
-    `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] --out design/verify/<Screen>\n` +
-    "      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
+    "      Read them; never retype them. --out is the verify directory (default design/verify; a new one ends in \"/\"): the set is\n" +
+    "      named by the frame's node, <Layer>__<id> — the name a set of that node there already has (a frame renamed in Figma keeps\n" +
+    "      it). Any other --out basename is refused (exit 2): one node, one set. --variant <slug> writes the variant set\n" +
+    "      <Layer>__<id>.<slug> instead (a dark theme, a narrow width): lower-case letters and digits, words joined by single \"-\",\n" +
+    "      at most 32; a file tail of the set is no slug, nor one that extends another variant of the node by \"-\" (exit 2).\n" +
+    "      Replacing one that differs keeps the old bytes as\n" +
+    "      <Layer>__<id>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
+    "      content). It notes a last run of <Layer>__<id> that failed, was blocked or never finished (its files are partial).\n" +
+    `  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]\n` +
+    "      writes <Layer>__<id>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…], components:[…], inferred:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
     "      components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}\n" +
     "      — what the build does that the design never drew — are listed under 'Inferred, not designed', never graded).\n" +
-    "      --out defaults to design/verify/<the .expected.json file's own basename>.\n" +
+    "      --out is the verify directory (default design/verify); the report takes the expectation's set name. A legacy-named\n" +
+    "      expectation, or one named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect).\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
     "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +
     "      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another\n" +
@@ -201,14 +231,14 @@ function main(argv: string[]): number | Promise<number> {
     "      or the renderer of a rendered report that gives none.\n" +
     "      No plan, or several and no --plan: exit 2 before comparing. A failed record — e.g. a report outside the project\n" +
     "      (the plan records project-relative paths only) — leaves the report written (exit 1).\n" +
-    `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
+    `  ${scriptCmd("verify-screen")} --accept <Layer>__<id>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
     "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
     "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
     "      absent components, failed interactions and unmeasured nodes are never waivable. Refuses a report whose run is\n" +
     "      unverified (its integrity[]), or that records no integrity[] (re-run --compare first). Re-run --compare to apply.\n" +
-    `  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
+    `  ${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
     "      writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache —\n" +
-    "      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +
+    "      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +
     "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
     "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
     "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
@@ -218,11 +248,11 @@ function main(argv: string[]): number | Promise<number> {
     "      it). Over another run that has ended it is written and says so: a `note  run <id> replaced run <other> …` line, and\n" +
     "      replaced {runId, phase, at} in the status (carried through the run, kept in the published copy). `done` checks first — refuses (exit 1)\n" +
     "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
-    "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
-    "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +
+    "      not the one the probe recorded in this run — then publishes, records the sha256 of <Layer>__<id>.expected/.measured.json (and\n" +
+    "      .evidence.json when this run published it), and writes the final status into <dir>/<Layer>__<id>.status.json. --publish copies every\n" +
     "      file of a staging directory into <dir> (tmp file in <dir>, then rename) — stage in the run cache while any page of the app is open.\n" +
-    `  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
-    "      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json (and the\n" +
+    `  ${scriptCmd("verify-screen")} --wait <Layer>__<id> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
+    "      waits (on the live status, else <dir>/<Layer>__<id>.status.json) until run <id> is done and <Layer>__<id>.measured.json (and the\n" +
     "      evidence this run published) is the file it names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
     "      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,\n" +
     "      6 when the run cache exists but cannot be read.\n" +
@@ -244,7 +274,7 @@ function main(argv: string[]): number | Promise<number> {
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
   const OPTIONS = {
-    out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" },
+    out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, variant: { type: "string" },
     accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" },
       "all-fields": { type: "boolean" },
     status: { type: "string" }, wait: { type: "string" }, phase: { type: "string" }, run: { type: "string" }, "new-run": { type: "boolean" }, detail: { type: "string" },
@@ -253,6 +283,11 @@ function main(argv: string[]): number | Promise<number> {
     help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  // (still parsed, so a caller that passes it is told why rather than "unknown option")
+  if (flags.force !== undefined) {
+    console.error("--force is gone: one node, one set — a second set of the node is a variant (--expect --variant <slug>); a legacy-named set: verify-screen --migrate\n" + USAGE);
+    return 2;
+  }
   // --migrate renames legacy-named verify sets (verify-migrate.ts); it takes --apply and --dir only
   if (flags.migrate) {
     const other = Object.entries(flags).filter(([k, v]) => v !== undefined && !["migrate", "apply", "dir"].includes(k)).map(([k]) => k);
@@ -264,7 +299,7 @@ function main(argv: string[]): number | Promise<number> {
   const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"] as const;
   if (flags.status !== undefined || flags.wait !== undefined) {
     if (flags.status !== undefined && flags.wait !== undefined) { console.error("pass --status or --wait, not both\n" + USAGE); return 2; }
-    const other = (["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"] as const).filter((k) => flags[k] !== undefined);
+    const other = (["expect", "compare", "accept", "out", "interactions", "against", "variant", "node", "field", "group", "reason", "plan", "all-fields", "record-plan"] as const).filter((k) => flags[k] !== undefined);
     if (other.length || files.length) { console.error(`--${flags.status !== undefined ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}\n` + USAGE); return 2; }
     if (flags.wait !== undefined) {
       const bad = (["phase", "new-run", "detail", "publish", "by"] as const).filter((k) => flags[k] !== undefined);
@@ -280,6 +315,8 @@ function main(argv: string[]): number | Promise<number> {
   const doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
   if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) { console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE); return 2; }
   for (const k of ["node", "field", "group", "reason", "by", "all-fields"] as const) if (flags[k] !== undefined && !doAccept) { console.error(`--${k} only applies to --accept\n` + USAGE); return 2; }
+  // a variant is named once, when its expectation is written: --compare, the probe and --status read it from the set's name
+  if (flags.variant !== undefined && !doExpect) { console.error("--variant only applies to --expect (the set's name carries it after that)\n" + USAGE); return 2; }
   if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); return 2; }
   if (againstFile !== undefined && !doCompare) { console.error("--against only applies to --compare\n" + USAGE); return 2; }
@@ -299,13 +336,14 @@ function write(doExpect: boolean, base: string | undefined, obj: unknown, md?: s
   console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
 }
 
-/** `--expect <screen.json>... [--out <base>] [--force] [--plan <plan.json>]`: writes <Screen>.expected.json (buildExpectation) and
- *  says what it replaced, refuses a second name for the same node, and notes the last run beside it. */
-function expectMain(files: string[], flags: { out?: string | undefined; plan?: string | undefined; force?: boolean | undefined }, USAGE: string): number {
-  const { out, plan: planFlag } = flags;
-  const force = !!flags.force;
+/** `--expect <screen.json>... [--out <dir>] [--variant <slug>] [--plan <plan.json>]`: writes <dir>/<Layer>__<id>[.<slug>].expected.json
+ *  (buildExpectation) — the set named by the frame's node, never by the caller — says what it replaced, and notes the last run beside it. */
+function expectMain(files: string[], flags: { out?: string | undefined; plan?: string | undefined; variant?: string | undefined }, USAGE: string): number {
+  const { out, plan: planFlag, variant } = flags;
   const firstFile = files[0];
   if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
+  const slugWhy = variant === undefined ? null : variantProblem(variant);
+  if (slugWhy !== null) { console.error(`error  --variant: ${slugWhy}`); return 2; }
   const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
   // the export's own index (relative to the project root) tells which destinations were exported
   const indexFile = path.join(EXPORT_DIR, "pages", "index.json");
@@ -329,7 +367,6 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
   const exportRoot = EXPORT_DIR;
   const readSibling = (file: string): ScreenDoc | null => readJsonOrNull(path.join(exportRoot, file), isScreenDoc);
-  const outBase0 = out || path.join(VERIFY_DIR, path.basename(firstFile, ".json"));
   // the plan's interactions[] — the plan --compare will pick too (choosePlan)
   let flagged: { file: string; plan: Plan } | undefined;
   if (planFlag !== undefined) {
@@ -337,14 +374,14 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     if (!("doc" in r)) { console.error(`--plan '${planFlag}' ${r.error}`); return 2; }
     flagged = { file: planFlag.split(path.sep).join("/"), plan: r.doc };
   }
+  // the plan is merged INTO the expectation, so it is chosen by the node buildExpectation records as frame.nodeId (its
+  // frames[0]: the first root of the first export that has one)
   const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== undefined);
-  const chosen = choosePlan(flagged, firstRoot && firstRoot.id, path.basename(outBase0));
+  const chosen = choosePlan(flagged, firstRoot && firstRoot.id);
+  // several plans of the node: which one's interactions bind the expectation is not ours to guess (--compare would face the same)
+  if (chosen.error !== undefined) { console.error(`error  ${chosen.error}`); return 2; }
+  if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
   const planForExpect = chosen.hit;
-  if (chosen.all.length > 1 && chosen.all.some((h) => h.plan.interactions !== undefined)) {
-    console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — using ${planForExpect.file}, the only one listing files[] ` +
-      `(--compare picks the same); pass --plan <plan.json> to choose another`
-      : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
-  }
   // the reference PNG (pointer relative to design/export/) and the document's colour profile stamp
   const readReference = (pointer: string): Uint8Array | null => {
     const file = resolveInside(exportRoot, pointer);
@@ -360,50 +397,30 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}…)`);
     for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
   }
-  // `--expect` run once by base name and once by a nickname for the SAME screen would write
-  // two byte-identical files (`<Layer>__<id>.expected.json` and `<Nickname>.expected.json`)
-  // if nothing tied the output name to the screen's own identity. Defaulting to the FIRST
-  // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.ts) —
-  // means two runs against the same export file always land on the same name, whatever string the
-  // caller typed on the command line.
-  const outBase = outBase0;
+  // the set's name is its node's: <Layer>__<id> — the stem a set of the node in the verify dir already has, or a run of it
+  // open in the run cache (fixed: a frame renamed in Figma keeps it), else the indexed layer name's (the frame's own without an index). Never the input file's
+  // basename or a name the caller typed: two names for one node would be two artefact sets.
+  const nodeId = exp.frame.nodeId;
+  if (!nodeId) { console.error(`error  the export's frame has no node id — its set cannot be named; re-pull the screen`); return 2; }
+  const layerName = layers.find((l) => l.id === nodeId)?.name ?? exp.frame.name ?? "";
+  const kDir = expectDirOf(out);
+  const k = nodeStem(kDir, nodeId, layerName, openRunSets(kDir));
+  if ("why" in k) { console.error(`error  ${k.why}`); return 2; }
+  const setName = formatSetName(k.stem, variant);
+  const ob = outBaseOf(out, setName, VERIFY_DIR);
+  if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
+  // a slug that extends another live variant of the node by "-" (or that one extends) would share files with it (variantOverlap)
+  if (variant !== undefined) {
+    const clash = variantOverlap(variant, variantsOf(ob.dir, k.stem));
+    if (clash !== null) { console.error(`error  --variant ${variant} overlaps the variant ${k.stem}.${clash} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other — pick a slug that neither extends`); return 2; }
+  }
+  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
+  if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} — verify-screen --migrate renames them to ${k.stem}`);
+  const outBase = ob.base;
   // Re-running --expect replaces the file in place and leaves a measurement and a report from the
   // PREVIOUS expectation beside it, undated. The file itself stays byte-deterministic —
   // the notice goes to stderr, and every report records the sha it was computed on.
   const target = outBase + ".expected.json";
-  // an explicit --out under a DIFFERENT name than the one already indexing
-  // this node (e.g. --out design/verify/<Nickname> when design/verify/<Layer>__<id> already
-  // covers the node) is refused rather than silently creating a second artefact set.
-  const dup = findExistingExpectedFor(path.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
-  if (dup && !force) {
-    // the existing set is under another name (a nickname). Say what it is, which name is canonical
-    // (the screen file's basename, `<Layer>__<id>`), and the way out: retire the old expectation, re-run.
-    const oldBase = dup.slice(0, -".expected.json".length);
-    const dir = path.dirname(dup), stemOld = path.basename(oldBase);
-    const oldFiles = fs.readdirSync(dir).filter((f) => f.startsWith(stemOld + ".") || f.startsWith(stemOld + "-")).sort().map((f) => path.join(dir, f));
-    const canonical = path.join(path.dirname(target), path.basename(firstFile, ".json"));
-    // the old set's last run, when it says something (a failed run under the nickname is partial evidence)
-    const oldStatus = runStatusNote(oldBase);
-    if (oldStatus) console.error(`note  ${oldStatus}`);
-    if (stemOld === path.basename(canonical)) {
-      console.error(
-        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
-          `(one screen, one artefact set). That is the canonical name: drop --out (the default is ${shellArg(canonical)}), or pass --force to write a second set anyway.`
-      );
-      return 1;
-    }
-    console.error(
-      `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
-        "(one screen, one artefact set).\n" +
-        `       existing set under '${stemOld}' (${oldFiles.length} file(s)): ${oldFiles.join(", ")}\n` +
-        `       the canonical name for this screen is '${path.basename(canonical)}' (<Layer>__<id> — the screen file's own basename), not '${stemOld}'.\n` +
-        `       To move it to the canonical name: mv ${shellArg(dup)} ${shellArg(dup + ".retired")}, then re-run this command` +
-        (path.resolve(target) === path.resolve(canonical + ".expected.json") ? "" : ` with --out ${shellArg(canonical)}`) +
-        ", then probe + --compare as usual — the old measured/report/PNGs stay as history under the old name.\n" +
-        `       Or keep the old name: --out ${shellArg(oldBase)}. (--force writes a second, parallel set — not recommended.)`
-    );
-    return 1;
-  }
   const next = JSON.stringify(exp, null, 2) + "\n";
   const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
   const h = sha256Hex(next);
@@ -448,8 +465,8 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   return 0;
 }
 
-/** `--compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan]
- *  [--out <base>]`: writes <Screen>.report.json + .md (compare) and exits 1 unless the verdict passes. */
+/** `--compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan]
+ *  [--out <dir>]`: writes <dir>/<set>.report.json + .md (compare), the set the expectation names, and exits 1 unless the verdict passes. */
 function compareMain(files: string[], flags: { out?: string | undefined; interactions?: string | undefined; against?: string | undefined; plan?: string | undefined; "record-plan"?: boolean | undefined },
   USAGE: string): number {
   const sha = (file: string): string => sha256Hex(fs.readFileSync(file));
@@ -482,13 +499,42 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     extra = list;
     if (comps.length) extraComponents = comps;
   }
+  // the expectation's set name is the report's: a legacy name, or one of another node than its frame, is refused before
+  // anything is compared or written (--migrate renames a legacy set; --expect names the set by its frame)
+  const setName = setNameOfFile(expFile);
+  const setProblem = expectationSetProblem(expFile, expectation.frame && expectation.frame.nodeId, path.dirname(expFile));
+  if (setProblem !== null) { console.error(`error  ${setProblem}`); return 2; }
+  const ob = outBaseOf(out, setName, VERIFY_DIR);
+  if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
+  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
+  const compareBase = ob.base;
+  // the run status of the set: ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the live status in the
+  // run cache, else the published <dir>/<set>.status.json — the key every writer of the set's run uses (--status, --wait,
+  // verify-probe), wherever the measured file was written. Always looked up: null = looked and found none (a measured file
+  // naming its run then has nothing recording it).
+  const statusBase = statusBaseOf(expFile);
+  const found = readStatusAt(statusBase);
+  const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
+  // an artefact listed under the set's old name (renamed by --migrate after its run) is read under the new one — only by
+  // migratedArtifact's rule, and said so
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
+  const measuredSha = sha(measuredFile);
+  const migrated = (listed: string): string | null => migratedArtifact(listed, { setName, verifyDir: path.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
+  const artifactNotes: string[] = [];
+  const movedNote = (listed: string, now: string): void => {
+    artifactNotes.push(`${listed} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) — read as ${now}`);
+    console.error(`note  ${artifactNotes[artifactNotes.length - 1]}`);
+  };
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
   // can never cite a screenshot that does not exist.
   const artifacts = measured.artifacts || [];
   const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
-    const p = typeof a === "string" ? a : a && a.path;
+    const listed = typeof a === "string" ? a : a && a.path;
+    const moved = listed ? migrated(listed) : null;
+    if (listed && moved !== null) movedNote(listed, moved);
+    const p = moved ?? listed;
     const exists = !!p && fs.existsSync(p);
-    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined) };
+    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined), ...(moved !== null ? { listedAs: listed } : {}) };
   });
   // tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
@@ -505,13 +551,11 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
     // the same rule --expect used (choosePlan) — never a second way of picking the plan
-    const chosen = choosePlan(flagged, frameId, stem);
+    const chosen = choosePlan(flagged, frameId);
     const all = chosen.all;
-    const hits = all.filter((h) => h.plan.files);
-    const onlyHit = hits.length === 1 ? hits[0] : undefined;
     planHit = chosen.hit;
+    if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
     // the plan --expect merged interactions from (planInteractions.plan) wins over another found now —
     // --expect may have been given --plan, or design/plan/ changed since; without --plan, check the rows it merged
     const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : undefined;
@@ -526,34 +570,29 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
         planHit = { file: recPi, plan: r.doc, choice: "recorded" };
       }
     }
-    if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — no waivers/descopes applied; pass --plan <plan.json>`);
-    // --record-plan writes into the plan this compare uses — none, or several and no way to choose, is a
-    // usage error BEFORE anything is compared or written
+    // several plans of the node and no plan to go by (--plan, or the one --expect merged): a data error, BEFORE anything
+    // is compared or written — waivers, descopes and the code hashes would come from a guess
+    if (!planHit && chosen.error !== undefined) { console.error(`error  ${chosen.error}`); return 2; }
+    // --record-plan writes into the plan this compare uses — none is a usage error BEFORE anything is compared or written
     if (recordPlanFlag && !planHit) {
-      console.error(all.length > 1 ? `--record-plan: ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — pass --plan <plan.json> to say which one records the run`
-        : "--record-plan: no plan in design/plan/ describes this frame (run from the project root) — pass --plan <plan.json>");
+      console.error(`--record-plan: no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} (run from the project root) — pass --plan <plan.json>`);
       return 2;
     }
-    if (onlyHit && onlyHit.plan.files) {
-      // files[] and every module the plan's anchors/components map (a shared shell)
-      code = { plan: onlyHit.file, files: fileHashes(planCodeFiles(onlyHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
+    if (planHit && planHit.plan.files) {
+      // the chosen plan's files[] and every module its anchors/components map (a shared shell)
+      code = { plan: planHit.file, files: fileHashes(planCodeFiles(planHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
       // what the code hashes leave out, beside them in the report's input notes
-      const skipped = planCodeSkippedNote(onlyHit.plan, process.cwd());
-      if (skipped) { compareNotes.push(`${onlyHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
+      const skipped = planCodeSkippedNote(planHit.plan, process.cwd());
+      if (skipped) { compareNotes.push(`${planHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
     } else {
-      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.file).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
-        : all.length ? `note  ${all.map((h) => h.file).join(", ")} list${all.length === 1 ? "s" : ""} no files[] — the report records no code hashes, so verify-build --status cannot tie it to the code`
-        : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
+      console.error(planHit ? `note  ${planHit.file} lists no files[] — the report records no code hashes, so verify-build --status cannot tie it to the code`
+        : `note  no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code`);
     }
   }
   const planInputs = planHit ? {
     ...ifDefined("waivers", planHit.plan.waivers), ...ifDefined("descopes", planHit.plan.descopes), ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) },
   } : {};
-  // Same rule as --expect: default to the EXPECTATION file's own basename (stripping the
-  // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`
-  // always reports under `<Screen>.report.*`, never a second name for the same screen.
-  const compareBase = out || path.join(VERIFY_DIR, path.basename(expFile, ".json").replace(/\.expected$/, ""));
   // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
   // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit
   // one is only noted (it is about to be replaced anyway).
@@ -568,28 +607,22 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
   }
-  // the run status of the measured file (<dir>/<S>.measured.json → the live status of <dir>/<S>, else the
-  // published <dir>/<S>.status.json) — the same resolver --status, --wait and verify-probe --run use
-  // — and, for a measured file naming its run, else the status of the expectation's dir the probe wrote it to
-  // (verify-probe keys the run by the expectation's dir, so a measured file it wrote to a stage dir finds its run)
-  const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
-  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path.join(path.dirname(expFile), path.basename(measuredBase)) : null;
-  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path.resolve(probeBase) !== path.resolve(measuredBase) ? readStatusAt(probeBase) : null);
-  // (status: null = looked and found none — a measured file naming its run then has nothing recording it)
-  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`,
-    status: found.status } }
-    : measuredBase !== null ? { status: null } : {};
-  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
+  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage), else
+  // under the set's new name (migratedArtifact)
   const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
   let visualDiff: { path: string; exists: boolean } | null = null;
   if (typeof vd === "string" && vd) {
     const beside = path.join(path.dirname(measuredFile), path.basename(vd));
-    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true } : { path: vd, exists: false };
+    const moved = fs.existsSync(vd) || fs.existsSync(beside) ? null : migrated(vd);
+    if (moved !== null) movedNote(vd, moved);
+    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true }
+      : moved !== null ? { path: moved, exists: true } : { path: vd, exists: false };
   }
+  const inputNotes = [...readable.notes, ...compareNotes, ...artifactNotes];
   const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}),
-    ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
+    ...(visualDiff ? { visualDiff } : {}), ...(inputNotes.length ? { inputNotes } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
     ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile),
-    measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+    measuredSha256: measuredSha, artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
   const md = reportToMarkdown(rep);
   write(false, compareBase, rep, md);
   console.error(rep.headline);
@@ -627,7 +660,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
 function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined;
   "all-fields"?: boolean | undefined }, USAGE: string): number {
   const reportFile = files[0];
-  if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE); return 2; }
+  if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Layer>__<id>.report.json\n" + USAGE); return 2; }
   if ((flags.node === undefined) === (flags.group === undefined)) { console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE); return 2; }
   if ((flags.field !== undefined || flags["all-fields"]) && flags.group !== undefined) { console.error("--field / --all-fields go with --node, not --group\n" + USAGE); return 2; }
   // One "keep the 16px" must not also waive a copy or colour delta on the same node: name the field, or say all.
@@ -643,15 +676,17 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   const sel = selectForAccept(report, { node: flags.node, field: flags.field, group: flags.group });
   if ("error" in sel) { console.error(`refused  ${sel.error}`); return 1; }
 
-  // the plan: --plan, else the one the report was compared with, else the one that describes this report's screen
-  const stem = path.basename(reportFile, ".json").replace(/\.report$/, "");
+  // the plan: --plan, else the one the report was compared with, else the one plan of the report's node
   const recorded = (report.inputs && report.inputs.waivers && report.inputs.waivers.plan) || (report.inputs && report.inputs.code && report.inputs.code.plan) || undefined;
   let planFile = flags.plan ?? (recorded && fs.existsSync(recorded) ? recorded : undefined);
   if (!planFile) {
-    const hits = plansFor(report.nodeId, stem);
-    const only = hits.length === 1 ? hits[0] : undefined;
-    if (!only) { console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) — pass --plan <plan.json>`
-      : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)"); return 1; }
+    // the report's node: its nodeId (an older report's), else the id its set name (`<Layer>__<id>[.<slug>]`) carries
+    const nodeId = report.nodeId || nodeIdFromSetName(path.basename(reportFile).replace(/\.report\.json$/, "")) || undefined;
+    const { hits, idless } = plansForNode(nodeId);
+    // several plans of the report's node: a data error, as at --expect and --compare
+    if (hits.length > 1) { console.error(`error  ${hits.length} plans in design/plan/ describe node ${nodeId ?? "?"} (${hits.map((h) => h.file).join(", ")}) — keep one, or pass --plan <plan.json>`); return 2; }
+    const only = hits[0];
+    if (!only) { console.error(`error  no plan in design/plan/ describes this screen${idlessNote(idless)} (run from the project root, or pass --plan <plan.json>)`); return 1; }
     planFile = only.file;
   }
   const pr = readJson(planFile, isPlan);

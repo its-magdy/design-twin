@@ -31,8 +31,8 @@
 //     rename, so a stage dir on another filesystem (EXDEV) works too;
 //   - wait: poll the status until THIS run is done and the measured file is the one the status names.
 //
-//   verify-screen.js --status <S> --phase <p> [--run <id> | --new-run] [--detail …] [--dir design/verify] [--publish <stageDir>]
-//   verify-screen.js --wait <S> --run <id> [--timeout <s>] [--stall <s>] [--dir design/verify]
+//   verify-screen.js --status <Layer>__<id> --phase <p> [--run <id> | --new-run] [--detail …] [--dir design/verify] [--publish <stageDir>]
+//   verify-screen.js --wait <Layer>__<id> --run <id> [--timeout <s>] [--stall <s>] [--dir design/verify]
 // (on verify-screen.js, so one script path covers every allow rule — the CLI glue is statusMain/waitMain here).
 import fs from "node:fs";
 import path from "node:path";
@@ -46,48 +46,15 @@ import { RunCacheUnwritable, UNWRITABLE_CODES, canonical, runCacheDir, runCacheO
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
 import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
-import type { ProcessStamp } from "../bridge/src/file-lock.ts";
-import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import { screenKey, setKey } from "./screen-key.ts";
+import { STATUS_PHASES, STATUS_SCHEMA, TERMINAL_PHASES, isPhase, liveStatusFile, openRunSets, readStatusFile, runCommands } from "./verify-status.ts";
+import type { OwnRunStamp, ReplacedRun, StatusPhase, StatusWriter, VerifyStatusV2 } from "./verify-status.ts";
 
-export const STATUS_SCHEMA = "designtwin/verify-status@2";
-/** Every phase a status v2 can be in, in the order a run normally passes through them. */
-export const STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"] as const;
-export type StatusPhase = (typeof STATUS_PHASES)[number];
-/** Phases after which nothing more happens in this run. */
-export const TERMINAL_PHASES: readonly StatusPhase[] = ["done", "failed", "blocked"];
-/** Phases at which the measured file is complete — a --compare may read it. */
-export const MEASURED_PHASES: readonly StatusPhase[] = ["measured", "done"];
-export type StatusWriter = "verify-probe" | "agent" | "orchestrator";
+// the status shape, its live file and the open-run listing (verify-status.ts), re-exported for the writers' callers
+export { MEASURED_PHASES, STATUS_PHASES, STATUS_SCHEMA, TERMINAL_PHASES, isVerifyStatusV2, liveStatusFile, openRunSets } from "./verify-status.ts";
+export type { OwnRunStamp, ReplacedRun, StatusPhase, StatusWriter, VerifyStatusV2 } from "./verify-status.ts";
 
-/** design/verify/<S>.status.json, schema @2. */
-export interface VerifyStatusV2 {
-  schema: typeof STATUS_SCHEMA;
-  screen: string;
-  runId: string;
-  /** 1 for a run's first write, +1 for every later write of the same run */
-  rev: number;
-  phase: StatusPhase;
-  detail: string;
-  /** machine time, ISO — written by the tool, never typed by hand */
-  at: string;
-  by: StatusWriter;
-  expectationSha256?: string;
-  measuredSha256?: string;
-  evidenceSha256?: string;
-  /** file names --publish copied into the verify directory */
-  published?: string[];
-  /** a probe's own run (started without --run): the process that started it and when — so a run its probe left open
-   *  (killed outright) can be told from a live one (file-lock.ts processState) */
-  ownRun?: OwnRunStamp;
-  /** the probe's failed attempts (exit 3/4) in this run (--run): the PROBE_ATTEMPTS-th ends the run `failed` */
-  probeFailures?: number;
-  /** the run this run's record replaced in the live status: ANOTHER run that had ended, written over by a write that
-   *  names this run (`current`: verify-screen --status without --new-run, the probe's --run) — a late record of an older
-   *  run after a newer one ended. Set by the run's first write and carried forward within the run, like the shas. */
-  replaced?: ReplacedRun;
-}
-/** Which ended run a run's record replaced (VerifyStatusV2.replaced): its id, its last phase, and that write's time. */
-export interface ReplacedRun { runId: string; phase: StatusPhase; at: string }
 /** The failed probe attempts (exit 3/4) a run named by --run takes: the last of them ends the run `failed` — the
  *  probe writes it, so a verifier re-runs a failed probe once and never writes that `failed` itself. */
 export const PROBE_ATTEMPTS = 2;
@@ -98,28 +65,8 @@ export function probeAttemptNote(n: number, exit: number): string {
     : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
   return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
 }
-/** Who started a probe's own run: the probe process (file-lock.ts thisProcess), the time it started the run, and the
- *  deadline past which no live probe still writes in it (its start + --max-time + a grace for closing the browser,
- *  writing the files and the status lock) — the backstop for a pid that a later process reuses. */
-export interface OwnRunStamp extends ProcessStamp { startedAt: string; deadline: string }
-
-const isPhase = (x: unknown): x is StatusPhase => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-const optStr = (x: unknown): boolean => x === undefined || typeof x === "string";
-const isOwnRunStamp = (x: unknown): x is OwnRunStamp => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string"
-  && typeof x.deadline === "string";
-const isFailureCount = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0;
-const isReplacedRun = (x: unknown): x is ReplacedRun => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
 /** Whether a probe's own run is past its deadline (an unreadable deadline is not). */
 const overdue = (o: OwnRunStamp): boolean => Date.parse(o.deadline) < Date.now();
-export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number"
-    && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator")
-    && optStr(x.expectationSha256) && optStr(x.measuredSha256) && optStr(x.evidenceSha256)
-    && (x.published === undefined || (Array.isArray(x.published) && x.published.every((p) => typeof p === "string")))
-    && (x.ownRun === undefined || isOwnRunStamp(x.ownRun)) && (x.probeFailures === undefined || isFailureCount(x.probeFailures))
-    && (x.replaced === undefined || isReplacedRun(x.replaced));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 
 // ---------------------------------------------------------------- files
 /** `<base>.status.json` — the PUBLISHED (durable) status in the verify dir; base is design/verify/<S>. */
@@ -141,8 +88,6 @@ function inRunCache<T>(verifyDir: string, fn: () => T): T {
 }
 /** The exit code of --status / --wait when the run cache cannot be written (or read). */
 export const EXIT_RUN_CACHE = 6;
-/** The LIVE status of `<base>` (design/verify/<S>): `<run cache>/<S>.status.json`. */
-export const liveStatusFile = (base: string): string => path.join(runCacheDir(path.dirname(base)), path.basename(base) + ".status.json");
 /** The lock every status write of `<base>` holds: `<live status>.lock`, beside it in the run cache. */
 export const lockFileOfStatus = (base: string): string => lockFileOf(liveStatusFile(base));
 /** Where a run stages its evidence and state screenshots until `--publish`: `<run cache>/stage/<runId>/`. */
@@ -153,19 +98,6 @@ export function newRunId(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto.randomBytes(3).toString("hex");
 }
 
-function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  // a malformed ownRun is ignored (read as a run nobody's probe owns), a malformed probeFailures as none counted, a
-  // malformed replaced as no run replaced — never the whole status
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== undefined || r.doc.probeFailures !== undefined || r.doc.replaced !== undefined)) {
-    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
-    const kept = { ...rest, ...(isOwnRunStamp(ownRun) ? { ownRun } : {}), ...(isFailureCount(probeFailures) ? { probeFailures } : {}), ...(isReplacedRun(replaced) ? { replaced } : {}) };
-    if (isVerifyStatusV2(kept)) return kept;
-  }
-  return isJsonObject(r.doc) && r.doc.schema === undefined && typeof r.doc.phase === "string" ? "v1" : null;
-}
 /** The status of `<base>` and the file it was read from: the live one first, else the published
  *  `<base>.status.json` (a v2 `done`, or an older hand-written "v1" — read, never trusted for shas); null when neither. */
 export function readStatusAt(base: string): { file: string; status: VerifyStatusV2 | "v1" } | null {
@@ -217,20 +149,15 @@ export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): Run
 export class RunOpen extends Error {
   constructor(base: string, open: VerifyStatusV2) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
+    const o = open.ownRun, S = path.basename(base);
     super(o
-      ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} — ` +
+      ? `run ${open.runId} of ${S} ${ownRunOpen(open, o)} — ` +
         `a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}`
-      : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
+      : `run ${open.runId} of ${S} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — a probe without --run starts a run of its own ` +
         `only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) ` +
         `or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
-}
-/** The commands a refusal names for the open run `open`: wait for it, and end it `failed`. */
-function runCommands(base: string, open: VerifyStatusV2): { waitIt: string; endIt: string } {
-  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path.resolve(path.dirname(base)));
-  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 /** How a refusal names another probe's own run that is open: when and by which process it started — nobody waits for
  *  that. `why`: the probe that started it is gone or past the run's deadline (abandonedRun), said after it. */
@@ -284,11 +211,11 @@ export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId:
 export class RunNotCurrent extends Error {
   constructor(base: string, runId: string, open: VerifyStatusV2) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
+    const o = open.ownRun, S = path.basename(base);
     super(o
-      ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : undefined)} — ` +
+      ? `run ${runId} is not the current run of ${S}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : undefined)} — ` +
         `nothing is written; if no probe is running, end it: ${endIt}`
-      : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
+      : `run ${runId} is not the current run of ${S}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) — ` +
         `nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
@@ -453,10 +380,65 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
 }
 
 // ---------------------------------------------------------------- CLI glue (called from verify-screen.ts main)
-/** `<dir>/<S>`: S is a screen name (`--dir` defaults to design/verify); a path with a separator is taken as-is. */
-function runBase(screen: string, dir: string | undefined): string {
-  const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
-  return /[\\/]/.test(s) && dir === undefined ? s : path.join(dir ?? VERIFY_DIR, s);
+/**
+ * `<verify dir>/<set>`: the verify set `screen` names (screen-key.ts setKey) — a set name as written (a variant
+ * `<Layer>__<id>.<slug>` too, an artefact's file tail dropped), else the screen's base set through the export index's
+ * exact stages (a node id, the exact layer name / title / plan header): the set's stem is fixed once it exists, so a frame
+ * renamed in Figma mid-run still names the same live status. The verify dir is --dir, else the directory of a `screen`
+ * given as a path, else design/verify. A set whose only trace is a run open in the run cache (opened by --status before
+ * any of its files exist) keeps its stem as well (openRunSets). Refused: a query that names no set (the candidates
+ * listed); at --status a node with only legacy-named sets — a run under the new name would start a second set for it
+ * (--migrate first); and at --status --new-run a set name with no files and no status whose node the export index names
+ * by another stem (the set --expect would write is that one). A legacy set's own name is refused too (--migrate renames
+ * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait --run <its id>,
+ * which reads its outcome there once it has ended too), or ended (--status --run <its id> with done/failed/blocked) under
+ * the old name. So is a set name whose node another stem holds now, except that its open run is ended under it (--status
+ * --run <its id> with done/failed/blocked).
+ */
+type RunAt = { kind: "wait"; run: string | undefined } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
+function runBase(screen: string, dir: string | undefined, at: RunAt): { base: string; notes: string[] } | { error: string } {
+  const asPath = dir === undefined && /[\\/]/.test(screen);
+  const verifyDir = dir ?? (asPath ? path.dirname(screen) : VERIFY_DIR);
+  const opts = { exportDir: EXPORT_DIR, planDir: PLAN_DIR, verifyDir, openSets: openRunSets(verifyDir) };
+  const k = setKey(asPath ? path.basename(screen) : screen, opts);
+  if (k.status === "unresolved") {
+    const open = k.legacySet !== undefined ? readStatus(path.join(verifyDir, k.legacySet)) : null;
+    // (a --wait for the status's own run reads its outcome there once it has ended, too)
+    const waited = open !== null && open !== "v1" && at.kind === "wait" && at.run === open.runId;
+    if (k.legacySet !== undefined && open !== null && open !== "v1" && (waited || !TERMINAL_PHASES.includes(open.phase))) {
+      const S = k.legacySet;
+      // no new run opens under a legacy name: only the open run itself is waited for or ended there
+      const ends = at.kind === "wait" ? at.run === undefined || at.run === open.runId : !at.newRun && at.run === open.runId && TERMINAL_PHASES.includes(at.phase);
+      const once = TERMINAL_PHASES.includes(open.phase) ? "" : ` once run ${open.runId} ends,`;
+      if (ends) return { base: path.join(verifyDir, S), notes: [`note  ${S} is a legacy-named verify set —${once} verify-screen --migrate renames it`] };
+      const { waitIt, endIt } = runCommands(path.join(verifyDir, S), open);
+      return { error: `'${screen}' names no verify set: ${S} is a legacy-named verify set, and its run ${open.runId} is open (phase ${open.phase}) — only that run's end is ` +
+        `written under the old name: wait for it (${waitIt}) or end it (${endIt}, or --phase done|blocked), then run verify-screen --migrate --apply` };
+    }
+    // a set name another stem of its node is refused for, while a run is open under it: only that run's end is written
+    // there — the command a refusal that names the run prints (stemHolders); the run id is checked again under the lock
+    const name = asPath ? path.basename(screen) : screen;
+    const own = at.kind === "status" && !at.newRun && TERMINAL_PHASES.includes(at.phase) && opts.openSets.includes(name) ? readStatus(path.join(verifyDir, name)) : null;
+    if (own !== null && own !== "v1" && own.runId === at.run) {
+      return { base: path.join(verifyDir, name), notes: [`note  another verify set holds ${name}'s node — only run ${own.runId}'s end is written under ${name}`] };
+    }
+    return { error: [`'${screen}' names no verify set: ${k.why}`, ...k.candidates.map((c) => `  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}`)].join("\n") };
+  }
+  // a fresh run under a set name no file or status holds yet: the name must be the one the export index gives the node,
+  // or --expect would later write the set under another
+  if (at.kind === "status" && at.newRun && k.via === "set name" && !k.existing && readStatus(path.join(verifyDir, k.name)) === null) {
+    const c = screenKey(k.nodeId, opts);
+    if (c.status === "resolved" && c.stem !== k.stem) {
+      const want = k.variant !== null ? `${c.stem}.${k.variant}` : c.stem;
+      return { error: `'${screen}' is not node ${k.nodeId}'s verify set: the export index names the node ${JSON.stringify(c.name ?? "")}, so its set is ${want} — pass --status ${shellArg(want)}` };
+    }
+  }
+  const legacy = k.legacy.length ? `legacy-named verify set(s) ${k.legacy.join(", ")} of node ${k.nodeId}` : null;
+  if (legacy !== null && !k.existing && at.kind === "status") {
+    return { error: `${legacy}, and none named ${k.stem} — a run of ${k.name} would start a second set for the node: run ${scriptCmd("verify-screen")} --migrate --apply` +
+      `${dir !== undefined ? ` --dir ${shellArg(dir)}` : ""}, then --status ${shellArg(k.name)}` };
+  }
+  return { base: path.join(verifyDir, k.name), notes: legacy !== null ? [`note  ${legacy} — verify-screen --migrate renames them to ${k.stem}`] : [] };
 }
 
 /** The measured file's expectationSha256 (and runId, when it names one), or why it has none. */
@@ -508,13 +490,16 @@ export function statusMain(screen: string | undefined, f: StatusFlags, usage: st
   }
 }
 function statusRun(screen: string | undefined, f: StatusFlags, usage: string): number {
-  if (!screen) { console.error("--status needs the screen name: --status <Screen> --phase <phase>\n" + usage); return 2; }
+  if (!screen) { console.error("--status needs the verify set: --status <Layer>__<id> --phase <phase>\n" + usage); return 2; }
   if (!isPhase(f.phase)) { console.error(`--status needs --phase ${STATUS_PHASES.join("|")}${f.phase !== undefined ? ` (got '${f.phase}')` : ""}\n` + usage); return 2; }
   if (f.run !== undefined && f["new-run"]) { console.error("pass --run <id> or --new-run, not both\n" + usage); return 2; }
   if (f.run !== undefined && !RUN_ID.test(f.run)) { console.error(`--run must be a run id (letters, digits, . : _ -), got '${f.run}'\n` + usage); return 2; }
   if (f.by !== undefined && f.by !== "agent" && f.by !== "orchestrator") { console.error(`--by must be agent or orchestrator (got '${f.by}')\n` + usage); return 2; }
   const by: StatusWriter = f.by === "orchestrator" ? "orchestrator" : "agent";
-  const base = runBase(screen, f.dir);
+  const key = runBase(screen, f.dir, { kind: "status", phase: f.phase, run: f.run, newRun: !!f["new-run"] });
+  if ("error" in key) { console.error(key.error); return 2; }
+  for (const n of key.notes) console.error(n);
+  const base = key.base;
   const phase = f.phase;
   const prev = readStatus(base);
   const prevV2 = prev && prev !== "v1" ? prev : null;
@@ -614,10 +599,13 @@ const seconds = (v: string | undefined, dflt: number): number | null => {
  * changed for --stall seconds; 6 when the run cache exists but cannot be read; 2 usage. Polls every --interval seconds (2).
  */
 export async function waitMain(screen: string | undefined, f: WaitFlags, usage: string): Promise<number> {
-  if (!screen || f.run === undefined) { console.error("--wait needs the screen name and the run: --wait <Screen> --run <id>\n" + usage); return 2; }
+  if (!screen || f.run === undefined) { console.error("--wait needs the verify set and the run: --wait <Layer>__<id> --run <id>\n" + usage); return 2; }
   const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
   if (timeout === null || stall === null || interval === null) { console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage); return 2; }
-  const base = runBase(screen, f.dir);
+  const key = runBase(screen, f.dir, { kind: "wait", run: f.run });
+  if ("error" in key) { console.error(key.error); return 2; }
+  for (const n of key.notes) console.error(n);
+  const base = key.base;
   console.error(`wait  run ${f.run} on ${liveStatusFile(base)} (then ${statusFile(base)})`);
   const t0 = Date.now();
   let lastKey = "", lastChange = Date.now(), noted = "";
@@ -638,7 +626,8 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
           // only this run's evidence: the file the status hashed at done
           const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
-          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(base)}`);
+          // (--out the verify directory: --compare names the report by the expectation's set)
+          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(path.dirname(base))}`);
           return 0;
         }
         const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];

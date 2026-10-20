@@ -23,58 +23,71 @@
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-tail-e2e.test.ts
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { VerifyMeasured } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { BROWSER_LOG, READY, browserExit, ix, killBrowsers, launchedPids, loadNote, out, startDriveFixture, type Run } from "./drive-e2e-fixture.ts";
+import { BROWSER_LOG, READY, browserExit, ix, killBrowsers, launchedPids, loadNote, startDriveFixture, type Run, type VerifyCase } from "./drive-e2e-fixture.ts";
+import { must } from "./fixtures.ts";
 
-const { url, edge, probe, vs, read, readReport, written, writes, froze, abs, status, EXPECTED, QUIET, finish } =
+const { url, edge, probe, vs, read, readReport, written, writes, froze, abs, status, verifyCase, EXPECTED, QUIET, finish } =
   await startDriveFixture("dt-probe-drive-tail-e2e-", "verify-probe drive e2e, serial tail — the built bundles in a real chromium, from a temp project:");
+// each run measures from a verify dir of its own (design/verify/<name>/, a copy of its expectation), as in the pooled suite —
+// a run left open (a killed probe) never refuses the next: kase → the copy to pass as --expected (no --out: the files go
+// beside it), baseOf → where the run wrote (<that dir>/<set>)
+const cases = new Map<string, VerifyCase>();
+const kase = (name: string, src: string): string => { const c = verifyCase(name, src); cases.set(name, c); return c.expected; };
+const baseOf = (name: string): string => must(cases.get(name), `the verify dir of the run ${name}`).base;
+/** a probe run whose arguments (and so its verify dir) are built now, run when its turn comes */
+const later = (args: string[]) => (): Promise<Run> => probe(args);
 
 // the freeze runs: Playwright's launcher log on stderr (the browser pids and how each ended), and killed at 90 s with everything it started (runNode) — a hang fails, never hangs the suite
 const FREEZE_RUN = { env: BROWSER_LOG, killAfterMs: 90_000 };
-const freezeArgs = (u: string, base: string, maxTime: string): string[] => ["--expected", EXPECTED, "--url", u, "--out", out(base), "--timeout", "30000", "--max-time", maxTime];
+const freezeArgs = (u: string, expected: string, maxTime: string): string[] => ["--expected", expected, "--url", u, "--timeout", "30000", "--max-time", maxTime];
+// the run bound to a verify run (--status names it): its own verify dir, so --status names the set (Beds__70_1) in that dir
+const FREEZE: VerifyCase = verifyCase("FreezeRaf", EXPECTED);
+const FREEZE_SET = path.basename(FREEZE.base);
 const freezeUrl = `${edge("freeze-drive")}&how=raf`;
 
 // ---- the runs (T): each started only when the one before it has finished (wall-clock windows, see the header)
 const T = {
-  budget25000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget25000"), "--steps", "steps.json", "--ready", READY, "--max-time", "25000"]),
-  budget30000: () => probe(["--expected", EXPECTED, "--url", url(), "--out", out("Budget30000"), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]),
+  budget25000: later(["--expected", kase("Budget25000", EXPECTED), "--url", url(), "--steps", "steps.json", "--ready", READY, "--max-time", "25000"]),
+  budget30000: later(["--expected", kase("Budget30000", EXPECTED), "--url", url(), "--steps", "steps.json", "--ready", READY, "--max-time", "30000"]),
   // (--ready none on replace, reloadSettleNoReady and clickReloadsSync: they check the probe with nothing to wait for — the default is the frame tag)
-  replace: () => probe(["--expected", QUIET, "--url", url("replace-state"), "--out", out("Replace"), "--ready", "none", "--max-time", "60000"]),
-  reloadSettle: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettle"), "--ready", READY, "--max-time", "60000"]),
-  reloadSettleNoReady: () => probe(["--expected", QUIET, "--url", edge("reload-settle"), "--out", out("ReloadSettleNoReady"), "--ready", "none", "--max-time", "60000"]),
-  reloadStep: () => probe(["--expected", QUIET, "--url", edge("reload-step"), "--out", out("ReloadStep"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]),
-  gotoReload: () => probe(["--expected", QUIET, "--url", edge("reload-after-goto"), "--out", out("GotoReload"), "--steps", "steps-goto-reload.json", "--ready", READY, "--max-time", "60000"]),
-  reloadLate: () => probe(["--expected", QUIET, "--url", edge("reload-late"), "--out", out("ReloadLate"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
-  slowReach: () => probe(["--expected", EXPECTED, "--url", edge("slow-reach"), "--out", out("SlowReach"), "--timeout", "30000", "--max-time", "22000"]),
-  smoothShell: () => probe(["--expected", EXPECTED, "--url", edge("smooth-shell"), "--out", out("SmoothShell"), "--max-time", "60000"]),
-  smoothShellImportant: () => probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1`, "--out", out("SmoothShellImportant"), "--max-time", "60000"]),
-  smoothShellPainted: () => probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--out", out("SmoothShellPainted"), "--max-time", "60000"]),
-  clickReloads: () => probe(["--expected", QUIET, "--url", edge("click-reloads"), "--out", out("ClickReloads"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
-  tokenSwitch: () => probe(["--expected", QUIET, "--url", edge("token-switch"), "--out", out("TokenSwitch"), "--max-time", "60000"]),
-  clickReloadsSync: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync`, "--out", out("ClickReloadsSync"), "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"]),
-  clickReloads100: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=100`, "--out", out("ClickReloads100"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
-  clickReloadsOnce: () => probe(["--expected", QUIET, "--url", `${edge("click-reloads")}&delay=sync&once=1`, "--out", out("ClickReloadsOnce"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
-  hangImg: () => probe(["--expected", QUIET, "--url", edge("hang-img"), "--out", out("HangImg"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "22000"]),
-  lateSlow: () => probe(["--expected", QUIET, "--url", edge("late-slow"), "--out", out("LateSlow"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
-  reloadHang: () => probe(["--expected", QUIET, "--url", edge("reload-hang"), "--out", out("ReloadHang"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
-  lateLoad: () => probe(["--expected", QUIET, "--url", edge("late-load"), "--out", out("LateLoad"), "--steps", "steps-late.json", "--ready", READY, "--max-time", "60000"]),
-  slowStay: () => probe(["--expected", QUIET, "--url", `${edge("slow-stay")}&d=7000`, "--out", out("SlowStay"), "--steps", "steps-slow-stay.json", "--ready", READY, "--timeout", "5000", "--max-time", "60000"]),
-  linkInplaceReload: () => probe(["--expected", QUIET, "--url", `${edge("link-inplace-reload")}&d=300`, "--out", out("LinkInplaceReload"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
-  linkEmptyReload: () => probe(["--expected", QUIET, "--url", `${edge("link-empty-reload")}&d=300`, "--out", out("LinkEmptyReload"), "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  replace: later(["--expected", kase("Replace", QUIET), "--url", url("replace-state"), "--ready", "none", "--max-time", "60000"]),
+  reloadSettle: later(["--expected", kase("ReloadSettle", QUIET), "--url", edge("reload-settle"), "--ready", READY, "--max-time", "60000"]),
+  reloadSettleNoReady: later(["--expected", kase("ReloadSettleNoReady", QUIET), "--url", edge("reload-settle"), "--ready", "none", "--max-time", "60000"]),
+  reloadStep: later(["--expected", kase("ReloadStep", QUIET), "--url", edge("reload-step"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "60000"]),
+  gotoReload: later(["--expected", kase("GotoReload", QUIET), "--url", edge("reload-after-goto"), "--steps", "steps-goto-reload.json", "--ready", READY, "--max-time", "60000"]),
+  reloadLate: later(["--expected", kase("ReloadLate", QUIET), "--url", edge("reload-late"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  slowReach: later(["--expected", kase("SlowReach", EXPECTED), "--url", edge("slow-reach"), "--timeout", "30000", "--max-time", "22000"]),
+  smoothShell: later(["--expected", kase("SmoothShell", EXPECTED), "--url", edge("smooth-shell"), "--max-time", "60000"]),
+  smoothShellImportant: later(["--expected", kase("SmoothShellImportant", EXPECTED), "--url", `${edge("smooth-shell")}&important=1`, "--max-time", "60000"]),
+  smoothShellPainted: later(["--expected", kase("SmoothShellPainted", EXPECTED), "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--max-time", "60000"]),
+  clickReloads: later(["--expected", kase("ClickReloads", QUIET), "--url", edge("click-reloads"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  tokenSwitch: later(["--expected", kase("TokenSwitch", QUIET), "--url", edge("token-switch"), "--max-time", "60000"]),
+  clickReloadsSync: later(["--expected", kase("ClickReloadsSync", QUIET), "--url", `${edge("click-reloads")}&delay=sync`, "--steps", "steps-click-only.json", "--ready", "none", "--max-time", "60000"]),
+  clickReloads100: later(["--expected", kase("ClickReloads100", QUIET), "--url", `${edge("click-reloads")}&delay=100`, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  clickReloadsOnce: later(["--expected", kase("ClickReloadsOnce", QUIET), "--url", `${edge("click-reloads")}&delay=sync&once=1`, "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  hangImg: later(["--expected", kase("HangImg", QUIET), "--url", edge("hang-img"), "--steps", "steps-reload-step.json", "--ready", READY, "--max-time", "22000"]),
+  lateSlow: later(["--expected", kase("LateSlow", QUIET), "--url", edge("late-slow"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  reloadHang: later(["--expected", kase("ReloadHang", QUIET), "--url", edge("reload-hang"), "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]),
+  lateLoad: later(["--expected", kase("LateLoad", QUIET), "--url", edge("late-load"), "--steps", "steps-late.json", "--ready", READY, "--max-time", "60000"]),
+  slowStay: later(["--expected", kase("SlowStay", QUIET), "--url", `${edge("slow-stay")}&d=7000`, "--steps", "steps-slow-stay.json", "--ready", READY, "--timeout", "5000", "--max-time", "60000"]),
+  linkInplaceReload: later(["--expected", kase("LinkInplaceReload", QUIET), "--url", `${edge("link-inplace-reload")}&d=300`, "--steps", "steps-click-only.json", "--max-time", "60000"]),
+  linkEmptyReload: later(["--expected", kase("LinkEmptyReload", QUIET), "--url", `${edge("link-empty-reload")}&d=300`, "--steps", "steps-click-only.json", "--max-time", "60000"]),
   // (--ready on an element that never comes keeps the settle on the page while it navigates)
-  slowChurn: () => probe(["--expected", QUIET, "--url", edge("slow-churn"), "--out", out("SlowChurn"), "--ready", "#never-drawn", "--timeout", "12000", "--max-time", "60000"]),
-  bounceHang: () => probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", out("BounceHang"), "--timeout", "12000", "--max-time", "40000"]),
-  redirSlow: () => probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", out("RedirSlow"), "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]),
+  slowChurn: later(["--expected", kase("SlowChurn", QUIET), "--url", edge("slow-churn"), "--ready", "#never-drawn", "--timeout", "12000", "--max-time", "60000"]),
+  bounceHang: later(["--expected", kase("BounceHang", QUIET), "--url", edge("bounce-hang"), "--timeout", "12000", "--max-time", "40000"]),
+  redirSlow: later(["--expected", kase("RedirSlow", QUIET), "--url", edge("redir-slow"), "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]),
   // a page whose main thread stops answering mid-drive: --timeout 30 s, so only the drive's budget can end the freeze
-  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl, "FreezeRaf", "30000"), "--run", runId], FREEZE_RUN),
+  freezeRaf: (runId: string) => probe([...freezeArgs(freezeUrl, FREEZE.expected, "30000"), "--run", runId], FREEZE_RUN),
 };
 console.log(`serial: ${Object.keys(T).length} runs, one at a time`);
 
 // the drive keeps its own budget (min(60 s, --max-time left − 15 s)) whatever the behaviour battery reserves after it — at a
 // small --max-time the first rows are still driven (--behaviour off: no behaviour work at all)
 for (const [mt, ids] of [["25000", ["70:44"]], ["30000", ["70:44", "70:45"]]] as const) {
-  const bm = out(`Budget${mt}`);
+  const bm = baseOf(`Budget${mt}`);
   const rm = await T[`budget${mt}`]();
   const mm = read(bm);
   if (rm.status !== 0) console.log(rm.stderr);
@@ -83,7 +96,7 @@ for (const [mt, ids] of [["25000", ["70:44"]], ["30000", ["70:44", "70:45"]]] as
 }
 
 // a same-document URL rewrite after load (replaceState) is no navigation — only a document load is
-const b9 = out("Replace");
+const b9 = baseOf("Replace");
 const r9 = await T.replace();
 const m9 = read(b9);
 if (r9.status !== 0) console.log(r9.stderr);
@@ -91,14 +104,14 @@ check("a replaceState 100 ms after load (no --steps) → afterInitialLoad 0 (fra
   r9.status === 0 && m9?.navigation?.afterInitialLoad === 0 && (m9.navigation.events || []).some((e) => e.type === "framenavigated" && /tab=harvest/.test(e.url)));
 
 // a reload 300 ms after load into a document that stays half-loaded for 2.5 s — the probe must wait for it
-const b11 = out("ReloadSettle");
+const b11 = baseOf("ReloadSettle");
 const r11 = await T.reloadSettle();
 const m11 = read(b11);
 if (r11.status !== 0) console.log(r11.stderr);
 check("a reload while settling into a half-loaded document → waited for: the root by tag, its heading measured, afterInitialLoad 1 (the reload's load), re-runs 0",
   r11.status === 0 && m11?.frame?.via === "tag" && m11.frame.nodeId === "70:1" && (m11.nodes || []).some((n) => n.nodeId === "70:2" && n.matchedBy === "tag")
   && m11.navigation?.afterInitialLoad === 1 && m11.navigation.reruns === 0);
-const b11b = out("ReloadSettleNoReady");
+const b11b = baseOf("ReloadSettleNoReady");
 const r11b = await T.reloadSettleNoReady();
 const m11b = read(b11b);
 check("the same without --ready (nothing to wait for but the quiet window) → still the reloaded document, measured once it loaded",
@@ -106,19 +119,19 @@ check("the same without --ready (nothing to wait for but the quiet window) → s
 
 // (steps) a load the step did not start is not the probe's own — it counts, and (the click's state is gone) the
 // pass is re-run once with the steps replayed
-const b12 = out("ReloadStep");
+const b12 = baseOf("ReloadStep");
 const r12 = await T.reloadStep();
 const m12 = read(b12);
 if (r12.status !== 0) console.log(r12.stderr);
 check("a reload 300 ms after a step's in-place click → not absorbed by the step: afterInitialLoad 1, re-runs 1 (steps replayed), the root by tag",
   r12.status === 0 && m12?.navigation?.afterInitialLoad === 1 && m12.navigation.reruns === 1 && m12.frame?.via === "tag");
-const b12b = out("GotoReload");
+const b12b = baseOf("GotoReload");
 const r12b = await T.gotoReload();
 const m12b = read(b12b);
 if (r12b.status !== 0) console.log(r12b.stderr);
 check("a goto step whose page then reloads by itself → the goto's load is absorbed, the reload's is not: afterInitialLoad 1, re-runs 0",
   r12b.status === 0 && m12b?.navigation?.afterInitialLoad === 1 && m12b.navigation.reruns === 0 && m12b.frame?.via === "tag");
-const b12c = out("ReloadLate");
+const b12c = baseOf("ReloadLate");
 const r12c = await T.reloadLate();
 const m12c = read(b12c);
 if (r12c.status !== 0) console.log(r12c.stderr);
@@ -127,7 +140,7 @@ check("a reload 1 s after an in-place click (while waiting for --ready, the sect
 
 // every driving page's reach hangs (the server never answers again); --timeout 30 s, --max-time 22 s → about 6 s of
 // driving: the cut closes the row's context mid-reach, so the run ends inside --max-time with the measured file written
-const b14 = out("SlowReach");
+const b14 = baseOf("SlowReach");
 const r14 = await T.slowReach();
 const s14 = r14.ms;
 const m14 = read(b14);
@@ -138,7 +151,7 @@ check(`a driving reach that never answers is cut by the budget mid-reach → exi
 // a covered opener in a scroll-behavior:smooth app-shell scroller — the drive's scroll is restored at once,
 // so the synthetic click lands on the shell as the drive had it; nothing the page itself scrolls animates either (the probe's
 // init CSS); with the page's own !important ID rule beating the init CSS, the restore is still instant
-const bR6s = out("SmoothShell");
+const bR6s = baseOf("SmoothShell");
 const rR6s = await T.smoothShell();
 const mR6s = read(bR6s), eR6s = ix(mR6s, "70:49"), jR6s = ix(mR6s, "70:50");
 if (rR6s.status !== 0) console.log(rR6s.stderr);
@@ -146,7 +159,7 @@ check(`a covered opener in a smooth-scrolling app shell → synthetic click with
   rR6s.status === 0 && eR6s?.activation === "synthetic" && eR6s.opened?.rect.y === 100 && eR6s.detectedBy === "[role=dialog]");
 check(`the page's own scroll in a smooth shell (scrollTo 300 on click, 70:50) is instant under the probe: its popover is at y 400 (saw ${String(jR6s?.opened?.rect.y)})`,
   jR6s?.activation === "mouse" && jR6s.opened?.rect.y === 400);
-const bR6i = out("SmoothShellImportant");
+const bR6i = baseOf("SmoothShellImportant");
 const rR6i = await T.smoothShellImportant();
 const eR6i = ix(read(bR6i), "70:49");
 if (rR6i.status !== 0) console.log(rR6i.stderr);
@@ -156,7 +169,7 @@ check(`the same shell forced smooth by the page's !important ID rule → the dri
 // its popover is anchored at the shell's scroll in the last frame PAINTED before the click: 100 only when the drive's restore held
 // for frames before its synthetic click (restore, two frames, look again — twice in a row), deterministic under any load (a single
 // restore right before the click could still be moved by a smooth scroll Playwright's retry started)
-const bR6p = out("SmoothShellPainted");
+const bR6p = baseOf("SmoothShellPainted");
 const rR6p = await T.smoothShellPainted();
 const eR6p = ix(read(bR6p), "70:49");
 if (rR6p.status !== 0) console.log(rR6p.stderr);
@@ -164,14 +177,14 @@ check(`the !important-smooth shell, popover anchored at the last painted frame's
   rR6p.status === 0 && eR6p?.activation === "synthetic" && eR6p.opened?.rect.y === 100);
 
 // a click that reloads the SAME URL after changing the page in place, every time → exit 4 naming the step, not the watch-tree hint
-const bR = out("ClickReloads");
+const bR = baseOf("ClickReloads");
 const rR = await T.clickReloads();
 check("a click that reloads the same URL after its in-place change, on the pass and the re-run → exit 4, nothing written, the step named, 'not a navigation step', no watch-tree hint",
   rR.status === 4 && !written(bR) && /after step 1 \{click: "\[data-dt-node=\\?"70:30\\?"\]"\} had changed it in place/.test(rR.stderr)
   && /on the first pass and again on the re-run/.test(rR.stderr) && /not a\s+navigation step/.test(rR.stderr) && !/watch tree/.test(rR.stderr) && /navigation log/.test(rR.stderr));
 // the document replaced right after settling (simulated by a token that changes at the first plain read after the
 // settle polls) → the pass compares against the token settle saw quiet → one re-run
-const bA = out("TokenSwitch");
+const bA = baseOf("TokenSwitch");
 const rA = await T.tokenSwitch();
 const mA = read(bA);
 if (rA.status !== 0) console.log(rA.stderr);
@@ -183,17 +196,17 @@ check("a document replaced between settling and measuring → caught (the settle
 const stepLost = (r: Run): boolean => r.status === 4 && /after step 1 \{click: "\[data-dt-node=\\?"70:30\\?"\]"\} had changed it in place/.test(r.stderr)
   && /on the first pass and again on the re-run/.test(r.stderr) && !/watch tree/.test(r.stderr);
 // a same-URL reload at once / 100 ms after the click's in-place change, every time or once
-const bS = out("ClickReloadsSync");
+const bS = baseOf("ClickReloadsSync");
 const rS = await T.clickReloadsSync();
 if (!stepLost(rS)) console.log(rS.stderr);
 check("`draw(); location.reload()` in the click handler, every time (no --ready) → the reload is not the click's: one re-run, then exit 4 naming the step, nothing written (not exit 0 measuring the default section)",
   stepLost(rS) && !written(bS));
-const bH = out("ClickReloads100");
+const bH = baseOf("ClickReloads100");
 const rH = await T.clickReloads100();
 if (!stepLost(rH)) console.log(rH.stderr);
 check("a reload 100 ms after the click's in-place change, every time (--ready) → exit 4 naming the step (not the generic '--ready never visible')",
   stepLost(rH) && !written(bH) && !/never became visible/.test(rH.stderr));
-const bO = out("ClickReloadsOnce");
+const bO = baseOf("ClickReloadsOnce");
 const rO = await T.clickReloadsOnce();
 const mO = read(bO);
 if (rO.status !== 0) console.log(rO.stderr);
@@ -201,7 +214,7 @@ check("the same sync reload on the first click only → re-run with the steps re
   rO.status === 0 && mO?.navigation?.reruns === 1 && mO.navigation.afterInitialLoad === 1 && mO.frame?.via === "tag" && mO.frame.nodeId === "70:1");
 // the click's navigation lands on a document whose image never loads — the load wait is per document: the click's
 // settle waits its 10 s, the waitFor step's and the --ready settle do not wait again (10 s each would pass --max-time)
-const bG = out("HangImg");
+const bG = baseOf("HangImg");
 const rG = await T.hangImg();
 const sG = rG.ms;
 const mG = read(bG);
@@ -210,7 +223,7 @@ check(`a step's navigation into a document that never finishes loading + a waitF
   rG.status === 0 && sG < 22_000 && mG?.frame?.via === "tag" && (mG.notes || []).some((n) => /the document had not finished loading after 10s/.test(n)));
 
 // a document a late navigation brings in gets its own 10 s for its load (per document), not the rest of the settle's
-const bLS = out("LateSlow");
+const bLS = baseOf("LateSlow");
 const rLS = await T.lateSlow();
 const mLS = read(bLS);
 if (rLS.status !== 0) console.log(rLS.stderr);
@@ -219,13 +232,13 @@ check("a click navigating 7 s later into a document that loads 5 s after (--read
   && !(mLS.notes || []).some((n) => /had not finished loading|still changing/.test(n)));
 // guard: no load wait decides a lost state — a reload after an in-place click into a document that never
 // finishes loading still loses the steps' state (at its commit): one re-run, then the step-specific exit 4
-const bRH = out("ReloadHang");
+const bRH = baseOf("ReloadHang");
 const rRH = await T.reloadHang();
 if (!stepLost(rRH)) console.log(rRH.stderr);
 check("a reload after the click's in-place change into a document that never finishes loading, every time → exit 4 naming the step, nothing written (not 'kept navigating' + the dev-server hint)",
   stepLost(rRH) && !written(bRH));
 // a document whose load timed out in one settle and completed before a later one carries no stale note
-const bLL = out("LateLoad");
+const bLL = baseOf("LateLoad");
 const rLL = await T.lateLoad();
 const mLL = read(bLL);
 if (rLL.status !== 0) console.log(rLL.stderr);
@@ -233,7 +246,7 @@ check("a document whose load timed out in the click's settle and completed befor
   rLL.status === 0 && mLL?.frame?.via === "tag" && mLL !== null && !loadNote(mLL));
 
 // the measured-anyway --url document's own late load (after a click changed it in place) is no reload
-const bSS = out("SlowStay");
+const bSS = baseOf("SlowStay");
 const rSS = await T.slowStay();
 const mSS = read(bSS);
 if (rSS.status !== 0) console.log(rSS.stderr);
@@ -241,7 +254,7 @@ check("the --url document taken after --timeout 5 s (its load given up) loads at
   rSS.status === 0 && mSS?.navigation?.reruns === 0 && mSS.frame?.via === "tag" && mSS.frame.nodeId === "70:1");
 // a link to the current URL that the app handles in place, then a reload 300 ms later — a genuine reload (a re-run)
 for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["link-empty-reload", "an <a href=\"\">"]] as const) {
-  const b = out(mode === "link-inplace-reload" ? "LinkInplaceReload" : "LinkEmptyReload");
+  const b = baseOf(mode === "link-inplace-reload" ? "LinkInplaceReload" : "LinkEmptyReload");
   const r = await (mode === "link-inplace-reload" ? T.linkInplaceReload() : T.linkEmptyReload());
   const m = read(b);
   if (r.status !== 0) console.log(r.stderr);
@@ -249,7 +262,7 @@ for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["lin
     r.status === 0 && m?.navigation?.afterInitialLoad === 1 && m.navigation.reruns === 1 && m.frame?.via === "tag" && m.frame.nodeId === "70:1");
 }
 // "kept navigating for Ns" states the real duration (a first new document at 8 s has its own window; the next one ends it)
-const bKN = out("SlowChurn");
+const bKN = baseOf("SlowChurn");
 const rKN = await T.slowChurn();
 if (!/kept navigating/.test(rKN.stderr)) console.log(rKN.stderr);
 const kn = /kept navigating for (\d+)s/.exec(rKN.stderr);
@@ -258,14 +271,14 @@ check(`a reload at 8 s into a never-loading document that reloads again 6 s late
 
 // ---- pages going on to a server that never answers
 // a page that arrives and goes on (before its load) to a server that never answers → "could not load" at --timeout
-const bBH = out("BounceHang");
+const bBH = baseOf("BounceHang");
 const rBH = await T.bounceHang();
 const sBH = rBH.ms;
 if (!/could not load/.test(rBH.stderr)) console.log(rBH.stderr);
 check(`the --url page goes on, before its load, to a server that never answers → exit 4 'could not load' at --timeout (${Math.round(sBH / 1000)} s < 30 s), nothing written (not a hang until --max-time)`,
   rBH.status === 4 && /could not load/.test(rBH.stderr) && sBH < 30_000 && !written(bBH));
 // a document the page redirected to itself, measured "anyway" at 10 s, whose load comes after an in-place click
-const bRS = out("RedirSlow");
+const bRS = baseOf("RedirSlow");
 const rRS = await T.redirSlow();
 const mRS = read(bRS);
 if (rRS.status !== 0) console.log(rRS.stderr);
@@ -308,20 +321,22 @@ const freezeChecks = (label: string, r: Run, m: VerifyMeasured | null, u: string
 // an endless loop in the animation frame after the click (every later evaluate never returns), the run bound to a verify run:
 // its `measured` status is written after the measured file (it carries that file's sha) — then --compare grades the cut row as
 // not probed, never as a failure
-const stF = await vs(["--status", "FreezeRaf", "--phase", "starting", "--new-run", "--dir", "design/verify"]);
+const stF = await vs(["--status", FREEZE_SET, "--phase", "starting", "--new-run", "--dir", FREEZE.dir]);
 const runF = /^run (\S+) rev 1$/m.exec(stF.stdout)?.[1] ?? "";
+if (runF === "") console.log(stF.stderr);
 const rF = await T.freezeRaf(runF);
-const mF = read(out("FreezeRaf"));
+const mF = read(FREEZE.base);
 freezeChecks("an opener whose click freezes the next animation frame for good (70:45)", rF, mF, freezeUrl, ["70:44"]);
 check("the frozen row on stderr as the probe words it: 'drive 70:45 on_click → ok:null · not-run: time budget'", /^drive 70:45 on_click → ok:null · not-run: time budget$/m.test(rF.stderr));
-const sF = status(out("FreezeRaf"));
-const mFile = abs(out("FreezeRaf") + ".measured.json");
+const sF = status(FREEZE.base);
+const mFile = abs(FREEZE.base + ".measured.json");
 const mBytes = fs.existsSync(mFile) ? fs.readFileSync(mFile) : null;
 check(`the run's status after the freeze: measured, by verify-probe, rev 3 (starting → measuring → measured), its measuredSha256 the measured file's bytes and its time not before that file's (saw ${sF === null || sF === "v1" ? String(sF) : `${sF.phase} rev ${sF.rev}`})`,
   runF !== "" && sF !== null && sF !== "v1" && sF.runId === runF && sF.phase === "measured" && sF.by === "verify-probe" && sF.rev === 3 && mBytes !== null
   && sF.measuredSha256 === crypto.createHash("sha256").update(mBytes).digest("hex") && Date.parse(sF.at) >= Math.floor(fs.statSync(mFile).mtimeMs));
-const cF = await vs(["--compare", EXPECTED, out("FreezeRaf") + ".measured.json", "--out", out("FreezeRaf")]);
-const repF = readReport(out("FreezeRaf"));
+// the run's own copy of the expectation (the same bytes: the measured file's expectationSha256 names it), the report beside it
+const cF = await vs(["--compare", FREEZE.expected, FREEZE.base + ".measured.json", "--out", FREEZE.dir]);
+const repF = readReport(FREEZE.base);
 const rowF = (id: string): string | undefined => (repF?.interactions || []).find((i) => i.nodeId === id)?.result;
 if (repF === null) console.log(cF.stderr);
 check(`--compare of the frozen run: the cut row 70:45 not-probed (saw ${String(rowF("70:45"))}), never fail; 70:44, driven before the freeze, passes (saw ${String(rowF("70:44"))})`,

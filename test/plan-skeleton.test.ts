@@ -146,7 +146,7 @@ console.log("determinism, merge, and the second screen:");
 check("byte-identical output on the same input (no timestamps of its own)", run([screen(JR), vars(JR), DS]).stdout === r.stdout);
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-"));
-  const out = path.join(dir, "plan.json");
+  const out = path.join(dir, JR + ".json"); // a new plan is named by its node
   run([screen(JR), vars(JR), DS, "--out", out]);
   const filled = read(out, isSkeletonPlan);
   const filledSpace4 = must(filled.tokens.find((t) => t.figmaName === "Space 4"), "filled.tokens 'Space 4'");
@@ -171,7 +171,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   const crlfText = fs.readFileSync(out, "utf8");
   // The plan keeps its own format; it is not rewritten as LF with 2-space indentation
   check("re-running --out keeps a hand-edited plan's own format (CRLF, 4-space indent) and leaves no temp file beside it",
-    crlf.status === 0 && crlfText.includes("\r\n    \"") && !/[^\r]\n/.test(crlfText) && fs.readdirSync(dir).join() === "plan.json");
+    crlf.status === 0 && crlfText.includes("\r\n    \"") && !/[^\r]\n/.test(crlfText) && fs.readdirSync(dir).join() === JR + ".json");
   const old = new Date(Date.now() - 24 * 3600 * 1000);
   fs.utimesSync(out, old, old);
   const same = run([screen(JR), vars(JR), DS, "--out", out]);
@@ -291,7 +291,8 @@ console.log("--seed-from fills a sibling screen's answers (same key + same value
   ] }] });
   const sA = put("A_screen.json", screenDoc("5:6", "Sample A")), vA = put("A_screen.vars.json", varsDoc(4));
   const sB = put("B_screen.json", screenDoc("7:8", "Sample B")), vB = put("B_screen.vars.json", varsDoc(12)); // Radius differs: 4 vs 12
-  const planA = path.join(dir, "A.json"), planB = path.join(dir, "B.json");
+  const planA = path.join(dir, "Sample_A__5_6.json"), planB = path.join(dir, "Sample_B__7_8.json"); // each named by its node
+  const A = path.basename(planA);
   const ds = path.join(dir, "no-design-system");
   run([sA, vA, ds, "--out", planA], { cwd: dir });
   const a = read(planA, isSkeletonPlan);
@@ -307,12 +308,12 @@ console.log("--seed-from fills a sibling screen's answers (same key + same value
   const bt = (n: string) => b?.tokens.find((t) => t.figmaName === n);
   const bc = (n: string) => b?.components.find((c) => c.name === n);
   check(`a token with the same key AND value is seeded, marked seededFrom (exit ${rb.status}: ${rb.stderr.trim().split("\n")[0]})`,
-    rb.status === 0 && bt("Space 2")?.codeToken === "--spacing-2" && bt("Space 2")?.verdict === "exact" && bt("Space 2")?.decision === "the spacing scale" && bt("Space 2")?.seededFrom === "A.json");
+    rb.status === 0 && bt("Space 2")?.codeToken === "--spacing-2" && bt("Space 2")?.verdict === "exact" && bt("Space 2")?.decision === "the spacing scale" && bt("Space 2")?.seededFrom === A);
   check("a token with the same key but a DIFFERENT value is left empty (no seededFrom)",
     !!bt("Radius") && bt("Radius")?.codeToken === null && bt("Radius")?.verdict === null && bt("Radius")?.seededFrom === undefined);
   check("components are seeded by setKey (Button) and, with no setKey, by key (Avatar)",
-    bc("Button")?.mapModule === "src/ui/Button.tsx" && bc("Button")?.verdict === "mapped" && bc("Button")?.seededFrom === "A.json" && bc("Avatar")?.mapModule === "src/ui/Avatar.tsx" && bc("Avatar")?.seededFrom === "A.json");
-  check("stderr counts what was seeded and asks for a review", /seeded 1 token row\(s\), 2 component row\(s\) from .*A\.json — review them \(seededFrom\)/.test(rb.stderr));
+    bc("Button")?.mapModule === "src/ui/Button.tsx" && bc("Button")?.verdict === "mapped" && bc("Button")?.seededFrom === A && bc("Avatar")?.mapModule === "src/ui/Avatar.tsx" && bc("Avatar")?.seededFrom === A);
+  check("stderr counts what was seeded and asks for a review", /seeded 1 token row\(s\), 2 component row\(s\) from .*Sample_A__5_6\.json — review them \(seededFrom\)/.test(rb.stderr));
   // never overwrites: B's own answer stays, and a re-run without --seed-from keeps the seeded rows (they count as filled)
   if (b) {
     const own = <T extends { seededFrom?: string }>(row: T | undefined, what: string, v: Partial<T>): void => { const r = must(row, what); Object.assign(r, v); delete r.seededFrom; };
@@ -328,10 +329,77 @@ console.log("--seed-from fills a sibling screen's answers (same key + same value
   const avatar = () => readB()?.components.find((c) => c.name === "Avatar");
   const plain = run([sB, vB, ds, "--out", planB], { cwd: dir });
   check("seeded rows count as filled: a re-run without --seed-from keeps them and their seededFrom",
-    plain.status === 0 && avatar()?.mapModule === "src/ui/Avatar.tsx" && avatar()?.seededFrom === "A.json");
+    plain.status === 0 && avatar()?.mapModule === "src/ui/Avatar.tsx" && avatar()?.seededFrom === A);
   const bad = run([sB, vB, ds, "--seed-from", put("notplan.json", { tokens: "none" })], { cwd: dir });
   check("a --seed-from that is not a plan is refused, one line, exit 1", bad.status === 1 && /cannot read the --seed-from plan .*notplan\.json/.test(bad.stderr) && bad.stdout === "");
   check("--seed-from is in --help", /--seed-from <plan>/.test(run(["--help"]).stdout));
+}
+
+// ---------------------------------------------------------------- a new plan is named by its node
+console.log("[canonical] a new plan is <stem>.json, one per node; an existing plan merges under any name:");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-canon-"));
+  const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const sf = put("export/Sample_A__5_6.json", { screen: "Sample A", nodes: [{ id: "5:6", type: "FRAME", name: "Sample A", children: [] }] });
+  const vf = put("export/Sample_A__5_6.vars.json", { collections: [], variables: [] });
+  const ds = path.join(dir, "no-design-system");
+  const planDir = path.join(dir, "design", "plan");
+  fs.mkdirSync(planDir, { recursive: true });
+  const at = (name: string): string => path.join(planDir, name);
+  const sk = (out: string) => run([sf, vf, ds, "--out", out], { cwd: dir });
+
+  const odd = sk(at("my-plan.json"));
+  check(`[canonical] a new plan under another name is refused, exit 2, naming <stem>.json, nothing written (exit ${odd.status}: ${odd.stderr.trim().split("\n").pop()})`,
+    odd.status === 2 && odd.stderr.includes(at("Sample_A__5_6.json")) && !fs.existsSync(at("my-plan.json")) && fs.readdirSync(planDir).length === 0);
+  const ok = sk(at("Sample_A__5_6.json"));
+  check("[canonical] the new plan at design/plan/<stem>.json is written",
+    ok.status === 0 && /wrote /.test(ok.stderr) && fs.existsSync(at("Sample_A__5_6.json")) && read(at("Sample_A__5_6.json"), isSkeletonPlan).nodeId === "5:6");
+
+  // a plan already there merges whatever its name (here a copy under a hand-picked name, in a directory of its own)
+  const own = path.join(dir, "elsewhere", "hand-named.json");
+  fs.mkdirSync(path.dirname(own));
+  fs.copyFileSync(at("Sample_A__5_6.json"), own);
+  const merged = sk(own);
+  check("[canonical] an existing plan merges under any name", merged.status === 0 && /merged into/.test(merged.stderr));
+
+  // a second plan of the node: by its nodeId (the copy) or by the id its file name carries (no nodeId)
+  const second = sk(path.join(dir, "elsewhere", "Sample_A__5_6.json"));
+  check(`[canonical] a second plan of a node (another plan there has its nodeId) is refused, exit 2, naming that plan (exit ${second.status})`,
+    second.status === 2 && second.stderr.includes(own) && !fs.existsSync(path.join(dir, "elsewhere", "Sample_A__5_6.json")));
+  const byStem = path.join(dir, "bystem");
+  fs.mkdirSync(byStem);
+  const idless = put("bystem/Older_Name__5_6.json", { schema: "designtwin/plan@2", screenName: "Older Name" });
+  const second2 = sk(path.join(byStem, "Sample_A__5_6.json"));
+  check(`[canonical] a plan with no nodeId whose file name carries the node's id holds it too (exit ${second2.status})`,
+    second2.status === 2 && second2.stderr.includes(idless) && !fs.existsSync(path.join(byStem, "Sample_A__5_6.json")));
+
+  // the verify dir already names the node by an older stem (the layer was renamed since): the plan takes that stem
+  put("design/verify/Older_Name__5_6.expected.json", { frame: { nodeId: "5:6", name: "Older Name" } });
+  const fresh = path.join(dir, "fresh");
+  fs.mkdirSync(fresh);
+  const layerNamed = sk(path.join(fresh, "Sample_A__5_6.json"));
+  const stemNamed = sk(path.join(fresh, "Older_Name__5_6.json"));
+  check(`[canonical] the stem is the one the node's verify set already has (exit ${layerNamed.status} for the layer's name, ${stemNamed.status} for the set's)`,
+    layerNamed.status === 2 && layerNamed.stderr.includes(path.join(fresh, "Older_Name__5_6.json")) && stemNamed.status === 0 && fs.readdirSync(fresh).join() === "Older_Name__5_6.json");
+}
+{
+  // a run opened by --status before any of its set's files exist names the node's set too: the frame renamed in Figma and
+  // re-pulled since, a new plan takes the open run's stem
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-open-"));
+  fs.writeFileSync(path.join(dir, "package.json"), "{}");
+  const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const q = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__7_7", "--phase", "queued", "--new-run"], { encoding: "utf8", cwd: dir });
+  const sf = put("export/New__7_7.json", { screen: "New", nodes: [{ id: "7:7", type: "FRAME", name: "New", children: [] }] });
+  const vf = put("export/New__7_7.vars.json", { collections: [], variables: [] });
+  const planDir = path.join(dir, "design", "plan");
+  fs.mkdirSync(planDir, { recursive: true });
+  const sk = (name: string) => run([sf, vf, path.join(dir, "no-design-system"), "--out", path.join(planDir, name)], { cwd: dir });
+  const byName = sk("New__7_7.json");
+  const byRun = sk("Old__7_7.json");
+  check(`[canonical] a status-only run Old__7_7 is open, the frame renamed "New": a new plan is Old__7_7.json, not New__7_7.json (status ${q.status}; exit ${byName.status}: ${byName.stderr.trim().split("\n").pop()}; exit ${byRun.status})`,
+    q.status === 0 && !fs.existsSync(path.join(dir, "design", "verify", "Old__7_7.expected.json")) && byName.status === 2 && byName.stderr.includes(path.join(planDir, "Old__7_7.json"))
+    && byRun.status === 0 && fs.readdirSync(planDir).join() === "Old__7_7.json");
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------- anchorsSuggested

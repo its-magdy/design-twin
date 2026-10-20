@@ -18,7 +18,7 @@ import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import { isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { liveStatusFile } from "../design-to-code/verify-run.ts";
-import type { BuildIdentity, CodeInputs, InteractionEvidence, JsonObject, MeasuredNode, MeasuredStyles, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
+import type { ArtifactCheck, BuildIdentity, CodeInputs, InteractionEvidence, JsonObject, MeasuredNode, MeasuredStyles, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { screenExport } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
@@ -244,7 +244,8 @@ const code = (h: string): CodeInputs => ({ plan: "design/plan/garden.json", file
 // ---------------------------------------------------------------- integrity failures
 console.log("integrity failures make the verdict incomplete; the report is still written:");
 const SHA_E = "e".repeat(64), SHA_M = "m".repeat(64);
-const status = (phase: "measuring" | "measured" | "done", measuredSha256?: string) => ({ file: "Garden.status.json", status: { schema: "designtwin/verify-status@2" as const, screen: "Garden", runId: "run-7", rev: 3, phase, detail: "", at: "2026-09-30T01:00:00Z", by: "agent" as const, ...(measuredSha256 ? { measuredSha256 } : {}) } });
+// (`screen`: the set the CLI keyed the status by — the name the advice's --status commands use)
+const status = (phase: "measuring" | "measured" | "done", measuredSha256?: string) => ({ file: "Garden.status.json", screen: "Garden", status: { schema: "designtwin/verify-status@2" as const, screen: "Garden", runId: "run-7", rev: 3, phase, detail: "", at: "2026-09-30T01:00:00Z", by: "agent" as const, ...(measuredSha256 ? { measuredSha256 } : {}) } });
 safe("a measured file with no expectationSha256 → incomplete 'measured file names no expectation (expectationSha256)'", () => {
   const r = run(measure(), { expectationSha256: SHA_E, measuredSha256: SHA_M });
   return r.verdict === "incomplete" && r.why.some((w) => w.startsWith("measured file names no expectation (expectationSha256)"));
@@ -301,7 +302,7 @@ safe("an older v1 status is never trusted nor judged: pass, with a note", () => 
 // a measured file that names NO run (written by hand on a native stack, or by an older probe) is judged by the run whose
 // status is beside it: that run records it by its sha (--status … --phase measured), or it is not that run's file.
 // Membership is the run id and the recorded sha — never the clock: measuredAt before, after, skewed or missing reads the same.
-const statusEnded = (phase: "done" | "failed" | "blocked", measuredSha256 = "f".repeat(64)) => ({ file: "Garden.status.json", status: { ...status("done", measuredSha256).status, phase } });
+const statusEnded = (phase: "done" | "failed" | "blocked", measuredSha256 = "f".repeat(64)) => ({ file: "Garden.status.json", screen: "Garden", status: { ...status("done", measuredSha256).status, phase } });
 const AT: Array<[string, string | undefined]> = [["before the status", "2026-09-30T00:00:00Z"], ["after it", "2026-09-30T02:00:00Z"], ["skewed a year ahead", "2027-09-30T01:00:00Z"],
   ["unreadable", "not a time"], ["missing", undefined]];
 const noRun = (at: string | undefined, over: Over = {}): VerifyMeasured => {
@@ -354,6 +355,22 @@ safe("no compare reason or input note speaks of an unbound measurement, or of a 
     const r = run(noRun("2026-09-30T02:00:00Z"), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status(p, "f".repeat(64)) });
     return ![...r.why, ...(r.probe.inputNotes || [])].some((w) => /unbound|measured before that run ended|end it:/.test(w));
   }));
+
+// the advice's --status commands name the set the CLI keyed the status by (opts.status.screen) — a set renamed by
+// --migrate keeps its old name in the status's own `screen`, and a command naming that would start a second set
+safe("[hint] a status whose own screen is the old name 'Old', keyed as New__1_1 → the record hint says --status New__1_1, never --status Old", () => {
+  const moved = { file: "New__1_1.status.json", screen: "New__1_1", status: { ...status("done").status, screen: "Old" } };
+  const r = run(noRun("2026-09-30T02:00:00Z"), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: moved });
+  const w = r.integrity[0] ?? "";
+  return w.includes("--status New__1_1 --phase starting --new-run, then --status New__1_1 --phase measured --run <id>") && !/--status Old\b/.test(w);
+});
+safe("[hint] no status found (compare looked) → the record hint names the set's placeholder <Layer>__<id>, never <Screen>", () => {
+  const r = run(measure({}, { expectationSha256: SHA_E, runId: "run-9" }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: null });
+  const w = r.integrity[0] ?? "";
+  return w.endsWith("record it with --status <Layer>__<id> --phase measured --run run-9, or re-measure") && !/<Screen>/.test(w);
+});
+safe("[hint] a run without a screenshot → 'write design/verify/<Layer>__<id>.png and list it in artifacts'", () =>
+  run(measure({}, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, artifactCheck: [] }).why.some((w) => /write design\/verify\/<Layer>__<id>\.png and list it in artifacts/.test(w)));
 
 // an undesigned row quotes its evidence under the evidence's provenance — never "probe said" for agent evidence
 {
@@ -441,61 +458,156 @@ console.log("CLI --compare with the run status beside the measured file:");
   const cli = (...args: string[]) => spawnSync(process.execPath, [VS_TS, ...args], { cwd, encoding: "utf8" });
   const dir = path.join(cwd, "design", "verify");
   fs.mkdirSync(dir, { recursive: true });
-  const expFile = path.join(dir, "Garden.expected.json");
+  const expFile = path.join(dir, "Garden_Plots__1_1.expected.json");
   fs.writeFileSync(expFile, JSON.stringify(exp, null, 2) + "\n");
   const shaE = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex");
-  fs.writeFileSync(path.join(dir, "Garden.png"), "png");
-  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden.png"] })));
-  const st = cli("--status", "Garden", "--phase", "measuring", "--new-run");
-  safe("the measuring status is live (run cache), not in design/verify", () => st.status === 0 && !fs.existsSync(path.join(dir, "Garden.status.json")));
-  const c1 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep1 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  fs.writeFileSync(path.join(dir, "Garden_Plots__1_1.png"), "png");
+  fs.writeFileSync(path.join(dir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden_Plots__1_1.png"] })));
+  const st = cli("--status", "Garden_Plots__1_1", "--phase", "measuring", "--new-run");
+  safe("the measuring status is live (run cache), not in design/verify", () => st.status === 0 && !fs.existsSync(path.join(dir, "Garden_Plots__1_1.status.json")));
+  const c1 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep1 = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("status at 'measuring' → exit 1, the report IS written, verdict incomplete with the status reason", () => st.status === 0 && c1.status === 1 && rep1?.verdict === "incomplete" && (rep1.why || []).some((w) => /is at phase measuring/.test(w)));
-  const done = cli("--status", "Garden", "--phase", "done");
-  const c2 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep2 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
-  safe("after --status done (same run) → exit 0, pass, inputs.runId recorded; done published design/verify/Garden.status.json", () => done.status === 0 && fs.existsSync(path.join(dir, "Garden.status.json")) && c2.status === 0 && rep2?.verdict === "pass" && typeof rep2.inputs?.runId === "string" && rep2.inputs.runId.length > 0);
+  const done = cli("--status", "Garden_Plots__1_1", "--phase", "done");
+  const c2 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep2 = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
+  safe("after --status done (same run) → exit 0, pass, inputs.runId recorded; done published design/verify/Garden_Plots__1_1.status.json", () => done.status === 0 && fs.existsSync(path.join(dir, "Garden_Plots__1_1.status.json")) && c2.status === 0 && rep2?.verdict === "pass" && typeof rep2.inputs?.runId === "string" && rep2.inputs.runId.length > 0);
   safe("no tmp files are left beside the report (atomic writes)", () => !fs.readdirSync(dir).some((f) => f.includes(".tmp-")));
   // a measured file naming a run no status records (the probe's status write was refused) → incomplete
-  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden.png"], runId: "run-unrecorded" })));
-  const c3 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep3 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  fs.writeFileSync(path.join(dir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: ["design/verify/Garden_Plots__1_1.png"], runId: "run-unrecorded" })));
+  const c3 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep3 = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("CLI: measured.runId names a run the status (another run's done) does not → exit 1, incomplete, report.integrity lists it", () =>
     c3.status === 1 && rep3?.verdict === "incomplete" && (rep3.integrity || []).some((w) => /taken in run run-unrecorded/.test(w)));
   // the probe wrote into a stage dir (--out elsewhere): its status is keyed by the EXPECTATION's dir — found there
-  const rec = cli("--status", "Garden", "--phase", "measuring", "--run", "run-staged");
+  const rec = cli("--status", "Garden_Plots__1_1", "--phase", "measuring", "--run", "run-staged");
   const stageDir = path.join(cwd, "stage-elsewhere");
   fs.mkdirSync(stageDir);
-  fs.writeFileSync(path.join(stageDir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-staged" })));
-  const c4 = cli("--compare", "design/verify/Garden.expected.json", "stage-elsewhere/Garden.measured.json", "--out", "stage-elsewhere/Garden");
-  const rep4 = readJsonOrNull(path.join(stageDir, "Garden.report.json"), isVerifyReport);
+  fs.writeFileSync(path.join(stageDir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-staged" })));
+  const c4 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "stage-elsewhere/Garden_Plots__1_1.measured.json", "--out", "stage-elsewhere");
+  const rep4 = readJsonOrNull(path.join(stageDir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("CLI: a staged measured file naming its run finds the run's status by the expectation's dir (at measuring → 'had not finished', not 'unrecorded')", () =>
     rec.status === 0 && c4.status === 1 && (rep4?.why || []).some((w) => /is at phase measuring/.test(w)) && !(rep4?.why || []).some((w) => /no status of that run records it/.test(w)));
   // after an earlier run's done, a hand-written measured file naming no run (a native verifier's) — taken later by the
   // clock, and still not that run's file until a run records it
-  cli("--status", "Garden", "--phase", "failed", "--run", "run-staged"); // end the in-flight run above
-  const st5 = cli("--status", "Garden", "--phase", "starting", "--new-run");
+  cli("--status", "Garden_Plots__1_1", "--phase", "failed", "--run", "run-staged"); // end the in-flight run above
+  const st5 = cli("--status", "Garden_Plots__1_1", "--phase", "starting", "--new-run");
   const run5 = st5.stdout.trim().split(" ")[1] ?? "";
-  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: run5, artifacts: ["design/verify/Garden.png"] })));
-  const done5 = cli("--status", "Garden", "--phase", "done", "--run", run5);
-  fs.writeFileSync(path.join(dir, "Garden.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, measuredAt: new Date(Date.now() + 1000).toISOString(), artifacts: ["design/verify/Garden.png"] })));
-  const c5 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep5 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  fs.writeFileSync(path.join(dir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, runId: run5, artifacts: ["design/verify/Garden_Plots__1_1.png"] })));
+  const done5 = cli("--status", "Garden_Plots__1_1", "--phase", "done", "--run", run5);
+  fs.writeFileSync(path.join(dir, "Garden_Plots__1_1.measured.json"), JSON.stringify(measure({}, { expectationSha256: shaE, measuredAt: new Date(Date.now() + 1000).toISOString(), artifacts: ["design/verify/Garden_Plots__1_1.png"] })));
+  const c5 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep5 = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("CLI: a measured file naming no run, newer than an earlier run's done that recorded another file → exit 1, incomplete 'names a different measured file' (the clock decides nothing)", () =>
-    done5.status === 0 && c5.status === 1 && rep5?.verdict === "incomplete" && (rep5.integrity || []).length === 1 && new RegExp(`names a different measured file .* — measured again outside run ${run5}\\? — a measured file that names no run is tied to a run by recording it: --status Garden --phase starting --new-run, then --status Garden --phase measured --run <id>$`).test(rep5?.integrity?.[0] ?? ""));
+    done5.status === 0 && c5.status === 1 && rep5?.verdict === "incomplete" && (rep5.integrity || []).length === 1 && new RegExp(`names a different measured file .* — measured again outside run ${run5}\\? — a measured file that names no run is tied to a run by recording it: --status Garden_Plots__1_1 --phase starting --new-run, then --status Garden_Plots__1_1 --phase measured --run <id>$`).test(rep5?.integrity?.[0] ?? ""));
   // a native verifier's run records it: --new-run, then --status … --phase measured (its sha) and done
-  const st6 = cli("--status", "Garden", "--phase", "starting", "--new-run");
+  const st6 = cli("--status", "Garden_Plots__1_1", "--phase", "starting", "--new-run");
   const run6 = st6.stdout.trim().split(" ")[1] ?? "";
-  const meas6 = cli("--status", "Garden", "--phase", "measured", "--run", run6);
-  const c6a = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep6a = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
-  const done6 = cli("--status", "Garden", "--phase", "done", "--run", run6);
-  const c6 = cli("--compare", "design/verify/Garden.expected.json", "design/verify/Garden.measured.json");
-  const rep6 = readJsonOrNull(path.join(dir, "Garden.report.json"), isVerifyReport);
+  const meas6 = cli("--status", "Garden_Plots__1_1", "--phase", "measured", "--run", run6);
+  const c6a = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep6a = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
+  const done6 = cli("--status", "Garden_Plots__1_1", "--phase", "done", "--run", run6);
+  const c6 = cli("--compare", "design/verify/Garden_Plots__1_1.expected.json", "design/verify/Garden_Plots__1_1.measured.json");
+  const rep6 = readJsonOrNull(path.join(dir, "Garden_Plots__1_1.report.json"), isVerifyReport);
   safe("CLI: …recorded by its run (--status --phase measured, then done) → exit 0, pass at both, inputs.runId that run", () =>
     run6 !== "" && run6 !== run5 && meas6.status === 0 && c6a.status === 0 && rep6a?.verdict === "pass" && rep6a.inputs?.runId === run6
     && done6.status === 0 && c6.status === 0 && rep6?.verdict === "pass" && !(rep6.integrity || []).length && rep6.inputs?.runId === run6);
-  fs.rmSync(path.dirname(liveStatusFile(path.join(dir, "Garden"))), { recursive: true, force: true }); // the run cache (OS temp dir: no node_modules here)
+  fs.rmSync(path.dirname(liveStatusFile(path.join(dir, "Garden_Plots__1_1"))), { recursive: true, force: true }); // the run cache (OS temp dir: no node_modules here)
+  fs.rmSync(cwd, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------- CLI: one status base; a migrated set's artefacts
+console.log("CLI --compare reads the set's ONE status base, and a migrated set's artefacts under their new name:");
+{
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dt-integrity-base-"));
+  const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cli = (...args: string[]) => spawnSync(process.execPath, [VS_TS, ...args], { cwd, encoding: "utf8" });
+  const dir = path.join(cwd, "design", "verify");
+  fs.mkdirSync(dir, { recursive: true });
+  const S = "Garden_Plots__1_1";
+  const expRel = `design/verify/${S}.expected.json`, measRel = `design/verify/${S}.measured.json`;
+  fs.writeFileSync(path.join(cwd, expRel), JSON.stringify(exp, null, 2) + "\n");
+  const shaE = crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, expRel))).digest("hex");
+  const shaOf = (rel: string): string => crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, rel))).digest("hex");
+  /** a published status v2 of the set (a hand-placed copy of what --status done writes) */
+  const publish = (file: string, st: Record<string, unknown>): void => fs.writeFileSync(path.join(cwd, file), JSON.stringify({ schema: "designtwin/verify-status@2", rev: 4, phase: "done", detail: "",
+    at: "2026-09-30T01:00:00Z", by: "verify-probe", ...st }));
+  const report = (rel: string): VerifyReport | null => readJsonOrNull(path.join(cwd, rel), isVerifyReport);
+
+  // [one-base] a measured file in a stage dir with a status published beside IT (not beside the expectation): that status is
+  // not the set's — the measured file's run is unrecorded
+  fs.mkdirSync(path.join(cwd, "stage"));
+  fs.writeFileSync(path.join(cwd, "stage", `${S}.measured.json`), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-staged" })));
+  publish(`stage/${S}.status.json`, { screen: S, runId: "run-staged", measuredSha256: shaOf(`stage/${S}.measured.json`) });
+  const c1 = cli("--compare", expRel, `stage/${S}.measured.json`, "--out", "stage");
+  const rep1 = report(`stage/${S}.report.json`);
+  safe(`[one-base] a status published only beside the staged measured file is not read → 'no status file was found' (got ${c1.status}: ${(rep1?.integrity ?? []).join(" / ")})`, () =>
+    c1.status === 1 && (rep1?.integrity ?? []).some((w) => /taken in run run-staged, but no status file was found/.test(w)));
+  // …the same status at the set's base (beside the expectation) is the one read
+  publish(`design/verify/${S}.status.json`, { screen: S, runId: "run-staged", measuredSha256: shaOf(`stage/${S}.measured.json`) });
+  const c1b = cli("--compare", expRel, `stage/${S}.measured.json`, "--out", "stage");
+  safe("[one-base] …the same status at the expectation's base → read: no integrity reason", () => (c1b.status === 0 || c1b.status === 1) && (report(`stage/${S}.report.json`)?.integrity ?? ["?"]).length === 0);
+  fs.rmSync(path.join(dir, `${S}.status.json`));
+
+  // [migrated] the set was `Garden` when its run wrote `design/verify/Garden.png`; --migrate renamed every file (the status
+  // too, which still says `screen: "Garden"`)
+  fs.writeFileSync(path.join(dir, `${S}.png`), "png");
+  fs.writeFileSync(path.join(dir, `${S}.diff.png`), "png");
+  const writeMeasured = (extra: Partial<VerifyMeasured>): string => {
+    fs.writeFileSync(path.join(cwd, measRel), JSON.stringify(measure({}, { expectationSha256: shaE, runId: "run-m", artifacts: ["design/verify/Garden.png"], ...extra })));
+    return shaOf(measRel);
+  };
+  const migratedRun = (extra: Partial<VerifyMeasured> = {}, st: Record<string, unknown> = {}): { r: ReturnType<typeof cli>; rep: VerifyReport | null } => {
+    const sha = writeMeasured(extra);
+    publish(`design/verify/${S}.status.json`, { screen: "Garden", runId: "run-m", measuredSha256: sha, ...st });
+    const r = cli("--compare", expRel, measRel);
+    return { r, rep: report(`design/verify/${S}.report.json`) };
+  };
+  const isRow = (a: string | ArtifactCheck): a is ArtifactCheck => typeof a === "object";
+  const rowOf = (rep: VerifyReport | null): ArtifactCheck | undefined => (rep?.artifacts ?? []).find(isRow);
+  const noShot = (rep: VerifyReport | null): boolean => (rep?.why ?? []).some((w) => /no screenshot of this render exists on disk/.test(w));
+  const m = migratedRun();
+  const row = rowOf(m.rep);
+  safe(`[migrated] Garden.png listed, the set now ${S}: the row reads ${S}.png (exists, an image, its sha), listedAs the old path; no 'no screenshot' reason; an input note (got ${JSON.stringify(row)})`, () =>
+    m.r.status === 0 && !!row && row.path === `design/verify/${S}.png` && row.exists === true && row.image === true
+    && row.listedAs === "design/verify/Garden.png" && row.sha256 === shaOf(`design/verify/${S}.png`) && !noShot(m.rep)
+    && (m.rep?.probe?.inputNotes ?? []).some((n) => n.startsWith("design/verify/Garden.png is listed under the set's name before --migrate (run run-m)")) && /^note {2}design\/verify\/Garden\.png is listed/m.test(m.r.stderr));
+  const md = (): string => { try { return fs.readFileSync(path.join(dir, `${S}.report.md`), "utf8"); } catch { return ""; } };
+  const mdArts = md().split("\n").find((l) => l.startsWith("Artifacts: "));
+  safe(`[migrated] report.md lists the artefact under its new name and says what the measured file listed (got ${JSON.stringify(mdArts)})`, () =>
+    mdArts === `Artifacts: design/verify/${S}.png (listed as design/verify/Garden.png)`);
+  // [hint] the advice names the set's new name: a hand-written measured file (no run) beside that done run
+  {
+    fs.writeFileSync(path.join(cwd, measRel), JSON.stringify(measure({}, { expectationSha256: shaE, artifacts: [`design/verify/${S}.png`] })));
+    publish(`design/verify/${S}.status.json`, { screen: "Garden", runId: "run-m", measuredSha256: "f".repeat(64) });
+    cli("--compare", expRel, measRel);
+    const w = (report(`design/verify/${S}.report.json`)?.integrity ?? [])[0] ?? "";
+    safe(`[hint] CLI: a migrated status (screen 'Garden') → the record hint says --status ${S}, never --status Garden (got ${w})`, () =>
+      w.includes(`--status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>`) && !/--status Garden /.test(w));
+  }
+  const otherRun = migratedRun({}, { runId: "run-other" });
+  safe("[migrated] the status is another run's → no fallback: the row stays missing, 'no screenshot'", () => rowOf(otherRun.rep)?.exists === false && noShot(otherRun.rep));
+  safe("[migrated] …and report.md lists the listed path as missing on disk, no 'listed as'", () =>
+    md().split("\n").includes("Artifacts: design/verify/Garden.png (missing on disk)"));
+  const otherSha = migratedRun({}, { measuredSha256: "f".repeat(64) });
+  safe("[migrated] the status recorded another measured file (sha) → no fallback, 'no screenshot'", () => rowOf(otherSha.rep)?.exists === false && noShot(otherSha.rep));
+  const otherName = migratedRun({ artifacts: ["design/verify/Other.png"] });
+  safe("[migrated] Other.png (not the old name's prefix) → no fallback, 'no screenshot'", () => rowOf(otherName.rep)?.exists === false && noShot(otherName.rep));
+  fs.mkdirSync(path.join(cwd, "elsewhere"));
+  fs.writeFileSync(path.join(cwd, "elsewhere", `${S}.png`), "png");
+  const otherDir = migratedRun({ artifacts: ["elsewhere/Garden.png"] });
+  safe("[migrated] the listed file in another dir than the set's → no fallback, 'no screenshot'", () => rowOf(otherDir.rep)?.exists === false && noShot(otherDir.rep));
+  fs.writeFileSync(path.join(dir, "Garden.expected.json"), JSON.stringify(exp));
+  const live = migratedRun();
+  safe("[migrated] a live set named Garden again → no fallback (that name is another set's), 'no screenshot'", () => rowOf(live.rep)?.exists === false && noShot(live.rep));
+  fs.rmSync(path.join(dir, "Garden.expected.json"));
+  // the old name live again in another case: on a case-insensitive disk garden.* and Garden.* are one set's files
+  fs.writeFileSync(path.join(dir, "garden.expected.json"), JSON.stringify(exp));
+  const lower = migratedRun();
+  safe("[migrated] a live set named garden (the old name in another case) → no fallback, 'no screenshot'", () => rowOf(lower.rep)?.exists === false && noShot(lower.rep));
+  fs.rmSync(path.join(dir, "garden.expected.json"));
+  safe("[migrated] (guard) with Garden gone again, the fallback holds", () => rowOf(migratedRun().rep)?.exists === true);
+  fs.rmSync(path.dirname(liveStatusFile(path.join(dir, S))), { recursive: true, force: true });
   fs.rmSync(cwd, { recursive: true, force: true });
 }
 

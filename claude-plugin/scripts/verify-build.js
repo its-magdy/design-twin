@@ -3,7 +3,7 @@
 
 // design-to-code/verify-build.ts
 import fs12 from "node:fs";
-import path10 from "node:path";
+import path11 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/hash.ts
@@ -78,12 +78,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path11, parent, depth) {
+  (function go(node, parentHidden, path12, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path11, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path12, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path11 ? path11 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path12 ? path12 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -377,7 +377,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path11, message) => errors.push({ path: path11, message });
+  const err = (path12, message) => errors.push({ path: path12, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -1469,6 +1469,44 @@ function recordedEdits(plan, cwd) {
   return out;
 }
 
+// design-to-code/verify-sets.ts
+import path9 from "node:path";
+
+// design-to-code/verify-status.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+
 // design-to-code/plan-skeleton.ts
 var USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -1488,7 +1526,9 @@ var USAGE = [
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
-  "                       overwritten: every field you filled is kept.",
+  "                       overwritten: every field you filled is kept. A new plan is named by its node,",
+  "                       design/plan/<Layer>__<id>.json (the stem its verify set already has, if any);",
+  "                       another name, or a second plan of a node that already has one, is refused (exit 2).",
   "  --map <file>         codeconnect.local.json (default: design/codeconnect.local.json or",
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
@@ -1536,27 +1576,46 @@ if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/verify-locate.ts
 import fs10 from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 function exportDirOf(cwd) {
-  const e = path9.join(cwd, EXPORT_DIR);
-  return fs10.existsSync(path9.join(e, "pages")) ? e : path9.join(cwd, DESIGN_DIR);
+  const e = path10.join(cwd, EXPORT_DIR);
+  return fs10.existsSync(path10.join(e, "pages")) ? e : path10.join(cwd, DESIGN_DIR);
 }
 function indexRows(exportDir) {
-  const root = readJsonOrNull(path9.join(exportDir, "pages", "index.json"), isPagesRootIndex);
+  const root = readJsonOrNull(path10.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = readJsonOrNull(path9.join(exportDir, pd.index || path9.join("pages", pd.dir || "", "index.json")), isPageIndex);
+    const idx = readJsonOrNull(path10.join(exportDir, pd.index || path10.join("pages", pd.dir || "", "index.json")), isPageIndex);
     if (idx) rows.push(...idx.layers);
   }
   return rows;
+}
+var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
+var sameFile = (a, b) => path10.resolve(a) === path10.resolve(b) || canonical2(a) === canonical2(b);
+function sourceOf(doc) {
+  const exp = screenExportOf(doc);
+  const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
+  if (!file) return null;
+  return { file, key: exp?.sourceFileKey || null };
+}
+function sameSource(r, src) {
+  if (!src || !r.sourceFile) return null;
+  return r.sourceFileKey && src.key ? r.sourceFileKey === src.key : r.sourceFile === src.file;
+}
+function oneSource(rows) {
+  const first = rows.find((r) => r.sourceFile);
+  if (!first?.sourceFile) return true;
+  if (new Set(rows.flatMap((r) => r.sourceFile && r.sourceFileKey ? [r.sourceFileKey] : [])).size > 1) return false;
+  const src = { file: first.sourceFile, key: first.sourceFileKey || null };
+  return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
 }
 function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path9.resolve(cwd, rel), path9.resolve(exportDir, rel)]) {
+    for (const f of [path10.resolve(cwd, rel), path10.resolve(exportDir, rel)]) {
       const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
@@ -1564,55 +1623,82 @@ function locateExport(plan, planFile, cwd) {
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path9.basename(planFile, ".json")) : null].filter((id) => !!id);
+  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path10.basename(planFile, ".json")) : null].filter((id) => !!id);
   let row = null;
   for (const id of ids) {
     row = rows.find((r) => r.id === id) || null;
     if (row) break;
   }
+  let staleFile = null;
+  let noRow = false;
+  if (hit && plan.file) {
+    const id = docNodeId(hit.doc) || plan.nodeId || null;
+    const header = hit;
+    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => {
+      const now = tryFile(r.file);
+      return now ? [{ r, now }] : [];
+    });
+    const own = filed.find((x) => sameFile(x.now.file, header.file));
+    if (own) {
+      if (!row || row.id === id) row = own.r;
+    } else {
+      const src = sourceOf(header.doc);
+      const fromSource = filed.filter((x) => sameSource(x.r, src) === true);
+      const unknown = filed.filter((x) => sameSource(x.r, src) === null && (src !== null || !x.r.sourceFile || oneSource(rows)));
+      const pick = fromSource.length === 1 ? fromSource[0] : !fromSource.length && unknown.length === 1 ? unknown[0] : void 0;
+      if (pick) {
+        hit = pick.now;
+        row = pick.r;
+        staleFile = plan.file;
+      } else {
+        row = null;
+        noRow = true;
+      }
+    }
+  }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
   const root = screenRoots(hit.doc)[0];
   const exp = screenExportOf(hit.doc);
-  const nodeId = exp && exp.nodeId || root && root.id || null;
+  const nodeId = docNodeId(hit.doc);
   const layerName = String(exp && exp.screen || root && root.name || "");
-  if (!row) row = rows.find((r) => r.id === nodeId) || null;
-  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
+  if (!row && !noRow) row = rows.find((r) => r.id === nodeId) || null;
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 function planNodeId(plan, planFile, exp) {
-  return plan.nodeId || exp && exp.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path9.basename(planFile, ".json")) : null);
+  return plan.nodeId || exp && exp.nodeId || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path10.basename(planFile, ".json")) : null);
 }
 function behaviourRef(x) {
   if (!isReportBehaviour(x)) return null;
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan, planFile, cwd, exp) {
-  const dir = path9.join(cwd, VERIFY_DIR);
+  const dir = path10.join(cwd, VERIFY_DIR);
   if (!fs10.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
-    plan.file ? path9.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path9.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path9.basename(planFile, ".json") : null,
+    plan.file ? path10.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path10.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path10.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
   const nodeId = planNodeId(plan, planFile, e);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
   for (const f of fs10.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
-    const abs = path9.join(dir, f);
+    const abs = path10.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
-    const expFile = path9.join(dir, stem + ".expected.json");
+    const expFile = path10.join(dir, stem + ".expected.json");
     if (!fs10.existsSync(expFile) && fs10.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
       const x = readJsonOrNull(expFile, isJsonObject);
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs10.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
@@ -1630,7 +1716,7 @@ function locateReports(plan, planFile, cwd, exp) {
       }
     }
     out.push({
-      rel: path9.relative(cwd, abs).split(path9.sep).join("/"),
+      rel: path10.relative(cwd, abs).split(path10.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
@@ -1643,28 +1729,13 @@ function locateReports(plan, planFile, cwd, exp) {
       exportContentSha256: r.inputs && r.inputs.exportContentSha256 || null,
       code: r.inputs && r.inputs.code || null,
       expectationChanged,
-      expectationRel: expectationChanged ? path9.relative(cwd, expFile).split(path9.sep).join("/") : null,
+      expectationRel: expectationChanged ? path10.relative(cwd, expFile).split(path10.sep).join("/") : null,
       waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null,
       behaviour: behaviourRef(r.behaviour),
       shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
     });
   }
   return out;
-}
-
-// design-to-code/verify-sets.ts
-var VARIANT_RE = /^[a-z0-9-]+$/;
-var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => VARIANT_RE.test(s);
-function parseSetName(name) {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
 }
 
 // design-to-code/hook-input.ts
@@ -1877,14 +1948,14 @@ function readPlan(file) {
 }
 var isPlanFile = (p) => "plan" in p;
 function findPlans(cwd) {
-  const dir = path10.join(cwd, PLAN_DIR);
-  const read2 = listPlans(dir).map((f) => readPlan(path10.join(dir, f)));
+  const dir = path11.join(cwd, PLAN_DIR);
+  const read2 = listPlans(dir).map((f) => readPlan(path11.join(dir, f)));
   return { plans: read2.filter(isPlanFile), bad: read2.filter((p) => !isPlanFile(p)) };
 }
 function rootOfPlan(file, fallback) {
-  const abs = path10.resolve(file);
-  const dir = path10.dirname(abs);
-  if (dir.endsWith(path10.sep + PLAN_DIR)) return path10.dirname(path10.dirname(dir));
+  const abs = path11.resolve(file);
+  const dir = path11.dirname(abs);
+  if (dir.endsWith(path11.sep + PLAN_DIR)) return path11.dirname(path11.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
@@ -2103,11 +2174,11 @@ function moduleImported(mapModule, byFile, cwd) {
     }
     return true;
   };
-  const wantAbs = moduleSegments(path10.relative(cwd, path10.resolve(cwd, String(mapModule))));
+  const wantAbs = moduleSegments(path11.relative(cwd, path11.resolve(cwd, String(mapModule))));
   for (const f of byFile) {
     for (const spec of cachedImports(f.text)) {
       if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path10.relative(cwd, path10.resolve(cwd, path10.dirname(f.rel), spec)));
+        const resolved = moduleSegments(path11.relative(cwd, path11.resolve(cwd, path11.dirname(f.rel), spec)));
         if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
       } else if (suffixMatch(moduleSegments(spec))) return true;
     }
@@ -2169,7 +2240,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path10.join(cwd, MAP_FILE), path10.join(cwd, LEGACY_MAP_FILE)]) {
+  for (const f of [path11.join(cwd, MAP_FILE), path11.join(cwd, LEGACY_MAP_FILE)]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -2190,13 +2261,13 @@ function checkVerification(plan, cwd) {
     const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
     const wrongShape = [];
     if (f.artifacts !== void 0 && !Array.isArray(f.artifacts))
-      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
     if (f.deltas !== void 0 && !Array.isArray(f.deltas))
       wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs12.existsSync(path10.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs12.existsSync(path11.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -2221,10 +2292,10 @@ function verificationWarnings(plan) {
 function recordedReportWarnings(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  if (!fs12.existsSync(path10.resolve(cwd, rec.report))) {
+  if (!fs12.existsSync(path11.resolve(cwd, rec.report))) {
     return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
   }
-  const bytes = readRegularFile(path10.resolve(cwd, rec.report));
+  const bytes = readRegularFile(path11.resolve(cwd, rec.report));
   if (!bytes) return [];
   const now = sha256Hex(bytes);
   return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
@@ -2248,17 +2319,17 @@ var newestOwn = (reports) => {
 function a11yReportOf(named, reports, ctx = {}) {
   if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
   const json = (x) => x.replace(/\.report\.md$/, ".report.json");
-  const slash = (x) => x.split(path10.sep).join("/").split("\\").join("/");
+  const slash = (x) => x.split(path11.sep).join("/").split("\\").join("/");
   const want = slash(named.trim());
   const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== void 0) {
-    rels.add(json(slash(path10.relative(ctx.cwd, path10.resolve(ctx.cwd, named.trim())))));
-    if (ctx.planFile !== void 0) rels.add(json(slash(path10.relative(ctx.cwd, path10.resolve(path10.dirname(path10.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+    rels.add(json(slash(path11.relative(ctx.cwd, path11.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash(path11.relative(ctx.cwd, path11.resolve(path11.dirname(path11.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
   }
   const exact = reports.find((r) => rels.has(r.rel));
   if (exact) return { ref: exact };
-  const base = json(path10.posix.basename(want));
-  const byBase = reports.filter((r) => path10.posix.basename(r.rel) === base);
+  const base = json(path11.posix.basename(want));
+  const byBase = reports.filter((r) => path11.posix.basename(r.rel) === base);
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
   return { ref: null, missing: want };
 }
@@ -2414,7 +2485,7 @@ var isAcknowledged = (row) => typeof row.acknowledged === "string" && !!row.ackn
 function readFiles(rels, cwd, bytes) {
   const out = [];
   for (const rel of rels) {
-    const abs = path10.join(cwd, rel);
+    const abs = path11.join(cwd, rel);
     try {
       if (!fs12.statSync(abs).isFile()) continue;
       const buf = fs12.readFileSync(abs);
@@ -2433,9 +2504,9 @@ function buildGraph(cwd, extra = [], plans) {
   const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd, bytes);
   const byRel = new Map(files.map((f) => [f.rel, f]));
   const rewritten = /* @__PURE__ */ new Set();
-  const cached = (rel) => rewritten.has(path10.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
+  const cached = (rel) => rewritten.has(path11.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
   const rewrote = (file) => {
-    rewritten.add(path10.resolve(cwd, file));
+    rewritten.add(path11.resolve(cwd, file));
   };
   const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
   const lower = (segs) => segs.map((x) => x.toLowerCase()).join("/");
@@ -2449,7 +2520,7 @@ function buildGraph(cwd, extra = [], plans) {
   for (const f of scripts) {
     const found = /* @__PURE__ */ new Set();
     for (const spec of cachedImports(f.text)) {
-      const segs = spec.startsWith(".") ? moduleSegments(path10.relative(cwd, path10.resolve(cwd, path10.dirname(f.rel), spec))) : moduleSegments(spec);
+      const segs = spec.startsWith(".") ? moduleSegments(path11.relative(cwd, path11.resolve(cwd, path11.dirname(f.rel), spec))) : moduleSegments(spec);
       if (!segs.length) continue;
       for (const r of bySuffix.get(lower(segs)) || []) found.add(r);
       for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r);
@@ -2462,7 +2533,7 @@ function buildGraph(cwd, extra = [], plans) {
   const scan = () => {
     if (scanned) return scanned;
     const walked = projectScan(cwd);
-    const dirs = /* @__PURE__ */ new Set([path10.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    const dirs = /* @__PURE__ */ new Set([path11.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
     return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
   };
   return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
@@ -2487,7 +2558,7 @@ function profileOf(plan, cwd) {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path10.join(cwd, TARGET_FILE), isJsonObject);
+  const doc = readJsonOrNull(path11.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
@@ -2531,9 +2602,9 @@ var hasTwConfig = (dir) => {
   }
 };
 function packageDirOf(cwd, rel) {
-  const root = path10.resolve(cwd);
-  for (let d = path10.dirname(path10.resolve(cwd, rel)); d.startsWith(root); d = path10.dirname(d)) {
-    if (fs12.existsSync(path10.join(d, "package.json"))) return d;
+  const root = path11.resolve(cwd);
+  for (let d = path11.dirname(path11.resolve(cwd, rel)); d.startsWith(root); d = path11.dirname(d)) {
+    if (fs12.existsSync(path11.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -2550,13 +2621,13 @@ function projectScan(cwd, limit = 2e3) {
     }
     for (const e of entries) {
       if (css.length >= limit) return;
-      const abs = path10.join(dir, e.name);
+      const abs = path11.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) walk(abs);
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path10.relative(cwd, abs).split(path10.sep).join("/"), text: fs12.readFileSync(abs, "utf8") });
+          css.push({ rel: path11.relative(cwd, abs).split(path11.sep).join("/"), text: fs12.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -2645,7 +2716,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs12.existsSync(path10.join(cwd, f)));
+  const absent = listed.filter((f) => !fs12.existsSync(path11.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -2653,12 +2724,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs12.statSync(path10.join(cwd, rel)).isFile();
+      return fs12.statSync(path11.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs12.readFileSync(path10.join(cwd, rel), "utf8") });
+  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs12.readFileSync(path11.join(cwd, rel), "utf8") });
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -2751,6 +2822,10 @@ function checkPlan({ plan, file }, cwd, opts) {
   if (!exp) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
+    if (exp.staleFile) {
+      const now = path11.relative(cwd, exp.file).split(path11.sep).join("/");
+      warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
+    }
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
@@ -2793,7 +2868,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp) {
-  const screenFile = plan.file ? path10.resolve(cwd, plan.file) : null;
+  const screenFile = plan.file ? path11.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || exp && exp.layerName || null;
   let g;
   try {
@@ -2828,7 +2903,7 @@ function auditGateWarnings(plan, cwd, exp) {
 function legacySetWarnings(plan, planFile, reports, exp) {
   const nodeId = planNodeId(plan, planFile, exp ?? null);
   return reports.flatMap((r) => {
-    const set = path10.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    const set = path11.posix.basename(r.rel).replace(/\.report\.json$/, "");
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
 }
@@ -3023,12 +3098,12 @@ function planSkeletonOuts(cmd, powershell = false) {
   }
   return out;
 }
-function sameFile(w, rel, cwd) {
+function sameFile2(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
   if (!c) return false;
-  const want = path10.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path10.posix.normalize(c).toLowerCase().endsWith("/" + path10.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path10.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  const want = path11.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path11.posix.normalize(c).toLowerCase().endsWith("/" + path11.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path11.resolve(w.base || cwd, c).replace(/\\/g, "/");
   return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
 }
 function ownPlans(open, input, all, cwd) {
@@ -3045,9 +3120,9 @@ function ownPlans(open, input, all, cwd) {
   const listers = /* @__PURE__ */ new Map();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => {
-    const planRel = path10.relative(cwd, path10.resolve(p.file));
-    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
-    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
+    const planRel = path11.relative(cwd, path11.resolve(p.file));
+    if (writes.some((w) => sameFile2(w, planRel, cwd))) return true;
+    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile2(w, f, cwd)));
   };
   const known = all && all.length ? all : open;
   if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
@@ -3056,8 +3131,8 @@ function ownPlans(open, input, all, cwd) {
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
   return bad.filter((b) => {
-    const rel = path10.relative(cwd, path10.resolve(b.file));
-    return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b);
+    const rel = path11.relative(cwd, path11.resolve(b.file));
+    return scan.writes.some((w) => sameFile2(w, rel, cwd)) && !closedStatusOf(b);
   });
 }
 function closedStatusOf(b) {
@@ -3109,14 +3184,14 @@ var USAGE2 = [
 function checkAndRecord(p, cwd, graph) {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
-  setPhase(`checking ${path10.basename(p.file)}`);
+  setPhase(`checking ${path11.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const isComputed = (x) => COMPUTED_STORED.has(String(x.status || "").toLowerCase());
   const cleared = isComputed(plan) ? plan.status : null;
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path10.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path11.basename(p.file)}`);
   const cached = graph ? graph().cached : void 0;
   const hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -3154,7 +3229,7 @@ function checkAndRecord(p, cwd, graph) {
     const v = { ...plan.verification };
     delete v.hook;
     recorded = { ...plan, verification: v };
-    warnings.push(`the hook record was not written into ${path10.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
+    warnings.push(`the hook record was not written into ${path11.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file);
   const st = computeStatus(recorded, { cwd, planFile: p.file, export: exp, reports, ...cached ? { cached } : {} });
@@ -3174,10 +3249,10 @@ async function main(argv) {
   const statusMode = !!flags.status, json = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path10.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path11.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     const show = (f) => {
-      const r = path10.relative(process.cwd(), f);
+      const r = path11.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
     for (const b of bad) {
@@ -3197,10 +3272,10 @@ async function main(argv) {
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read2 = planArgs.map((f) => readPlan(path10.resolve(f)));
+    const read2 = planArgs.map((f) => readPlan(path11.resolve(f)));
     const bad = read2.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path10.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path11.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read2.filter(isPlanFile);
@@ -3230,7 +3305,7 @@ async function main(argv) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path10.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path11.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -3246,16 +3321,16 @@ async function main(argv) {
     const own = ownPlans(open, input, plans, cwd);
     const badOwn = ownBadPlans(bad, own.scan, cwd);
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path10.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path11.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
-      const rel = path10.relative(cwd, b.file);
-      blockedOut.push(`# ${path10.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
+      const rel = path11.relative(cwd, b.file);
+      blockedOut.push(`# ${path11.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type) && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
-        const names = open.map((p) => path10.relative(cwd, p.file).replace(/\\/g, "/"));
+        const names = open.map((p) => path11.relative(cwd, p.file).replace(/\\/g, "/"));
         console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
@@ -3267,7 +3342,7 @@ async function main(argv) {
   const graphs = /* @__PURE__ */ new Map();
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)));
-    const name = path10.basename(p.file);
+    const name = path11.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) {

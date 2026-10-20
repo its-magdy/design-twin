@@ -1809,6 +1809,118 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   check("…with no node id known, it names the plan's screen",
     JSON.stringify(verifyBuild.legacySetWarnings({}, undefined, [clean], null)) === JSON.stringify(["legacy-named verify set Crates for this plan's screen — run verify-screen --migrate"])
     && verifyBuild.legacySetWarnings({}, path.join("design", "plan", "Crates__80_1.json"), [clean], null)[0]?.includes("node 80:1") === true);
+  {
+    // [variant] a variant's report that names no node and has no expectation beside it is the plan's node's by its set name
+    const vroot = project({ "design/verify/Crates__80_1.dark.report.json": JSON.stringify({ verdict: "pass" }), "design/verify/Crates__80_1.report.json": JSON.stringify({ verdict: "pass" }) }, { nodeId: "80:1" });
+    const found = verifyBuild.locateReports(planOf(vroot), path.join(vroot, "design", "plan", "login.json"), vroot, null).map((r) => `${r.rel} ${r.matchedBy}`);
+    check(`[variant] locateReports finds the base report and the .dark variant's by the node id their set names carry (got ${JSON.stringify(found)})`,
+      JSON.stringify(found) === JSON.stringify(["design/verify/Crates__80_1.dark.report.json nodeId", "design/verify/Crates__80_1.report.json nodeId"]));
+    fs.rmSync(vroot, { recursive: true, force: true });
+  }
+  {
+    // [stale-export] the layer was renamed and re-pulled: the old export file is still on disk, the index files the node
+    // under the new one, and the plan's `file` header still names the old
+    const OLD = "design/export/pages/P/Crates__80_1.json", NEW = "design/export/pages/P/Crates_Renamed__80_1.json";
+    const doc = (name: string) => JSON.stringify(screenExport([{ type: "FRAME", id: "80:1", name }], { screen: name, nodeId: "80:1" }));
+    const index = (layers: unknown[]) => JSON.stringify({ pageDirs: [], layers });
+    const at = (layers: unknown[]) => project({ [OLD]: doc("Crates"), [NEW]: doc("Crates Renamed"), "design/export/pages/index.json": index(layers) }, { nodeId: "80:1", file: OLD, files: [] });
+    const STALE = /^plan\.file names (.*); the index files node 80:1 under (.*) — read \2; re-run plan-skeleton --out to refresh the header$/;
+    const moved = at([{ id: "80:1", name: "Crates Renamed", file: "pages/P/Crates_Renamed__80_1.json" }]);
+    const hit = verifyBuild.locateExport(planOf(moved), path.join(moved, "design", "plan", "login.json"), moved);
+    const w = checkPlan({ plan: planOf(moved), file: path.join(moved, "design", "plan", "login.json") }, moved).warnings.map((x) => STALE.exec(x)).filter((m) => m !== null);
+    check(`[stale-export] the export the index files the plan's node under is read, staleFile names the header's (got ${hit ? `${path.relative(moved, hit.file)} ${String(hit.staleFile)} ${hit.layerName}` : "null"})`,
+      !!hit && path.relative(moved, hit.file).split(path.sep).join("/") === NEW && hit.staleFile === OLD && hit.layerName === "Crates Renamed" && hit.row?.id === "80:1");
+    check(`[stale-export] verify-build warns: plan.file names the old file, the index files the node under the new one (got ${JSON.stringify(w.map((m) => m[0]))})`,
+      w.length === 1 && w[0]?.[1] === OLD && w[0]?.[2] === NEW);
+    // the node has no index row (another node's only): the header's file is read as before, no warning
+    const unfiled = at([{ id: "90:1", name: "Other", file: "pages/P/Other__90_1.json" }]);
+    const hit2 = verifyBuild.locateExport(planOf(unfiled), path.join(unfiled, "design", "plan", "login.json"), unfiled);
+    const w2 = checkPlan({ plan: planOf(unfiled), file: path.join(unfiled, "design", "plan", "login.json") }, unfiled).warnings.filter((x) => STALE.test(x));
+    check("[stale-export] a plan whose node has no index row reads its `file` header as before, no warning",
+      !!hit2 && path.relative(unfiled, hit2.file).split(path.sep).join("/") === OLD && hit2.staleFile === null && hit2.layerName === "Crates" && w2.length === 0);
+    for (const r of [moved, unfiled]) fs.rmSync(r, { recursive: true, force: true });
+  }
+  {
+    // [stale-export] node ids repeat across Figma files: the index merges two files that both hold node 1:2, and the
+    // plan's header names file B's export — that is the node's export, whichever row comes first
+    const A = "design/export/pages/PA/Crates__1_2.json", B = "design/export/pages/PB/Bins__1_2.json";
+    const doc = (name: string, sourceFile?: string, sourceFileKey?: string) =>
+      JSON.stringify({ ...screenExport([{ type: "FRAME", id: "1:2", name }], { screen: name, nodeId: "1:2" }), ...(sourceFile ? { sourceFile } : {}), ...(sourceFileKey ? { sourceFileKey } : {}) });
+    const rowA = { id: "1:2", name: "Crates", file: "pages/PA/Crates__1_2.json", sourceFile: "File A", sourceFileKey: "keyA" };
+    const rowB = { id: "1:2", name: "Bins", file: "pages/PB/Bins__1_2.json", sourceFile: "File B", sourceFileKey: "keyB" };
+    const index = (layers: unknown[]) => JSON.stringify({ pageDirs: [], layers });
+    const STALE = /^plan\.file names /;
+    const at = (files: Record<string, string>, layers: unknown[]) => project({ ...files, "design/export/pages/index.json": index(layers) }, { nodeId: "1:2", file: B, files: [] });
+    const run = (root: string) => {
+      const plan = planOf(root), file = path.join(root, "design", "plan", "login.json");
+      const hit = verifyBuild.locateExport(plan, file, root);
+      return { rel: hit ? path.relative(root, hit.file).split(path.sep).join("/") : null, stale: hit ? hit.staleFile : "none", row: hit?.row?.file ?? null,
+        warned: checkPlan({ plan, file }, root).warnings.filter((x) => STALE.test(x)).length };
+    };
+    const two = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins", "File B", "keyB") }, [rowA, rowB]);
+    const r1 = run(two);
+    check(`[stale-export] two index rows share node 1:2 in two Figma files: the header's export (file B's) is read, its own row, no warning (got ${JSON.stringify(r1)})`,
+      r1.rel === B && r1.stale === null && r1.row === rowB.file && r1.warned === 0);
+    // file B's frame was renamed and re-pulled: the header's old export stays on disk; the index has file A's row and
+    // file B's new row — the one of the header's Figma file (its source stamp) is the replacement
+    const B2 = "design/export/pages/PB/Bins_Renamed__1_2.json";
+    const rowB2 = { ...rowB, name: "Bins Renamed", file: "pages/PB/Bins_Renamed__1_2.json" };
+    const renamed = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins", "File B", "keyB"), [B2]: doc("Bins Renamed", "File B", "keyB") }, [rowA, rowB2]);
+    const r2 = run(renamed);
+    check(`[stale-export] …renamed in file B: the row of the header's Figma file is read, not file A's (got ${JSON.stringify(r2)})`,
+      r2.rel === B2 && r2.stale === B && r2.warned === 1);
+    // unstamped exports and rows, two other files hold the id: which one is a guess — the header is kept
+    const C = "design/export/pages/PC/Pots__1_2.json";
+    const amb = at({ [A]: doc("Crates"), [B]: doc("Bins"), [C]: doc("Pots") },
+      [{ id: "1:2", name: "Crates", file: "pages/PA/Crates__1_2.json" }, { id: "1:2", name: "Pots", file: "pages/PC/Pots__1_2.json" }]);
+    const r3 = run(amb);
+    check(`[stale-export] two other files hold the node and none is the header's source: the header is kept, no warning (got ${JSON.stringify(r3)})`,
+      r3.rel === B && r3.stale === null && r3.warned === 0);
+    // the header's export is stamped File B, the one row of the id is File A's: another file's node, not a re-pull
+    const other = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins", "File B", "keyB") }, [rowA]);
+    const r4 = run(other);
+    check(`[stale-export] the only row of the id is another Figma file's: the header is kept (got ${JSON.stringify(r4)})`, r4.rel === B && r4.stale === null && r4.warned === 0);
+    // the header's export is an older, unstamped pull of file B; the index holds file A's stamped row of the id and a
+    // row of file B's other node: the index is of two Figma files, so file A's row may be another file's node
+    const rowB9 = { id: "9:9", name: "Lids", file: "pages/PB/Lids__9_9.json", sourceFile: "File B", sourceFileKey: "keyB" };
+    const unstamped = at({ [A]: doc("Crates", "File A", "keyA"), [B]: doc("Bins") }, [rowA, rowB9]);
+    const r5 = run(unstamped);
+    check(`[stale-export] an unstamped header and one stamped row of the id in a two-file index: the header is kept, no row, no warning (got ${JSON.stringify(r5)})`,
+      r5.rel === B && r5.stale === null && r5.row === null && r5.warned === 0);
+    // one Figma file only: the header's older unstamped export, the frame renamed and re-pulled (stamped) — a re-pull
+    const single = at({ [B]: doc("Bins"), [B2]: doc("Bins Renamed", "File B", "keyB") }, [rowB2, rowB9]);
+    const r6 = run(single);
+    check(`[stale-export] an unstamped header in a one-file index: the renamed row is read (got ${JSON.stringify(r6)})`,
+      r6.rel === B2 && r6.stale === B && r6.row === rowB2.file && r6.warned === 1);
+    // two Figma files of one name: their rows differ only by key, and a row without a key matches both by name — the
+    // index is of two files in every row order, so file A's row of the id is not the unstamped header's replacement
+    const sharedA = { ...rowA, sourceFile: "Shared" };
+    const sharedB = { id: "7:7", name: "Pots", file: "pages/PB/Pots__7_7.json", sourceFile: "Shared", sourceFileKey: "keyB" };
+    const sharedNoKey: { id: string; name: string; file: string; sourceFile: string; sourceFileKey?: string } = { id: "9:9", name: "Lids", file: "pages/PB/Lids__9_9.json", sourceFile: "Shared" };
+    const sameName: string[] = [];
+    for (const order of [[sharedNoKey, sharedA, sharedB], [sharedNoKey, sharedB, sharedA], [sharedA, sharedNoKey, sharedB], [sharedB, sharedNoKey, sharedA]]) {
+      const root = at({ [A]: doc("Crates", "Shared", "keyA"), [B]: doc("Bins") }, order);
+      const r = run(root);
+      check(`[stale-export] an unstamped header, two same-named Figma files told apart by key, rows ${order.map((x) => x.sourceFileKey || "-").join(",")}: the header is kept, no row, no warning (got ${JSON.stringify(r)})`,
+        r.rel === B && r.stale === null && r.row === null && r.warned === 0);
+      sameName.push(root);
+    }
+    for (const r of [two, renamed, amb, other, unstamped, single, ...sameName]) fs.rmSync(r, { recursive: true, force: true });
+  }
+  {
+    // [stale-export] the header spells the index's file in another case: on a case-insensitive disk that is one file, not
+    // a stale header
+    const FILE = "design/export/pages/P/Crates__80_1.json";
+    const root = project({ [FILE]: JSON.stringify(screenExport([{ type: "FRAME", id: "80:1", name: "Crates" }], { screen: "Crates", nodeId: "80:1" })),
+      "design/export/pages/index.json": JSON.stringify({ pageDirs: [], layers: [{ id: "80:1", name: "Crates", file: "pages/P/Crates__80_1.json" }] }) },
+      { nodeId: "80:1", file: "design/export/pages/p/crates__80_1.json", files: [] });
+    if (!fs.existsSync(path.join(root, "DESIGN"))) console.log("  (skipped [stale-export] case-only spelling: this filesystem is case-sensitive)");
+    else {
+      const hit = verifyBuild.locateExport(planOf(root), path.join(root, "design", "plan", "login.json"), root);
+      check(`[stale-export] a header that differs from the index's file only in case is the same file: no staleFile (got ${String(hit?.staleFile)})`, !!hit && hit.staleFile === null);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
   check("the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
 
   // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook

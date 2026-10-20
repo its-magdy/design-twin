@@ -2,9 +2,9 @@
 
 
 // design-to-code/verify-probe.ts
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import os3 from "node:os";
-import path9 from "node:path";
+import path11 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -700,9 +700,9 @@ function freeHoverPoint(arg) {
   }
   return null;
 }
-function focusablePath(path10) {
+function focusablePath(path12) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path10);
+  const el = document.querySelector(path12);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -794,8 +794,8 @@ function screenTags(a) {
   }
   return { shown, ambiguous, foreign: null };
 }
-function focusInfo(path10) {
-  const el = document.querySelector(path10);
+function focusInfo(path12) {
+  const el = document.querySelector(path12);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -2330,8 +2330,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path10) {
-  const el = document.querySelector(path10);
+function syntheticClick(path12) {
+  const el = document.querySelector(path12);
   if (!el) return false;
   el.click();
   return true;
@@ -5820,7 +5820,7 @@ function gitHead(cwd) {
 }
 
 // design-to-code/verify-run.ts
-import path8 from "node:path";
+import path10 from "node:path";
 import crypto4 from "node:crypto";
 
 // design-to-code/run-cache.ts
@@ -6153,25 +6153,129 @@ function writeFileAtomic(file, data, opts = {}) {
   if (opts.sync) syncDir(dir);
 }
 
-// design-to-code/verify-run.ts
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
+// bridge/src/node-id.ts
+var ID = "[A-Za-z0-9%:;_-]+";
+var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+
+// bridge/src/is-main.ts
+import fs7 from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs7.realpathSync(argv1) === fs7.realpathSync(fileURLToPath2(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/verify-sets.ts
+import fs8 from "node:fs";
+import path9 from "node:path";
+
+// design-to-code/verify-status.ts
+import path8 from "node:path";
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var PROBE_ATTEMPTS = 2;
-function probeAttemptNote(n, exit) {
-  const next = n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
-  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
-}
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
 var optStr2 = (x) => x === void 0 || typeof x === "string";
 var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
 var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
 var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
-var overdue = (o) => Date.parse(o.deadline) < Date.now();
 function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), path8.basename(base) + ".status.json");
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path8.basename(base)), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+var EXPECTED_SUFFIX = ".expected.json";
+function setNameOfFile(file) {
+  const b = path9.basename(file);
+  return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
+}
+function statusBaseOf(expectedFile) {
+  return path9.join(path9.dirname(expectedFile), setNameOfFile(expectedFile));
+}
+var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var endsInSep = (p) => TRAILING_SEP.test(p);
+var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
+function outBaseOf(out, setName, defaultDir) {
+  if (out === void 0) return { base: path9.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  const why = `--out takes the verify directory; this set is ${setName}`;
+  let st = null;
+  try {
+    st = fs8.statSync(out);
+  } catch {
+  }
+  if (st?.isDirectory()) return { base: path9.join(out, setName), dir: out, deprecated: false };
+  if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
+  if (endsInSep(out) || path9.resolve(out) === path9.resolve(VERIFY_DIR)) return { base: path9.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (path9.basename(out) === setName) return { base: out, dir: path9.dirname(out), deprecated: true };
+  return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
+}
+function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
+  const name = setNameOfFile(expectedFile);
+  const p = parseSetName(name);
+  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path9.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
+  return null;
+}
+
+// design-to-code/resolve-screen.ts
+if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/verify-run.ts
+var PROBE_ATTEMPTS = 2;
+function probeAttemptNote(n, exit) {
+  const next = n >= PROBE_ATTEMPTS ? "the probe ended the run failed" : exit === 3 ? "ask the user to make a renderer available, then re-run the probe once in this run" : "re-run the probe once in this run";
+  return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
+}
+var overdue = (o) => Date.parse(o.deadline) < Date.now();
 var statusFile = (base) => base + ".status.json";
 function inRunCache(verifyDir, fn) {
   try {
@@ -6185,22 +6289,10 @@ function inRunCache(verifyDir, fn) {
     throw e;
   }
 }
-var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), path8.basename(base) + ".status.json");
 var lockFileOfStatus = (base) => lockFileOf(liveStatusFile(base));
-var stageDirOf = (base, runId) => path8.join(runCacheDir(path8.dirname(base)), "stage", runId);
+var stageDirOf = (base, runId) => path10.join(runCacheDir(path10.dirname(base)), "stage", runId);
 function newRunId() {
   return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto4.randomBytes(3).toString("hex");
-}
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
-    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
-    if (isVerifyStatusV2(kept)) return kept;
-  }
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
 function readStatusAt(base) {
   for (const file of [liveStatusFile(base), statusFile(base)]) {
@@ -6225,15 +6317,11 @@ function endedRun(prev, runId) {
 var RunOpen = class extends Error {
   constructor(base, open) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
-    super(o ? `run ${open.runId} of ${open.screen} ${ownRunOpen(open, o)} \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${open.screen} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) or, only if nobody is running it any more, ends it (${endIt})`);
+    const o = open.ownRun, S = path10.basename(base);
+    super(o ? `run ${open.runId} of ${S} ${ownRunOpen(open, o)} \u2014 a probe without --run starts a run of its own only when no other run of the screen is open; if no probe is running, end it: ${endIt}` : `run ${open.runId} of ${S} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 a probe without --run starts a run of its own only when no other run of the screen is open: that run's verifier passes --run ${open.runId}; anyone else waits for it (${waitIt}) or, only if nobody is running it any more, ends it (${endIt})`);
     this.name = "RunOpen";
   }
 };
-function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(open.screen), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
-  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
-}
 function ownRunOpen(open, o, why) {
   return `is a probe's own run (no --run), started at ${o.startedAt} by pid ${o.pid} on ${o.host} and still open (phase ${open.phase})` + (why !== void 0 ? `, but the probe that started it ${why}` : "");
 }
@@ -6262,8 +6350,8 @@ function openRun(base, prev, runId) {
 var RunNotCurrent = class extends Error {
   constructor(base, runId, open) {
     const { waitIt, endIt } = runCommands(base, open);
-    const o = open.ownRun;
-    super(o ? `run ${runId} is not the current run of ${open.screen}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : void 0)} \u2014 nothing is written; if no probe is running, end it: ${endIt}` : `run ${runId} is not the current run of ${open.screen}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
+    const o = open.ownRun, S = path10.basename(base);
+    super(o ? `run ${runId} is not the current run of ${S}: run ${open.runId} ${ownRunOpen(open, o, abandonedRun(open, runId) ? abandonedWhy(o) : void 0)} \u2014 nothing is written; if no probe is running, end it: ${endIt}` : `run ${runId} is not the current run of ${S}: run ${open.runId} is open (phase ${open.phase}, rev ${open.rev}, by ${open.by}, ${open.at}) \u2014 nothing is written; wait for it (${waitIt}) or, only if nobody is running it any more, end it (${endIt})`);
     this.name = "RunNotCurrent";
   }
 };
@@ -6273,7 +6361,7 @@ function notCurrentRun(base, prev, runId) {
 }
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
-  const live = liveStatusFile(base), dir = path8.dirname(base);
+  const live = liveStatusFile(base), dir = path10.dirname(base);
   const lock = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
   try {
     const prev = readStatus(base);
@@ -6318,7 +6406,7 @@ function writeStatus(base, p, hooks = {}) {
     const over = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc = {
       schema: STATUS_SCHEMA,
-      screen: path8.basename(base),
+      screen: path10.basename(base),
       runId: w.runId,
       rev: same ? same.rev + 1 : 1,
       phase,
@@ -6349,19 +6437,6 @@ function replacedNote(doc) {
   return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
-// bridge/src/is-main.ts
-import fs7 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs7.realpathSync(argv1) === fs7.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
-}
-
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
@@ -6370,24 +6445,24 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs8.existsSync(path9.join(dir, f));
+  const has = (f) => fs9.existsSync(path11.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs8.existsSync(path9.join(dir, f));
+  const has = (f) => fs9.existsSync(path11.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function projectRequire(dir) {
-  return createRequire(path9.join(path9.resolve(dir), "package.json"));
+  return createRequire(path11.join(path11.resolve(dir), "package.json"));
 }
 function resolvePlaywright(dir) {
-  const abs = path9.resolve(dir);
+  const abs = path11.resolve(dir);
   const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
@@ -6417,8 +6492,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs8.existsSync(path9.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path9.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs9.existsSync(path11.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path11.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
   const req = projectRequire(dir);
@@ -6487,8 +6562,8 @@ async function launchPid(b, capMs = LAUNCH_PID_CAP_MS, host = PROBE_HOST) {
 function browserPathError(p) {
   let ok = false;
   try {
-    ok = fs8.statSync(p).isFile();
-    if (ok) fs8.accessSync(p, fs8.constants.X_OK);
+    ok = fs9.statSync(p).isFile();
+    if (ok) fs9.accessSync(p, fs9.constants.X_OK);
   } catch {
     ok = false;
   }
@@ -6496,13 +6571,13 @@ function browserPathError(p) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path9.join(path9.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path9.join(path9.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path11.join(path11.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path11.join(path11.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
   return null;
 }
-var selfSha256 = () => sha256Hex(fs8.readFileSync(SELF2));
+var selfSha256 = () => sha256Hex(fs9.readFileSync(SELF2));
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -7254,15 +7329,18 @@ function behaviourLine(b) {
 }
 var BEHAVIOUR_OFF_ENV = "DESIGNTWIN_TEST_BEHAVIOUR_OFF";
 var USAGE = `usage:
-  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
+  ${scriptCmd("verify-probe")} --expected design/verify/<Layer>__<id>.expected.json --url <url> [--out design/verify]
       [--ready <selector> | none] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
       [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
-      --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
+      --out is the directory the files go to (default: the expectation's; a new one ends in "/"): <out> is <dir>/<the
+      expectation's set name>, never another name (any other --out basename is exit 2). A legacy-named expectation, or one
+      named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect) before anything
+      starts. --viewport defaults to the frame's w\xD7h; --project to cwd.
       Every measurement belongs to a run, and measured.runId names it. --run <id> (from verify-screen --status \u2026 --new-run):
       that run. Without --run the probe starts a run of its own (\`run <id>\` on stderr) and ends it \u2014 \`done\` with the files
-      (published as <Screen>.status.json beside the expectation), \`failed\` on an exit 3/4 (a re-run is a new run); refused
+      (published as <Layer>__<id>.status.json beside the expectation), \`failed\` on an exit 3/4 (a re-run is a new run); refused
       before anything starts (exit 2) while another run of the screen is open \u2014 a verifier's writes the same files: wait for
       it, or end one nobody runs any more. Every other non-zero exit, an error or SIGINT/SIGTERM/SIGHUP (exit 128+n) ends
       its own run \`failed\`. One left at measuring \u2014 a SIGKILL, or an exit whose last status write was refused \u2014 names the
@@ -7271,7 +7349,7 @@ var USAGE = `usage:
       when it cannot tell (another host, or the pid runs). A probe that finds its own run replaced by such a later one
       (it was stopped or slept past its deadline) writes nothing more (exit 2; 128+n after a stop signal, 1 after an
       error). The probe writes the run's LIVE status (the run cache,
-      node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
+      node_modules/.cache/designtwin-verify/<Layer>__<id>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (its own run: \`done\`) + the measured file's sha256 after it is closed. With --run an
       exit 3/4 is a failed attempt the status counts (probeFailures): the first leaves the run at measuring for one re-run
       (after an exit 3, once the user has fixed the renderer), the second ends the run \`failed\` \u2014 the probe writes it (a
@@ -7467,7 +7545,7 @@ async function probeMain(argv, own) {
     "browser-path": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path9.resolve(f.project ?? ".");
+  const project = path11.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -7536,7 +7614,7 @@ ${USAGE}`);
     if (parsed.noNavigate) console.error(`note  --steps '${f.steps}' is a plan with no \`navigate\` list \u2014 no steps run: the screen is measured where --url lands`);
     else {
       steps = parsed.steps;
-      stepsSource = `--steps ${(path9.relative(process.cwd(), path9.resolve(f.steps)) || f.steps).split(path9.sep).join("/")}`;
+      stepsSource = `--steps ${(path11.relative(process.cwd(), path11.resolve(f.steps)) || f.steps).split(path11.sep).join("/")}`;
     }
   }
   let expectation = null, expBytes = null;
@@ -7549,7 +7627,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs8.readFileSync(f.expected);
+    expBytes = fs9.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -7566,8 +7644,22 @@ ${USAGE}`);
   const frameNodeId = expectation?.frame?.nodeId;
   const ownTags = f.ready === void 0 && readyPick?.ready !== void 0 && expectation && frameNodeId !== void 0 ? ownTagsOf(expectation, frameNodeId) : null;
   const untaggedRoot = ownTags !== null ? { ...ownTags, seen: false } : void 0;
-  const outBase = f.out ?? (f.expected ? path9.join(path9.dirname(f.expected), path9.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  const statusBase = f.expected ? path9.join(path9.dirname(f.expected), path9.basename(outBase)) : "";
+  let outBase = "", statusBase = "";
+  if (!f.check && f.expected) {
+    const setProblem = expectationSetProblem(f.expected, frameNodeId, path11.dirname(f.expected));
+    if (setProblem !== null) {
+      console.error(`verify-probe: ${setProblem}`);
+      return 2;
+    }
+    const ob = outBaseOf(f.out, setNameOfFile(f.expected), path11.dirname(f.expected));
+    if ("error" in ob) {
+      console.error(`verify-probe: ${ob.error}`);
+      return 2;
+    }
+    if (ob.deprecated) console.error(`note  --out ${f.out ?? ""} names the set: pass the directory ${ob.dir}`);
+    outBase = ob.base;
+    statusBase = statusBaseOf(f.expected);
+  }
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const runId = f.check || !statusBase ? void 0 : f.run ?? newRunId();
   const ownRun = runId !== void 0 && f.run === void 0;
@@ -7633,7 +7725,7 @@ ${USAGE}`);
       if (wrote2 === "over") return 2;
       if (!ownRun) {
         if (rec.doc?.probeFailures !== void 0) console.error(probeAttemptLine(rec.doc, code));
-        else if (wrote2 === "refused") console.error(probeAttemptUncounted({ runId, exit: code, by: refusal.by, screen: path9.basename(statusBase), verifyDir: path9.resolve(path9.dirname(statusBase)) }));
+        else if (wrote2 === "refused") console.error(probeAttemptUncounted({ runId, exit: code, by: refusal.by, screen: path11.basename(statusBase), verifyDir: path11.resolve(path11.dirname(statusBase)) }));
       }
     }
     return code;
@@ -7690,7 +7782,7 @@ ${USAGE}`);
     const browserLine = `chromium ${identity2.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`;
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path9.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path11.relative(project, res.file) || res.file}) \xB7 ${browserLine} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -7800,7 +7892,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path9.sep).join("/")
+            forcedPng: (outBase + ".forced-colors.png").split(path11.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -7869,13 +7961,13 @@ ${USAGE}`);
   const diffPath = outBase + ".diff.png";
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
-  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path9.sep).join("/"), captureMs }));
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path11.sep).join("/"), captureMs }));
   const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
   const measuredBase = {
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path9.sep).join("/")],
+    artifacts: [png.split(path11.sep).join("/")],
     expectationSha256: sha256Hex(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
@@ -7898,7 +7990,7 @@ ${USAGE}`);
   const writeFiles = () => {
     try {
       if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
-      else if (fs8.existsSync(diffPath)) fs8.rmSync(diffPath, { force: true });
+      else if (fs9.existsSync(diffPath)) fs9.rmSync(diffPath, { force: true });
     } catch (e) {
       console.error(`warning  ${diffPath}: ${firstLine(e)} \u2014 the visual diff image is not written`);
       if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
@@ -7909,7 +8001,7 @@ ${USAGE}`);
     const forcedPath = outBase + ".forced-colors.png";
     try {
       if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-      else if (fs8.existsSync(forcedPath)) fs8.rmSync(forcedPath, { force: true });
+      else if (fs9.existsSync(forcedPath)) fs9.rmSync(forcedPath, { force: true });
     } catch (e) {
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
@@ -7958,11 +8050,11 @@ ${USAGE}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused) {
-    const outDir = path9.resolve(path9.dirname(outBase)), verifyDir = path9.resolve(path9.dirname(statusBase));
-    const findable = outDir === verifyDir || !ownRun && outDir === path9.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path9.basename(statusBase))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
+    const outDir = path11.resolve(path11.dirname(outBase)), verifyDir = path11.resolve(path11.dirname(statusBase));
+    const findable = outDir === verifyDir || !ownRun && outDir === path11.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path11.basename(statusBase))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
   }
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(path11.dirname(outBase))}`);
   return 0;
 }
 var EXIT_GRACE_MS = 1e3;

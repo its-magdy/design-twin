@@ -445,6 +445,45 @@ for (const [legacy, to] of [["Crates@320", "Crates__80_1.320"], ["Crates.dark", 
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 
+{
+  // a reserved slug: Crates.diff would become Crates__80_1.diff, whose screenshot <S>.diff.png is the base set's diff
+  const p = project("Crates__80_1", { record: false });
+  writeSet(p.put, "Crates.diff");
+  const before = p.ls();
+  const { r } = run(p, true);
+  const s = r.steps.find((x) => x.set === "Crates.diff");
+  check(`[slug] a legacy set whose variant slug is reserved (Crates.diff) is skipped, saying so; nothing moves (got ${JSON.stringify(s)})`,
+    s?.kind === "skip" && s.why.some((w) => /variant 'diff' is not a slug a set can take \(reserved/.test(w)) && r.done.length === 0 && JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
+{
+  // [slug] a variant that overlaps a live one by "-": Crates@w320-dialog would become Crates__80_1.w320-dialog beside the live
+  // Crates__80_1.w320, whose -dialog state screenshot (<set>-<state>.png) is that set's screenshot
+  const p = project("Crates__80_1.w320", { record: false });
+  writeSet(p.put, "Crates@w320-dialog");
+  const before = p.ls();
+  const { r } = run(p, true);
+  const s = r.steps.find((x) => x.set === "Crates@w320-dialog");
+  check(`[slug] a legacy variant that overlaps a live variant by "-" (w320-dialog / w320) is skipped, saying so; nothing moves (got ${JSON.stringify(s)})`,
+    s?.kind === "skip" && s.why.some((w) => /^variant 'w320-dialog' overlaps 'w320' by "-"/.test(w) && /rename one by hand$/.test(w)) && r.done.length === 0 && JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
+{
+  // [slug] two legacy variants of one batch that overlap by "-": neither is renamed (which one keeps its slug is a person's call)
+  const p = project("Crates__80_1", { record: false });
+  writeSet(p.put, "Crates@w320");
+  writeSet(p.put, "Crates@w320-dialog");
+  const before = p.ls();
+  const { r } = run(p, true);
+  const why = (set: string): string[] => { const s = r.steps.find((x) => x.set === set); return s?.kind === "skip" ? s.why : []; };
+  check(`[slug] two planned variants that overlap (w320, w320-dialog) are both skipped; nothing moves (got ${JSON.stringify(r.steps.map((x) => [x.set, x.kind]))})`,
+    why("Crates@w320").some((w) => /^variant 'w320' overlaps 'w320-dialog'/.test(w)) && why("Crates@w320-dialog").some((w) => /^variant 'w320-dialog' overlaps 'w320'/.test(w))
+    && r.done.length === 0 && JSON.stringify(p.ls()) === JSON.stringify(before));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+
 console.log("\na legacy set beside its node's canonical set is retired:");
 {
   const p = project("Crates", { record: false });

@@ -399,13 +399,13 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   const cli = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
   const put = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof v === "string" ? v : JSON.stringify(v, null, 2)); return rel; };
   const readPlan = (): Plan | null => readJsonOrNull(path.join(cwd, "design/plan/Orders__1_1.json"), isPlan);
-  const readReport = () => readJsonOrNull(path.join(cwd, "design/verify/Orders.report.json"), isVerifyReport);
+  const readReport = () => readJsonOrNull(path.join(cwd, "design/verify/Orders__1_1.report.json"), isVerifyReport);
   put("design/export/pages/index.json", { pageDirs: [], sourceFile: "Sample Kit", layers: INDEX.index?.layers ?? [] });
   const screenFile = put("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
   put("design/plan/Orders__1_1.json", { schema: "designtwin/plan@2", screen: "Orders__1_1", screenName: "Orders", nodeId: "1:1", file: screenFile, anchors: {} } satisfies Plan);
-  put("design/verify/Orders.png", "not really a png");
-  const e = cli("--expect", screenFile, "--out", "design/verify/Orders");
-  const expDoc = readJsonOrNull(path.join(cwd, "design/verify/Orders.expected.json"), isVerifyExpectation);
+  put("design/verify/Orders__1_1.png", "not really a png");
+  const e = cli("--expect", screenFile, "--out", "design/verify");
+  const expDoc = readJsonOrNull(path.join(cwd, "design/verify/Orders__1_1.expected.json"), isVerifyExpectation);
   safe("--expect (exit 0) reads design/export/pages/index.json: 2:4 → destinationExported:false", () =>
     e.status === 0 && !!expDoc && (expDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false) && (expDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined));
   // a later page walk REPLACED the root index; 9:9 was exported by an earlier walk and is listed only
@@ -415,8 +415,8 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   putW("design/export/pages/index.json", { pageDirs: [{ page: "Main", dir: "Main", index: "pages/Main/index.json" }], sourceFile: "Sample Kit", layers: (INDEX.index?.layers ?? []).filter((l) => l.id !== "9:9") });
   putW("design/export/pages/Dialogs/index.json", { page: "Dialogs", layers: [{ id: "9:9", name: "Export Dialog", file: "pages/Dialogs/Export_Dialog__9_9.json", sourceFile: "Sample Kit" }] });
   const wScreen = putW("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
-  const we = spawnSync(process.execPath, [CLI, "--expect", wScreen, "--out", "design/verify/Orders"], { encoding: "utf8", cwd: walked });
-  const wDoc = readJsonOrNull(path.join(walked, "design/verify/Orders.expected.json"), isVerifyExpectation);
+  const we = spawnSync(process.execPath, [CLI, "--expect", wScreen, "--out", "design/verify"], { encoding: "utf8", cwd: walked });
+  const wDoc = readJsonOrNull(path.join(walked, "design/verify/Orders__1_1.expected.json"), isVerifyExpectation);
   safe("9:9 listed only in pages/Dialogs/index.json (an earlier walk) → not marked undesigned", () =>
     we.status === 0 && !!wDoc && (wDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === undefined));
   fs.rmSync(walked, { recursive: true, force: true });
@@ -433,22 +433,22 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" },
   ] });
   const mScreen = putM("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
-  const me = spawnSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify/Orders"], { encoding: "utf8", cwd: m2 });
-  const mDoc = readJsonOrNull(path.join(m2, "design/verify/Orders.expected.json"), isVerifyExpectation);
+  const me = spawnSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify"], { encoding: "utf8", cwd: m2 });
+  const mDoc = readJsonOrNull(path.join(m2, "design/verify/Orders__1_1.expected.json"), isVerifyExpectation);
   safe("CLI: 1:50 in an older unnamed page-index row, root index top-level names another file → 1:50 not marked; 9:9 marked", () =>
     me.status === 0 && !!mDoc && (mDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined) && (mDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false));
   fs.rmSync(m2, { recursive: true, force: true });
-  const expSha = (() => { try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, "design/verify/Orders.expected.json"))).digest("hex"); } catch { return ""; } })();
-  put("design/verify/Orders.measured.json", { ...measure({ "2:1": { fontSize: 16 } }), expectationSha256: expSha, artifacts: ["design/verify/Orders.png"] });
-  const c1 = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json");
+  const expSha = (() => { try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, "design/verify/Orders__1_1.expected.json"))).digest("hex"); } catch { return ""; } })();
+  put("design/verify/Orders__1_1.measured.json", { ...measure({ "2:1": { fontSize: 16 } }), expectationSha256: expSha, artifacts: ["design/verify/Orders__1_1.png"] });
+  const c1 = cli("--compare", "design/verify/Orders__1_1.expected.json", "design/verify/Orders__1_1.measured.json");
   const r1 = readReport();
   safe("--compare finds the plan without files[] and records inputs.waivers; font-size high → exit 1", () =>
     c1.status === 1 && r1?.verdict === "fail" && r1.inputs?.waivers?.plan === "design/plan/Orders__1_1.json" && r1.inputs.waivers.sha256 === waiversHash({}));
-  const noReason = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--by", "Sam Doe");
+  const noReason = cli("--accept", "design/verify/Orders__1_1.report.json", "--node", "2:1", "--by", "Sam Doe");
   safe("--accept without --reason → exit 2, nothing written", () => noReason.status === 2 && /--reason/.test(noReason.stderr) && !readPlan()?.waivers);
-  const noField = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--reason", "x", "--by", "Sam Doe");
+  const noField = cli("--accept", "design/verify/Orders__1_1.report.json", "--node", "2:1", "--reason", "x", "--by", "Sam Doe");
   safe("--accept --node without --field or --all-fields → exit 2, nothing written", () => noField.status === 2 && /--field "<label>" \/ --all-fields/.test(noField.stderr) && !readPlan()?.waivers);
-  const noDelta = cli("--accept", "design/verify/Orders.report.json", "--node", "2:4", "--all-fields", "--reason", "x", "--by", "Sam Doe");
+  const noDelta = cli("--accept", "design/verify/Orders__1_1.report.json", "--node", "2:4", "--all-fields", "--reason", "x", "--by", "Sam Doe");
   safe("--accept on a node with no delta → refused, exit 1", () => noDelta.status === 1 && /refused {2}no delta in the report for 2:4/.test(noDelta.stderr));
   // --accept reads report.integrity only: a report without it is refused, whatever its why[] says
   const planBytes = fs.readFileSync(path.join(cwd, "design/plan/Orders__1_1.json"), "utf8");
@@ -467,20 +467,20 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   safe("--accept on a report whose integrity[] lists a reason → exit 1, names it, no waiver written", () =>
     unverified.status === 1 && unverified.stderr === `refused  the report's run is unverified (${unfinishedWhy}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report\n`
     && planUnchanged() && !readPlan()?.waivers);
-  const flagOnCompare = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json", "--reason", "x");
+  const flagOnCompare = cli("--compare", "design/verify/Orders__1_1.expected.json", "design/verify/Orders__1_1.measured.json", "--reason", "x");
   safe("--reason outside --accept → exit 2", () => flagOnCompare.status === 2);
-  const a = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--field", "font-size", "--reason", "the wider type reads better", "--by", "Sam Doe");
+  const a = cli("--accept", "design/verify/Orders__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "the wider type reads better", "--by", "Sam Doe");
   const plan = readPlan();
   const w0 = plan?.waivers?.[0];
   safe("--accept writes one waiver {designed 14, built 16, export sha, reason, decidedBy} into the plan, exit 0, says re-run --compare", () =>
     a.status === 0 && plan?.waivers?.length === 1 && w0?.nodeId === "2:1" && w0.field === "font-size" && w0.designed === 14 && w0.built === 16 &&
     w0.exportContentSha256 === r1?.inputs?.exportContentSha256 && w0.decidedBy === "Sam Doe" && /re-run --compare/.test(a.stderr));
   safe("…the rest of the plan is kept as it was", () => plan?.nodeId === "1:1" && isJsonObject(plan.anchors));
-  const c2 = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json");
+  const c2 = cli("--compare", "design/verify/Orders__1_1.expected.json", "design/verify/Orders__1_1.measured.json");
   const r2 = readReport();
   safe("re-run --compare → pass-with-deviations, exit 0, inputs.waivers.sha256 = waiversHash(plan)", () =>
     c2.status === 0 && r2?.verdict === "pass-with-deviations" && !!plan && r2.inputs?.waivers?.sha256 === waiversHash(plan) && /PASS-WITH-DEVIATIONS/.test(c2.stderr));
-  const again = cli("--accept", "design/verify/Orders.report.json", "--node", "2:1", "--field", "font-size", "--reason", "still intended", "--by", "Sam Doe");
+  const again = cli("--accept", "design/verify/Orders__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "still intended", "--by", "Sam Doe");
   safe("the plan is written by rename: no temp file is left beside it", () => !fs.readdirSync(path.join(cwd, "design/plan")).some((f) => f.endsWith(".tmp")));
   safe("accepting the same node + field again replaces the row (one per node + field)", () => again.status === 0 && readPlan()?.waivers?.length === 1 && readPlan()?.waivers?.[0]?.reason === "still intended");
   fs.rmSync(cwd, { recursive: true, force: true });
