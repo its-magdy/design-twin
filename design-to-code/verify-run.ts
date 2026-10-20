@@ -390,9 +390,10 @@ export function publishStaged(stageDir: string, destDir: string): { published: s
  * listed); at --status a node with only legacy-named sets — a run under the new name would start a second set for it
  * (--migrate first); and at --status --new-run a set name with no files and no status whose node the export index names
  * by another stem (the set --expect would write is that one). A legacy set's own name is refused too (--migrate renames
- * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait --run <its id>, which
- * reads its outcome there once it has ended too), or ended (--status --run <its id> with done/failed/blocked) under the old name. So is a set name whose node another stem holds
- * now, except that its open run is ended under it (--status --run <its id> with done/failed/blocked).
+ * it), except while a run of it is open — --migrate skips such a set, so that run is waited for (--wait --run <its id>,
+ * which reads its outcome there once it has ended too), or ended (--status --run <its id> with done/failed/blocked) under
+ * the old name. So is a set name whose node another stem holds now, except that its open run is ended under it (--status
+ * --run <its id> with done/failed/blocked).
  */
 type RunAt = { kind: "wait"; run: string | undefined } | { kind: "status"; phase: StatusPhase; run: string | undefined; newRun: boolean };
 function runBase(screen: string, dir: string | undefined, at: RunAt): { base: string; notes: string[] } | { error: string } {
