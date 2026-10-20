@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Type-aware lint gate (oxlint + oxlint-tsgolint, which embeds typescript-go 7 — typescript-eslint
+  // does not support TypeScript 7). Each file is typed by its nearest tsconfig.json.
+  "options": { "typeAware": true },
+  "plugins": ["typescript"],
+  // Only the rules below — no default categories.
+  "categories": { "correctness": "off", "suspicious": "off", "pedantic": "off", "perf": "off", "style": "off", "restriction": "off", "nursery": "off" },
+  // .js/.mjs (committed bundles) and fixtures have no tsconfig and would lint untyped — except the two
+  // fixture generators, which test/tsconfig.json types like any other test file.
+  "ignorePatterns": ["test/fixtures/**", "**/*.js", "**/*.mjs", "**/dist/**", ".claude/**", "figma-plugin/code.js", "**/node_modules/**"],
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/consistent-type-imports": ["error", { "prefer": "type-imports", "fixStyle": "inline-type-imports" }],
+    "typescript/restrict-template-expressions": ["error", { "allowNumber": true }],
+    // Promoted from warn (§5.9): 494 sites removed — a value's presence is established by a guard, a typed
+    // helper (design-to-code/map-util.ts getOrInit, test/fixtures.ts must) or a restructure, never asserted.
+    "typescript/no-non-null-assertion": "error"
+  }
+}

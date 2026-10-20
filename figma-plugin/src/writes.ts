@@ -1,26 +1,19 @@
 // Writes (code -> design): minimal, EXPLICIT, safe command set (no eval).
-import { Obj, errMsg } from "./util";
+import { errMsg } from "./util";
+import { ifDefined } from "../../bridge/src/json-util.ts";
+import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
+import type { AppliedWrite, WriteOp, WriteResult } from "../../bridge/src/commands.ts";
 
-// Handle 3/4/6/8-digit hex (CSS Color L4). Shorthand expands by doubling each digit; the optional
-// 4th pair is alpha, which Figma carries as paint.opacity (not in .color).
-function parseHex(hex: string): { color: RGB; opacity?: number } {
-  let h = (hex || "#000000").replace(/^#/, "").trim();
-  if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
-  const chan = (s: string) => {
-    const v = parseInt(s, 16);
-    return Number.isFinite(v) ? v / 255 : 0;
-  };
-  return {
-    color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-    opacity: h.length >= 8 ? chan(h.slice(6, 8)) : undefined,
-  };
-}
-
-function solidPaint(hex: string): SolidPaint {
-  const { color, opacity } = parseHex(hex);
-  const p: any = { type: "SOLID", color };
-  if (opacity !== undefined) p.opacity = opacity;
-  return p as SolidPaint;
+// Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
+// which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
+// the failed op instead of painting a wrong colour: a write can arrive from any bridge client, not only
+// through the MCP schema.
+function solidPaint(hex: string | undefined, what: string): SolidPaint {
+  const c = parseHexColor(hex);
+  if (!c) throw new Error(what + ": '" + String(hex) + "' is not a valid colour — expected " + HEX_COLOR_HINT);
+  const p: { type: "SOLID"; color: RGB; opacity?: number } = { type: "SOLID", color: { r: c.r, g: c.g, b: c.b } };
+  if (c.a !== undefined) p.opacity = c.a;
+  return p;
 }
 
 // Load every font a text node uses before mutating .characters — node.fontName is figma.mixed for
@@ -51,10 +44,16 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
   return p as ChildrenMixin & BaseNode;
 }
 
-async function applyWrite(op: any): Promise<Obj> {
+// WriteOp (the args of one op), AppliedWrite and WriteResult are the bridge's wire contract, so they
+// are imported from it rather than re-declared here. WriteOp's optionals are `T | undefined`;
+// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same. `op` is
+// typed as one of the four names, but the default branch below still refuses anything else, because
+// a write can arrive from any bridge client.
+async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
+      const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null; // likewise: a bad colour leaves no node
       const f = figma.createFrame();
       if (op.name) f.name = op.name;
       if (op.width && op.height) f.resize(op.width, op.height);
@@ -66,17 +65,18 @@ async function applyWrite(op: any): Promise<Obj> {
         f.paddingBottom = op.padding[2];
         f.paddingLeft = op.padding[3];
       }
-      if (op.fill) f.fills = [solidPaint(op.fill)];
+      if (fill) f.fills = [fill];
       parent.appendChild(f);
       return { id: f.id };
     }
     case "createText": {
       const parent = await resolveParent(op.parentId); // before createText — no orphan on a bad parent
+      const fill = op.fill ? solidPaint(op.fill, "createText fill") : null; // likewise: a bad colour leaves no node
       const t = figma.createText();
       await figma.loadFontAsync(t.fontName as FontName);
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
-      if (op.fill) t.fills = [solidPaint(op.fill)];
+      if (fill) t.fills = [fill];
       parent.appendChild(t);
       return { id: t.id };
     }
@@ -85,19 +85,19 @@ async function applyWrite(op: any): Promise<Obj> {
     // not every node type carries fills/characters. Returning {id} in those cases reported a write
     // that never happened — over MCP the agent reads that as success and builds on a false premise.
     case "setFill": {
-      const nd = await figma.getNodeByIdAsync(op.nodeId);
+      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-      (nd as GeometryMixin).fills = [solidPaint(op.color)];
-      return { id: op.nodeId };
+      (nd as GeometryMixin).fills = [solidPaint(op.color, "setFill color")];
+      return ifDefined("id", op.nodeId);
     }
     case "setText": {
-      const nd = await figma.getNodeByIdAsync(op.nodeId);
+      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
       nd.characters = op.text || "";
-      return { id: op.nodeId };
+      return ifDefined("id", op.nodeId);
     }
     default:
       throw new Error("unknown write op: " + op.op);
@@ -109,38 +109,31 @@ async function applyWrite(op: any): Promise<Obj> {
 // ALREADY committed. Throwing here discarded the ids of everything just created, leaving orphan nodes
 // the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
-export interface WriteResult {
-  ok: boolean;
-  applied: Obj[];
-  failedAt?: number;
-  failedOp?: string;
-  error?: string;
-}
-
-export async function applyWrites(ops: any[]): Promise<WriteResult> {
+export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
-  const applied: Obj[] = [];
+  const applied: AppliedWrite[] = [];
   // Dev Mode (manifest editorType "dev") is read-only: every op below would throw its own opaque
   // Plugin-API error, the first one partway into the batch. Refuse the whole batch up front, with the
   // fix, in the same shape a mid-batch failure reports.
   if (list.length && figma.editorType === "dev") {
+    const first = list[0];
     return {
       ok: false,
       applied,
       failedAt: 0,
-      failedOp: list[0] && list[0].op,
+      ...ifDefined("failedOp", first && first.op),
       error: "the file is open in Dev Mode, which is read-only for plugins — switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode.",
     };
   }
-  for (let i = 0; i < list.length; i++) {
+  for (const [i, op] of list.entries()) {
     try {
-      applied.push(await applyWrite(list[i]));
+      applied.push(await applyWrite(op));
     } catch (e) {
       return {
         ok: false,
         applied,
         failedAt: i,
-        failedOp: list[i] && list[i].op,
+        failedOp: op && op.op,
         error: errMsg(e),
       };
     }

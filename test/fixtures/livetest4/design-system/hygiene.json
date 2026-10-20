@@ -1,6 +1,6 @@
 {
   "exportedAt": "2026-09-23T08:48:19.574Z",
-  "file": "Design System - NERA (Copy)",
+  "file": "Design System - NIMA (Copy)",
   "colorProfile": "srgb",
   "hygiene": [
     "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced — pull a page for the full set.",
@@ -96,7 +96,7 @@
     "duplicate component name: 'filter button'",
     "unnamed component: 'Component 1'",
     "duplicate component name: 'Component 1'",
-    "duplicate component name: 'Confirmation Popups'",
+    "duplicate component name: 'Confirmation Panels'",
     "duplicate component name: 'icons'",
     "duplicate component name: 'Popup'",
     "duplicate component name: 'Tabs'",

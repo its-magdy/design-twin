@@ -13,7 +13,8 @@ Output
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing:, runSpacing:)`.
 - `gap:N` → `spacing: N` (Flutter 3.27+) or `SizedBox(width/height: N)` between children.
 - `padding:[t,r,b,l]` (PHYSICAL) → `Padding(padding: EdgeInsetsDirectional.fromSTEB(l, t, r, b))`.
-- `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween`); `alignItems` → `crossAxisAlignment`
+- `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween/spaceEvenly/spaceAround`);
+  `alignItems` → `crossAxisAlignment`
   (`"baseline"` → `CrossAxisAlignment.baseline` **plus** the required `textBaseline:
   TextBaseline.alphabetic` — a `Row` asserts without it).
 - `widthMode:"fill"` → `Expanded`/`Flexible` in the main axis, `double.infinity` width in the cross axis;
@@ -38,8 +39,9 @@ Output
 - A grid inside a scrolling screen is a **sliver** (`SliverGrid` in the screen's `CustomScrollView`), not
   a `GridView` nested in a scroll view — see the next section.
 
-**Scroll, clip & sticky** — `clip:true` → `ClipRRect`/`clipBehavior: Clip.hardEdge`; `layout.scroll` →
-`SingleChildScrollView` (short) or `ListView.builder` (long). `fixedChildren` if present → `CustomScrollView`
+**Scroll, clip & sticky** — `clip:true` → `ClipRRect`/`clipBehavior: Clip.hardEdge`; `scroll` →
+`SingleChildScrollView` (short) or `ListView.builder` (long). `fixedChildren` if present (the LAST N entries of
+`children[]`; place each by its `y`) → `CustomScrollView`
 with `SliverAppBar(pinned: true)`/`SliverPersistentHeader(pinned: true)`, or keep them outside the scroll.
 **A scrollable inside a `Column` (or inside another scrollable on the same axis) throws "Vertical
 viewport was given unbounded height"** — the most common generated-Flutter crash. The list that fills
@@ -117,7 +119,9 @@ intent to real widgets; a node name is a hint, never the decision.
   Slider→`Slider`, Segmented→`SegmentedButton`, Menu→`DropdownMenu`/`MenuAnchor`, Chip→`FilterChip`/
   `InputChip`, Spinner→`CircularProgressIndicator`, Progress→`LinearProgressIndicator`, field→`TextField`
   with an `InputDecoration` (`labelText`/`hintText`/`errorText`) rather than a separate label `Text`,
-  tabs→`TabBar`/`TabBarView`, sheet→`showModalBottomSheet`, dialog→`AlertDialog`.
+  tabs→`TabBar`/`TabBarView`, sheet→`showModalBottomSheet`, dialog→`AlertDialog`. A picker draws its own text:
+  set the picker's text colour explicitly to the drawn tokens (`DropdownButton`'s `style` and its `hint` `Text`
+  style; `showDatePicker` through a `DatePickerThemeData`).
 
 **Interaction states** — look up the component in `design/export/design-system/components.local.json`'s
 `components` catalog and check its variant `options` for hover/focus/pressed/disabled/error/selected

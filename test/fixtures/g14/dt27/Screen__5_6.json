@@ -1,0 +1,18 @@
+{
+  "screen": "Sample App",
+  "nodeId": "5:6",
+  "exportedAt": "2026-10-07T00:00:00Z",
+  "nodes": [
+    {
+      "type": "FRAME", "id": "5:6", "name": "Sample App",
+      "children": [
+        { "type": "INSTANCE", "id": "5:7", "name": "check", "props": {},
+          "mainComponent": { "name": "icon/check-circle", "key": "sample-check" } },
+        { "type": "INSTANCE", "id": "5:8", "name": "Header", "props": { "Count#20:0": true },
+          "mainComponent": { "name": "Header", "key": "sample-header" } },
+        { "type": "INSTANCE", "id": "5:9", "name": "Badge", "component": "Tone=Info", "props": { "Tone": "Info" },
+          "mainComponent": { "name": "Tone=Info", "key": "sample-badge-info", "setKey": "sample-badge", "setName": "Badge" } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "exportedAt": "2026-10-01T00:00:00Z",
+  "screen": "Bed Form",
+  "page": "Plots",
+  "pageId": "70:0",
+  "nodeId": "70:60",
+  "nodes": [
+    {
+      "type": "FRAME",
+      "name": "Bed Form",
+      "id": "70:60",
+      "layout": {
+        "display": "flex",
+        "flexDirection": "column",
+        "gap": 16,
+        "padding": [
+          24,
+          24,
+          24,
+          24
+        ]
+      },
+      "box": {
+        "w": 480,
+        "h": 320,
+        "x": 1200,
+        "y": 0
+      },
+      "clip": true,
+      "fills": [
+        {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      ],
+      "radius": 12,
+      "overlay": {
+        "position": "center",
+        "closeOnClickOutside": true,
+        "background": "#00000040"
+      },
+      "children": [
+        {
+          "type": "TEXT",
+          "name": "Form Title",
+          "id": "70:61",
+          "box": {
+            "w": 200,
+            "h": 24
+          },
+          "fills": [
+            {
+              "type": "solid",
+              "color": "#1d1d1f"
+            }
+          ],
+          "text": "Bed details",
+          "font": {
+            "size": 18,
+            "family": "Arial",
+            "weight": "Semi Bold",
+            "lineHeight": {
+              "value": 20,
+              "unit": "px"
+            },
+            "color": "#1d1d1f"
+          }
+        }
+      ]
+    }
+  ]
+}

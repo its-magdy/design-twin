@@ -16,6 +16,7 @@ export in layers (structure → numbers → pixels), fix the largest gap first, 
 Most false diffs come from the render, not the code:
 - Size = the root `box.w × box.h` of the exported frame (points/dp = Figma px at 1x). Match the
   reference's scale: the `.png` is usually exported at 2x — compare at the same scale or downsample.
+  The web probe renders at the reference's scale itself (`referenceImage` in the expectation) — nothing to set up there.
 - Fonts loaded before capture (web: `await document.fonts.ready`; mobile: bundled fonts registered).
   A missing font makes every text box differ — fix that first.
 - Animations and transitions off; carets hidden; images decoded; deterministic sample data equal to the
@@ -24,13 +25,36 @@ Most false diffs come from the render, not the code:
 - Remove drawn system chrome from comparison (status bar/home indicator areas) — the build uses real
   insets there.
 
+**On web the shipped probe does all of this** (`<scripts>/verify-probe.js`): it waits for `document.fonts.ready`,
+emulates reduced motion and switches animations/transitions off, waits for `--ready` — by default the screen root's
+tag `[data-dt-node="<frame id>"]`, so a page that is not the screen is exit 4, never measured (`--ready none` waits
+for nothing; an untagged root on a page that shows at least half of the screen root's other tags, and no other screen's tagged root, is measured with a note, and a plan with
+`tagging.off` has no default — `measurable.md`) — then requires a quiet window (no navigation, no DOM churn) before measuring, and detects reloads (one re-run,
+then exit 4 with nothing written). It does not use `networkidle` — Playwright's docs discourage it, and a
+page with polling or a dev-server socket never reaches it. Do not re-implement any of this by hand.
+
+A screen that is a section of the app (chosen by component state, not the URL) is reached with `--steps <plan.json>`
+(the plan's `navigate`: `click` / `waitFor` / `goto <same-origin path>` — closed, navigation-only, exactly one visible
+match per `click` (a `waitFor` needs at least one), a click never submits; replayed on every page load, a failing step while measuring is exit 4 with
+nothing written; a click either changes the page in place or navigates to ANOTHER URL — a click that reloads the same URL
+loses what it built, one re-run, then exit 4 naming the step (a link to the URL already shown counts as a `goto` for the load the click starts); a click that lands on another page,
+a login bounce, is still the step's own, and the default `--ready` on the screen root's tag is what tells it apart; a
+plan with no `navigate` runs no steps). The plan's `route` is advisory. After measuring, the probe drives the overlay/swap `on_click` /
+`on_press` interactions and plan `expect: "dialog"` rows (`on_click` / `on_press` only) itself — skipping a disabled
+opener (`:disabled` / `[disabled]` / `aria-disabled`, on it or an ancestor) and one that would submit a form (`ok: null`), revealing a hover-hidden opener, clicking with the real
+mouse, watching the dialog contract (`:modal`, `dialog[open]`, `[role=dialog]`, `[role=alertdialog]`,
+`[aria-modal="true"]`, `:popover-open`) with the destination frame's `data-dt-node` on or inside the opened element (or on a newly visible ancestor of it) — and
+records `ok: true` or `ok: null`, never `ok: false`. Do not re-drive those rows, and a detector you write by hand uses
+the same contract, never `[role=dialog]` alone. The probe also reads the page's sideways overflow at the design width
+(`overflowX`, a high waivable delta on the root frame).
+
 ## Per-stack rendering
 Use what the project already has; suggest adding the lightest option if nothing exists, and ask before
 installing dependencies.
 
 | Stack | Render | Structure dump |
 |---|---|---|
-| Web (React/Tailwind/CSS Modules) | Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
+| Web (React/Tailwind/CSS Modules) | `<scripts>/verify-probe.js` (drives the project's Playwright and measures; `--check` first; `--steps <plan.json>` for a screen reached by clicks). By hand only for looking around: Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
 | iOS SwiftUI / UIKit | swift-snapshot-testing (`assertSnapshot(of: view, as: .image(layout: .fixed(width: w, height: h)))`), or an Xcode Preview / `xcrun simctl io booted screenshot` on a matching device | `.recursiveDescription` / `dump` strategy for the view hierarchy; Accessibility Inspector |
 | Android Compose | Roborazzi (Robolectric, renders `@Preview`s, `captureRoboImage`) or Paparazzi; `@Preview(widthDp = w, heightDp = h)`; `compose-preview-screenshot-testing` | Roborazzi `.uitree.json` / `composeTestRule.onRoot().printToLog()` semantics tree |
 | React Native | Detox/Maestro screenshot on a simulator/emulator at the frame's size; or react-native-web + Playwright for layout-only checks | `toJSON()` from react-test-renderer; accessibility props |
@@ -59,15 +83,55 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    and `padding`, `font.size`/line height/letter spacing (after unit conversion), `radius`, stroke
    width, colors (resolve the token; compare hex). Feed back concrete deltas — "title line box 34→28pt",
    "card gap 12→16" — not "spacing looks off".
-3. **Pixels.** Side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
+3. **Pixels.** Web: the probe diffs its render against the reference — read `report.visual` and open
+   `<Layer>__<id>.diff.png`; start at the hot regions, then still compare the whole reference and build side by side
+   (1-px lines, light greys/tints and text-only changes rarely become regions). The diff is pixelmatch-style
+   YIQ with anti-aliasing detection and shift tolerance; informational, never the verdict; a 1–3 % text-edge
+   floor is normal. Other stacks: side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
    for one component). Look first for clipped or overlapping text and missing elements, then
    alignment and spacing, then color and effects. When a pixel-diff tool is available, align the images
    before diffing so a 1px global offset doesn't drown real differences; prefer a perceptual/SSIM
    score plus the numeric checks over raw pixel equality.
-4. **Accessibility.** Web: axe-core through `@axe-core/playwright` (Playwright's own accessibility
-   guide uses it) on the same page you screenshotted, keyboard tab-through with visible focus. iOS: Accessibility
+4. **Accessibility.** Web: the probe runs the behaviour battery and axe-core (when the project has it) on the page
+   it measured — read `report.behaviour`; a hand-run axe (`@axe-core/playwright`) or keyboard tab-through is only for what the probe
+   reports `not-run`. iOS: Accessibility
    Inspector / VoiceOver labels, Dynamic Type at AX sizes. Android: accessibility scanner / semantics
    tree, font scale 2.0. Touch targets at platform minimums.
+
+**Numbers: what `--expect`, the probe and `--compare` do.** `--expect` emits the spec as data — font
+family/weight/size/line-height/colour, background, radius, padding, gap, size, and the literal text — one row per
+node, read straight off the export. Read those rows rather than retyping them into a code comment: one build's
+wrong text styles traced to exactly that — a component carrying the comment "heading 20/Semi Bold, subtitle
+16/Regular" which contradicted the export, and no later step re-read the node.
+
+`--compare` has **no browser**: it diffs the measured computed styles against the spec with explicit tolerances and
+grades the interaction results the probe recorded (in `measured.json`'s `interactions[]`, or a separate
+`--interactions <file>`), then writes `design/verify/<Layer>__<id>.report.json`. Driving each designed interaction is the
+probe's job (the `visual-verifier` agent drives the rest and records the selector it drove); anything nobody drove
+is reported `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass` or `pass-with-deviations`
+(nothing open, and ≥1 delta the user accepted or interaction the user descoped — waivers and descopes are the user's
+word, recorded through the verify skill). That verdict is computed, and it is what you report.
+
+Every measured file the probe writes names its run. Without `--run` (your own loop) the probe starts a run of its own,
+prints `run <id>`, and ends it: `done` once the files are written, `failed` on an exit 3/4 — so `--compare` judges your
+measurement by that run, and a re-run is a new run. It never measures beside another open run of the screen: while a
+`visual-verifier` or verify-skill run is in flight (it writes the same `design/verify/<Layer>__<id>.*` files) the probe
+refuses with exit 2 before starting anything — wait for that run
+(`node "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase failed --run <id>`.
+
+Every non-zero exit, an error, or a stop signal (Ctrl-C, a command timeout's SIGTERM, a closed terminal) ends your own
+run `failed` before the probe exits. Two cases leave it at `measuring` — a probe killed outright (SIGKILL), and an exit
+whose last status write was refused (the probe then prints the command that records it) — so the run records the
+probe's pid, host and a deadline (its start + `--max-time` + 120 s): the next probe without `--run` ends it `failed`
+itself (it says so on stderr) once that pid is gone on the same machine or, on any host, the deadline has passed, and
+goes on. Before the deadline, when it cannot tell — the run was started on another host, or the pid is running — it
+refuses, naming that probe's own run, when and by which pid it started; if no probe is running, end it with the
+`--status <Layer>__<id> --phase failed --run <id>` command it prints. A probe that was stopped or slept past its deadline
+finishes in its run when nobody took it over; when a later probe did, it finds the status naming that run and writes
+nothing more (exit 2, or 128 + the signal's number when a stop signal ended it, or 1 after an error). An own run that
+ends `done` replaces the published `design/verify/<Layer>__<id>.status.json` with its run's (the pid and host stay in the
+run cache, never in that file); one that ends `failed` publishes nothing — only the live status says so.
 
 **Known approximations** (listed in the plan: shadow spread on iOS, blur radius conversions, diamond
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded
@@ -86,6 +150,11 @@ texture as thousands of separate paths, every renderer antialiases each one, and
 result. Report it as a real delta naming that cause; the fix is a re-export on the design side, never
 a redraw or a blur in your stack.
 
+**Values come from the export JSON** — the expectation is built from it and the compare grades against it.
+The PNG is the layout and visual aid (and the visual-diff input): a PNG pixel that disagrees with a JSON value
+(a text colour, say) is not a build defect — anti-aliased glyph edges and colour-profile conversion move
+sampled pixels. Report it as a designer question with both values, and never change the build to match the PNG.
+
 ## Beyond the ideal frame
 Render at least once each, when the stack supports it:
 - Each interaction state with a design (or a derived default) — pressed/disabled/focus/error/selected.
@@ -96,11 +165,17 @@ Render at least once each, when the stack supports it:
 - A narrow and a wide width (small phone / tablet, or web breakpoints) for fill/hug behavior.
 
 Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
-why}]}` — and, when an accessibility check ran, `verification.a11y` — `{tool, violations}`. One
+why}]}` (yours to write) — and, on web, let `verify-screen.js --compare … --record-plan` write `verification.recorded`, the
+tool's block (the report's sha256, verdict, headline and counts, `mode` — `static-only` + its `reason` for a static-only
+measured file —, `renderer`, `artifacts`, open `deltas`, `a11y` from `report.behaviour.summary`), which you never edit;
+elsewhere, when an
+accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
 rendered frame is a legitimate result; an unstated one is not, because the report would then read as
 "verified" for states nobody looked at. The Stop hook only warns when these are missing.
 
 ## The fix loop
+- Record the differences you already know about as `deviations[]` (with a reason) when you build them, not after the
+  report lists them; a line-height taller than its fixed text box is a choice to make deliberately, not a delta to chase.
 - Fix the largest structural or numeric delta first, re-render, re-compare. Keep a one-line log per
   round (what changed, what the delta became).
 - Cap at **5 rounds per component**, and stop sooner when a round fixes nothing. If a fix to one value
@@ -108,33 +183,18 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
   split the component, or report it.
 - Never trade maintainability for pixels: a round that adds absolute positioning, a fixed size or a
   magic offset to a node the export lays out with auto layout, or replaces a token with a literal,
-  is a regression even when the screenshot got closer. Report the residual in `deltas` instead.
+  is a regression even when the screenshot got closer. Record the residual in `deviations[]` (with a reason) instead —
+  the record's `deltas` belong to `--record-plan`, which writes `verification.recorded` whole (a hand edit there blocks the Stop hook).
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
 
 ## Saying you're alive
-A full verify pass is minutes, not seconds, and every stack's render step is silent while it works —
-a dev server booting, a simulator coming up, a Gradle task compiling, a golden test warming. Observed
-in practice: a pass that ran ~25 minutes with the caller unable to distinguish progress from a hang.
-So **write a status file as you go**: `design/verify/<screen>.status.json`, rewritten at each step
-with `{"screen", "phase", "detail", "at": "<ISO>"}`, where `phase` is
-
-`starting` → `renderer-found` → `renderer-ready` → `rendered` → `comparing` → `done` (or `failed`)
-
-`renderer-ready` is whatever "ready to capture" means on your stack — dev server answering, simulator
-booted, emulator up, test harness compiled. One Write per phase is the whole cost.
-
-The caller polls that file instead of guessing: a changed `at` means working, an `at` that has not
-moved in several minutes means genuinely stuck, and `phase` says which step to blame. Delete nothing
-— the final `done`/`failed` record is useful afterwards.
-
-**On timings, so nobody chases a phantom:** the same verifier legitimately takes far longer inside a
-build than standalone, and that is not a bug. Standalone is one capture against finished code with
-the renderer often already warm. Inside a build it runs *once per fix round* — render → report
-deltas → the builder edits → re-render — each paying its own cold start, and cold start is the
-expensive part on every stack (a simulator boot or a Gradle build more so than a dev server). One
-observed run: ~25 min inside a build with two fix rounds, ~3.5 min standalone afterwards. Budget
-per-round, and treat a *phase* that stops advancing for minutes as the real hang.
+A full verify pass is minutes, not seconds, and every stack's render step is silent while it works — a dev server
+booting, a simulator coming up, a Gradle task compiling, a golden test warming. So report status as you go,
+through the tool, and wait on a run with the tool rather than a poll loop. The one copy of that protocol — the
+`--status` / `--wait` commands and exit codes, run ids, the run cache, staging and publishing, closing pages
+before the probe writes, rebuilding a preview, processes, permission denials, timings — is the verify skill's
+`references/run-protocol.md`, which the skill that sent you here links beside this file.
 
 ## When you can't render
 Rendering is the default, not an optional extra — check `package.json`/`node_modules` (or the
