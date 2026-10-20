@@ -294,7 +294,9 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`overlay`** on a frame — `{position, closeOnClickOutside, background}` (scrim color).
 - **`flows[]`** (top level) — `{page, pageId, nodeId, name}` prototype entry points → candidate routes.
 - Ignore triggers with no code meaning (`mediaHitTime` scrub points) rather than guessing.
-- **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API.
+- **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API. A
+  `styles[]` row is an applied animation style; one with `custom: true` is a custom animation style, read as its name
+  only (no duration or props).
 
 ## Images and vectors
 
