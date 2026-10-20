@@ -18,9 +18,9 @@
     "test:fast": "node test/run-suites.ts --fast"
   },
   "devDependencies": {
-    "axe-core": "4.13.0",
-    "oxlint": "^1.85.0",
+    "axe-core": "4.14.0",
+    "oxlint": "^1.87.0",
     "oxlint-tsgolint": "^7.0.2002",
-    "playwright": "1.63.0"
+    "playwright": "1.64.0"
   }
 }
