@@ -109,7 +109,7 @@ async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenM
   if ("r" in v && "g" in v && "b" in v) return { color: rgbaToHex(v) }; // RGB | RGBA
   return undefined; // an object of no known shape is omitted
 }
-/** The shader's property definitions as `{defId: {name, type, default?, description?}}`; undefined when none. */
+/** The shader's property definitions as `{defId: {name, type, default?, tokens?, description?}}`; undefined when none. */
 async function shaderDefs(meta: { readonly [defId: string]: ShaderPropertyDefinition } | undefined): Promise<Record<string, IrShaderPropDef> | undefined> {
   if (!meta || typeof meta !== "object") return undefined;
   const out: Record<string, IrShaderPropDef> = {};
