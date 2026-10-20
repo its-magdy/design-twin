@@ -61,7 +61,7 @@ its export directly in `design/` — every path below works either way, just dro
   The Figma layer name and the visible on-screen title are often different strings ("build the Members screen"
   when no layer is named that): resolve with
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`, which prints the one
-  screen it resolved and its `stem` — the `<Layer>__<id>` the screen's plan and verify set are named by — or stops
+  screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (an existing plan keeps its own name) — or stops
   and prints the candidates (a match only once spaces, `-` and `_` are ignored is one too) — confirm a candidate by
   node id with the user rather than building from a guess.
 - **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.
@@ -392,7 +392,7 @@ Copy this checklist into your notes and keep it updated:
      ```
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json \
-       --url <url> --out design/verify [--steps design/plan/<Layer>__<id>.json]   # web: renders, measures every node, writes <Layer>__<id>.measured.json + .png
+       --url <url> --out design/verify [--steps <plan.json>]   # web: renders, measures every node, writes <Layer>__<id>.measured.json + .png
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
        design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json --out design/verify
      ```
@@ -403,8 +403,12 @@ Copy this checklist into your notes and keep it updated:
      `<Screen>-r1`) is a note at `--expect`, which writes the `<Layer>__<id>` set beside it; `--compare` and the probe
      refuse a legacy-named expectation. Rename the old sets with `verify-screen.js --migrate` (a dry run), then
      `--migrate --apply` (the verify skill, step 2, has what it skips).
-     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan as
-     `--steps` (one with no `navigate` runs no steps); after every load the probe waits for the screen root's tag
+     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan
+     found in step 2 as `--steps <plan.json>` (and as `verify-build`'s argument): only a NEW plan is named
+     `design/plan/<Layer>__<id>.json`; an existing plan keeps whatever name it has, and a variant set
+     (`<Layer>__<id>.<slug>`) uses its node's plan — no slugged plan exists. A frame that is not its plan's
+     `nodeId` (a modal in its primary screen's plan) is found by no tool: pass `--plan <that plan>` to `--expect`
+     and `--compare`, and that plan as `--steps`. A plan with no `navigate` runs no steps; after every load the probe waits for the screen root's tag
      (`--ready` defaults to `[data-dt-node="<frame id>"]`: a step's click can land on another page — a login bounce —
      and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
      and the plan's `expect: "dialog"` rows itself (evidence only: `ok: true` or `ok: null`, never `ok: false`);
@@ -435,14 +439,14 @@ Copy this checklist into your notes and keep it updated:
    - **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
      **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
      `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json`.
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>`.
    - **Status is computed, never stored**:
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status design/plan/<Layer>__<id>.json` derives it from the
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>` derives it from the
      hook's result, the hashes of `files[]` and the verify report. Write `status` yourself only as `"abandoned"`
      or `"awaiting-user"` (and back to `"pending"`); `hook-and-status.md` lists every status and what blocks.
 
-6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
-   <Layer>__<id>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
+6. **Report** (short): files created/changed; components reused vs generated (from the plan's
+   `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
    states designed vs defaulted (with the defaults used); approximations; **every name you invented**
    (any token/component/asset the export did not name — list each with what you called it and where
    it lives, so the user can rename it before it spreads); verification evidence (what was rendered

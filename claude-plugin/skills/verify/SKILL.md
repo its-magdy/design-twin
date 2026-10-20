@@ -57,7 +57,10 @@ Five things to know before running the commands above:
   were asked about may be a multi-frame plan under another name: list the plans and read their `nodeId`/`files`
   fields rather than `ls`-ing a name that was never written. One node has one plan: two or more that describe the
   frame are exit 2 before anything is written, until one is kept or `--plan <plan.json>` names the one to use (a
-  multi-frame plan).
+  multi-frame plan). A frame that is not its plan's `nodeId` (a modal described in its primary screen's plan) is
+  found by no tool: pass `--plan <that plan>` to `--expect` and `--compare`, and that plan as the probe's
+  `--steps`. A plan keeps whatever name it was written under, and a variant set (`<Layer>__<id>.<slug>`) uses its
+  node's plan — no slugged plan exists.
 - **`design/target.json` may carry `profile: null`.** `dtwin init` writes the file unconditionally so
   every step has one place to look; a null profile means nobody has decided, and the plan's own
   `target` field is then the better answer. Ask if neither has it.
@@ -74,8 +77,8 @@ Five things to know before running the commands above:
 - **The user's name for the screen (e.g. "Members") may not be the Figma layer name (e.g. `people `,
   trailing space).** Resolve it with
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`: it prints the one
-  screen it resolved and its `stem` — the `<Layer>__<id>` its plan and verify set are named by (the name a set of
-  that node already has, so a frame renamed in Figma keeps it) — or stops (exit 1) and prints the candidates (with the
+  screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (the name a set of
+  that node already has, so a frame renamed in Figma keeps it; an existing plan keeps its own name) — or stops (exit 1) and prints the candidates (with the
   field each matched on) — show those and ask, rather than picking the nearest name or reading a plan's free-text
   `screen` field as a resolver. A name that matches only once spaces, `-` and `_` are ignored ("OrderList" for
   "Order List") is a candidate to confirm by node id too, never a resolve.
@@ -130,10 +133,14 @@ renamed by `verify-screen.js --migrate`. `--expect` writes the `<Layer>__<id>` s
 and the probe refuse a legacy-named expectation (exit 2), and `--status` refuses a node that has only legacy-named
 sets. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --migrate` first — a dry run that lists each rename
 and each set it skips, and why — then `--migrate --apply`. It moves every file of a set (the live status too) and
-rewrites the paths a plan's `verification` records; it skips a set whose node is unknown or ambiguous, that has an
-open run, whose new name is taken, or that a plan records by hand or finds by its name alone (add `"nodeId"` to that
-plan) — those stay for you to rename by hand. A legacy set whose node already has its `<Layer>__<id>` set only has
-its expectation retired (`<old>.expected.json.retired`).
+rewrites the paths a plan's `verification` records. A legacy variant (`<Screen>@320`, `<Screen>-r1`) becomes
+`<Layer>__<id>.<slug>`. Only a legacy BASE set beside an existing `<Layer>__<id>` base set of its node is retired
+(`<old>.expected.json.retired`; its other files stay). A set it skips, the dry run says why, and each skip has its own
+way on: a set with an open run — end the run first; a plan that finds the set by its name alone — add `"nodeId"` to
+that plan; a plan that still records the old report, or whose record was edited by hand or no longer names the report on disk —
+re-run `--compare --record-plan` (on the node's existing `<Layer>__<id>` set, for a set to retire), then
+`--migrate`; a node that is unknown or ambiguous, a new name that is taken, or a variant slug that is reserved
+(`diff`, a file tail of a set) or overlaps another variant of the node — rename by hand.
 
 This writes `design/verify/<Layer>__<id>.expected.json`: one row per **visible** node that carries a
 checkable value, plus every visible component instance and every designed `reactions` edge on a
@@ -170,9 +177,9 @@ verifier a new run id (`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --wait <Layer>__<id> --run <id>` (exit 0 done, 1 failed or `blocked`,
 5 timeout or no progress, 6 run cache not accessible) rather than a hand-rolled poll loop.
 
-On web the verifier first closes every page and browser of the app it opened, then runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> [--steps design/plan/<Layer>__<id>.json]` — which waits for the frame's tag (`[data-dt-node="<frame id>"]`, its default `--ready`) after every load — a page that shows at least half of the screen root's other tags but not the root's, and no other screen's tagged root, is measured with the note "the screen root is not tagged", and a plan with `"tagging": {"off": true, …}` has no default (pass `--ready <root selector>` or `--ready none`; `references/probe-driving.md`) — then matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: the designed interactions the probe did not drive (and pressed states) and components it judges absent, in `<Layer>__<id>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never written there directly. `--browser-path <executable>` (also on `--check`) launches a Chromium the user already has cached instead of Playwright's own — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); not an executable file is exit 3, and it is only guaranteed with the bundled Chromium. `measured.json` says `custom`, never the path. Exit 4 (kept navigating, reloaded, unreachable, `--ready` timeout, a `--steps` step that failed, a reload that undid an in-place `--steps` click on both passes, or the probe's own `--max-time` bound, default 180000 ms, or the page or browser closed or crashed) writes nothing, and the probe counts it in the run's status: after the first failed attempt (exit 3 or 4) it prints `status run <id> measuring — failed probe attempt 1 of 2: …` and the agent re-runs it once — after an exit 4 at once, after an exit 3 only once the user has fixed the renderer (ask them first, never install it); the second ends the run `failed` itself (`status run <id> failed — …`) and the agent reports the navigation log (a closed or crashed page or browser prints none: if it recurs, run `--check`). While the user answers an exit 3 the run stays open at `measuring`: it resumes with the same `--run <id>`, never `--new-run`, and an orchestrator's `--wait` on it may end meanwhile in exit 5 `stalled` — the question pending, not a hang: `--wait` again with the same id once the user has answered (`references/run-protocol.md`).
+On web the verifier first closes every page and browser of the app it opened, then runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> [--steps <plan.json>]` (the plan found in step 1 — an existing plan keeps whatever name it was written under, a variant set `<Layer>__<id>.<slug>` uses its node's plan, and a frame that is not its plan's `nodeId` uses that plan too) — which waits for the frame's tag (`[data-dt-node="<frame id>"]`, its default `--ready`) after every load — a page that shows at least half of the screen root's other tags but not the root's, and no other screen's tagged root, is measured with the note "the screen root is not tagged", and a plan with `"tagging": {"off": true, …}` has no default (pass `--ready <root selector>` or `--ready none`; `references/probe-driving.md`) — then matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: the designed interactions the probe did not drive (and pressed states) and components it judges absent, in `<Layer>__<id>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never written there directly. `--browser-path <executable>` (also on `--check`) launches a Chromium the user already has cached instead of Playwright's own — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); not an executable file is exit 3, and it is only guaranteed with the bundled Chromium. `measured.json` says `custom`, never the path. Exit 4 (kept navigating, reloaded, unreachable, `--ready` timeout, a `--steps` step that failed, a reload that undid an in-place `--steps` click on both passes, or the probe's own `--max-time` bound, default 180000 ms, or the page or browser closed or crashed) writes nothing, and the probe counts it in the run's status: after the first failed attempt (exit 3 or 4) it prints `status run <id> measuring — failed probe attempt 1 of 2: …` and the agent re-runs it once — after an exit 4 at once, after an exit 3 only once the user has fixed the renderer (ask them first, never install it); the second ends the run `failed` itself (`status run <id> failed — …`) and the agent reports the navigation log (a closed or crashed page or browser prints none: if it recurs, run `--check`). While the user answers an exit 3 the run stays open at `measuring`: it resumes with the same `--run <id>`, never `--new-run`, and an orchestrator's `--wait` on it may end meanwhile in exit 5 `stalled` — the question pending, not a hang: `--wait` again with the same id once the user has answered (`references/run-protocol.md`).
 
-`references/probe-driving.md` is the one copy of the driving rules: `--steps` (pass the screen's plan; a plan
+`references/probe-driving.md` is the one copy of the driving rules: `--steps` (pass the plan found in step 1; a plan
 with no `navigate` list runs no steps), which page loads belong to a step, the overlay drive and the dialog contract, the
 evidence an interaction row needs, and which side wins when probe and agent disagree. The probe drives the overlay
 and plan `expect: "dialog"` rows itself; the agent does NOT re-drive rows the probe drove with `ok: true`, and a

@@ -33,7 +33,9 @@ spec, instance and designed interaction, the `coordinates` convention, the canon
 and under `hidden` the ids of every layer the designer switched off); the reference PNG
 (`nodes[0].reference` in the screen export, a path relative to `design/export/`; its scale and offset live in the
 expectation's `referenceImage`, so never recompute the reference geometry); the plan
-(`design/plan/<Layer>__<id>.json`, or the multi-frame plan that describes the frame); the run id; and how to reach
+(its path, `<plan.json>`: an existing plan keeps whatever name it was written under, a variant set uses its node's
+plan, and a frame that is not its plan's `nodeId` — a modal in its primary screen's plan — is found by no tool, so
+the caller names that plan for `--steps`); the run id; and how to reach
 the built screen (route / component / preview name). If you script against the export JSON, read
 `design/export/SCHEMA.md` first (the scripting quick keys: `text`, `box.w`, `hidden` on ancestors, `scroll`,
 `fixedChildren`). The plan's `route` is advisory free text; when the screen is a
@@ -120,10 +122,10 @@ page and browser of the app you opened (§2): the probe writes into `design/veri
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
   --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> \
-  [--steps design/plan/<Layer>__<id>.json]
+  [--steps <plan.json>]
 ```
 
-Pass the screen's plan as `--steps` (a plan with no `navigate` list runs no steps). After every load the probe waits
+Pass the plan you were given as `--steps` (a plan with no `navigate` list runs no steps). After every load the probe waits
 for the screen root's tag `[data-dt-node="<frame id>"]` — its default `--ready` — so a login bounce or another
 section is an exit 4, never measured; a page that shows at least half of the screen root's other tags but not the root's,
 and no other screen's tagged root, is measured with the note "the screen root is not tagged" (report it). For a plan with `"tagging": {"off": true, …}` the probe has no

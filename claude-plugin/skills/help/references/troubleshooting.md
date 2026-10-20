@@ -168,9 +168,12 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   expectation, and `--status` a node that has only legacy-named sets. From the project root run
   `node "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
   then `--migrate --apply`, which renames every file of each set (the live status too) and rewrites the paths a
-  plan's `verification` records. It skips a set whose node is unknown or ambiguous, that has an open run (end or
-  finish that run first), whose new name is taken, whose variant slug the grammar refuses, or that a plan records by
-  hand or finds by its name alone (add `"nodeId"` to that plan); rename those by hand. A run cut short leaves
+  plan's `verification` records. Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its
+  expectation gets `.retired`); a legacy variant becomes `<Layer>__<id>.<slug>`. A set it skips, the dry run says why,
+  and each has its own way on: an open run — end or finish that run first; a plan that finds the set by its name
+  alone — add `"nodeId"` to that plan; a plan that still records the old report, or whose record was edited by hand —
+  re-run `--compare --record-plan`, then `--migrate`; a node that is unknown or ambiguous, a new name that is taken,
+  or a variant slug that is reserved or overlaps another — rename by hand. A run cut short leaves
   `design/verify/.migrate-<S>.json`: the next `--migrate --apply` rolls it back first. **"--out takes the verify
   directory"** / **"--force is gone"** → `--out` names the directory, never the set; a second set of one node is
   `--expect --variant <slug>`.

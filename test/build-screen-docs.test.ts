@@ -330,11 +330,11 @@ console.log("build-screen docs (steps / dialog driving / precedence / overflow):
       && /never submits a form/.test(t) && /[Ii]dempotent/.test(t) && /exit 4 and nothing is written/.test(t) && /its re-run after a same-URL reload/.test(t) && /every page the probe drives an interaction on/.test(t)));
   check("the plan's `route` is advisory; the skill passes the screen's plan to --steps, and a plan with no `navigate` runs no steps (verifier, verify skill, build-screen, references)",
     /`route` is advisory/.test(verifier) && /`route` stays advisory/.test(verifySkill) && /`route` \(advisory free text/.test(skill) && /`route` is advisory/.test(verifyRef)
-    && /Pass the screen's plan as `--steps` \(a plan with no `navigate` list runs no steps\)/.test(verifier) && /pass the screen's plan to `--steps`/.test(verifySkill)
-    && /a plan with no `navigate` list runs no steps, and the probe says so in a `note` line/.test(verifySkill) && /Pass the plan as `--steps` \(one with no `navigate` runs no steps\)/.test(skill)
+    && /as `--steps` \(a plan with no `navigate` list runs no steps\)/.test(verifier) && /pass the screen's plan to `--steps`/.test(verifySkill)
+    && /a plan with no `navigate` list runs no steps, and the probe says so in a `note` line/.test(verifySkill) && /as `--steps <plan\.json>`/.test(skill) && /plan with no `navigate` runs no steps/i.test(skill)
     && !/only when (the plan|it) has a `navigate` list/.test(verifier + verifySkill + skill));
   check("the probe call in every doc shows --steps",
-    [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<Layer>__<id>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
+    [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps <plan\.json>/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
   check("the shipped probe drives overlay/swap on_click/on_press and plan expect:dialog rows: reveals hover-hidden openers, mouse vs synthetic activation, never ok:false, destination tag inside",
     [verifier, verifySkill].every((t) => /`overlay` or `swap`|`overlay` \/ `swap`/.test(t) && /`on_click` \/ `on_press`/.test(t) && /`expect: "dialog"`/.test(t) && /hover-hidden opener/.test(t) && /`"synthetic"`/.test(t) && /never a user activation/.test(t)
       && /never `ok: false`|NEVER `ok: false`/.test(t) && /`data-dt-node` tag (on or )?INSIDE|tag INSIDE|on or inside/i.test(t)));
@@ -429,7 +429,7 @@ console.log("build-screen docs (same-URL documents + load wait):");
     /After every load and the steps the probe waits for the screen root's tag — `--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(verifier) && /an expired session bouncing to a login page/.test(verifier)
     && /its default `--ready`/.test(verifier) && /`--ready none` only to wait for nothing/.test(verifySkill) && /an expired session bouncing to a login page/.test(verifySkill)
     && /waits for `--ready` — by default the screen root's tag `\[data-dt-node="<frame id>"\]`/.test(verifyRef) && /the default `--ready` on the screen root's tag is what tells it apart/.test(verifyRef)
-    && /\[--steps design\/plan\/<Layer>__<id>\.json\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
+    && /\[--steps <plan\.json>\]/.test(skill) && /`--ready` defaults to `\[data-dt-node="<frame id>"\]`/.test(skill)
     && ![verifier, verifySkill, verifyRef, skill].some((t) => /always pass `--ready|--ready '\[data-dt-node/.test(t)));
   check("the screen root carries its frame id (build-screen); an untagged root on a page that shows at least half of the screen's other tags is measured with a note (fewer: exit 4), and a tagging-off plan has no default — pass --ready <root selector> or --ready none (verifier, verify skill, build-screen)",
     /\*\*The screen root carries its frame id\*\*/.test(skill) && /finds the root by the frame's size and a\s+fill \(else the viewport stands in for it\), and says how in a note/.test(skill)
@@ -969,28 +969,57 @@ console.log("build-screen docs:");
   // legacy names are --migrate's, plans are found by node id, a fold is a candidate.
   console.log("verify docs (the canonical screen key):");
   const trouble = flat(read("claude-plugin/skills/help/references/troubleshooting.md"));
-  const verifyDocs = [verifier, verifySkill, verifyRef, skill];
+  const syncDoc = flat(read("claude-plugin/skills/sync-design/SKILL.md"));
+  const rootReadme = flat(read("README.md"));
+  const d2cReadme = flat(read("design-to-code/README.md"));
+  // every doc that speaks of a verify set, a plan or the verify tools (build-screen's `skill` holds measurable.md and hook-and-status.md)
+  const verifyDocs = [verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble, rootReadme, d2cReadme];
   // <Screen> survives only as an export file's <Screen>__<id> and the legacy names --migrate renames
-  check("no verify doc names a verify set <Screen>/<screen>, passes --out design/verify/<set>, or tells anyone to pass --force (verifier, verify skill, references/verify.md, build-screen)",
+  check("no verify-related doc names a verify set <Screen>/<screen>, passes --out design/verify/<set>, or tells anyone to pass --force (verifier, verify skill, references, build-screen, screen-builder, sync-design, troubleshooting, READMEs)",
     verifyDocs.every((t) => !/<Screen>(?!__|@320|-r1)/.test(t) && !/design\/(verify|plan)\/<screen>/.test(t) && !/--out design\/verify\/<(?!Layer>__<id>` spelling)/.test(t) && !/pass `?--force|`--force` overrides/.test(t)));
   check("the verify skill: --out is the verify DIRECTORY, the set is named by the frame's node (the name a set of the node already has), any other --out basename is exit 2, and there is no --force",
-    /`--out` is the verify DIRECTORY \(default `design\/verify`; a new one ends in `\/`\), and the set in it is `<Layer>__<id>` — the name a set of that node there already has \(a frame renamed in Figma keeps writing the same set\)/.test(verifySkill)
-    && /any other `--out` basename is refused \(exit 2;/.test(verifySkill) && /There is no `--force`: it is a usage error \(exit 2\)/.test(verifySkill));
+    /`--out` is the verify DIRECTORY/.test(verifySkill) && /the set in it is `<Layer>__<id>`/.test(verifySkill) && /the name a set of that node there\s+already has/.test(verifySkill)
+    && /a frame renamed in Figma keeps writing the same set/.test(verifySkill)
+    && /any other `--out` basename is refused \(exit 2/.test(verifySkill) && /There is no `--force`/.test(verifySkill));
   check("the verify skill: a second set of a node is --expect --variant <slug> (<Layer>__<id>.<slug>), with the slug grammar, reserved file tails and the \"-\" overlap rule",
-    /`--expect --variant <slug>` writes `<Layer>__<id>\.<slug>`/.test(verifySkill) && /lower-case letters and digits, words joined by single `-`, at most\s+32 characters/.test(verifySkill)
-    && /a file tail of the set \(`diff`, `report`, `measured`, …\) is no slug, nor one that extends another\s+variant of the node by `-`/.test(verifySkill));
-  check("--migrate is documented where legacy-named sets are met: dry run first, then --apply, and what it skips (verify skill, build-screen, help troubleshooting)",
-    /Run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-screen\.js" --migrate` first — a dry run that lists each rename\s+and each set it skips, and why — then `--migrate --apply`/.test(verifySkill)
-    && /it skips a set whose node is unknown or ambiguous, that has an\s+open run, whose new name is taken/.test(verifySkill)
-    && /`verify-screen\.js --migrate` \(a dry run\), then `--migrate --apply`/.test(skill) && /`--expect --variant <slug>`/.test(skill)
-    && /verify-screen\.js" --migrate` — a dry run that lists each rename and each set it skips, with why — then `--migrate --apply`/.test(trouble)
-    && /It skips a set whose node is unknown or ambiguous, that has an open run/.test(trouble));
+    /--variant <slug>` writes `<Layer>__<id>\.<slug>`/.test(verifySkill) && /lower-case letters and digits/.test(verifySkill) && /single `-`/.test(verifySkill) && /at most\s+32 characters/.test(verifySkill)
+    && /a file tail of the set \(`diff`, `report`/.test(verifySkill) && /extends another\s+variant of the node by `-`/.test(verifySkill));
+  check("--migrate is documented where legacy-named sets are met: dry run first, then --apply (verify skill, build-screen, help troubleshooting)",
+    /verify-screen\.js" --migrate` first/.test(verifySkill) && /a dry run that lists each rename/.test(verifySkill) && /then `--migrate --apply`/.test(verifySkill)
+    && /`verify-screen\.js --migrate` \(a dry run\)/.test(skill) && /then `--migrate --apply`/.test(skill) && /`--expect --variant <slug>`/.test(skill)
+    && /verify-screen\.js" --migrate` — a dry run/.test(trouble) && /then `--migrate --apply`/.test(trouble));
+  // each skip --migrate prints has its own way on; only a legacy BASE set beside a canonical base set is retired
+  check("--migrate: each skip says what to do (open run: end it; a plan found by name: add nodeId; a plan still recording the old report: re-record; taken name / reserved or overlapping slug / unknown node: by hand), in the verify skill and troubleshooting",
+    [verifySkill, trouble].every((t) => /open run/.test(t) && /end( or finish)? (that|the) run( first)?/.test(t) && /add `"nodeId"` to\s+that plan/.test(t) && /--compare --record-plan/.test(t)
+      && /rename by hand/.test(t) && /name that is taken/.test(t) && /(variant )?slug that is reserved/.test(t) && /overlaps another/.test(t))
+    && ![verifySkill, trouble].some((t) => /stay for you to rename by hand|rename those by hand/.test(t)));
+  check("--migrate retires only a legacy BASE set beside an existing <Layer>__<id> base set (its expectation gets .retired); a legacy variant becomes <Layer>__<id>.<slug> (verify skill, troubleshooting)",
+    [verifySkill, trouble].every((t) => /legacy base set beside an existing `<Layer>__<id>` base\s+set/i.test(t) && /\.retired|`\.retired`/.test(t) && /legacy variant.{0,80}becomes\s+`<Layer>__<id>\.<slug>`/.test(t))
+    && !/A legacy set whose node already has its/.test(verifySkill + trouble));
+  const planDocs = { verifier, verifySkill, verifyRef, skill, builder, syncDoc, trouble };
+  check("no verify-related doc writes `--steps design/plan/<Layer>__<id>.json` or hands verify-build `design/plan/<Layer>__<id>.json` as if every plan had the canonical name: the plan path found earlier is `<plan.json>`",
+    Object.values(planDocs).every((t) => !/--steps\s+design\/plan\//.test(t) && !/verify-build\.js"( --status)? design\/plan\/<Layer>/.test(t) && !/\(`design\/plan\/<Layer>__<id>\.json`, or the multi-frame plan/.test(t))
+    && /--steps <plan\.json>/.test(verifySkill) && /--steps <plan\.json>/.test(verifier) && /--steps <plan\.json>/.test(skill) && /verify-build\.js" --status <plan\.json>/.test(syncDoc));
+  check("only a NEW plan is design/plan/<Layer>__<id>.json; an existing plan keeps whatever name it has, and the stem is the name a NEW plan and the verify set take (build-screen, verify skill, verifier, extract, screen-builder)",
+    /only a NEW plan is named\s+`design\/plan\/<Layer>__<id>\.json`/.test(skill) && /keeps whatever name it (has|was written under)/.test(skill)
+    && /keeps whatever name it (has|was written under)/.test(verifySkill) && /keeps whatever name it (has|was written under)/.test(verifier) && /an existing one keeps its name/.test(builder)
+    && [skill, verifySkill, extractDocs].every((t) => /a NEW plan and the verify set take/.test(t) && /an existing plan keeps its own name/.test(t))
+    && ![skill, verifySkill, extractDocs].some((t) => /plan and verify set are named by/.test(t)));
+  check("a variant set (<Layer>__<id>.<slug>) uses its node's plan: no slugged plan exists (build-screen, verify skill, verifier)",
+    [skill, verifySkill, verifier].every((t) => /variant set.{0,60}uses its node's\s+plan/.test(t)) && /no slugged plan exists/.test(skill) && /no slugged plan exists/.test(verifySkill));
+  check("a frame that is not its plan's nodeId (a modal in its primary screen's plan) is found by no tool: --plan <that plan> to --expect and --compare, that plan as the probe's --steps (build-screen, verify skill, verifier, sync-design)",
+    [skill, verifySkill, verifier, syncDoc].every((t) => /not its plan's `nodeId`/.test(t) && /found by no tool/.test(t))
+    && [skill, verifySkill].every((t) => /`--plan <that plan>`/.test(t) && /`--expect`/.test(t) && /`--compare`/.test(t) && /`--steps`/.test(t))
+    && /`--steps`/.test(verifier) && /`--plan`/.test(syncDoc));
+  check("verify-build --status counts every report of the node: <Layer>__<id>.report.json and each variant's <Layer>__<id>.<slug>.report.json (hook-and-status)",
+    /every report of the screen's node/.test(skill) && /each variant's `<Layer>__<id>\.<slug>\.report\.json`/.test(skill));
   check("--status/--wait take the set name, else the node id or exact layer name; a legacy-only node is refused at --status with --migrate --apply (the run protocol)",
     /`--status` and `--wait` take that name as written, else the\s+screen's node id or exact layer name/.test(verifySkill)
     && /`--status` refuses a node that has only legacy-named sets \(exit 2: run\s+`verify-screen\.js --migrate --apply`, then `--status <Layer>__<id>`\)/.test(verifySkill));
   check("build-screen: a new plan is design/plan/<Layer>__<id>.json (resolve-screen's stem); another name or a second plan of the node is exit 2; an existing plan merges under any name",
-    /A new plan is named by its node: `design\/plan\/<Layer>__<id>\.json`, the `stem` resolve-screen printed/.test(skill)
-    && /Another name for a new plan, or a second plan of a node that already has\s+one, is refused \(exit 2, naming the file to use\); an existing plan is merged under whatever name it has/.test(skill));
+    /A new plan is named by its node/.test(skill) && /`design\/plan\/<Layer>__<id>\.json`, the `stem` resolve-screen printed/.test(skill)
+    && /Another name for a new plan/.test(skill) && /a second plan of a node that already has\s+one, is refused \(exit 2/.test(skill)
+    && /an existing plan is merged under whatever name it has/.test(skill));
   check("resolve-screen: a resolve prints its stem (verify skill, build-screen, extract); a whitespace-insensitive match is a candidate, never a resolve (verify skill, build-screen, extract)",
     [verifySkill, skill, extractDocs].every((t) => /`stem`/.test(t))
     && /matches only once spaces, `-` and `_` are ignored .{0,60}is a candidate to confirm by node id too, never a resolve/.test(verifySkill)

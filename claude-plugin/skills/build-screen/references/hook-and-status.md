@@ -65,8 +65,8 @@ string, alpha included) or `{"file": "…", "reason": "…"}` for a generated to
 
 ## Run it by hand
 
-Run it the same way the Stop hook does: `node "<scripts>/verify-build.js" design/plan/<Layer>__<id>.json` (the plan
-path is a positional argument). It reads the hook's JSON from stdin only when fd 0 is not a TTY; a piped payload
+Run it the same way the Stop hook does: `node "<scripts>/verify-build.js" <plan.json>` (the plan
+path is a positional argument; a plan keeps the name it was written under, and a NEW one is `design/plan/<Layer>__<id>.json`). It reads the hook's JSON from stdin only when fd 0 is not a TTY; a piped payload
 that delivers nothing within 1 s is treated as "no payload"; the whole read is capped at 60 s naming what it was
 still waiting on. A manual run from a terminal never blocks on stdin at all.
 
@@ -76,10 +76,11 @@ The hook records its result and a hash of every file in `files[]` — and of eve
 anchors/components map (`mapModule`: a project-relative file; one with no extension resolves like an import,
 `.tsx`/`.ts`/`.jsx`/`.js` then `/index.*`; an `@/`/`~/` alias or a package is not hashed — `--status` and the
 verify report name it once) — under `verification.hook`; `node "<scripts>/verify-build.js" --status
-design/plan/<Layer>__<id>.json` derives the status:
+<plan.json>` derives the status:
 
-- `verified` only when the hook passed, no listed file changed since, **and** the screen's
-  `design/verify/<Layer>__<id>.report.json` (schema @2, `--compare` run from the project root) says `pass` and measured this
+- `verified` only when the hook passed, no listed file changed since, **and** every report of the screen's node —
+  `design/verify/<Layer>__<id>.report.json` and each variant's `<Layer>__<id>.<slug>.report.json` (schema @2,
+  `--compare` run from the project root) — says `pass` and measured this
   design and these files — compared by content hash, never by time, so a no-change re-pull or a `touch` changes
   nothing;
 - `verified-with-deviations` when it says `pass-with-deviations` instead;
