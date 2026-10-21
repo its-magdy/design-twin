@@ -194,7 +194,7 @@ function textResult(obj: unknown): { content: [{ type: "text"; text: string }] }
   return { content: [{ type: "text" as const, text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
 }
 // Takes the thrown value, not a pre-stringified message: the coercion lives once in server-core
-// (`errMsg`) for the whole Node side.
+// (`errMsg`) for the whole Bun side.
 function errorResult(e: unknown) {
   return { content: [{ type: "text" as const, text: errMsg(e) }], isError: true as const };
 }
@@ -390,7 +390,7 @@ function guardStdio(): void {
 }
 
 // SIGTERM / SIGINT / SIGHUP end this process — even while it serves other sessions (a signal is an
-// explicit request). Node's default handler would kill it outright: no 'exit' event (so the daemon
+// explicit request). The runtime's default handler would kill it outright: no 'exit' event (so the daemon
 // socket file stays behind) and no cancel frame for a read in flight. Claude Code ends a stdio server
 // with SIGINT, then SIGTERM ~100 ms later, then SIGKILL ~400 ms after that (secondary
 // source), so this runs once, cancels and unlinks synchronously, gives the cancel frames ~150 ms to reach

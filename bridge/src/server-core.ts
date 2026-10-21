@@ -1203,9 +1203,9 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   }
 
   // Shut the server down so the process can exit ON ITS OWN. Without this a caller's only way out was
-  // process.exit(), which on a PIPE discards whatever stdout hasn't flushed — Node's stdout is async
-  // for pipes, so a large `--list` payload was silently cut at one 64KB pipe buffer (measured:
-  // 369,799 bytes written, 65,536 delivered). Letting the event loop drain instead is the only fix
+  // process.exit(), which on a PIPE discards whatever stdout hasn't flushed — stdout is async for pipes
+  // (seen under Node, before the Bun port), so a large `--list` payload was silently cut at one 64KB
+  // pipe buffer (measured: 369,799 bytes written, 65,536 delivered). Letting the event loop drain instead is the only fix
   // that keeps the whole payload; the WS server is what was holding the loop open, so it has to go.
   function close(): void {
     clearInterval(heartbeat);

@@ -14,7 +14,7 @@
 // A unix socket, not a second TCP port: it gets filesystem permissions for free (no verifyClient
 // equivalent to write), and it cannot be reached from a browser tab the way a loopback port can.
 //
-// Not on Windows (daemonSupported below). Node's net IPC there is a named pipe, and Node cannot give a
+// Not on Windows (daemonSupported below). Bun's node:net IPC there is a named pipe, and Bun cannot give a
 // pipe a private access list: its default security descriptor grants Everyone read, and a client cannot
 // check who created the server end, so another local user could create the name first and answer with
 // forged replies. Nothing there plays the part of the 0700 directory below. So on win32 serve() / stop() refuse,
@@ -208,7 +208,7 @@ export function daemonSupported(platform: NodeJS.Platform = process.platform): b
 
 /** What is unsupported where daemonSupported() is false, why, and what to do instead. The one spelling:
  *  serve()/stop() reject with it, `dtwin serve`/`dtwin stop` print it, doctor and the MCP server report it. */
-export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between sessions are not supported on Windows yet (Node cannot make the local socket they need, a named pipe, private to your account, so another user on this machine could impersonate it) — one MCP session or dtwin command holds the bridge at a time, so close the other one first.";
+export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between sessions are not supported on Windows yet (Bun cannot make the local socket they need, a named pipe, private to your account, so another user on this machine could impersonate it) — one MCP session or dtwin command holds the bridge at a time, so close the other one first.";
 
 // ---- where the socket lives
 //
@@ -234,7 +234,7 @@ export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between 
 // macOS, each with its terminating NUL. Bun does not hand a longer path to the kernel as it is: on Linux
 // it binds and connects through /proc/self/fd/<dir fd>/<name> (bun-usockets bsd.c), so any length works
 // there. On macOS, only a recent Bun has the equivalent (fchdir into the directory, then the bare name);
-// an older one fails with ENAMETOOLONG — and Node, before it, silently TRUNCATED the path and bound a
+// an older one fails with ENAMETOOLONG — and Node (before the Bun port) silently TRUNCATED the path and bound a
 // different file. So on macOS a path over 103 bytes is refused here, by sockPath, with the fix named
 // (MAX_SOCK_PATH_BYTES), rather than left to whichever of those the running Bun does. It takes a long
 // TMPDIR to get there: a default macOS tmpdir is ~48 bytes, so `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock`
@@ -451,7 +451,7 @@ function unlinkOnExit(sock: string): () => void {
 }
 
 // Last-resort handlers for the LONG-LIVED processes only (the `dtwin serve` daemon, the MCP server) —
-// never a one-shot CLI run, where Node's default (print the stack, exit non-zero) is already right.
+// never a one-shot CLI run, where the runtime's default (print the stack, exit non-zero) is already right.
 // Both log ONE line through errMsg, so the cause reaches stderr the process's own log format.
 //  - uncaughtException: log, run `cleanup` (synchronous only), then exit 1. The Node docs are explicit
 //    that carrying on is unsafe: "The correct use of 'uncaughtException' is to perform synchronous

@@ -6,7 +6,7 @@
 //   - server-core.ts / daemon.ts / figma-mcp.ts / figma-pull.ts type `request()` per command, so a
 //     caller cannot name a reply type the plugin never sends (a hand-mirror of `IndexReply`/`WhoamiReply`
 //     was stale once already: an `r.frames` the plugin never produced);
-//   - `replyShapeError` is the ONE structural check a reply passes at the point it enters the Node
+//   - `replyShapeError` is the ONE structural check a reply passes at the point it enters the bridge
 //     process (server-core.ts), so a plugin answering the wrong shape is a named error, not a
 //     TypeError three modules later;
 //   - `parseCommandRequest` is its twin on the way IN: the plugin's `handleBridge` narrows the wire's

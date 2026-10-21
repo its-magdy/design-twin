@@ -1,4 +1,4 @@
-// asset-compare.ts — Node-side byte comparison built on svg-normalize.ts's two definitions: the v1
+// asset-compare.ts — bridge-side byte comparison built on svg-normalize.ts's two definitions: the v1
 // normalised hash (normalizeForCompare/sameAsset — design-diff's, unchanged) and the fingerprint index
 // the shared assets/ directory dedups with (ContentIndex, below).
 //
@@ -7,7 +7,7 @@
 // tsconfig (no Node types) and bundle into the plugin, so an `import … from "node:crypto"` anywhere
 // in a file the plugin bundle imports breaks that build, even for a function the bundle never calls.
 // svg-normalize.ts stays crypto-free so figma-plugin/src/util.ts can safely re-export it; this file
-// is imported only from Node (bridge/src/write-out.ts, design-to-code/design-diff.ts — the latter
+// is imported only from the Bun side (bridge/src/write-out.ts, design-to-code/design-diff.ts — the latter
 // bundled by claude-plugin/build-scripts.ts the same way it already bundles bridge/src/snapshot-meta.ts).
 import crypto from "node:crypto";
 import fs from "node:fs";

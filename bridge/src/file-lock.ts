@@ -7,7 +7,7 @@
 // creates it. It holds {pid, host, at, token} (+ ns on Linux: the holder's pid namespace), and the creator holds it
 // only once it reads those bytes back after writing them: a lock judged dead while still empty (the instant between
 // the create and the write) and removed is never taken for its own. A waiter polls every POLL_MS
-// with Atomics.wait on a private SharedArrayBuffer (a synchronous sleep: these writes are synchronous, and Node lets
+// with Atomics.wait on a private SharedArrayBuffer (a synchronous sleep: these writes are synchronous, and the runtime lets
 // the main thread block) and gives up after `waitMs` with LockBusy. Every turn of that loop that takes nothing sleeps
 // and counts against `waitMs` — only a turn that removed a dead holder's lock tries again at once.
 //
