@@ -217,8 +217,12 @@ export async function collectMotion(node: SceneNode): Promise<NodeMotion | undef
     out.styles = await Promise.all(node.animationStyles.map(async (s): Promise<MotionStyle> => {
       // AppliedAnimationStyle is discriminated on `type` (typings 1.141): "FIGMA" carries duration/props,
       // "CUSTOM" (a CustomAnimationStyle applied to this node) carries only the ids and timelineOffset. A
-      // runtime older than the CUSTOM kind sends no `type` at all, which the typings define as FIGMA — so
-      // only an explicit "CUSTOM" takes the custom branch.
+      // runtime older than the CUSTOM kind sends no `type` at all, which the typings define as FIGMA. The
+      // typings close the union, so a kind added after them is read through an `unknown` view of `type`:
+      // any other non-empty string is exported as that kind without reading a FIGMA shape out of it. An
+      // empty `type` counts as absent (FIGMA).
+      const kind: unknown = s.type;
+      if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
       if (s.type === "CUSTOM") {
         const o: MotionStyle = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
@@ -230,11 +234,27 @@ export async function collectMotion(node: SceneNode): Promise<NodeMotion | undef
   return nonEmpty(out);
 }
 
-// An applied Figma animation style, or one entry of a custom animation style (AnimationEntry is the same
-// AppliedFigmaAnimationStyle shape) -> {id, name, styleId, duration?, timelineOffset?, props?}. A zero
+// A row of an animation style kind this exporter does not know -> {id?, name?, styleId?, kind, timelineOffset?}.
+// `kind` is the row's `type`, lower-cased. Only the common BaseAnimationStyle fields are read, each only
+// when it has the expected type; the row's other fields are not (their shape is unknown). A zero
 // timelineOffset is the default and is omitted.
+function unknownKindStyle(s: AppliedAnimationStyle, kind: string): MotionStyle {
+  const fields: { id?: unknown; name?: unknown; styleId?: unknown; timelineOffset?: unknown } = s;
+  const o: MotionStyle = {};
+  if (typeof fields.id === "string") o.id = fields.id;
+  if (typeof fields.name === "string") o.name = fields.name;
+  if (typeof fields.styleId === "string") o.styleId = fields.styleId;
+  o.kind = kind.toLowerCase();
+  if (typeof fields.timelineOffset === "number" && fields.timelineOffset) o.timelineOffset = round(fields.timelineOffset);
+  return o;
+}
+
+// An applied Figma animation style, or one entry of a custom animation style (AnimationEntry is the same
+// AppliedFigmaAnimationStyle shape) -> {id, name, styleId, description?, duration?, timelineOffset?, props?}.
+// An empty description is dropped; a zero timelineOffset is the default and is omitted.
 export async function animationStyleEntry(s: AppliedFigmaAnimationStyle): Promise<MotionStyleEntry> {
   const o: MotionStyleEntry = { id: s.id, name: s.name, styleId: s.styleId };
+  if (typeof s.description === "string" && s.description) o.description = s.description;
   if (typeof s.duration === "number") o.duration = round(s.duration);
   if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
   if (s.props) {

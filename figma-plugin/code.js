@@ -2325,6 +2325,8 @@
     }
     if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
       out.styles = await Promise.all(node.animationStyles.map(async (s) => {
+        const kind = s.type;
+        if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
         if (s.type === "CUSTOM") {
           const o = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
           if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
@@ -2335,8 +2337,19 @@
     }
     return nonEmpty(out);
   }
+  function unknownKindStyle(s, kind) {
+    const fields = s;
+    const o = {};
+    if (typeof fields.id === "string") o.id = fields.id;
+    if (typeof fields.name === "string") o.name = fields.name;
+    if (typeof fields.styleId === "string") o.styleId = fields.styleId;
+    o.kind = kind.toLowerCase();
+    if (typeof fields.timelineOffset === "number" && fields.timelineOffset) o.timelineOffset = round(fields.timelineOffset);
+    return o;
+  }
   async function animationStyleEntry(s) {
     const o = { id: s.id, name: s.name, styleId: s.styleId };
+    if (typeof s.description === "string" && s.description) o.description = s.description;
     if (typeof s.duration === "number") o.duration = round(s.duration);
     if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
     if (s.props) {

@@ -303,8 +303,10 @@ const scrollFrame = {
       { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
   },
   // AppliedAnimationStyle is discriminated on `type` (typings 1.141): the first entry has NO `type` (a
-  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, the rest
-  // CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props).
+  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, applied3-9
+  // are CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props),
+  // applied10 and the MORPH row are kinds newer than the typings; applied12-13 are FIGMA styles with a non-empty
+  // and an empty description; applied14 has an empty type, read as FIGMA.
   // A CUSTOM row is expanded from the style its styleId resolves to (getStyleByIdAsync below): cas1
   // resolves (twice — one fetch), the others do not resolve to a readable custom animation style.
   animationStyles: [{
@@ -332,6 +334,23 @@ const scrollFrame = {
     type: "CUSTOM", id: "applied8", styleId: "cas1", name: "Brand Entrance", timelineOffset: 0,
   }, {
     type: "CUSTOM", id: "applied9", styleId: "cas_empty", name: "Empty",
+  }, {
+    // a kind added after the typings: exported as its lower-cased kind, never read as a FIGMA style (the
+    // duration/props/entries it carries are never read: the getters throw)
+    type: "SPRING", id: "applied10", styleId: "as3", name: "Bounce", timelineOffset: 0.5,
+    get duration(): number { throw new Error("unknown-kind row: duration read"); },
+    get props(): Record<string, number> { throw new Error("unknown-kind row: props read"); },
+    get entries(): unknown[] { throw new Error("unknown-kind row: entries read"); },
+  }, {
+    // an unknown kind whose id, name and styleId are not strings, with a zero offset: none of them is exported
+    type: "MORPH", id: 11, name: 7, styleId: 9, timelineOffset: 0,
+  }, {
+    type: "FIGMA", id: "applied12", styleId: "as4", name: "Pop", description: "Scales in with a bounce", duration: 0.2,
+  }, {
+    type: "FIGMA", id: "applied13", styleId: "as5", name: "Plain", description: "", duration: 0.1,
+  }, {
+    // an empty type string: read as a FIGMA style, like an absent type
+    type: "", id: "applied14", styleId: "as6", name: "Blank", duration: 0.1,
   }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -369,7 +388,7 @@ const customAnimStyle: FakeNode = {
   remote: false, documentationLinks: [], getPublishStatusAsync: async () => "CURRENT",
   animationEntries: [
     { type: "FIGMA", id: "entry1", styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0, props: { easing: { type: "EASE_OUT" } } },
-    { type: "FIGMA", id: "entry2", styleId: "as2", name: "Slide Up", duration: 0.456, timelineOffset: 0.2,
+    { type: "FIGMA", id: "entry2", styleId: "as2", name: "Slide Up", description: "Rises into place", duration: 0.456, timelineOffset: 0.2,
       props: { distance: 16, color: { type: "VARIABLE_ALIAS", id: "VariableID:2" } } },
   ],
 };
@@ -386,7 +405,7 @@ const emptyAnimStyle: FakeNode = {
 };
 // cas1's entries as both the motion read and the catalog emit them (motion.ts animationStyleEntry).
 const CAS1_ENTRIES = '{"id":"entry1","name":"Fade In","styleId":"as1","duration":0.3,"props":{"easing":{"type":"ease_out"}}},' +
-  '{"id":"entry2","name":"Slide Up","styleId":"as2","duration":0.46,"timelineOffset":0.2,"props":{"distance":16,"color":{"aliasOf":"easing/emphasized"}}}';
+  '{"id":"entry2","name":"Slide Up","styleId":"as2","description":"Rises into place","duration":0.46,"timelineOffset":0.2,"props":{"distance":16,"color":{"aliasOf":"easing/emphasized"}}}';
 
 // ---- mock figma ----
 const noop = () => {};
@@ -1001,6 +1020,16 @@ const sandbox: Sandbox = context;
     customStyleFetches === 1);
   ok("motion CUSTOM style whose animationEntries list is empty: entries: [] (read and empty, distinct from the unreadable row above)", JSON.stringify(m3?.styles?.[8]) ===
     '{"id":"applied9","name":"Empty","styleId":"cas_empty","custom":true,"entries":[]}');
+  ok("motion applied animation style of an unknown kind: ids, name, the lower-cased kind, timelineOffset; no duration/props", JSON.stringify(m3?.styles?.[9]) ===
+    '{"id":"applied10","name":"Bounce","styleId":"as3","kind":"spring","timelineOffset":0.5}');
+  ok("motion unknown-kind style: an id, name or styleId that is not a string is not exported, a zero offset is omitted", JSON.stringify(m3?.styles?.[10]) ===
+    '{"kind":"morph"}');
+  ok("motion applied FIGMA animation style: description exported after styleId", JSON.stringify(m3?.styles?.[11]) ===
+    '{"id":"applied12","name":"Pop","styleId":"as4","description":"Scales in with a bounce","duration":0.2}');
+  ok("motion applied FIGMA animation style: an empty description is dropped", JSON.stringify(m3?.styles?.[12]) ===
+    '{"id":"applied13","name":"Plain","styleId":"as5","duration":0.1}');
+  ok("motion applied animation style with an empty type: exported as a FIGMA row, no kind", JSON.stringify(m3?.styles?.[13]) ===
+    '{"id":"applied14","name":"Blank","styleId":"as6","duration":0.1}');
   const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&

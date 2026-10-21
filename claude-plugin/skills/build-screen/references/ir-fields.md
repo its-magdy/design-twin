@@ -315,11 +315,14 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`flows[]`** (top level) — `{page, pageId, nodeId, name}` prototype entry points → candidate routes.
 - Ignore triggers with no code meaning (`mediaHitTime` scrub points) rather than guessing.
 - **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API. A
-  `styles[]` row is an applied animation style: `{id, name, styleId, duration, timelineOffset, props}`, `duration`
-  and `timelineOffset` in SECONDS (`timelineOffset` absent = 0). One with `custom: true` is a custom animation style:
+  `styles[]` row is an applied animation style: `{id, name, styleId, description, duration, timelineOffset, props}`,
+  `duration` and `timelineOffset` in SECONDS (`timelineOffset` absent = 0; `description` only when the style has
+  one). One with `custom: true` is a custom animation style:
   the row itself has no `duration` or `props`; its `entries[]` are the animations the style plays, in order, each a
   row of that same shape, plus the style's `description` when it has one. `entries: []` is a style that plays no
-  animations; with `entries` absent its animations could not be read, so treat them as unknown.
+  animations; with `entries` absent its animations could not be read, so treat them as unknown. A row with a
+  `kind` (e.g. `"spring"`) is an animation style kind this exporter doesn't know: only `id`, `name`, `styleId`
+  and `timelineOffset` are exported, so treat it as unknown and never read it as a Figma style.
 
 ## Images and vectors
 
