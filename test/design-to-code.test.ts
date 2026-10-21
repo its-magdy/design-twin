@@ -1973,20 +1973,19 @@ await (async () => {
     c.on("close", (code) => { clearTimeout(hold); resolve({ code, out, err, ms: Date.now() - t0 }); });
   });
   const want = Array.from({ length: 4000 }, (_, i) => String(i).padStart(6, "0") + "y".repeat(93)).join("\n") + "\n" + "z".repeat(50_000) + "\nEND\n";
-  for (const [name, code] of [["runCli", 4], ["exitFlushed", 3], ["exitCli", 2]] as const) {
-    const f = path.join(dir, name + ".ts");
-    fs.writeFileSync(f, scripts[name] ?? "");
-    const r = await slowRead(f, 400);
-    check(`[proc] ${name}: exit ${code} and every byte of ~450 KB to a reader 400 ms late, in order (got exit ${r.code}, ${r.out.length}/${want.length} B)`,
-      r.code === code && r.out === want && r.err === "to stderr\n");
-  }
-  {
-    // a reader that never drains: exitFlushed still ends the process at its cap (a few hundred ms here), not never
-    const f = path.join(dir, "never.ts");
-    fs.writeFileSync(f, `import { exitFlushed, installQueuedConsole } from ${PROC};\ninstallQueuedConsole();\nprocess.stdout.write("x".repeat(400_000));\nexitFlushed(5, 300);\n`);
-    const r = await slowRead(f, 60_000 * 10);
-    check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (${r.ms} ms < 5000)`, r.code === 5 && r.ms < 5_000);
-  }
+  const cases = [["runCli", 4], ["exitFlushed", 3], ["exitCli", 2]] as const;
+  for (const [name] of cases) fs.writeFileSync(path.join(dir, name + ".ts"), scripts[name] ?? "");
+  // a reader that never drains: exitFlushed still ends the process at its cap (a few hundred ms here), not never
+  const never = path.join(dir, "never.ts");
+  fs.writeFileSync(never, `import { exitFlushed, installQueuedConsole } from ${PROC};\ninstallQueuedConsole();\nprocess.stdout.write("x".repeat(400_000));\nexitFlushed(5, 300);\n`);
+  // all at once (each its own child and pipe)
+  const [runs, nr] = await Promise.all([Promise.all(cases.map(([name]) => slowRead(path.join(dir, name + ".ts"), 400))), slowRead(never, 60_000 * 10)]);
+  cases.forEach(([name, code], i) => {
+    const r = runs[i];
+    check(`[proc] ${name}: exit ${code} and every byte of ~450 KB to a reader 400 ms late, in order (got exit ${r?.code}, ${r?.out.length}/${want.length} B)`,
+      r !== undefined && r.code === code && r.out === want && r.err === "to stderr\n");
+  });
+  check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (${nr.ms} ms < 5000)`, nr.code === 5 && nr.ms < 5_000);
   fs.rmSync(dir, { recursive: true, force: true });
 })();
 
