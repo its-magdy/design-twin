@@ -100,7 +100,7 @@ try {
   const h = bs("--help");
   const bad = bs("--nope");
   check("`build-scripts.ts --help` exits 0, prints usage and creates no `--help` directory; another dash argument is a usage error (exit 2, stderr), also writing nothing",
-    h.status === 0 && /usage: node claude-plugin\/build-scripts\.ts/.test(h.stdout) && !fs.existsSync(path.join(cwd, "--help"))
+    h.status === 0 && /usage: bun claude-plugin\/build-scripts\.ts/.test(h.stdout) && !fs.existsSync(path.join(cwd, "--help"))
     && bad.status === 2 && /usage:/.test(bad.stderr) && !fs.existsSync(path.join(cwd, "--nope")));
 } finally {
   fs.rmSync(cwd, { recursive: true, force: true });
