@@ -1,0 +1,28 @@
+# Bun settings for working IN this repo (bun install, bun run <script>, bun <file> with this directory as the cwd).
+# Bun reads the bunfig.toml of the directory it is started in, so none of this reaches a consumer project the plugin or
+# `dtwin` runs in: there the guarantees below are made on the command line instead — every user-facing invocation is
+# `bun --no-install --no-env-file …` (plugin hooks, skills, the .mcp.json `dtwin init` writes, the bin shebang).
+
+# Never read a .env file. Bun loads ./.env* into process.env by default; this repo's tools and suites take their
+# settings from the real environment only (FIGMA_BRIDGE_PORT, FIGMA_BRIDGE_TOKEN, CI, DT_* test seams), so a stray .env
+# in a checkout must not silently move the bridge's port or flip a suite into CI mode. An explicit --env-file still works.
+env = false
+
+[install]
+# Mirrors Dependabot's 7-day cooldown (.github/dependabot.yml): a version published less than a week ago is not picked by
+# `bun install` / `bun update` either, so a hijacked release has a week to be pulled or flagged before it can land here.
+# In seconds (7 × 24 × 3600). Dependabot's security updates are not held by it.
+minimumReleaseAge = 604800
+# Never auto-install. With no node_modules, `bun <file>` would otherwise fetch a missing import from the registry on the
+# fly — unpinned, unlocked, outside bun.lock. Here a missing dependency is an error: run `bun install`.
+auto = "disable"
+# The flat layout package-lock.json had (and bun.lock was migrated from): playwright and axe-core resolve from the root
+# node_modules exactly as the suites and verify-probe's createRequire(project) expect. Stated, not left to the default,
+# which is "isolated" for a workspace created fresh.
+linker = "hoisted"
+
+[run]
+# `node` is an alias of this bun for every script and file bun runs here (bun run typecheck → tsc, oxlint, playwright's
+# CLI shims start with `#!/usr/bin/env node`). The default turns this on only when no node is on PATH; stating it keeps a
+# machine with an unrelated Node from running half the toolchain on it — the repo needs Bun alone.
+bun = true
