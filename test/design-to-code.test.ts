@@ -2093,7 +2093,9 @@ await (async () => {
     "}",
     "if (import.meta.main) process.exitCode = main(process.argv.slice(2));", ""].join("\n"));
   const fakeMain = ((await import(pathToFileURL(file).href)) as { main: (argv: string[]) => number }).main;
-  const run = cliRunner(file, fakeMain, { spawnFirst: 0, label: "fake-cli" });
+  // spawnAll: false pins these self-tests to the in-process rules whatever DT_SPAWN says (under DT_SPAWN=1 every run is a
+  // child, so "in-process" exit codes and crashes below could not occur); the env var is read once as the option's default
+  const run = cliRunner(file, fakeMain, { spawnFirst: 0, label: "fake-cli", spawnAll: false });
   const throws = (args: string[], re: RegExp): boolean => { try { run(args); return false; } catch (e) { return e instanceof Error && re.test(e.message); } };
   for (let i = 0; i < 6; i++) run(["fail"]); // the runner's first runs are children (none exits 0): exit 1 is covered, 0 is not
   (globalThis as { dtLeak?: boolean }).dtLeak = true;
@@ -2104,6 +2106,11 @@ await (async () => {
       throws(["crash"], /exited 1 in-process \(main threw: Error: leaked state\) but 0 as a child/));
     const fail = run(["fail"]);
     check("[cli-runner] an in-process exit 1 a child has shown (no throw) is taken as is", fail.status === 1 && /usage: fake-cli/.test(fail.stderr));
+    // the DT_SPAWN=1 mode itself (spawnAll: true): with the leak set, "zero" would be 0 in-process but is 3 as a child, and
+    // "crash" would throw in-process but is 0 as a child — each run returning the child's code, with no re-run throw, shows it was a child
+    const all = cliRunner(file, fakeMain, { spawnFirst: 0, label: "fake-cli-all", spawnAll: true });
+    check("[cli-runner] with every run forced to a child (DT_SPAWN=1) none runs in-process: the child's codes come back, no leak seen",
+      all(["zero"]).status === 3 && all(["crash"]).status === 0 && all(["fail"]).status === 1);
   } finally { delete (globalThis as { dtLeak?: boolean }).dtLeak; fs.rmSync(dir, { recursive: true, force: true }); }
 })();
 

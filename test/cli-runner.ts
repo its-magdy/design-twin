@@ -17,7 +17,8 @@
 // Always a real child: `spawn: true`, an `env` or `input` of its own (main() would see this process's), the runner's
 // `spawnIf(args)` (a mode whose main returns a Promise, which cannot run synchronously; a main that returns one anyway is
 // an error of the suite, thrown), and every run under DT_SPAWN=1 (the whole surface as children, e.g. to bisect a
-// difference). DT_SPAWN_STATS=1 prints, per runner at exit, how many runs went which way and the codes children covered.
+// difference; the `spawnAll` option overrides DT_SPAWN per runner, so a self-test of the in-process rules is not at the
+// mercy of the ambient env). DT_SPAWN_STATS=1 prints, per runner at exit, how many runs went which way and the codes children covered.
 import path from "node:path";
 import { runSync } from "../design-to-code/proc.ts";
 import { runMainSync } from "./in-process.ts";
@@ -35,7 +36,8 @@ process.on("exit", () => {
 
 /** `script` is the CLI's source (design-to-code/<name>.ts); `main` its exported main (null: always a child). */
 export function cliRunner(script: string, main: Main | null,
-  { spawnFirst = 2, label = path.basename(script), spawnIf }: { spawnFirst?: number; label?: string; spawnIf?: (args: string[]) => boolean } = {}):
+  { spawnFirst = 2, label = path.basename(script), spawnIf, spawnAll = SPAWN_ALL }:
+    { spawnFirst?: number; label?: string; spawnIf?: (args: string[]) => boolean; spawnAll?: boolean } = {}):
   (args: string[], o?: CliOpts) => CliResult {
   const s = { label, spawned: 0, inProc: 0, codes: new Set<number | null>() };
   stats.push(s);
@@ -46,7 +48,7 @@ export function cliRunner(script: string, main: Main | null,
     return { status: r.status, stdout: r.stdout, stderr: r.stderr + (r.lost ? `\n[cli-runner] ${r.lost}\n` : "") };
   };
   return (args, o = {}) => {
-    if (main === null || SPAWN_ALL || o.spawn || o.env !== undefined || o.input !== undefined || spawnIf?.(args) === true
+    if (main === null || spawnAll || o.spawn || o.env !== undefined || o.input !== undefined || spawnIf?.(args) === true
       || s.spawned < spawnFirst || (!s.codes.has(0) && s.spawned < spawnFirst + 6)) return child(args, o); // exit 0 from a child too
     let promised = false, threw = false;
     const r = runMainSync((argv) => {
