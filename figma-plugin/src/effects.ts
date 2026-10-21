@@ -85,10 +85,12 @@ export async function simplifyEffects(
   const out = await Promise.all(
     vis.map(async (e) => {
       const o = effectBody(e);
-      // A shader effect's inputs — ShaderEffect.properties (plugin-api.d.ts 1.139.0 L4574-4579, same
-      // map as ShaderPaint's; see putShaderProperties in paint.ts for the quote and the IR shape).
-      // Async (bound inputs resolve to token names), hence here rather than in the sync effectBody.
-      if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
+      // A shader effect's inputs and their definitions — ShaderEffect.properties / .propertyMetadata
+      // (plugin-api.d.ts 1.141.0 L4606-4616, same maps as ShaderPaint's; see putShaderProperties in
+      // paint.ts for the quote and the IR shape). The typings promise propertyMetadata only on fills and
+      // strokes; the runtime supplies it on shader effects too. Async (bound inputs resolve to token
+      // names), hence here rather than in the sync effectBody.
+      if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties, e.propertyMetadata);
       // Effect-level variable bindings (e.g. a shadow's radius/color bound to a token).
       // ShaderEffect declares no boundVariables (the typings), so the read is guarded; absent -> no tokens.
       const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : undefined);

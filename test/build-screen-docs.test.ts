@@ -1146,5 +1146,15 @@ console.log("build-screen docs (wrapped-track gap):");
     && /`alignItems` → a `Row`'s `verticalAlignment` \/ a `Column`'s `horizontalAlignment`/.test(compose)
     && !/the layout's `verticalAlignment`/.test(compose));
 }
+console.log("build-screen docs (shader property definitions):");
+{
+  const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
+  check("ir-fields: a shader's `propertyDefs[defId].name` names an input (the source identifier, not the panel label), `type` is lowercased, and the map is absent without Figma metadata",
+    /\*\*`propertyDefs`\*\* `\{defId: \{name, type, default\?, description\?, tokens\?\}\}` names those inputs — read `propertyDefs\[defId\]\.name` to name a shader input \(the identifier the shader's source declares/.test(irf)
+    && /Figma's properties panel can show a different label, which the Plugin API does not expose/.test(irf)
+    && /can list inputs `properties` omits/.test(irf) && /absent when Figma supplied no definitions/.test(irf));
+  check("ir-fields: a bound shader `default` (or a bound colour inside one) is named under `propertyDefs[defId].tokens`, keys `default` / `default.color` / `default.stops.N.color`",
+    /left out of `default` and named under that definition's own `tokens` \(`propertyDefs\[defId\]\.tokens`, keys `default`, `default\.color`, `default\.stops\.N\.color`\)/.test(irf));
+}
 
 report();

@@ -3,7 +3,7 @@ import type {
   Paint as IrPaint, PaintBase as IrPaintBase, GradientStop as IrGradientStop, MediaPaint as IrMediaPaint,
   GradientPaint as IrGradientPaint, PatternPaint as IrPatternPaint, ShaderPaint as IrShaderPaint,
   ImageFilters as IrImageFilters, Strokes as IrStrokes, ShaderPropValue as IrShaderPropValue,
-  ShaderEffect as IrShaderEffect, TokenMap, ComplexStroke as IrComplexStroke,
+  ShaderPropDef as IrShaderPropDef, ShaderEffect as IrShaderEffect, TokenMap, ComplexStroke as IrComplexStroke,
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty, isList } from "./util";
 import { resolveBoundMap, resolveVar, isVariableAlias } from "./variables";
@@ -45,22 +45,33 @@ function mediaPaint(f: ImagePaint | VideoPaint, type: IrMediaPaint["type"], hash
 }
 
 // A shader's property assignments (ShaderPaint and ShaderEffect share the shape). plugin-api.d.ts
-// 1.139.0 L4827-4832 (ShaderPaint; ShaderEffect's L4574-4579 is the same with "effect's"):
+// 1.141.0 L4865-4875 (ShaderPaint; ShaderEffect's L4606-4616 is the same with "effect's"):
 //   "The read/write map of property assignments, keyed by property-definition id (the keys of
 //    {@link Shader.propertyDefinitions}, not property names). On reads, this is populated with the
 //    paint's current assignments, including author-defined defaults, ..."
 //   readonly properties?: { [defId: string]: ShaderPropertyValue }
-// ShaderPropertyValue (L4847-4884) = boolean | string | number | RGB | RGBA | {x,y} | {x,y,x2,y2} |
+//   "Read-only property definitions, keyed by the same ids as `properties`. Each entry includes the
+//    name, input type, and any default value or description. Supplied on reads of an applied shader
+//    fill or stroke."
+//   readonly propertyMetadata?: { [defId: string]: ShaderPropertyDefinition }
+// ShaderPropertyValue (L4889-4927) = boolean | string | number | RGB | RGBA | {x,y} | {x,y,x2,y2} |
 // {x,y,radius} | {x,y,radius,angle} | {x,y,color: RGB|RGBA|VariableAlias} |
 // {stops: {position, color: RGB|RGBA|VariableAlias}[]} | VariableAlias.
-// The typings expose NO shader source text anywhere (Shader, L4926-4955, is only id/name/type/imported/
+// ShaderPropertyDefinition (L4933-4963) = {name, type: 'BOOLEAN' | 'TEXT' | 'NUMBER' | ... | 'GRADIENT',
+// defaultValue?: ShaderPropertyValue, description?}.
+// The typings expose NO shader source text anywhere (Shader, L4969+, is only id/name/type/imported/
 // propertyDefinitions), so there is no blob to hash: the id (`shaderId`) plus these values is all the
 // paint/effect holds. Normalised like the rest of this file: colours -> hex (8-digit when alpha < 1),
 // numbers and points rounded to 2dp. A bare colour is wrapped as `{color}` so it can't be mistaken for a
 // TEXT property's string. A variable-bound value resolves to its token NAME under `tokens` (key = defId,
 // or `defId.color` / `defId.stops.N.color` for a bound colour inside a point or gradient) and is itself
-// omitted — the "names, not values" rule `tokens` follows everywhere. Property-definition NAMES are not
-// on the node (only on figma.listAvailableShaders(), a file-level async call), so keys stay the defIds.
+// omitted — the "names, not values" rule `tokens` follows everywhere. `properties` keeps the opaque
+// defIds as keys (stable across renames); `propertyMetadata` becomes the sibling `propertyDefs` map
+// {defId: {name, type (lowercased), default?, description?, tokens?}} so a reader can name each input. A
+// default goes through the same shaderValue conversion; a variable-bound default (or a bound colour inside
+// a point/gradient default) is omitted from `default` and named under that definition's own `tokens`
+// (keys `default`, `default.color`, `default.stops.N.color`, mirroring the paint-level scheme). An empty
+// description is dropped; the whole map is omitted when the runtime supplies no metadata.
 type ShaderColor = RGB | RGBA | VariableAlias;
 async function shaderColor(c: ShaderColor, tokenKey: string, tokens: TokenMap): Promise<string | undefined> {
   if (isVariableAlias(c)) {
@@ -73,6 +84,7 @@ async function shaderColor(c: ShaderColor, tokenKey: string, tokens: TokenMap): 
 async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenMap): Promise<IrShaderPropValue | undefined> {
   if (typeof v === "boolean" || typeof v === "string") return v;
   if (typeof v === "number") return round(v);
+  if (v == null || typeof v !== "object") return undefined; // a null/undefined value (the runtime can hand one over)
   if (isVariableAlias(v)) {
     const name = await resolveVar(v);
     if (name) tokens[defId] = name;
@@ -94,21 +106,43 @@ async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenM
   }
   if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
   if ("x" in v) return xy(v);
-  return { color: rgbaToHex(v) }; // RGB | RGBA
+  if ("r" in v && "g" in v && "b" in v) return { color: rgbaToHex(v) }; // RGB | RGBA
+  return undefined; // an object of no known shape is omitted
 }
-/** Sets `properties` (and `tokens` for bound values) on a shader paint/effect; both omitted when empty. */
+/** The shader's property definitions as `{defId: {name, type, default?, tokens?, description?}}`; undefined when none. */
+async function shaderDefs(meta: { readonly [defId: string]: ShaderPropertyDefinition } | undefined): Promise<Record<string, IrShaderPropDef> | undefined> {
+  if (!meta || typeof meta !== "object") return undefined;
+  const out: Record<string, IrShaderPropDef> = {};
+  for (const [defId, d] of Object.entries(meta)) {
+    if (!d || typeof d.name !== "string" || typeof d.type !== "string") continue;
+    const def: IrShaderPropDef = { name: d.name, type: lower(d.type) };
+    if (d.defaultValue != null) {
+      const dt: TokenMap = {}; // a bound default (or a bound colour inside one) is named here, not valued
+      const dv = await shaderValue(d.defaultValue, "default", dt);
+      if (dv !== undefined) def.default = dv;
+      putNonEmpty(def, "tokens", dt);
+    }
+    if (typeof d.description === "string" && d.description) def.description = d.description;
+    out[defId] = def;
+  }
+  return out;
+}
+/** Sets `properties` (and `tokens` for bound values) and `propertyDefs` on a shader paint/effect; each omitted when empty. */
 export async function putShaderProperties(
   o: IrShaderPaint | IrShaderEffect,
   props: { readonly [defId: string]: ShaderPropertyValue } | undefined,
+  meta?: { readonly [defId: string]: ShaderPropertyDefinition },
 ): Promise<void> {
-  if (!props || typeof props !== "object") return;
   const out: Record<string, IrShaderPropValue> = {};
   const tokens: TokenMap = {};
-  for (const [defId, pv] of Object.entries(props)) {
-    const v = await shaderValue(pv, defId, tokens);
-    if (v !== undefined) out[defId] = v;
+  if (props && typeof props === "object") {
+    for (const [defId, pv] of Object.entries(props)) {
+      const v = await shaderValue(pv, defId, tokens);
+      if (v !== undefined) out[defId] = v;
+    }
   }
   putNonEmpty(o, "properties", out);
+  putNonEmpty(o, "propertyDefs", await shaderDefs(meta));
   putNonEmpty(o, "tokens", tokens);
 }
 
@@ -160,7 +194,7 @@ export async function simplifyFills(
         // Procedural shader fill — the opaque program id correlates the fill to the rendered PNG.
         const sp = paintExtras<IrShaderPaint>(f, { type: "shader" });
         if (f.id) sp.shaderId = f.id;
-        await putShaderProperties(sp, f.properties); // the shader's inputs (see putShaderProperties)
+        await putShaderProperties(sp, f.properties, f.propertyMetadata); // the shader's inputs + their definitions (see putShaderProperties)
         o = sp;
       } else {
         // A paint type newer than the typings reaches here only at run time. Carried as its lowercased

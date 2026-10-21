@@ -1405,6 +1405,7 @@
   async function shaderValue(v, defId, tokens) {
     if (typeof v === "boolean" || typeof v === "string") return v;
     if (typeof v === "number") return round(v);
+    if (v == null || typeof v !== "object") return void 0;
     if (isVariableAlias(v)) {
       const name = await resolveVar(v);
       if (name) tokens[defId] = name;
@@ -1426,17 +1427,37 @@
     }
     if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
     if ("x" in v) return xy(v);
-    return { color: rgbaToHex(v) };
+    if ("r" in v && "g" in v && "b" in v) return { color: rgbaToHex(v) };
+    return void 0;
   }
-  async function putShaderProperties(o, props) {
-    if (!props || typeof props !== "object") return;
+  async function shaderDefs(meta) {
+    if (!meta || typeof meta !== "object") return void 0;
+    const out = {};
+    for (const [defId, d] of Object.entries(meta)) {
+      if (!d || typeof d.name !== "string" || typeof d.type !== "string") continue;
+      const def = { name: d.name, type: lower(d.type) };
+      if (d.defaultValue != null) {
+        const dt = {};
+        const dv = await shaderValue(d.defaultValue, "default", dt);
+        if (dv !== void 0) def.default = dv;
+        putNonEmpty(def, "tokens", dt);
+      }
+      if (typeof d.description === "string" && d.description) def.description = d.description;
+      out[defId] = def;
+    }
+    return out;
+  }
+  async function putShaderProperties(o, props, meta) {
     const out = {};
     const tokens = {};
-    for (const [defId, pv] of Object.entries(props)) {
-      const v = await shaderValue(pv, defId, tokens);
-      if (v !== void 0) out[defId] = v;
+    if (props && typeof props === "object") {
+      for (const [defId, pv] of Object.entries(props)) {
+        const v = await shaderValue(pv, defId, tokens);
+        if (v !== void 0) out[defId] = v;
+      }
     }
     putNonEmpty(o, "properties", out);
+    putNonEmpty(o, "propertyDefs", await shaderDefs(meta));
     putNonEmpty(o, "tokens", tokens);
   }
   async function simplifyFills(fills) {
@@ -1481,7 +1502,7 @@
         } else if (f.type === "SHADER") {
           const sp = paintExtras(f, { type: "shader" });
           if (f.id) sp.shaderId = f.id;
-          await putShaderProperties(sp, f.properties);
+          await putShaderProperties(sp, f.properties, f.propertyMetadata);
           o = sp;
         } else {
           const future = f;
@@ -1625,7 +1646,7 @@
     const out = await Promise.all(
       vis.map(async (e) => {
         const o = effectBody(e);
-        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
+        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties, e.propertyMetadata);
         const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : void 0);
         if (bv) o.tokens = o.tokens ? { ...o.tokens, ...bv } : bv;
         return o;

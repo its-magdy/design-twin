@@ -148,7 +148,25 @@ export type ShaderPropValue =
   | { x: number; y: number; radius: number; angle?: number }
   | { x: number; y: number; color?: string }
   | { stops: Array<{ pos: number; color?: string }> };
-export interface ShaderPaint extends PaintBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
+/** Figma's declared shader input type, lowercased (`ShaderPropDef.type`). */
+export type ShaderPropType =
+  | "boolean" | "text" | "number" | "image" | "instance_swap" | "slot" | "color" | "point" | "line" | "circle"
+  | "circle_point" | "color_point" | "gradient";
+/** One entry of a shader paint/effect's `propertyDefs` (paint.ts putShaderProperties), keyed by the same
+ *  property-definition id as `properties`. `name` is the input's identifier as the shader source declares
+ *  it (Figma's properties panel can show a different label, which the Plugin API does not expose); `type`
+ *  is Figma's declared input type lowercased (`boolean`, `text`, `number`, `image`, `instance_swap`, `slot`, `color`,
+ *  `point`, `line`, `circle`, `circle_point`, `color_point`, `gradient`); `default` is normalised like a
+ *  `properties` value (a variable-bound default, or a bound colour inside one, is left out of `default`
+ *  and named in this definition's `tokens` under `default`, `default.color` or `default.stops.N.color`);
+ *  `description` is omitted when empty. Definitions are emitted for every input the shader declares,
+ *  whether or not `properties` assigns it. */
+export interface ShaderPropDef {
+  name: string; type: ShaderPropType | (string & {}); default?: ShaderPropValue; description?: string; tokens?: TokenMap;
+}
+export interface ShaderPaint extends PaintBase {
+  type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue>; propertyDefs?: Record<string, ShaderPropDef>;
+}
 export type Paint = SolidPaint | GradientPaint | MediaPaint | PatternPaint | ShaderPaint;
 
 /** `strokes` is an OBJECT (paint.ts simplifyStrokes), never an array of paints. */
@@ -205,7 +223,9 @@ export interface GlassEffect extends EffectBase {
   lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number; radius?: number;
 }
 export interface TextureEffect extends EffectBase { type: "texture"; noiseSize?: number; noiseSizeVector?: XY; radius?: number; clipToShape?: boolean }
-export interface ShaderEffect extends EffectBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
+export interface ShaderEffect extends EffectBase {
+  type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue>; propertyDefs?: Record<string, ShaderPropDef>;
+}
 export type Effect = ShadowEffect | BlurEffect | NoiseEffect | GlassEffect | TextureEffect | ShaderEffect;
 
 // ---- text (text.ts)

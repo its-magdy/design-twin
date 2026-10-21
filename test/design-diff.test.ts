@@ -309,6 +309,13 @@ check("a change deep inside a long nested value names the LEAF — never two ide
   const f0 = f[0];
   return f.length === 1 && f0?.field === "fills[0].stops[4].color" && f0?.before === "#778899ff" && f0?.after === "#ff0000ff" && f0?.category === "paint";
 })());
+check("a shader's propertyDefs diff leaf by leaf, keyed by defId (a renamed input names its own leaf, the stable properties key is untouched)", (() => {
+  const shader = (name: string): Paint[] => malformed<Paint[]>([{ type: "shader", shaderId: "s1", properties: { "d:1": 0.5 }, propertyDefs: { "d:1": { name, type: "number", default: 0.5 } } }]);
+  const a = screen(), b = screen(); must(a.tree.children[1], "a.tree.children[1]").fills = shader("Speed"); must(b.tree.children[1], "b.tree.children[1]").fills = shader("Pace");
+  const f = must(diffScreens(a, b).changed[0], "changed[0]").fields;
+  const f0 = f[0];
+  return f.length === 1 && f0?.field === "fills[0].propertyDefs.d:1.name" && f0?.before === "Speed" && f0?.after === "Pace" && f0?.category === "paint";
+})());
 check("a variant swap is ONE change — the regenerated I…;… sublayers are counted on it, not listed as added/removed", (() => {
   const inst = (v: string, p: number) => { const s = screen(); Object.assign(must(s.tree.children[2], "s.tree.children[2]"), { mainComponent: { key: "k-" + v }, props: { Variant: v }, children: [{ id: `I1:5;${p}:1`, name: "Label", type: "TEXT", text: "Go" }, { id: `I1:5;${p}:2`, name: "Icon", type: "VECTOR" }] }); return s; };
   const d = diffScreens(inst("primary", 10), inst("secondary", 11));
