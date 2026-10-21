@@ -103,8 +103,8 @@ Exit 3 → stop and ask before step 3 (step 2 needs no browser), saying exactly 
 it (the probe prints them: `npm i -D playwright`, then `npx playwright install chromium`, a large browser
 download). Never run either yourself — only the user does, or says so: one edits the project's
 dependencies, the other a large download. "No playwright package" can be a false negative — a Yarn
-Plug'n'Play project (no `node_modules`; run the same check through `yarn node`; pass `--project`), or a project that drives
-the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of
+Plug'n'Play project (no `node_modules`) needs `nodeLinker: node-modules` in .yarnrc.yml and a `yarn install` (the user's
+call) before the probe can find Playwright, or a project that drives the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of
 `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md` (simulator, emulator, `flutter`) the same way. The only way
 on without a renderer is the agent's `static-only` mode, which the report marks as not rendered.
 

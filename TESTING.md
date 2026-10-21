@@ -13,6 +13,7 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 ends with a line saying it was not the full run — use it while iterating, `bun run test` before a commit; CI's other matrix legs run the four it leaves out (naming only those with `--fast` exits 2: nothing would run).
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
 The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). The drive e2e's wall-clock-timing cases are a suite of their own, `verify-probe-drive-tail-e2e`, which runs its probes strictly one at a time (no pool); the pooled cases are `verify-probe-drive-e2e`, and the two share `test/drive-e2e-fixture.ts`.
+`DT_TEST_EPHEMERAL_PORT=1` is a test-only seam (`bridge/src/server-core.ts`): the bridge binds an ephemeral port instead of `FIGMA_BRIDGE_PORT`'s and prints the real one on stderr (`[bridge] DT_TEST_EPHEMERAL_PORT: <port> -> <real>`), so `mcp-lifecycle` spawns its MCP servers without contending for 8787–8789. Never set it outside the suites: the plugin can only reach the three ports its manifest names.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
@@ -99,7 +100,8 @@ platform (web 24px / iOS 44pt / Android 48dp targets differ).
 ### `bridge/` — handshake auth + seed CLI
 
 `test/bridge.test.ts` covers the bridge files the plugin harness can't reach: `server-core.ts`'s
-`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host),
+`verifyClientWith` (the handshake check its Bun.serve upgrade runs — the bridge's **only** real access
+control: token, Origin, loopback Host),
 `token-store.ts` (where that token lives between runs — precedence, `0600` permissions, the
 lifecycle commands), the
 `seed-components.ts` CLI driven as a subprocess against a temp directory, `write-out.ts` (the one
@@ -139,7 +141,7 @@ bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core
 bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
-`verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed
+`verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed
 attacker iframe sends `Origin: null` exactly like the real plugin does, so the suite asserts that
 `Origin: null` **without** a valid token is still rejected (the CSWSH case), alongside DNS-rebinding
 (non-loopback `Host`) and tokens of a different length — which must compare `false` rather than throw,
