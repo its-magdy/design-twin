@@ -8,7 +8,7 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
-`bun run test` runs every suite in order and ends with a summary (`bun run test`, never `bun test` — that is Bun's own test runner); `bun test/run-suites.ts <name>` runs a subset.
+`bun run test` runs every suite in order and ends with a summary (a bare `bun test` is Bun's own test runner instead: `bunfig.toml` points it at `test/spawn-stress/` only, the spawn-stress workflow's bun:test files); `bun test/run-suites.ts <name>` runs a subset.
 `bun run test:fast` leaves out the four slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
 ends with a line saying it was not the full run — use it while iterating, `bun run test` before a commit; CI's other matrix legs run the four it leaves out (naming only those with `--fast` exits 2: nothing would run).
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
@@ -60,6 +60,9 @@ bun test/verify-build.test.ts         # expect: all checks pass, exit 0 — the 
 bun test/verifier-guard.test.ts       # expect: all checks pass, exit 0 — the visual-verifier's PreToolUse guard: scoped by
                                        # agent_type, the write allow-list, refused pattern kills / installs / sandbox bypass,
                                        # the shipped bundle's deny JSON + exit 0, fail-open on bad input, the hooks.json matcher
+bun test/plugin-hooks.test.ts         # expect: all checks pass, exit 0 — SessionStart's Bun check (check-bun.sh against a
+                                       # fake bun: floor, canary-of-floor, upgrade advice per install method, missing bun) and
+                                       # that no session-wide hook fails closed (the verifier guard fails open; why: hooks.json)
 bun test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
                                        # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
                                        # --seed-from) and the visibility rule verify-build.js walks with

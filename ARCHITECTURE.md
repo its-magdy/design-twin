@@ -363,7 +363,9 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
   The WebSocket server is Bun's own (`Bun.serve`): the handshake checks run before the upgrade, and its
-  `maxPayloadLength` is the real per-message cap (`FIGMA_BRIDGE_MAX_PAYLOAD_MB`) — there is no `ws` dependency.
+  `maxPayloadLength` is the real per-message cap (`FIGMA_BRIDGE_MAX_PAYLOAD_MB`, default 128; a value that is not a
+  number above 0 falls back to 128 with a warning — `ws` read ≤ 0 as unlimited, Bun.serve has no unlimited) — there is
+  no `ws` dependency.
 - Runtime: everything runs on **Bun ≥ 1.4.2** (CLI, MCP server, the plugin's scripts and hooks; Node is not
   supported). Bun loads a `.env` from the working directory and auto-installs a missing import from the
   registry by default — in a *user's* project, that would let the project's `.env` move the bridge's port or
@@ -372,13 +374,23 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   the `.mcp.json` `dtwin init --mcp` writes (absolute `bun` path), and the `dtwin` bin's shebang; the probe also
   accepts a Playwright/axe-core only from the project's own `node_modules`. In this repo, `bunfig.toml` sets
   the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`. The plugin's
-  SessionStart hook checks `bun` is on PATH and new enough, and the verifier guard is `onFailure: block`, so a
-  missing `bun` refuses the verifier's calls instead of letting them through unguarded.
+  SessionStart hook checks `bun` is on PATH and new enough (on startup, resume, fork, clear and compact) and, when it
+  is not, says so to the user and to Claude — including that the verifier guard cannot run. The guard fails open
+  (no `onFailure: block`): Claude Code ignores hooks in a plugin agent's frontmatter, so its PreToolUse entry runs on
+  every agent's Bash/Write/PowerShell call, and fail-closed a missing `bun` would block the whole session. On Windows
+  without Git Bash the `sh` check itself cannot run (a hook error; a `"shell": "powershell"` twin would error at every
+  macOS/Linux start instead).
 - Output: Bun's `console.*` writes the fd directly and drops what meets a full pipe, and an exit drops what is still
   queued on one. So every entry point (`dtwin`, the MCP server, the daemon, each design-to-code script) routes console
   through the stream queue and ends on `process.exitCode`, or with `exitFlushed` when something still holds the loop
   (`bridge/src/stdio.ts`, re-exported by `design-to-code/proc.ts`; `test/cli-exit.test.ts` keeps `process.exit` out of
-  both trees). The MCP server sends all of its console output to stderr: its stdout carries JSON-RPC only.
+  both trees). Every console method that prints is rerouted (`log`… but also `table`, `dir`, `trace`, `count`, `time*`,
+  `group`, `assert`, Bun's `write`), and the MCP server sends all of it to stderr: its stdout carries JSON-RPC only.
+  `exitCli` (a library helper ending the CLI mid-call) throws `CliExit` back to `runCli` only while that CLI's `main`
+  runs; `dtwin mcp` awaits the server's module load and returns, so the long-lived server sees the same `exitCli` as
+  `bun figma-mcp.ts` does. The exits that wait on stderr are capped short where something must let go fast: a crash
+  releases its port and socket synchronously, then waits ≤ 200 ms; the daemon's first SIGINT/SIGTERM ≤ 300 ms, a second
+  one not at all.
 - Daemon socket: unauthenticated, and it forwards every command a bridge takes, writes included, so
   its only protection is its directory — private to the user (`0700`, owner-checked, never a symlink),
   and refused otherwise (`daemon.ts` sockDir).

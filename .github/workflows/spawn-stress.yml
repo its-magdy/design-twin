@@ -15,8 +15,12 @@ on:
   pull_request:
     paths:
       - design-to-code/proc.ts
+      # proc.ts re-exports the queued console and exit helpers from here
+      - bridge/src/stdio.ts
       - test/run-suites.ts
       - test/pool.ts
+      - test/spawn-helper.ts
+      - test/assert.ts
       - test/spawn-stress/**
       - .github/workflows/spawn-stress.yml
 
@@ -62,41 +66,57 @@ jobs:
             bash -c 'end=$((SECONDS + 1500)); while [ "$SECONDS" -lt "$end" ]; do :; done' > /dev/null 2>&1 &
           done
 
-      # stress.ts <mode> <runs> <concurrency> prints one line per mode: `bun <version> <mode> N=… C=… fail=<k> …`.
-      # Every line goes to out-*.txt for the gate below, and to the log.
+      # stress.ts <mode> <runs> <concurrency> prints one line per mode: `bun <version> <mode> N=… C=… fail=<k> …`, and exits
+      # 1 when a gated (helper-*, fake-*) mode failed. The measuring steps never stop on that — `shell: bash` runs with
+      # -e -o pipefail, so a bare failing run would end the loop and hide every mode after it: each run's exit status goes
+      # to exits.txt (`<mode> <status>`) and its line to out-*.txt (async: also to the log), and the last step gates on both.
       - name: Async spawn, raw vs helper
         run: |
           for m in raw-async raw-async-late bun-spawn helper-async fake-early-exit fake-lost-exit; do
-            bun test/spawn-stress/stress.ts "$m" 2000 32 | tee "out-async-$m.txt"
+            s=0; bun test/spawn-stress/stress.ts "$m" 2000 32 > "out-async-$m.txt" || s=$?
+            cat "out-async-$m.txt"; echo "$m $s" >> exits.txt
           done
 
-      # #46142's shape: 32 processes each doing synchronous captures at once.
+      # #46142's shape: 32 processes each doing synchronous captures at once. Each process's own line stays in its
+      # out-sync-<mode>-<i>.txt (for the gate); the log gets one summed line per mode.
       - name: Sync capture under 32 parallel processes
         run: |
           for m in raw-sync-cat raw-sync-pipe helper-sync helper-big-stderr; do
-            for i in $(seq 32); do bun test/spawn-stress/stress.ts "$m" 300 1 > "out-sync-$m-$i.txt" & done
+            for i in $(seq 32); do
+              ( s=0; bun test/spawn-stress/stress.ts "$m" 300 1 > "out-sync-$m-$i.txt" || s=$?; echo "$m $s" >> exits.txt ) &
+            done
             wait
             cat out-sync-"$m"-*.txt | awk -v m="$m" '{ for (i = 1; i <= NF; i++) if ($i ~ /^fail=/) { split($i, a, "="); s += a[2] } } END { print m, "fail=" s + 0 }'
           done
 
       # #45483 under the real `bun test` runner. The raw test documents the bug (reported, its exit ignored); the helper
-      # test must pass every one of its 300 runs. Not on Windows: the bug is a POSIX one (macOS), and the test's child is a
-      # POSIX shell.
+      # test must pass every one of its 300 runs (recorded here, gated below). Not on Windows: the bug was reported on
+      # macOS and the measurement that matters is there and on Linux; the test's child is this bun, so it would run.
       - name: bun test early exit (raw, reported)
         if: runner.os != 'Windows'
         run: |
           bun test --rerun-each=300 -t '^raw' test/spawn-stress/early-exit.test.ts || echo "raw early-exit failed (expected while #45483 is open)"
-      - name: bun test early exit (helper, gated)
+      - name: bun test early exit (helper, recorded)
         if: runner.os != 'Windows'
-        run: bun test --rerun-each=300 -t '^helper' test/spawn-stress/early-exit.test.ts
+        run: |
+          s=0; bun test --rerun-each=300 -t '^helper' test/spawn-stress/early-exit.test.ts || s=$?
+          echo "bun-test-helper-early-exit $s" >> exits.txt
 
+      # Every gated result at once: a failing mode no longer hides the ones after it.
       - name: Gate — the helper modes lose nothing
         run: |
+          bad=0
           if grep -hE '^bun .*(helper|fake)-[a-z-]+ .*fail=[1-9]' out-*.txt; then
-            echo "::error::a helper mode lost a child's status or output (lines above)"
-            exit 1
+            echo "::error::a helper mode lost a child's status or output (lines above)"; bad=1
           fi
-          if ! grep -qE '^bun .*helper-' out-*.txt; then
-            echo "::error::no helper result lines — did stress.ts change its output?"
-            exit 1
+          if grep -E '^(helper-[a-z-]+|fake-[a-z-]+|bun-test-helper-early-exit) [1-9]' exits.txt; then
+            echo "::error::a gated run exited non-zero (lines above: <mode> <exit status>)"; bad=1
           fi
+          for m in helper-async fake-early-exit fake-lost-exit helper-sync helper-big-stderr; do
+            want=1; case $m in helper-sync | helper-big-stderr) want=32 ;; esac
+            got=$(cat out-*-"$m"*.txt 2>/dev/null | grep -cE "^bun .* $m " || true)
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::$m printed $got result line(s), expected $want — a run died before reporting, or stress.ts changed its output"; bad=1
+            fi
+          done
+          exit "$bad"

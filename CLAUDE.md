@@ -20,4 +20,5 @@ CLI/MCP surface, read these directly rather than guessing:
 
 In this repo, `dtwin` is `bun bridge/src/figma-pull.ts` (not on PATH unless the package is linked with
 `bun link`) — e.g. `bun bridge/src/figma-pull.ts --list`. The whole repo is Bun-only (≥ 1.4.2; no Node): `bun install`,
-`bun run typecheck`, `bun run test` (never `bun test`, Bun's own runner), `bun test/<suite>.test.ts` for one suite.
+`bun run typecheck`, `bun run test` for the suites (a bare `bun test` is Bun's own runner: bunfig.toml points it at
+`test/spawn-stress/` only, the spawn-stress workflow's bun:test files), `bun test/<suite>.test.ts` for one suite.

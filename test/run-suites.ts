@@ -4,7 +4,8 @@
 //   bun test/run-suites.ts --list         print the order and exit (the coverage guard still runs)
 //   bun test/run-suites.ts --fast         everything except the four slow probe e2e suites (`bun run test:fast`, ~3 min vs ~20)
 //   bun test/run-suites.ts --fast --list  what --fast would run
-// (Not `bun test`: that is Bun's own jest-style runner, which would take every test/*.test.ts for a bun:test file.)
+// (Not a bare `bun test`: that is Bun's own jest-style runner, which would take every test/*.test.ts for a bun:test file —
+// bunfig.toml's [test] root points it at test/spawn-stress/, the only bun:test files, instead.)
 //
 // --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
 // stay in the SUMMARY as `not run` (why `--fast`) and do NOT make the exit code 1 — `not run` otherwise means an
@@ -90,7 +91,7 @@ const SUITE_FILES: readonly string[] = [
   // the real-name guard, right after the lints (fast, repo-wide)
   "real-names.test.ts",
   "harness.ts", "bridge.test.ts", "await-client.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "figma-pull-args.test.ts", "ports.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "write-out-bookkeeping.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts", "file-lock.test.ts",
-  "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "verifier-guard.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-migrate.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
+  "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "verifier-guard.test.ts", "plugin-hooks.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-migrate.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
   "verify-waivers.test.ts", "verify-node-rules.test.ts", "verify-run.test.ts", "verify-behaviour.test.ts",
   "verify-integrity.test.ts", "verify-probe.test.ts", "pw-errors.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
   "verify-probe-drive-e2e.test.ts", "verify-probe-drive-tail-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",

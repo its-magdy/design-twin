@@ -3,7 +3,8 @@
 // no build). `--no-install`: Bun never auto-installs a package a project lacks from the network (a
 // missing dependency is an error, not a download); `--no-env-file`: the project's .env is not loaded
 // into this process (a FIGMA_BRIDGE_PORT there would silently move the bridge). `env -S` splits the
-// line into its arguments on Linux and macOS alike.
+// line into its arguments on Linux (GNU coreutils >= 8.30) and macOS alike; BusyBox's env (Alpine) has no
+// -S, so there the documented form is `bun --no-install --no-env-file <this file>` (bridge/README.md).
 //
 // ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor`,
 // `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before server-core loads.
@@ -1282,14 +1283,17 @@ async function cli(argv: string[]): Promise<void> {
     }
     // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
     process.argv.splice(2, 1);
-    // Not awaited: the server runs on after cli() returns. A failure to load it (an invalid FIGMA_BRIDGE_PORT exits
-    // through exitCli at server-core's load — the CliExit lands here) ends the process on its exit code, naturally:
-    // nothing holds the loop once the module failed.
-    import("./figma-mcp.ts").catch((e: unknown) => {
+    // Awaited only until the module has LOADED (its main() runs on, unawaited, after cli() returns): a failure to load
+    // it — an invalid FIGMA_BRIDGE_PORT exits through exitCli at server-core's load, still inside runCli, so the CliExit
+    // lands here — ends the process on its exit code, naturally: nothing holds the loop once the module failed. Once
+    // cli() has returned, runCli is done with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
+    try {
+      await import("./figma-mcp.ts");
+    } catch (e) {
       if (e instanceof CliExit) { process.exitCode = e.code; return; }
       console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));
       process.exitCode = 1;
-    });
+    }
     return;
   }
   // `dtwin init` — project setup (init.ts). Routed here for the same reason `mcp` is: it must run before

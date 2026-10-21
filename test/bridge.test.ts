@@ -396,6 +396,17 @@ void (async () => {
     c.close();
     b.close();
   }
+  // FIGMA_BRIDGE_MAX_PAYLOAD_MB as the bridge reads it — anything but a finite number above 0 is the default 128 MB with a
+  // warning (`ws` read <=0 as "unlimited"; Bun.serve has none, and its 0 would refuse every frame); past 4 GiB it is
+  // clamped, and `mb` — what the too-big diagnosis quotes — is the clamped cap, not the number typed.
+  {
+    const mp = core.maxPayloadFromEnv;
+    ok("[payload] unset, empty or blank: the default 128 MB, no warning", [undefined, "", "  "].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && r.warning === undefined; }));
+    ok("[payload] 0, a negative, NaN, Infinity, a word or blanks: the default 128 MB, with a warning naming the value",
+      ["0", "-5", "NaN", "Infinity", "-Infinity", "lots", "1e999"].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && !!r.warning && r.warning.includes(JSON.stringify(v)) && /default 128 MB/.test(r.warning); }));
+    ok("[payload] a real value is taken as is (1, 0.5, 512)", mp("1").bytes === 1024 * 1024 && mp("1").mb === 1 && mp("0.5").bytes === 512 * 1024 && mp(" 512 ").mb === 512 && mp("1").warning === undefined);
+    ok("[payload] past Bun's 32-bit maxPayloadLength it is clamped, and mb is the clamped cap (4096), not 99999", mp("99999").bytes === 0xffffffff && mp("99999").mb === 4096);
+  }
   // …and FIGMA_BRIDGE_MAX_PAYLOAD_MB is the real cap: a reply over a 1 MB limit closes the socket, and the
   // request fails with the diagnosis that names the knob (Bun reports it as 1006 "Received too big message").
   {
@@ -858,12 +869,72 @@ void (async () => {
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
       return m.figma?.url === "https://mcp.figma.com/mcp" && m.designtwin?.args?.[0] === "/abs/figma-mcp.mjs";
     })());
+    // An entry of ours that WILL start: this bun, with the shebang's flags, at the real figma-mcp.ts.
+    const realMcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
+    const healthy = { command: process.execPath, args: ["--no-install", "--no-env-file", realMcp] };
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
-      const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
+      const before = JSON.stringify({ mcpServers: { figma: healthy } });
       const d = mk({ ".mcp.json": before });
       const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
       init.apply(d, plan, () => {});
-      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma"/.test(a.note));
+      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma" — left as is$/.test(a.note));
+    })());
+    // …but one of ours that can no longer start is REPAIRED in place: same key, its other fields kept, still one copy.
+    ok("[init] --mcp repairs a Node-era entry of ours in place (same key, other fields kept, no second copy) and says what was wrong", (() => {
+      const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { other: { command: "x" }, figma: { command: "node", args: ["/old/clone/bridge/dist/figma-mcp.js"], env: { KEEP: "1" } } } }) });
+      const plan = init.plan(d, { mcp: true, mcpEntry: healthy, token: tok });
+      init.apply(d, plan, () => {});
+      const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> }).mcpServers;
+      const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+      return Object.keys(m).join() === "other,figma" && m.figma?.command === healthy.command && JSON.stringify(m.figma.args) === JSON.stringify(healthy.args) && m.figma.env?.KEEP === "1"
+        && /REPAIRED the "figma" MCP server entry/.test(note) && /runs on Node/.test(note) && /old Node build/.test(note);
+    })());
+    ok("[init] --mcp repairs a dangling entry (its bun and figma-mcp.ts gone) and one whose bun lacks the two flags", (() => {
+      const gone = { command: "/nowhere/bun", args: ["--no-install", "--no-env-file", "/nowhere/bridge/src/figma-mcp.ts"] };
+      const bare = { command: process.execPath, args: [realMcp] };
+      const cases: Array<{ e: object; why: RegExp[] }> = [
+        { e: gone, why: [/`\/nowhere\/bun` does not exist/, /figma-mcp\.ts does not exist/] },
+        { e: bare, why: [/bun runs it without --no-install and --no-env-file/] },
+      ];
+      return cases.every(({ e, why }) => {
+        const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: e } }) });
+        const plan = init.plan(d, { mcp: true, mcpEntry: healthy, token: tok });
+        init.apply(d, plan, () => {});
+        const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+        return JSON.stringify((JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin) === JSON.stringify(healthy)
+          && why.every((r) => r.test(note));
+      });
+    })());
+    ok("[init] mcpEntryProblems: a healthy entry, and the `bunx designtwin mcp` form, have none; each broken shape is named", (() => {
+      const P = (e: unknown) => init.mcpEntryProblems(e, { which: (c) => (c === "bunx" ? "/x/bunx" : null) });
+      return P(healthy).length === 0 && P({ command: "bunx", args: ["designtwin", "mcp"] }).length === 0
+        && /runs on Node/.test(P({ command: "npx", args: ["designtwin", "mcp"] }).join())
+        && /is not on PATH/.test(P({ command: "bun", args: ["--no-install", "--no-env-file", realMcp] }).join())
+        && /does not run the server with bun/.test(P({ command: process.execPath.replace(/bun(\.exe)?$/, "deno"), args: [realMcp] }).join())
+        && /no `command`/.test(P({ args: [realMcp] }).join()) && /no `command`/.test(P(null).join());
+    })());
+    ok("[init] a figma-mcp.ts inside a bunx cache is a problem, and an install run from one refuses to register (or repair) anything", (() => {
+      const cached = path.join(os.tmpdir(), ".bunx-1000", "designtwin@0.1.0", "node_modules", "designtwin", "src");
+      const legacyWin = path.join(os.tmpdir(), "bunx-S-1-5-21-designtwin@0.1.0", "node_modules", "designtwin", "src");
+      const cachedProblems = init.mcpEntryProblems({ command: process.execPath, args: ["--no-install", "--no-env-file", path.join(cached, "figma-mcp.ts")] }, { exists: () => true });
+      const refuse = "REFUSED-FOR-TEST";
+      const fresh = mk({}), repair = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/dist/figma-mcp.js"] } } }) });
+      const p1 = init.plan(fresh, { mcp: true, mcpEntry: healthy, refuseMcp: refuse, token: tok });
+      const p2 = init.plan(repair, { mcp: true, mcpEntry: healthy, refuseMcp: refuse, token: tok });
+      return init.bunxCacheOf(cached) === path.join(os.tmpdir(), ".bunx-1000") && init.bunxCacheOf(legacyWin) === path.join(os.tmpdir(), "bunx-S-1-5-21-designtwin@0.1.0")
+        && init.bunxCacheOf(path.resolve(import.meta.dirname, "..", "bridge", "src")) === null
+        && /in a bunx cache/.test(cachedProblems.join())
+        && !p1.some((a) => a.kind === "write" && a.path === ".mcp.json") && p1.some((a) => a.kind === "skip" && a.note === `not registered: ${refuse}`)
+        && !p2.some((a) => a.kind === "write" && a.path === ".mcp.json") && p2.some((a) => a.kind === "skip" && /needs repair \(.*\), but REFUSED-FOR-TEST/.test(a.note));
+    })());
+    ok("[init] stableBunPath: the bun on PATH when it resolves to the running one (a symlink that survives upgrades), else the running bun", (() => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-bunpath-"));
+      const link = path.join(dir, "bun");
+      try { fs.symlinkSync(process.execPath, link); } catch { return true; } // no symlinks here (Windows without the privilege): nothing to resolve
+      const other = path.join(dir, "other-bun");
+      fs.writeFileSync(other, "");
+      return init.stableBunPath(process.execPath, link) === link && init.stableBunPath(process.execPath, other) === process.execPath
+        && init.stableBunPath(process.execPath, null) === process.execPath && init.stableBunPath(process.execPath, path.join(dir, "gone")) === process.execPath;
     })());
     ok("[init] --mcp leaves a foreign designtwin entry, and an invalid .mcp.json, untouched", (() => {
       const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
@@ -976,8 +1047,19 @@ void (async () => {
       const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--mcp"], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command: string; args: string[] }> }).mcpServers.designtwin;
       const mcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
-      return r.status === 0 && !!e && e.command === process.execPath && path.isAbsolute(e.command)
-        && JSON.stringify(e.args) === JSON.stringify(["--no-install", "--no-env-file", mcp]) && fs.existsSync(mcp) && init.isOurMcpEntry(e);
+      return r.status === 0 && !!e && e.command === init.stableBunPath() && path.isAbsolute(e.command) && fs.realpathSync(e.command) === fs.realpathSync(process.execPath)
+        && JSON.stringify(e.args) === JSON.stringify(["--no-install", "--no-env-file", mcp]) && fs.existsSync(mcp) && init.isOurMcpEntry(e) && init.mcpEntryProblems(e).length === 0;
+    })());
+    // The repair through the real CLI: --dry-run says it and writes nothing; the run rewrites the entry and says so.
+    ok("[init] CLI: --mcp on a Node-era entry of ours: --dry-run prints the repair and leaves the file; the run repairs it", (() => {
+      const before = JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/gone/bridge/dist/figma-mcp.js"] } } });
+      const d = mk({ ".mcp.json": before });
+      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const dry = run(["--mcp", "--dry-run"]);
+      const dryOk = dry.status === 0 && /would write \.mcp\.json — REPAIRED the "designtwin" MCP server entry — it runs on Node/.test(dry.stderr) && fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before;
+      const real = run(["--mcp"]);
+      const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+      return dryOk && real.status === 0 && /wrote\s+\.mcp\.json — REPAIRED/.test(real.stderr) && init.mcpEntryProblems(e).length === 0;
     })());
 
     // `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
@@ -2502,6 +2584,73 @@ void (async () => {
       exc.status === 1 && exc.stderr.includes("[t] uncaught exception — exiting: kaboom") && !exc.stdout.includes("still alive"));
     ok("[crash] its synchronous cleanup runs before the exit", exc.stdout.includes("cleanup ran"));
     ok("[crash] installed once per process — a second install adds no second handler", !rej.stderr.includes("[second]") && !exc.stderr.includes("[second]"));
+    const two = spawnSync(process.execPath, ["-e",
+      `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
+      `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("first cleanup"));\n` +
+      `const forget = installCrashHandlers(() => {}, () => console.log("dropped cleanup"));\n` +
+      `installCrashHandlers(() => {}, () => { throw new Error("a failing cleanup"); });\n` +
+      `installCrashHandlers(() => {}, () => console.log("last cleanup"));\n` +
+      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`], { encoding: "utf8" });
+    ok("[crash] every install's cleanup runs (the MCP server's and a daemon's), in order, past a failing one — and a forgotten one does not",
+      two.status === 1 && /first cleanup\nlast cleanup/.test(two.stdout) && !two.stdout.includes("dropped cleanup"));
+  }
+
+  // The exits that wait for stderr to drain are capped short, so a reader that stopped reading cannot keep a crashed or
+  // stopped process (and the port it held) around: a crash waits at most ~200 ms; the daemon's first SIGINT/SIGTERM ~300 ms,
+  // a second one not at all. Driven with ~300 KB queued on a stderr that nobody reads (a pipe into `sleep`); each process
+  // stamps Date.now() when it exits ('exit' event), against the moment it threw / was signalled.
+  if (process.platform === "win32") console.log("  (skipped: the capped-exit timings — a signal from child.kill ends a Windows process outright, and the stderr is a POSIX sh pipe)");
+  else {
+    console.log("\ndaemon.ts — capped exits (crash, signals):");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-capped-"));
+    const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
+    const stdioUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/stdio.ts")).href;
+    const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+    const readNum = (f: string): number | null => { try { const n = Number(fs.readFileSync(f, "utf8")); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; } };
+    // Start `script` with its stderr (and stdout) into a pipe nobody reads; resolves once it wrote `ready`.
+    const start = async (name: string, script: string): Promise<{ stamp: string; ready: string; kill: () => void }> => {
+      const file = path.join(dir, name + ".ts"), stamp = path.join(dir, name + ".exit"), ready = path.join(dir, name + ".ready");
+      // installQueuedConsole: as in every entry point (runCli / the MCP server), so the exit knows what is still queued
+      fs.writeFileSync(file, `import fs from "node:fs";\nimport { installQueuedConsole } from ${JSON.stringify(stdioUrl)};\ninstallQueuedConsole();\n` +
+        `process.on("exit", () => fs.writeFileSync(${JSON.stringify(stamp)}, String(Date.now())));\n` +
+        `process.stderr.write("e".repeat(300_000) + "\\n");\n${script}`);
+      const sh = spawn("sh", ["-c", `${q(process.execPath)} ${q(file)} 2>&1 | sleep 5`], { stdio: "ignore", env: { ...process.env, TMPDIR: dir, XDG_RUNTIME_DIR: "" } });
+      await until(() => fs.existsSync(ready), 10_000);
+      return { stamp, ready, kill: () => { try { sh.kill("SIGKILL"); } catch { /* gone */ } } };
+    };
+    {
+      const c = await start("crash", `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
+        `installCrashHandlers((m) => console.error(m), () => {});\nfs.writeFileSync(${JSON.stringify(path.join(dir, "crash.ready"))}, "1");\n` +
+        `setTimeout(() => { fs.writeFileSync(${JSON.stringify(path.join(dir, "crash.threw"))}, String(Date.now())); throw new Error("kaboom"); }, 20);`);
+      await until(() => readNum(c.stamp) !== null, 5_000);
+      const threw = readNum(path.join(dir, "crash.threw")), exited = readNum(c.stamp);
+      ok(`[crash] with stderr stuck, the crash exit waits ~200 ms, not 1 s (exited ${threw && exited ? exited - threw : "?"} ms after the throw)`, threw !== null && exited !== null && exited - threw >= 100 && exited - threw < 700);
+      c.kill();
+    }
+    const serveScript = (name: string, port: number): string =>
+      `import * as daemon from ${JSON.stringify(daemonUrl)};\n` +
+      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({}), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
+      `fs.writeFileSync(${JSON.stringify(path.join(dir, name + ".ready"))}, String(process.pid));`;
+    for (const [name, port, twice] of [["sig-once", 8796, false], ["sig-twice", 8797, true]] as const) {
+      const s = await start(name, serveScript(name, port));
+      const pid = readNum(s.ready);
+      const sock = path.join(dir, `designtwin-${process.getuid?.() ?? ""}`, `designtwin-${port}.sock`);
+      const hadSock = fs.existsSync(sock);
+      let sent = 0;
+      const signal = (sig: NodeJS.Signals): void => { try { if (pid !== null) process.kill(pid, sig); } catch { /* already gone: the timing check below fails */ } sent = Date.now(); };
+      if (pid !== null) {
+        signal("SIGINT");
+        if (twice) { await sleep(40); signal("SIGTERM"); }
+      }
+      await until(() => readNum(s.stamp) !== null, 5_000);
+      const exited = readNum(s.stamp);
+      const took = exited !== null && sent ? exited - sent : null;
+      if (twice) ok(`[signals] a second SIGINT/SIGTERM exits at once, waiting on nothing (${took ?? "?"} ms after it)`, took !== null && took < 150);
+      else ok(`[signals] the daemon's first SIGINT exits within its ~300 ms cap with stderr stuck (${took ?? "?"} ms)`, took !== null && took >= 150 && took < 900);
+      ok(`[signals] …and its socket file is gone (${name})`, hadSock && !fs.existsSync(sock));
+      s.kill();
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   // ---------------------------------------------------------------- write-out.ts: atomic writeJson
@@ -3075,16 +3224,39 @@ void (async () => {
   fs.writeFileSync(path.join(projDir, "design", "target.json"), "{}");
   const exportedAt = Date.parse("2026-01-01T00:00:00Z");
   fs.writeFileSync(path.join(projDir, "design", "design-system.json"), JSON.stringify({ exportedAt: new Date(exportedAt).toISOString(), file: "My File" }));
-  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: { command: "node", args: ["/x/bridge/figma-mcp.mjs"] } } }));
+  // An entry of ours that starts (this bun, its flags, the real figma-mcp.ts) — under the legacy `figma` key.
+  const startable = { command: process.execPath, args: ["--no-install", "--no-env-file", path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")] };
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: startable } }));
   const fresh = doctor.checkProject(projDir, exportedAt + 3600000);
   ok("[doctor] project: design/ + target.json is ok; a 1h-old export is ok and names its source file",
     byId(fresh, "project").status === "ok" && byId(fresh, "export").status === "ok" && byId(fresh, "export").detail.includes("My File"));
   ok("[doctor] project: an export past 24h is flagged stale", byId(doctor.checkProject(projDir, exportedAt + 3 * 86400000), "export").status === "warn");
   ok("[doctor] project: no codeconnect.local.json is a note", byId(fresh, "map").status === "warn");
-  ok("[doctor] project: a legacy `figma` MCP key pointing at figma-mcp.mjs still works, and is told about `designtwin`",
+  ok("[doctor] project: a legacy `figma` MCP key pointing at a startable figma-mcp.ts still works, and is told about `designtwin`",
     byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next ?? ""));
-  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: startable, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
+  // Ours, but Claude Code cannot start it as written: a ✗ that names `dtwin init --mcp` (which repairs it), under any key.
+  {
+    const broken = (e: object, key = "designtwin"): Check => { fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { [key]: e } })); return byId(doctor.checkProject(projDir), "mcp"); };
+    const failsWith = (c: Check, why: RegExp): boolean => c.status === "fail" && why.test(c.detail) && /dtwin init --mcp/.test(c.next ?? "");
+    const script = startable.args[2] ?? "";
+    ok("[doctor] mcp: a Node-era entry (`node …/bridge/dist/figma-mcp.js`, or the legacy key's figma-mcp.mjs) is a failure naming `dtwin init --mcp`",
+      failsWith(broken({ command: "node", args: ["/x/bridge/dist/figma-mcp.js"] }), /runs on Node/) && failsWith(broken({ command: "node", args: ["/x/bridge/figma-mcp.mjs"] }, "figma"), /old Node build/));
+    ok("[doctor] mcp: a missing command, and a missing figma-mcp.ts, are failures naming `dtwin init --mcp`",
+      failsWith(broken({ ...startable, command: "/nowhere/bun" }), /`\/nowhere\/bun` does not exist/)
+      && failsWith(broken({ ...startable, args: ["--no-install", "--no-env-file", "/nowhere/src/figma-mcp.ts"] }), /figma-mcp\.ts does not exist/));
+    ok("[doctor] mcp: bun without --no-install/--no-env-file before the script is a failure naming them",
+      failsWith(broken({ command: process.execPath, args: [script, "--no-install", "--no-env-file"] }), /without --no-install and --no-env-file/)
+      && failsWith(broken({ command: process.execPath, args: ["--no-install", script] }), /without --no-env-file \(/));
+    fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: startable } }));
+  }
+  ok("[doctor] DT_TEST_EPHEMERAL_PORT: unset or empty is no note; \"1\" warns the plugin can never reach the port; any other value is a test variable to unset",
+    doctor.ephemeralPortWarning({}) === null && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "" }) === null
+    && /test-only seam.*can never reach/.test(doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.detail ?? "")
+    && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.status === "warn"
+    && /acts on it only at "1"/.test(doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "yes" })?.detail ?? "")
+    && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.next === "unset DT_TEST_EPHEMERAL_PORT");
 
   // A stray `dtwin pull design ...` writes a SECOND export tree directly under
   // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside the

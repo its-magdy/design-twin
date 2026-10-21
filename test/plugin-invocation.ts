@@ -12,6 +12,24 @@ export const RUNNER_RE = String.raw`bun --no-install --no-env-file`;
 
 const PLUGIN_SCRIPT = (name: string): RegExp => new RegExp(String.raw`^"?\$\{CLAUDE_PLUGIN_ROOT\}/scripts/${name.replace(/[.-]/g, "\\$&")}\.js"?$`);
 
+/** The SessionStart sources (Claude Code's matcher values) after which Claude needs the Bun check's note: a new session
+ *  (startup, a resumed or forked one), and the same session once its context was wiped (clear, compact). */
+export const SESSION_SOURCES: readonly string[] = ["startup", "resume", "fork", "clear", "compact"];
+
+/** Does the hook handler `h` run the plugin's own claude-plugin/hooks/<name>.sh through `sh`, as SessionStart's Bun check
+ *  must (it is the check that Bun exists, so it cannot need Bun)? A quoted path keeps a plugin root with spaces one word. */
+export function hookRunsShellScript(h: unknown, name: string): boolean {
+  return isJsonObject(h) && h.type === "command" && h.args === undefined && h.shell === undefined
+    && h.command === `sh "\${CLAUDE_PLUGIN_ROOT}/hooks/${name}.sh"`;
+}
+
+/** Does Claude Code's matcher `m` (a SessionStart / PreToolUse matcher string) select `value`? Only letters, digits, _,
+ *  -, spaces, `,` and `|` → a list of exact names; anything else → an unanchored regex; "" and "*" select everything. */
+export function matcherSelects(m: string, value: string): boolean {
+  if (m === "" || m === "*") return true;
+  return /^[A-Za-z0-9_\- ,|]*$/.test(m) ? m.split(/[|,]/).map((s) => s.trim()).includes(value) : new RegExp(m).test(value);
+}
+
 /** Does the hook handler `h` run claude-plugin/scripts/<name>.js the way a user-facing invocation must? `form` says how. */
 export function hookRunsScript(h: unknown, name: string): { ok: boolean; form: "exec" | "shell" | null } {
   if (!isJsonObject(h) || h.type !== "command" || typeof h.command !== "string") return { ok: false, form: null };

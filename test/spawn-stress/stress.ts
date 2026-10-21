@@ -22,14 +22,18 @@ const [modeArg = "raw-async", nS = "300", cS = "8"] = process.argv.slice(2);
 const N = Number(nS), C = Number(cS);
 const EXE = process.execPath;
 const BIG = 170_000;
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function pool(n: number, c: number, task: (i: number) => Promise<string | null>): Promise<string[]> {
   const fails: string[] = []; let next = 0;
   await Promise.all(Array.from({ length: c }, async () => { while (next < n) { const i = next++; const f = await task(i); if (f) fails.push(f); } }));
   return fails;
 }
-const withTimeout = <T, F>(p: Promise<T>, ms: number, v: F): Promise<T | F> => Promise.race([p, sleep(ms).then(() => v)]);
+// The timer is cleared once `p` settles: thousands of runs would otherwise leave as many 10–15 s timers behind, holding
+// the process open well past its last result line (and skewing the timing it prints).
+const withTimeout = <T, F>(p: Promise<T>, ms: number, v: F): Promise<T | F> => {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<F>((r) => { t = setTimeout(() => r(v), ms); })]).finally(() => clearTimeout(t));
+};
 const brief = (r: ProcResult | null): string => JSON.stringify(r && { status: r.status, out: r.stdout.slice(0, 40), lost: r.lost, timedOut: r.timedOut });
 
 // a stand-in ChildProcess whose exit was already recorded and whose pipes already ended when spawn() returned (#45483)

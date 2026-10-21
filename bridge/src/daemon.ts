@@ -459,20 +459,34 @@ function unlinkOnExit(sock: string): () => void {
 //    process. It is not safe to resume normal operation after 'uncaughtException'."
 //  - unhandledRejection: log only. A stray rejected promise (a tool whose caller went away, a late
 //    socket write) must not take down the user's whole stdio MCP session or a daemon mid-export with it.
-// Installed at most once per process: figma-mcp re-serves after every `dtwin stop`.
+// Installed at most once per process: figma-mcp re-serves after every `dtwin stop`. Each call's `cleanup` is kept,
+// though (the MCP server installs first, with its own; a serve() that installs too adds the daemon's shutdown), and all
+// of them run, in order, each in its own try — the returned function drops that cleanup again (a stopped daemon).
+// The cleanups are what release the PORT and the socket: Bun.serve's stop() and net.Server's close() stop listening
+// synchronously, so by the time the exit waits on stderr the port is already free for the next bridge. That wait is
+// capped short (CRASH_FLUSH_CAP_MS): a host restarting the server right away must not find the old process still
+// holding 8787 — or still alive — because a reader stopped draining its stderr.
+const CRASH_FLUSH_CAP_MS = 200;
+// The first SIGINT / SIGTERM's wait for stderr (serve() below); a second one does not wait at all.
+const SIGNAL_FLUSH_CAP_MS = 300;
 let crashHandlersInstalled = false;
-export function installCrashHandlers(log: (m: string) => void, cleanup?: () => void): void {
-  if (crashHandlersInstalled) return;
+const crashCleanups = new Set<() => void>();
+export function installCrashHandlers(log: (m: string) => void, cleanup?: () => void): () => void {
+  if (cleanup) crashCleanups.add(cleanup);
+  const forget = (): void => { if (cleanup) crashCleanups.delete(cleanup); };
+  if (crashHandlersInstalled) return forget;
   crashHandlersInstalled = true;
   process.on("unhandledRejection", (reason) => {
     log("unhandled promise rejection (continuing): " + errMsg(reason));
   });
   process.on("uncaughtException", (e) => {
+    // Say why, release (synchronously: the port and socket are free before anything waits), then wait — briefly — for
+    // those lines to reach stderr.
     log("uncaught exception — exiting: " + errMsg(e));
-    if (cleanup) { try { cleanup(); } catch { /* exiting anyway */ } }
-    // Once that line is out (exitFlushed; a reader that never drains it holds the exit 1 s at most).
-    exitFlushed(1, 1_000);
+    for (const c of [...crashCleanups]) { try { c(); } catch { /* exiting anyway */ } }
+    exitFlushed(1, CRASH_FLUSH_CAP_MS);
   });
+  return forget;
 }
 
 // Requests are SERIALIZED, not multiplexed. server-core's `pending` map is id-keyed and would happily
@@ -675,6 +689,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
 
     let forgetExit: (() => void) | null = null;
+    let forgetCrash: (() => void) | null = null;
     // Idempotent: the idle check, `__shutdown`, a signal and a host's own shutdown can all race.
     function shutdown() {
       if (stopped) return;
@@ -684,6 +699,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       try { server.close(); } catch { /* already closed */ }
       try { fs.unlinkSync(sock); } catch { /* already gone */ }
       if (forgetExit) { forgetExit(); forgetExit = null; }
+      if (forgetCrash) { forgetCrash(); forgetCrash = null; }
       // Abort every outstanding request BEFORE the bridge closes. This fires first: each in-flight
       // abort makes server-core send its cancel frame and drop the request from `pending`, so
       // bridge.close() below finds nothing left to cancel for it (were one sent twice, the plugin
@@ -695,14 +711,25 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
     // socket nobody is listening on. `as const`: process.on's overload wants NodeJS.Signals, not string.
-    if (signals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { shutdown(); exitFlushed(0); });
+    // shutdown() releases the socket file, the socket and the port synchronously; the exit then waits for the log lines
+    // to reach stderr — briefly (SIGNAL_FLUSH_CAP_MS: Ctrl-C must feel instant, and a supervisor's SIGKILL follows its
+    // SIGTERM soon after). A SECOND signal is a person (or supervisor) insisting: exit at once, waiting on nothing.
+    if (signals) {
+      let signalled = false;
+      for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => {
+        if (signalled) { exitFlushed(0, 0); return; }
+        signalled = true;
+        shutdown();
+        exitFlushed(0, SIGNAL_FLUSH_CAP_MS);
+      });
+    }
     // A host that exits some other way (the MCP server ends when its stdio closes) still must not
     // leave the socket file behind for the next probe to trip over. One process-level hook, and this
     // socket is forgotten again on shutdown (the MCP server re-serves after every `dtwin stop`).
     else forgetExit = unlinkOnExit(sock);
     // shutdown() is synchronous (closes the servers, unlinks the socket file), so it is exactly the
     // "synchronous cleanup" the Node docs allow an uncaughtException handler before it exits.
-    if (crashHandlers) installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
+    if (crashHandlers) forgetCrash = installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
 
     const handle: ServeHandle = {
       sock,

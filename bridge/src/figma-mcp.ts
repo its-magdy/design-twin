@@ -1243,9 +1243,14 @@ server.registerTool(
 
 async function main() {
   // This process IS the user's MCP session: a stray rejection is logged and the session stays up; an
-  // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). The daemon
-  // socket this process may serve is unlinked by daemon.ts's own exit hook.
-  daemon.installCrashHandlers(wlog);
+  // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). Before that exit waits on
+  // stderr, the cleanup lets go of what this process holds — the daemon socket it serves (unlinked) and the bridge's
+  // port — synchronously, so a Claude Code that restarts the server at once finds 8787 free.
+  daemon.installCrashHandlers(wlog, () => {
+    const s = served;
+    served = null;
+    try { s?.shutdown(); } finally { own?.close(); } // shutdown closes the bridge through shared.close (own → null); else close it here
+  });
   // Before anything can write to stdout (guardStdio says why it cannot wait for the client to go).
   guardStdio();
   // console.* through the streams' queue (Bun drops a direct console write that meets a full pipe) — and ALL of it to

@@ -20,13 +20,14 @@ CLI and MCP surface, and [TESTING.md](TESTING.md) covers the test layers, includ
 ## Tests
 
 ```sh
-bun run test                              # everything (~10 min) — `bun run test`, not `bun test` (Bun's own runner)
+bun run test                              # every suite (~20 min)
 bun run test:fast                         # all but the slow browser e2e suites (~3 min)
 bun test/run-suites.ts bridge audit       # only the named suites
 bun run typecheck
 ```
 
-The type and lint gates (`lint:any`, `lint:types`) run as the first two suites. Run `bun run test` before opening a pull
+A bare `bun test` is not the suite run: it is Bun's own test runner, which `bunfig.toml` points at `test/spawn-stress/`
+only (the spawn-stress workflow's bun:test files). The type and lint gates (`lint:any`, `lint:types`) run as the first two suites. Run `bun run test` before opening a pull
 request; CI runs the same suites, split across several runners.
 
 ## Rules the checks enforce
