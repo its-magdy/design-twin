@@ -33,7 +33,8 @@ import { PAINT_TYPES, idSuffix, normText } from "../design-to-code/probe-match.t
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runSync } from "../design-to-code/proc.ts";
+import { runAsync, runSync } from "../design-to-code/proc.ts";
+import { gitHead } from "../design-to-code/content-hash.ts";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { cliRunner } from "./cli-runner.ts";
@@ -1987,6 +1988,108 @@ await (async () => {
   });
   check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (${nr.ms} ms < 5000)`, nr.code === 5 && nr.ms < 5_000);
   fs.rmSync(dir, { recursive: true, force: true });
+})();
+
+// ---------- proc.ts: runSync / runAsync edges ----------
+await (async () => {
+  console.log("proc.ts — runSync / runAsync edges:");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-proc-"));
+  const PROC = JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "..", "design-to-code", "proc.ts")).href);
+  // 400 KB of 1-4 byte characters on each stream: a 64 KiB pipe chunk ends inside a character somewhere, and decoding chunk
+  // by chunk turned each split into two U+FFFD
+  const unit = "é€😀a", big = unit.repeat(40_000);
+  const mb = await runAsync(process.execPath, ["-e", `const s = ${JSON.stringify(unit)}.repeat(40_000); process.stdout.write(s); process.stderr.write(s);`], { timeoutMs: 60_000 }).done;
+  check(`[proc] runAsync: ${Buffer.byteLength(big)} B of multi-byte UTF-8 on stdout and stderr arrive intact, no character split at a chunk edge (U+FFFD on stdout: ${(mb.stdout.match(/�/g) ?? []).length})`,
+    mb.status === 0 && mb.stdout === big && mb.stderr === big);
+  // a child that never started has no exit status: null (Bun's spawnSync leaves it undefined), with the error
+  const nx = runSync(path.join(dir, "no-such-command"), ["x"]);
+  check(`[proc] runSync of a command that does not exist: status null and the ENOENT error (got ${String(nx.status)}, ${nx.error?.message ?? "no error"})`,
+    nx.status === null && nx.error !== undefined && "code" in nx.error && nx.error.code === "ENOENT");
+  // the capture files: when the second cannot be opened (EMFILE), the first is closed and the run goes through the pipes
+  {
+    const realOpen = fs.openSync, realClose = fs.closeSync;
+    const opened: number[] = [], closed: number[] = [];
+    let opens = 0;
+    fs.openSync = (...a: Parameters<typeof fs.openSync>): number => {
+      if (++opens === 2) throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
+      const fd = realOpen(...a); opened.push(fd); return fd;
+    };
+    fs.closeSync = (fd: number): void => { closed.push(fd); realClose(fd); };
+    let r: ReturnType<typeof runSync> | null = null;
+    try { r = runSync(process.execPath, ["-e", "console.log('via the pipes')"]); } finally { fs.openSync = realOpen; fs.closeSync = realClose; }
+    check(`[proc] runSync: a capture file that cannot be opened closes the one already open (opened ${JSON.stringify(opened)}, closed ${JSON.stringify(closed)}) and captures through the pipes`,
+      opened.length === 1 && closed.includes(opened[0] ?? -1) && r?.status === 0 && r.stdout === "via the pipes\n");
+  }
+  // the `[spawn-helper] … re-running once` line is for a suite's log: `quiet` re-runs without it (in a child: its stderr is the user's)
+  const say = (quiet: boolean): ReturnType<typeof runSync> => {
+    const src = `import { runSync } from ${PROC};\nconst r = runSync(process.execPath, ["-e", "0"], { expect: "stdout", quiet: ${quiet} });\nconsole.log(JSON.stringify({ attempts: r.attempts, lost: r.lost !== undefined }));\n`;
+    const f = path.join(dir, `quiet-${quiet}.ts`); fs.writeFileSync(f, src);
+    return runSync(process.execPath, [f], { timeoutMs: 60_000 });
+  };
+  const loud = say(false), quiet = say(true);
+  check("[proc] runSync: an exit-0 run that fails its check is re-run once and flagged lost either way; the stderr line only without `quiet`",
+    /re-running once/.test(loud.stderr) && quiet.stderr === "" && [loud, quiet].every((r) => r.status === 0 && r.stdout.trim() === JSON.stringify({ attempts: 2, lost: true })));
+  // an exit event that comes after the run has settled (here: the liveness poll found the pid gone first) arms no drain timer —
+  // one would hold the caller's event loop open for drainMs (60 s here) after it is done
+  {
+    const deadPid = runSync(process.execPath, ["-e", "0"]).pid ?? 0;
+    const src = `import { runAsync } from ${PROC};\nimport { EventEmitter } from "node:events";\n`
+      + `const fake = Object.assign(new EventEmitter(), { pid: ${deadPid}, exitCode: null, signalCode: null, stdout: null, stderr: null, kill: () => true });\n`
+      + `const r = await runAsync("x", [], { spawnImpl: (() => fake) as never, pollMs: 5, drainMs: 60_000 }).done;\n`
+      + `fake.emit("exit", 0, null);\nconsole.log(r.lost ? "lost" : "settled by an event");\n`;
+    const f = path.join(dir, "late-exit.ts"); fs.writeFileSync(f, src);
+    const late = runSync(process.execPath, [f], { timeoutMs: 30_000 });
+    check(`[proc] runAsync: an exit event after it settled (poll: pid ${deadPid} gone) leaves no timer behind — the process ends at once (${late.ms} ms, exit ${String(late.status)})`,
+      deadPid > 0 && late.status === 0 && late.stdout.trim() === "lost" && late.ms < 15_000);
+  }
+  // git's object ids are 64 hex digits in a SHA-256 repository: still the HEAD (content-hash gitHead), never "no head"
+  {
+    const repo = (fmt: string): string | null => {
+      const d = fs.mkdtempSync(path.join(dir, `git-${fmt}-`));
+      const g = (...a: string[]) => runSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { cwd: d });
+      if (g("init", "-q", `--object-format=${fmt}`).status !== 0) return "no-git";
+      fs.writeFileSync(path.join(d, "a.txt"), "a"); g("add", "-A"); g("commit", "-qm", "a");
+      return gitHead(d);
+    };
+    const h1 = repo("sha1"), h256 = repo("sha256");
+    // (a git too old for --object-format, before 2.29, cannot make the second repository: only then is it skipped)
+    check(`[content-hash] gitHead: a SHA-1 HEAD (40 hex) and a SHA-256 one (64 hex) are both read (got ${h1}, ${h256})`,
+      /^[0-9a-f]{40}$/.test(h1 ?? "") && (/^[0-9a-f]{64}$/.test(h256 ?? "") || h256 === "no-git"));
+    check("[content-hash] gitHead outside a repository → null", gitHead(dir) === null);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+})();
+
+// ---------- test/cli-runner.ts: an in-process result is taken only for what a real child has shown ----------
+// A stand-in CLI whose main misbehaves only in-process (state another check left behind: globalThis.dtLeak): an exit 0
+// no child of the runner has produced is re-run as a child, and so is a crash (main threw → exit 1 + stack) even after a
+// child exited 1 for a real reason — each differing child then throws, naming both, instead of passing silently.
+await (async () => {
+  console.log("test/cli-runner.ts — what an in-process run may stand for:");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-runner-"));
+  const file = path.join(dir, "fake-cli.ts");
+  fs.writeFileSync(file, [
+    "export function main(argv: string[]): number {",
+    "  const leak = (globalThis as { dtLeak?: boolean }).dtLeak === true;",
+    "  if (argv[0] === \"fail\") { console.error(\"usage: fake-cli\"); return 1; }",
+    "  if (argv[0] === \"crash\") { if (leak) throw new Error(\"leaked state\"); return 0; }",
+    "  if (argv[0] === \"zero\") return leak ? 0 : 3;",
+    "  return 0;",
+    "}",
+    "if (import.meta.main) process.exitCode = main(process.argv.slice(2));", ""].join("\n"));
+  const fakeMain = ((await import(pathToFileURL(file).href)) as { main: (argv: string[]) => number }).main;
+  const run = cliRunner(file, fakeMain, { spawnFirst: 0, label: "fake-cli" });
+  const throws = (args: string[], re: RegExp): boolean => { try { run(args); return false; } catch (e) { return e instanceof Error && re.test(e.message); } };
+  for (let i = 0; i < 6; i++) run(["fail"]); // the runner's first runs are children (none exits 0): exit 1 is covered, 0 is not
+  (globalThis as { dtLeak?: boolean }).dtLeak = true;
+  try {
+    check("[cli-runner] an in-process exit 0 no child of the runner has shown is re-run as a child (here: 3) — a throw, not a pass",
+      throws(["zero"], /exited 0 in-process but 3 as a child/));
+    check("[cli-runner] an in-process crash (main threw) is re-run as a child even though a child already exited 1 — a throw naming the error",
+      throws(["crash"], /exited 1 in-process \(main threw: Error: leaked state\) but 0 as a child/));
+    const fail = run(["fail"]);
+    check("[cli-runner] an in-process exit 1 a child has shown (no throw) is taken as is", fail.status === 1 && /usage: fake-cli/.test(fail.stderr));
+  } finally { delete (globalThis as { dtLeak?: boolean }).dtLeak; fs.rmSync(dir, { recursive: true, force: true }); }
 })();
 
 report();

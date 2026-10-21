@@ -2005,13 +2005,16 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["']axe-core(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports axe-core literally`);
   }
   check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
-  // …and what that one call site resolves is loaded only from the project's own node_modules: under Bun a package the
-  // project lacks resolves to a copy auto-installed from npm into Bun's global cache (verify-probe.ts installedInProject;
-  // its cases are in test/verify-probe.test.ts). The guard must be in the bundle, before each load.
+  // …and that one call site resolves a package only once the project has it on disk (under Bun, resolving a package the
+  // project lacks downloads it from npm into Bun's global cache — auto-install — so the look comes first:
+  // packageDirInProject), and what it resolves is loaded only from the project's own node_modules (installedInProject).
+  // Their cases are in test/verify-probe.test.ts; both guards must be in the bundle, before each resolve / load.
   const vp = fs.readFileSync(path.join(SCRIPTS, "verify-probe.js"), "utf8");
-  const guards = [...vp.matchAll(/\binstalledInProject\(/g)].length;
+  const guards = [...vp.matchAll(/\binstalledInProject\(/g)].length, looks = [...vp.matchAll(/\bpackageDirInProject\(/g)].length;
   check(`verify-probe.js checks every resolved Playwright package and axe-core against the project's node_modules before loading it (installedInProject: ${guards} mentions — its definition and the Playwright and axe-core call sites, want 3)`,
     guards === 3 && /resolved outside the project's node_modules/.test(vp));
+  check(`verify-probe.js resolves Playwright and axe-core only after finding them on disk in the project (packageDirInProject: ${looks} mentions — its definition and the two call sites, want 3)`,
+    looks === 3 && vp.indexOf("packageDirInProject(abs, name)") < vp.indexOf("file = req.resolve(name)") && vp.indexOf("packageDirInProject(dir, \"axe-core\")") < vp.indexOf("file = req.resolve(\"axe-core\")"));
 }
 // the visual diff ports pixelmatch v6.0.0 (ISC) — its licence notice must ship with the code: visual-diff.ts carries it
 // as a `/*! … */` legal comment, which esbuild keeps (moved to the end of the file, legalComments "eof" when bundling)
@@ -2044,6 +2047,15 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 void build(tmp).then(async () => {
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
   check("claude-plugin/scripts/ is in sync with design-to-code/ (else: bun claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
+  // the exec bit is part of the build: a bundle with a shebang (design-diff.js) 0755, every other 0644 — in a rebuild and in
+  // the committed tree alike (a checkout carries git's mode; Windows has no such bit)
+  if (process.platform !== "win32") {
+    const mode = (f: string): string => (fs.statSync(f).mode & 0o777).toString(8);
+    const want = (f: string): string => fs.readFileSync(f, "latin1").startsWith("#!") ? "755" : "644";
+    const wrong = ENTRIES.flatMap((n) => [path.join(tmp, n + ".js"), path.join(SCRIPTS, n + ".js")]).filter((f) => mode(f) !== want(f)).map((f) => `${path.relative(path.dirname(path.dirname(f)), f)} is ${mode(f)}, want ${want(f)}`);
+    check("each bundle's mode follows its first line, rebuilt and committed: a shebang → 755, else 644" + (wrong.length ? " — " + wrong.join("; ") : ""),
+      wrong.length === 0 && want(path.join(SCRIPTS, "design-diff.js")) === "755");
+  }
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
     fs.copyFileSync(path.join(SCRIPTS, "drift-lint.js"), path.join(out, "drift-lint.js"));

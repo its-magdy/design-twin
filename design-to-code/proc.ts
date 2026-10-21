@@ -13,6 +13,7 @@ import { spawn, spawnSync, type ChildProcess, type StdioOptions } from "node:chi
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 export interface ProcResult {
   status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; ms: number;
@@ -33,6 +34,10 @@ export interface SyncOpts extends Common {
   capture?: "file" | "pipe";
   /** Also return stdout as bytes (`stdoutBytes`): a blob from `git show`, not text. */
   binary?: boolean;
+  /** Re-run a run that fails `expect` without the `[spawn-helper] … re-running once` line on stderr: a production caller
+   *  whose check can fail for an ordinary reason (`git show` of a committed empty file has no stdout) — the line is for a
+   *  suite's log, never the user's terminal. */
+  quiet?: boolean;
 }
 export interface AsyncOpts extends Common {
   stdin?: "pipe" | "ignore"; detached?: boolean;
@@ -54,19 +59,26 @@ function syncOnce(cmd: string, args: readonly string[], o: SyncOpts, attempt: nu
   const t0 = Date.now();
   const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL" as const, maxBuffer: 256 * 1024 * 1024 };
   const stdin = o.input !== undefined ? "pipe" : "ignore";
+  // a child that never started (ENOENT, EACCES: an error and no pid) has no exit status — null, as the type says (Bun
+  // leaves it undefined there)
   const done = (s: ReturnType<typeof spawnSync>, stdout: string, stderr: string): ProcResult => ({
-    status: s.status, signal: s.signal, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}), ...(s.pid ? { pid: s.pid } : {}),
+    status: s.error !== undefined && !s.pid ? null : s.status ?? null, signal: s.signal ?? null, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}), ...(s.pid ? { pid: s.pid } : {}),
     timedOut: (s.error !== undefined && "code" in s.error && s.error.code === "ETIMEDOUT"), attempts: attempt });
-  let dir: string | null = null;
-  if (o.capture !== "pipe") try { dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-")); } catch { /* no writable temp dir: the pipes, below */ }
-  if (dir === null) {
+  const piped = (): ProcResult => {
     const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
     const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
     return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...(o.binary ? { stdoutBytes: bytes } : {}) };
-  }
+  };
+  let dir: string | null = null;
+  if (o.capture !== "pipe") try { dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-")); } catch { /* no writable temp dir: the pipes, below */ }
+  if (dir === null) return piped();
   const outF = path.join(dir, "out"), errF = path.join(dir, "err");
   try {
-    const out = fs.openSync(outF, "wx+"), err = fs.openSync(errF, "wx+");
+    // the capture files, or the pipes when either cannot be opened (EMFILE, a full disk): an fd already open is closed
+    // whatever fails after it — a suite that spawns thousands of times would otherwise run out of them
+    let out: number | null = null, err: number | null = null;
+    try { out = fs.openSync(outF, "wx+"); err = fs.openSync(errF, "wx+"); }
+    catch { if (out !== null) fs.closeSync(out); return piped(); }
     let s: ReturnType<typeof spawnSync>;
     try { s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] }); } finally { fs.closeSync(out); fs.closeSync(err); }
     const bytes = readBytes(outF);
@@ -81,7 +93,7 @@ export function runSync(cmd: string, args: readonly string[], o: SyncOpts = {}):
     : o.expect instanceof RegExp ? o.expect.test(r.stdout) || o.expect.test(r.stderr) : o.expect(r);
   let r = syncOnce(cmd, args, o, 1);
   if (!valid(r) && r.status === 0 && !r.error) {
-    process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) — re-running once\n`);
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) — re-running once\n`);
     r = syncOnce(cmd, args, o, 2);
   }
   if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
@@ -111,6 +123,9 @@ export function runAsync(cmd: string, args: readonly string[], o: AsyncOpts = {}
     return { child: null, done: Promise.resolve({ status: null, signal: null, stdout: "", stderr: "", ms: 0, error: e as Error, timedOut: false, attempts: 1 }) };
   }
   let stdout = "", stderr = "", outEnded = false, errEnded = false, timedOut = false;
+  // Decoded as a stream, not chunk by chunk: a pipe chunk (64 KiB) can end inside a multi-byte UTF-8 character, whose
+  // halves would each read as U+FFFD. The caller's own 'data' listeners still get the Buffers.
+  const outDec = new StringDecoder("utf8"), errDec = new StringDecoder("utf8");
   let exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   const done = new Promise<ProcResult>((resolve) => {
     let settled = false;
@@ -118,15 +133,20 @@ export function runAsync(cmd: string, args: readonly string[], o: AsyncOpts = {}
     const finish = (extra: Partial<ProcResult> = {}): void => {
       if (settled) return; settled = true;
       for (const t of timers) clearTimeout(t), clearInterval(t);
+      stdout += outDec.end(); stderr += errDec.end();
       resolve({ status: exit?.code ?? child.exitCode, signal: exit?.signal ?? child.signalCode, stdout, stderr, ms: Date.now() - t0, timedOut, attempts: 1, ...extra });
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exit) return; exit = { code, signal };
+      // already settled (the liveness poll, the timeout): a late exit arms nothing — a drain timer now would hold the
+      // event loop open for drainMs after the caller is done
+      if (settled) return;
       if (outEnded && errEnded) return finish();
       timers.push(setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); finish(); }, o.drainMs ?? 2_000));
     };
-    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+    const text = (dec: StringDecoder, d: Buffer | string): string => typeof d === "string" ? d : dec.write(d);
+    child.stdout?.on("data", (d: Buffer | string) => { stdout += text(outDec, d); });
+    child.stderr?.on("data", (d: Buffer | string) => { stderr += text(errDec, d); });
     const ended = (): void => { if (exit && outEnded && errEnded) finish(); };
     child.stdout?.on("end", () => { outEnded = true; ended(); });
     child.stderr?.on("end", () => { errEnded = true; ended(); });

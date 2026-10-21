@@ -410,6 +410,15 @@ check("a re-drawn icon (same node id, same path, different bytes) is a change", 
   const c0 = d.changed[0];
   return /1 asset hash/.test(snap.stdout) && d.summary.changed === 1 && c0?.fields[0]?.field === "asset bytes" && c0?.categories[0] === "asset";
 })());
+{
+  const root = project(); git(root, "init", "-q"); const icon = path.join(root, "design", "assets", "1_5.svg");
+  fs.writeFileSync(icon, ""); put(root, "v1", "2026-01-01T00:00:00Z", { asset: "assets/1_5.svg" }); git(root, "add", "-A"); git(root, "commit", "-qm", "v1");
+  fs.writeFileSync(icon, "<svg>new</svg>"); put(root, "v1", "2026-02-01T00:00:00Z", { asset: "assets/1_5.svg" });
+  const r = dd(["design/login.json", "--json"], { cwd: root, spawn: true }); // a real child: its own stderr, as the user sees it
+  const d: unknown = (() => { try { return JSON.parse(r.stdout) as unknown; } catch { return null; } })();
+  check(`a committed EMPTY asset is not a committed copy, and its expected re-run (proc.ts runSync, quiet) prints no [spawn-helper] line to the user's stderr (exit ${String(r.status)}${r.stderr ? ": " + r.stderr.trim().slice(0, 300) : ""})`,
+    r.status === 0 && isScreenResult(d) && d.against === "git HEAD" && d.summary.changed === 0 && !/spawn-helper|re-running/.test(r.stderr));
+}
 check("an unknown flag is an error, not a silently different command", (() => { const root = project(); put(root, "v1", "2026-01-01T00:00:00Z"); const r = cli(root, "design/login.json", "--agains", "x.json"); return r.status === 2 && /unknown flag --agains/.test(r.stderr); })());
 check("a file of an unknown kind exits 2 with the reason", (() => { const root = project(); fs.writeFileSync(path.join(root, "a.json"), "{}"); fs.writeFileSync(path.join(root, "b.json"), "{}"); const r = cli(root, "a.json", "--against", "b.json"); return r.status === 2 && /nothing here can be diffed/.test(r.stderr); })());
 

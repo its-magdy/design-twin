@@ -20,9 +20,9 @@
 //     `kill -1` / `kill 0`): it takes down the user's own servers and editors. `kill <pid>` of a PID it
 //     recorded, `kill -- -<pgid>` of its own process group, and `pkill -P <pid>` / `kill $(pgrep -P <pid>)`
 //     (the children of a PID — no name or pattern) stay allowed.
-//   - a dependency install or reinstall (npm/pnpm/yarn/bun install, ci, add, …) and a Playwright
-//     browser install: the user's call, and `npm ci`/`npm install` clear node_modules/.cache with the
-//     live status and the staged evidence in it.
+//   - a dependency install or reinstall (npm/pnpm/yarn/bun install, ci, add, …, also a package manager run as a package:
+//     `bunx bun install`, `npx npm i`), a Playwright browser install and `bun upgrade` (it replaces the user's bun): the
+//     user's call, and `npm ci`/`npm install` clear node_modules/.cache with the live status and the staged evidence in it.
 //   - a Bash or PowerShell call with `dangerouslyDisableSandbox`: a permission denial is not a sandbox violation.
 //   - `verify-screen --migrate`: it renames verify sets and rewrites plans — the caller's call.
 // A PowerShell call (tool_name `PowerShell`, the same `command` field) is judged like a Bash one, with PowerShell's
@@ -150,13 +150,19 @@ const BUN_DEPS = new Set(["install", "i", "ci", "add", "a", "remove", "rm", "r",
 const NPM_VALUED = new Set(["--prefix", "-C", "--workspace", "-w", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--registry", "--tag", "--omit", "--include", "--before", "--otp", "--scope"]);
 const PNPM_VALUED = new Set(["-C", "--dir", "--filter", "-F", "--loglevel", "--reporter", "--registry", "--store-dir"]);
 const YARN_VALUED = new Set(["--cwd", "--cache-folder", "--modules-folder", "--global-folder", "--registry", "--network-timeout"]);
-// `bun`'s options that take a value as the next word. Bun itself does not know that when it picks the subcommand: it
-// takes the first word not starting with "-" (`bun --cwd install x` IS `bun install x`, run in ./install; `bun --cwd .
-// install` runs the script or bin named install) — so the guard reads the subcommand both ways (bunSubcommands).
-const BUN_VALUED = new Set(["--cwd", "--config", "-c", "-e", "--eval", "-p", "--print", "--env-file", "--preload", "-r", "--require", "--import", "--tsconfig-override",
-  "--install", "--conditions", "--main-fields", "--define", "-d", "--loader", "-l", "--port", "--console-depth", "--title",
-  "--elide-lines", "--filter", "-F", "--shell", "--user-agent", "--dns-result-order", "--unhandled-rejections"]);
-const NPX_VALUED = new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
+// Options of `bun` (and of bunx / npx / npm exec) KNOWN to take no value. Which word such a command runs is read without a
+// list of the options that do take one — bun has dozens (--jsx-factory, --extension-order, --fetch-preconnect, …) and a
+// new release adds more, so any list misses one: `bun --jsx-factory h playwright install` runs playwright. Instead every
+// word after an option is taken as possibly that option's value, and the word after it is judged as well (bunTargets).
+// These are the exceptions that stop that walk early — the plugin's own `bun --no-install --no-env-file <script> …` runs
+// <script>, and what follows is <script>'s — so an option missing here costs only a stricter reading, never a bypass.
+const BUN_BOOLEAN = new Set(["--no-install", "--no-env-file", "--bun", "-b", "--smol", "--hot", "--watch", "--no-clear-screen", "--if-present", "--silent",
+  "--prefer-offline", "--prefer-latest", "--no-macros", "--preserve-symlinks", "-i"]);
+const NPX_BOOLEAN = new Set(["--yes", "-y", "--no", "--no-install", "--bun", "-b", "--silent", "--quiet", "-q", "--verbose", "--prefer-offline", "--prefer-online", "--offline"]);
+const PM_BOOLEAN = new Set(["--silent", "-s", "--quiet", "-q", "--verbose", "--yes", "-y", "--global", "-g", "--offline", "--prefer-offline", "--frozen-lockfile", "--no-color"]);
+// The package managers: one run as a package (`bunx bun install`, `npx npm i`, `npm exec npm install`) or as the bin
+// `bun` runs (`bun x npm ci`, `bun run pnpm add x`) is judged as the command it then is.
+const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "npx", "pnpx", "bunx"]);
 const PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
 // PowerShell/Windows lookups of processes by name, command line or port (`ps` is Get-Process's alias, above).
@@ -228,6 +234,8 @@ const REASON = {
     + "or its children with `pkill -P <pid>` — and reuse a dev server the user already runs (PowerShell: `Stop-Process -Id <pid>`).",
   install: "installing or reinstalling dependencies is the user's call, never the verifier's — and `npm ci`/`npm install` clear node_modules/.cache, "
     + "the live status and your staged evidence with it. Write status `blocked` with the command as the detail and hand it back to the caller.",
+  upgrade: "`bun upgrade` replaces the user's own bun — the one every project and tool of theirs runs on — and is the user's call, never the verifier's. "
+    + "Write status `blocked` with the command as the detail and hand it back to the caller.",
   playwright: "installing Playwright or its browsers is the user's call (it edits the project's dependencies and downloads ~150 MB). "
     + `No usable renderer (\`${scriptCmd("verify-probe")} --check\` exit 3): stop and ask the user, with the install line the probe printed and its cost.`,
   sandbox: "a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); "
@@ -303,49 +311,64 @@ function commandVerdict(cmd: Words, line: string, depth: number, ps: boolean): s
     return null;
   }
 
+  // npm / pnpm / yarn: each word that may be the subcommand is judged — the first after the options with the listed ones'
+  // values skipped, and every word pmTargets finds (an unlisted option's value: `npm --fetch-retries 3 install`)
   if (p === "npm") {
-    const s = firstArg(words, 1, NPM_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (NPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "exec" || sub === "x") return npxVerdict(words, s + 1);
+    for (const s of pmTargets(words, NPM_VALUED)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (NPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "exec" || sub === "x") { const v = npxVerdict(words, s + 1, line, depth, ps); if (v) return v; }
+    }
     return null;
   }
-  if (p === "npx" || p === "pnpx" || p === "bunx") return npxVerdict(words, 1);
+  if (p === "npx" || p === "pnpx" || p === "bunx") return npxVerdict(words, 1, line, depth, ps);
   if (p === "pnpm") {
-    const s = firstArg(words, 1, PNPM_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (PNPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "dlx" || sub === "exec" || sub === "x") return npxVerdict(words, s + 1);
-    return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+    for (const s of pmTargets(words, PNPM_VALUED)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (PNPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "dlx" || sub === "exec" || sub === "x") { const v = npxVerdict(words, s + 1, line, depth, ps); if (v) return v; }
+      if (PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    }
+    return null;
   }
   if (p === "yarn") {
-    let s = firstArg(words, 1, YARN_VALUED);
-    // `yarn workspace <name> <command…>` runs the command in that workspace
-    if ((words[s] ?? "").toLowerCase() === "workspace" && s + 2 < words.length) s += 2;
-    const sub = (words[s] ?? "").toLowerCase();
     // a bare `yarn` (options only, e.g. --frozen-lockfile) installs; `yarn --version` / `--help` do not
-    if (s >= words.length && !args.some((a) => /^(-v|--version|-h|--help)$/.test(a))) return REASON.install;
-    if (YARN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "dlx" || sub === "exec") return npxVerdict(words, s + 1);
-    return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+    if (firstArg(words, 1, YARN_VALUED) >= words.length && !args.some((a) => /^(-v|--version|-h|--help)$/.test(a))) return REASON.install;
+    for (let s of pmTargets(words, YARN_VALUED)) {
+      // `yarn workspace <name> <command…>` runs the command in that workspace
+      if ((words[s] ?? "").toLowerCase() === "workspace" && s + 2 < words.length) s += 2;
+      const sub = (words[s] ?? "").toLowerCase();
+      if (YARN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "dlx" || sub === "exec") { const v = npxVerdict(words, s + 1, line, depth, ps); if (v) return v; }
+      if (PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    }
+    return null;
   }
   if (p === "bun") {
     // `bun --no-install --no-env-file <script> …` is how the plugin runs its own scripts (the migrate check above reads it);
-    // what is refused here is a subcommand that installs, a package's bin run by name (`bun playwright install`, `bun run
-    // playwright install`), a Playwright CLI run by path, and `bun exec <shell script>` (its body is judged like bash -c).
-    for (const s of bunSubcommands(words)) {
+    // what is refused here is a subcommand that installs (or `upgrade`, which replaces the user's bun), a package's bin run
+    // by name (`bun playwright install`, `bun run playwright install`), a Playwright CLI run by path, a package manager run
+    // as a bin (`bun run npm ci`), and `bun exec <shell script>` (its body is judged like bash -c).
+    // The Playwright CLI's install is refused wherever it stands on the line: which word bun runs depends on which of its
+    // options take a value, and a `playwright install` that bun does not run is no command a verifier needs.
+    for (let k = 1; k < words.length; k++) if (runsPlaywrightCli(words, k)) return REASON.playwright;
+    for (const s of bunTargets(words, 1, BUN_BOOLEAN)) {
       const sub = (words[s] ?? "").toLowerCase();
       if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "upgrade") return REASON.upgrade;
       if (sub === "pm" && (words[firstArg(words, s + 1)] ?? "").toLowerCase() === "trust") return REASON.install; // runs install scripts, edits package.json
-      if (sub === "x") { const v = npxVerdict(words, s + 1); if (v) return v; continue; }
+      if (sub === "x") { const v = npxVerdict(words, s + 1, line, depth, ps); if (v) return v; continue; }
       if (sub === "exec") { if (depth < 4) { const v = bashVerdict(words.slice(firstArg(words, s + 1)).join(" "), depth + 1); if (v) return v; } continue; }
-      const t = sub === "run" ? firstArg(words, s + 1, BUN_VALUED) : s;
-      if (runsPlaywrightCli(words, t)) return REASON.playwright;
+      for (const t of sub === "run" ? bunTargets(words, s + 1, BUN_BOOLEAN) : [s]) {
+        const v = packageManagerVerdict(words, t, line, depth, ps);
+        if (v) return v;
+      }
     }
     return null;
   }
   if (PLAYWRIGHT_PKG.test(p) && playwrightInstall(words, 1)) return REASON.playwright;
-  if (p === "node" && runsPlaywrightCli(words, firstArg(words, 1))) return REASON.playwright;
+  // node's options that take a value (--require x, --import tsx, …) are not listed either — refused wherever it stands, as for bun
+  if (p === "node") for (let k = 1; k < words.length; k++) if (runsPlaywrightCli(words, k)) return REASON.playwright;
   return null;
 }
 
@@ -355,14 +378,42 @@ const createsPlaywright = (words: Words, s: number): boolean => {
   return (sub === "init" || sub === "innit" || sub === "create" || sub === "c") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
 };
 
-// The words a `bun …` command line may take as its subcommand: the first word after bun's options with their values
-// skipped (BUN_VALUED), and the first word not starting with "-" — the one bun itself dispatches on. Both are judged.
-function bunSubcommands(words: Words): number[] {
-  const byValue = firstArg(words, 1, BUN_VALUED);
-  let bare = 1;
-  while (bare < words.length && (words[bare] ?? "").startsWith("-") && words[bare] !== "--") bare++;
-  if (words[bare] === "--") bare++;
-  return byValue === bare ? [byValue] : [byValue, bare];
+// The words from `from` on that a `bun …` (or bunx / npx / npm exec) command line may take as its subcommand, script, bin
+// or package — every one is judged. Bun dispatches on the first word not starting with "-" (`bun --cwd install x` IS `bun
+// install x`, run in ./install), while its option parser gives each option that takes a value the word after it (`bun
+// --jsx-factory h playwright install` runs playwright; `bun --cwd . install` runs the script or bin named install). With
+// no table of which options take a value, the walk takes the first word after the options, and goes on past it while the
+// option just before it could have taken it as its value — not `--x=v`, not one of `booleans` — through the options
+// after it, to the next such word. After `--` the next word is the target, and nothing past it.
+function bunTargets(words: Words, from: number, booleans: ReadonlySet<string>): number[] {
+  const out: number[] = [];
+  const option = (w: string): boolean => w.startsWith("-") && w !== "-";
+  for (let i = from; i < words.length; i++) {
+    const w = words[i] ?? "";
+    if (w === "--") { if (i + 1 < words.length) out.push(i + 1); break; }
+    if (option(w)) continue;
+    out.push(i);
+    const prev = words[i - 1] ?? "";
+    if (i > from && option(prev) && !prev.includes("=") && !booleans.has(prev)) continue; // maybe prev's value: the next word may be the target
+    break;
+  }
+  return out;
+}
+
+// The words of an npm / pnpm / yarn command line that may be its subcommand: the first one after the options with the
+// values of the `valued` ones skipped, and those bunTargets finds (no option of theirs is taken for boolean).
+function pmTargets(words: Words, valued: ReadonlySet<string>): number[] {
+  const first = firstArg(words, 1, valued);
+  return [...new Set([...(first < words.length ? [first] : []), ...bunTargets(words, 1, PM_BOOLEAN)])];
+}
+
+// words[t] (a package bunx/npx runs, or the bin bun runs) is a package manager: judged as that command, with the words
+// after it as its own (`bunx bun@1.4 install` → `bun install`; `npx npm i` → `npm i`).
+function packageManagerVerdict(words: Words, t: number, line: string, depth: number, ps: boolean): string | null {
+  const w = (words[t] ?? "").toLowerCase();
+  const name = prog(/^@/.test(w) ? w : w.replace(/@.*$/, "")); // bun@1.4 → bun; a scoped package (@x/npm) is not npm
+  if (!PACKAGE_MANAGERS.has(name) || depth >= 4) return null;
+  return commandVerdict([name, ...words.slice(t + 1)], line, depth + 1, ps);
 }
 
 // Does words[s…] run the Playwright CLI's install: a Playwright package's bin by name (`playwright`, as `bun playwright`
@@ -372,14 +423,20 @@ function runsPlaywrightCli(words: Words, s: number): boolean {
   return (PLAYWRIGHT_PKG.test(w.toLowerCase()) || PLAYWRIGHT_PKG.test(prog(w)) || PLAYWRIGHT_CLI.test(w)) && playwrightInstall(words, s + 1);
 }
 
-// npx / npm exec / pnpm dlx / yarn dlx / bunx: what runs is the package named first.
-function npxVerdict(words: Words, from: number): string | null {
+// npx / npm exec / pnpm dlx / yarn dlx / bunx: what runs is the package named first — read like bun's target (bunTargets:
+// `npx --loglevel silent playwright install` runs playwright, whatever options npm adds), and a package manager run that
+// way is judged as the command it then is.
+function npxVerdict(words: Words, from: number, line: string, depth: number, ps: boolean): string | null {
   const c = words.findIndex((w, k) => k >= from && (w === "-c" || w === "--call"));
-  if (c >= 0 && words[c + 1] !== undefined) return bashVerdict(words[c + 1] ?? "", 1);
-  const s = firstArg(words, from, NPX_VALUED);
-  const pkg = (words[s] ?? "").toLowerCase();
-  if (/^create-playwright(@.*)?$/.test(pkg)) return REASON.playwright;
-  return PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+  if (c >= 0 && words[c + 1] !== undefined) return depth < 4 ? bashVerdict(words[c + 1] ?? "", depth + 1, ps) : null;
+  for (const s of bunTargets(words, from, NPX_BOOLEAN)) {
+    const pkg = (words[s] ?? "").toLowerCase();
+    if (/^create-playwright(@.*)?$/.test(pkg)) return REASON.playwright;
+    if (PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    const v = packageManagerVerdict(words, s, line, depth, ps);
+    if (v) return v;
+  }
+  return null;
 }
 
 /** Why a shell command line is refused, or null. `ps`: read it as PowerShell (its quoting, its cmdlets). */
@@ -456,7 +513,7 @@ const USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, …);",
-  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
+  "a dependency install, `bun upgrade` or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
   "verify-screen --migrate (it renames verify sets and rewrites plans).",
   "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   "A refusal is {\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",…}} on stdout; every answer exits 0.",
