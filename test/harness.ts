@@ -305,7 +305,8 @@ const scrollFrame = {
   // AppliedAnimationStyle is discriminated on `type` (typings 1.141): the first entry has NO `type` (a
   // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, applied3-9
   // are CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props),
-  // applied10-11 are kinds added after the typings (SPRING, MORPH), applied12-13 are FIGMA styles with a description.
+  // applied10 and the MORPH row are kinds newer than the typings; applied12-13 are FIGMA styles with a non-empty
+  // and an empty description; applied14 has an empty type, read as FIGMA.
   // A CUSTOM row is expanded from the style its styleId resolves to (getStyleByIdAsync below): cas1
   // resolves (twice — one fetch), the others do not resolve to a readable custom animation style.
   animationStyles: [{
@@ -347,6 +348,9 @@ const scrollFrame = {
     type: "FIGMA", id: "applied12", styleId: "as4", name: "Pop", description: "Scales in with a bounce", duration: 0.2,
   }, {
     type: "FIGMA", id: "applied13", styleId: "as5", name: "Plain", description: "", duration: 0.1,
+  }, {
+    // an empty type string: read as a FIGMA style, like an absent type
+    type: "", id: "applied14", styleId: "as6", name: "Blank", duration: 0.1,
   }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -1024,6 +1028,8 @@ const sandbox: Sandbox = context;
     '{"id":"applied12","name":"Pop","styleId":"as4","description":"Scales in with a bounce","duration":0.2}');
   ok("motion applied FIGMA animation style: an empty description is dropped", JSON.stringify(m3?.styles?.[12]) ===
     '{"id":"applied13","name":"Plain","styleId":"as5","duration":0.1}');
+  ok("motion applied animation style with an empty type: exported as a FIGMA row, no kind", JSON.stringify(m3?.styles?.[13]) ===
+    '{"id":"applied14","name":"Blank","styleId":"as6","duration":0.1}');
   const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (not dead)",!!(
     rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
