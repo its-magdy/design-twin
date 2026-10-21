@@ -2602,7 +2602,10 @@ void (async () => {
   if (process.platform === "win32") console.log("  (skipped: the capped-exit timings — a signal from child.kill ends a Windows process outright, and the stderr is a POSIX sh pipe)");
   else {
     console.log("\ndaemon.ts — capped exits (crash, signals):");
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-capped-"));
+    // Short, under /tmp: each daemon's socket is <dir>/designtwin-<uid>/designtwin-<port>.sock, and under macOS's
+    // ~48-byte os.tmpdir() (/var/folders/…/T) that is ~104 bytes — past the 103 macOS allows a socket path
+    // (daemon.ts MAX_SOCK_PATH_BYTES), so serve() would rightly refuse it and no daemon would start.
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join("/tmp", "dtwin-capped-")));
     const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
     const stdioUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/stdio.ts")).href;
     const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
