@@ -4,7 +4,7 @@
 //
 // this needs the repo's own devDependency `playwright` and its chromium. Locally, when the renderer is
 // unavailable (the probe exits 3), the suite prints SKIPPED and passes; in CI (CI=true) that is a failure.
-// Run with:  node test/verify-probe-e2e.test.ts
+// Run with:  bun test/verify-probe-e2e.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -520,7 +520,7 @@ else {
   fs.chmodSync(path.dirname(sLive), 0o555);
   const r11 = await probe(["--expected", path.join(svdir, SET + ".expected.json"), "--url", url(), "--out", sStage, "--project", ROOT, "--run", "run-e2e-11"]);
   fs.chmodSync(path.dirname(sLive), 0o755);
-  const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
+  const recovery = /with: (bun --no-install --no-env-file .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
   check("every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
     r11.status === 0 && !fs.existsSync(sLive) && /no live status of the run exists, so --compare will report the run as unrecorded/.test(r11.stderr) && recovery !== "");
   if (r11.status !== 0) console.log(r11.stderr);

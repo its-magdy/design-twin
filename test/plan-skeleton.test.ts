@@ -1,7 +1,7 @@
 // Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export.
 // Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
 // by its build.ts (visibility, bindings and instances are the export's own — see the counts below).
-//   node test/plan-skeleton.test.ts
+//   bun test/plan-skeleton.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -197,7 +197,7 @@ console.log("CLI:");
 const help = run(["--help"]);
 // The script's path is double-quoted in the usage line, or single-quoted when it holds a backslash (cli-args.ts shellQuote): every Windows path.
 const Q = process.platform === "win32" ? "'" : '"';
-check("--help prints usage and exits 0", help.status === 0 && new RegExp(`usage: node ${Q}[^${Q}]*plan-skeleton\\.(ts|js)${Q} <screen\\.json> <screen\\.vars\\.json> <design-system dir>`).test(help.stdout));
+check("--help prints usage and exits 0", help.status === 0 && new RegExp(`usage: bun --no-install --no-env-file ${Q}[^${Q}]*plan-skeleton\\.(ts|js)${Q} <screen\\.json> <screen\\.vars\\.json> <design-system dir>`).test(help.stdout));
 check("an unknown flag is refused (exit 2), not swallowed", run([screen(JR), vars(JR), DS, "--output", "x"]).status === 2);
 {
   // Every input is checked as it is read (doc-guards.ts); each failure is one line naming the file, exit 1.

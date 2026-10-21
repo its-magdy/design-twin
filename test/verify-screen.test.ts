@@ -5,7 +5,7 @@
 // a body at 16px/#d4d4d4 where the export says 14px/#a0a0a0, a chip whose fill token was never
 // applied, a modal at radius 20 against a spec of 12, two toolbar components never built, and a set
 // of designed interactions nobody exercised.
-// Run with:  node test/verify-screen.test.ts
+// Run with:  bun test/verify-screen.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

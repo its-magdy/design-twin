@@ -2,7 +2,7 @@
 // plan.verification.recorded, the tool-owned block, whole) and the verify-build side of it: planHash does not cover
 // `verification` (the legacy formula is still accepted), the recorded-report sha warning, the block on a hand-edited
 // record and the warning on the record's keys left at the top level.
-//   node test/plan-record.test.ts
+//   bun test/plan-record.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

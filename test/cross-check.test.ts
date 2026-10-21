@@ -4,7 +4,7 @@
 // a duplicated file that re-keys every collection, a catalog that covers 0% of the screen, two
 // libraries whose token names collide on different values, a text style that differs by one capital
 // letter, a radius of a billion, a Dark-only export of a two-mode system.
-// Run with:  node test/cross-check.test.ts
+// Run with:  bun test/cross-check.test.ts
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";

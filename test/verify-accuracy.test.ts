@@ -2,7 +2,7 @@
 // over plugin-shaped screen exports (test/fixtures.ts, invented names): font.case lower-case ("title", "upper", "small_caps"), lineHeight {value, unit},
 // autoResize lower-case, fills bound to a state token, reactions[].actions[]. Measurements are the probe's shape
 // ({nodeId, styles, states.<s>.styles, matchedBy}); paintedBy / textTransform are the shipped probe's optional keys.
-// Run with:  node test/verify-accuracy.test.ts
+// Run with:  bun test/verify-accuracy.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

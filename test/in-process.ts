@@ -23,9 +23,9 @@ export function runMainSync(main: (argv: string[]) => number, argv: string[], o:
   let status: number | null;
   try {
     if (o.cwd) process.chdir(o.cwd);
-    process.exit = ((code?: number | string | null) => { throw new Exit(Number(code ?? process.exitCode ?? 0)); }) as typeof process.exit;
-    process.stdout.write = sink("out") as typeof process.stdout.write;
-    process.stderr.write = sink("err") as typeof process.stderr.write;
+    process.exit = (code?: number | string | null): never => { throw new Exit(Number(code ?? process.exitCode ?? 0)); };
+    process.stdout.write = sink("out");
+    process.stderr.write = sink("err");
     console.log = console.info = console.debug = line("out");
     console.warn = console.error = line("err");
     try { status = main(argv); }

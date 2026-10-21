@@ -1,7 +1,7 @@
 // the deviation registry, waivers and grouping. Expectations come from the real `buildExpectation` over a plugin-shaped screen export
 // (test/fixtures.ts, invented names); plans have the real Plan shape (design-to-code/types.ts). The last block
 // runs the CLI (--expect / --compare / --accept) in a temp project.
-// Run with:  node test/verify-waivers.test.ts
+// Run with:  bun test/verify-waivers.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

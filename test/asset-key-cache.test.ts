@@ -3,7 +3,7 @@
 // interleaved) and FileKeyCache (a file's ContentKey reused only while the file is provably unchanged), with
 // the FileMemo it is built on (file-memo.ts).
 // Pure functions and temp files only — binds no port.
-// Run with:  node test/asset-key-cache.test.ts
+// Run with:  bun test/asset-key-cache.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

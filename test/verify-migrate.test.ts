@@ -2,7 +2,7 @@
 // `<Layer>__<id>` (a variant to `<Layer>__<id>.<slug>`), the plan's recorded paths rewritten together, a legacy set
 // beside its node's canonical set retired, and every refusal (hand-edited record, open run, a taken name) leaving the
 // disk as it was. Invented screens, temp projects only.
-//   node test/verify-migrate.test.ts
+//   bun test/verify-migrate.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

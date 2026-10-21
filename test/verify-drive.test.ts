@@ -3,7 +3,7 @@
 // evidence precedence by provenance (a run-bound probe row vs the agent's), page overflow at the design width.
 // Expectations come from the real `buildExpectation` over plugin-shaped screen exports (test/fixtures.ts; the overlay
 // block has the shape figma-plugin/src/serialize.ts writes on a destination root). Invented names throughout.
-// Run with:  node test/verify-drive.test.ts
+// Run with:  bun test/verify-drive.test.ts
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

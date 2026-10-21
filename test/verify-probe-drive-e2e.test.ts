@@ -31,7 +31,7 @@
 // (25 s, 30 s) leave wide margins over a run that takes a few seconds under load.
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
-// (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
+// (CI=true) that is a failure.  Run with:  bun test/verify-probe-drive-e2e.test.ts
 import path from "node:path";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";

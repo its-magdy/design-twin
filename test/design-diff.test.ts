@@ -1,5 +1,5 @@
 // Offline tests for design-to-code/design-diff.ts (the sync-design skill's change list).
-//   node test/design-diff.test.ts
+//   bun test/design-diff.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

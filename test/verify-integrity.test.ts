@@ -2,7 +2,7 @@
 // `buildExpectation` over a plugin-shaped screen export (test/fixtures.ts, invented names); measured files and
 // interaction evidence have the shapes the shipped probe and the verifier write (design-to-code/types.ts). The
 // last block runs the CLI's --compare in a temp project with a status file beside the measured one.
-// Run with:  node test/verify-integrity.test.ts
+// Run with:  bun test/verify-integrity.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

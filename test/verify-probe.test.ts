@@ -1,7 +1,7 @@
 // Offline tests for the shipped web probe's output contract and what --compare does with it.
 // No browser here: the compare/contract half builds real expectations through buildExpectation / --expect
 // and feeds them measured.json shapes the probe writes (every STYLE_KEY present, null + unmeasured[key]).
-// Run with:  node test/verify-probe.test.ts
+// Run with:  bun test/verify-probe.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +26,7 @@ import * as PP from "../design-to-code/probe-page.ts";
 import * as VP from "../design-to-code/verify-probe.ts";
 import type { Match, MatchPool, NoMatch, ResolvedFrame } from "../design-to-code/probe-match.ts";
 import type { Candidate, CollectOutput, ElemFlags, MeasureResult, SizedCandidate } from "../design-to-code/probe-page.ts";
-import { errorKind, installHint, resolvePlaywright } from "../design-to-code/verify-probe.ts";
+import { errorKind, installHint, installedInProject, resolvePlaywright } from "../design-to-code/verify-probe.ts";
 import type { VerifySpec } from "../design-to-code/types.ts";
 import { must } from "./fixtures.ts";
 import type * as PDT from "../design-to-code/probe-drive.ts";
@@ -389,8 +389,30 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   t("only playwright-core → playwright-core", () => rc.ok && rc.pkg === "playwright-core");
   const none = project("none", []);
   const rn = resolvePlaywright(none);
+  // under a bare `bun` (this suite) the project's require answers a package the project lacks from Bun's auto-install cache
+  // (downloaded from npm): each is then named as resolved outside the project and never loaded — "not installed" otherwise
   t("nothing installed → not ok, the reason names <project>/package.json and the hint is the npm install command", () =>
-    !rn.ok && rn.reason.includes(path.join(none, "package.json")) && rn.hint === "npm i -D playwright && npx playwright install chromium");
+    !rn.ok && rn.reason.includes(path.join(none, "package.json")) && rn.hint === "npm i -D playwright && npx playwright install chromium"
+    && ["playwright", "@playwright/test", "playwright-core"].every((n) => rn.reason.includes(`${n}: not installed`) || rn.reason.includes(`${n}: resolved outside the project's node_modules`)));
+  {
+    // installedInProject: the guard every resolved package passes before it is loaded
+    const ws = path.join(tmp, "ws"), app = path.join(ws, "apps", "web"), store = path.join(ws, "node_modules", ".pnpm", "axe-core@4.0.0", "node_modules", "axe-core");
+    fakePkg(app, "playwright", "1.0.0", WITH_CHROMIUM);
+    fakePkg(ws, "@playwright/test", "1.0.0", WITH_CHROMIUM);
+    fakePkg(ws, "playwright-extra", "1.0.0", WITH_CHROMIUM);
+    fs.mkdirSync(store, { recursive: true }); fs.writeFileSync(path.join(store, "index.js"), "");
+    fs.mkdirSync(path.join(app, "node_modules"), { recursive: true });
+    fs.symlinkSync(store, path.join(app, "node_modules", "axe-core"), "dir");
+    const elsewhere = path.join(tmp, "bun-cache", "playwright@1.0.0", "index.js");
+    fs.mkdirSync(path.dirname(elsewhere), { recursive: true }); fs.writeFileSync(elsewhere, "");
+    t("installedInProject: the project's own node_modules/<name>, a workspace root's hoisted copy and a pnpm symlink into .pnpm/ are the project's",
+      () => installedInProject(app, "playwright", path.join(app, "node_modules", "playwright", "index.js"))
+        && installedInProject(app, "@playwright/test", path.join(ws, "node_modules", "@playwright", "test", "index.js"))
+        && installedInProject(app, "axe-core", path.join(store, "index.js")));
+    t("installedInProject: a copy anywhere else (an auto-install cache, NODE_PATH), a package whose name only starts with it, or a sibling's node_modules are not",
+      () => !installedInProject(app, "playwright", elsewhere) && !installedInProject(ws, "playwright", path.join(ws, "node_modules", "playwright-extra", "index.js"))
+        && !installedInProject(ws, "playwright", path.join(app, "node_modules", "playwright", "index.js")) && !installedInProject(app, "playwright-core", path.join(app, "node_modules", "playwright", "index.js")));
+  }
   const noChromium = project("no-chromium", [["playwright", "1.62.0", "module.exports = { firefox: {} };\n"]]);
   const rx = resolvePlaywright(noChromium);
   t("a package with no chromium launcher is rejected (the type guard checks at runtime)", () => !rx.ok && /no chromium launcher/.test(rx.reason));
@@ -404,7 +426,8 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     installHint(none).startsWith("npm i -D playwright"));
   const pnp = project("pnp", [], { ".pnp.cjs": "" });
   const rp = resolvePlaywright(pnp);
-  t("Yarn Plug'n'Play → the reason says to retry via `yarn node`", () => !rp.ok && /yarn node/.test(rp.reason));
+  t("Yarn Plug'n'Play → the reason says Bun cannot resolve through it and asks for the node-modules linker (never `yarn node`, which runs Node)",
+    () => !rp.ok && /Yarn Plug'n'Play, which Bun cannot resolve packages through/.test(rp.reason) && /`nodeLinker: node-modules` in \.yarnrc\.yml/.test(rp.reason) && !/yarn node/.test(rp.reason));
 
   const PROBE_CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
   const run = spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", none], { encoding: "utf8" });
@@ -847,7 +870,7 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 3) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
   t("[run] probeAttemptUncounted: an attempt the status lock or cache refused names why, the one re-run (exit 4: at once) and the command that ends the run", () => {
     const l = VP.probeAttemptUncounted({ runId: "r1", exit: 4, by: "busy", screen: "Orders", verifyDir: "/p/design/verify" });
-    return l.startsWith("status run r1 not counted — this failed attempt (exit 4) is not in the run's status (another status write held the status lock for the whole wait). Re-run the probe once in this run (--run r1); if that attempt fails too, whatever its own line says, end the run: node ")
+    return l.startsWith("status run r1 not counted — this failed attempt (exit 4) is not in the run's status (another status write held the status lock for the whole wait). Re-run the probe once in this run (--run r1); if that attempt fails too, whatever its own line says, end the run: bun --no-install --no-env-file ")
       && l.endsWith(" --status Orders --phase failed --run r1 --detail \"probe exit 4 twice\" --dir /p/design/verify");
   });
   t("[run] probeAttemptUncounted with an unwritable run cache: says a verify-screen --status write would be refused the same way, re-run once it takes writes — no command to run now", () => {

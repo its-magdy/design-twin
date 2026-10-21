@@ -1,4 +1,4 @@
-// Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.ts
+// Offline tests for the design-to-code/ layer. No Figma, no dependencies:  bun test/design-to-code.test.ts
 // Assertions pin VALUES (not just presence) and every confirmed bug has a regression test.
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName } from "../design-to-code/tokens.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
@@ -1014,9 +1014,11 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   })());
   // the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
   // names the script by the real path it is running from (here, the source; installed, the bundle).
-  check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
-    run("drift-lint.ts", []).stderr.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "drift-lint.ts")}${PATH_QUOTE}`)
-    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "tokens.ts")}${PATH_QUOTE}`));
+  // `bun --no-install --no-env-file`: copied into Bash it runs in the user's project, where a bare `bun` would
+  // auto-install a missing package and load the project's .env.
+  check("[usage] the usage line names the script by its real path (bun --no-install --no-env-file \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
+    run("drift-lint.ts", []).stderr.includes(`usage: bun --no-install --no-env-file ${PATH_QUOTE}${path.join(D2C, "drift-lint.ts")}${PATH_QUOTE}`)
+    && run("tokens.ts", ["--help"]).stdout.includes(`usage: bun --no-install --no-env-file ${PATH_QUOTE}${path.join(D2C, "tokens.ts")}${PATH_QUOTE}`));
 })();
 
 // ---------- tokens: the export's colour profile (the plugin writes Figma's DISPLAY_P3 lowercased: "display_p3") ----------
@@ -1736,13 +1738,13 @@ console.log("map — SLOT props:");
   // script named in a hint both exist.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
   const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
-  const usagePath = new RegExp(`usage: node ${PATH_QUOTE}([^${PATH_QUOTE}]+)${PATH_QUOTE}`).exec(help.stdout)?.[1];
-  check("the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
+  const usagePath = new RegExp(`usage: bun --no-install --no-env-file ${PATH_QUOTE}([^${PATH_QUOTE}]+)${PATH_QUOTE}`).exec(help.stdout)?.[1];
+  check("the shipped tokens.js --help prints its own real path (bun --no-install --no-env-file \"…/scripts/tokens.js\"), from any cwd",
     help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
   fs.writeFileSync(path.join(tmp, "map.json"), "{}");
   fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
   const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
-  const hintPath = new RegExp(`node ${PATH_QUOTE}([^${PATH_QUOTE}]+map-validate\\.js)${PATH_QUOTE}`).exec(lint.stderr)?.[1];
+  const hintPath = new RegExp(`bun --no-install --no-env-file ${PATH_QUOTE}([^${PATH_QUOTE}]+map-validate\\.js)${PATH_QUOTE}`).exec(lint.stderr)?.[1];
   check("a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
     hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
   fs.rmSync(tmp, { recursive: true, force: true });

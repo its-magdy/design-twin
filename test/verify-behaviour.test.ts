@@ -1,7 +1,7 @@
 // what --compare does with the probe's behaviour/a11y block: report.behaviour (always written),
 // the second headline, the md section, the CLI line, the lenient guard, and that behaviour never reaches the verdict.
 // Expectations come from the real `buildExpectation` over plugin-shaped screen exports (test/fixtures.ts). Invented names.
-// Run with:  node test/verify-behaviour.test.ts
+// Run with:  bun test/verify-behaviour.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

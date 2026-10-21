@@ -3,7 +3,7 @@
 // sha256), and report.visual at --compare (always written, a third headline, an md section, the lenient guard, and that
 // the diff never reaches the verdict). Screens are plugin-shaped exports (test/fixtures.ts) with the real index-row and
 // reference-PNG shapes (IHDR, pHYs, sRGB, gAMA, tEXt, IDAT, IEND); every name is invented ("Kiln Log").
-// Run with:  node test/verify-visual.test.ts
+// Run with:  bun test/verify-visual.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

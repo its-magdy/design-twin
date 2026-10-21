@@ -4,7 +4,7 @@
 // skipped when no browser is installed; in CI (CI=true) it must run. What it learns about Playwright's own internals (the
 // closed error's name, whether a crashed page reports itself closed) is printed, never failed on: a Playwright upgrade
 // that changes them must not fail the suite while the classifier still answers right.
-// Run with:  node test/pw-errors.test.ts
+// Run with:  bun test/pw-errors.test.ts
 import { pwErrorKind, pwFirstLine } from "../design-to-code/pw-errors.ts";
 import type { PwErrorKind } from "../design-to-code/pw-errors.ts";
 import { setTimeout as sleep } from "node:timers/promises";

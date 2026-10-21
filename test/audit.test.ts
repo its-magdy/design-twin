@@ -1,5 +1,5 @@
 // Offline tests for design-to-code/audit.ts — the pre-implementation design audit.
-//   node test/audit.test.ts
+//   bun test/audit.test.ts
 // The fixture is a deliberately flawed login screen: every seeded flaw has one assertion that the
 // audit reports it, and the clean parts have assertions that it does NOT (no false positives).
 import fs from "node:fs";
@@ -11,6 +11,7 @@ import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
+import { RUNNER_RE } from "./plugin-invocation.ts";
 import { catalog as catalog1, codeMap, malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
 import type { ExportNeighbours } from "../design-to-code/design-system-dir.ts";
@@ -1203,7 +1204,7 @@ console.log("input fields: border on an inner frame:");
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md"), cl = readRepo("claude-plugin/skills/audit-design/references/checklist.md");
   check("audit-design: the loop skips page indexes, and the cross-check run is a runnable command over the screen files only",
     /case "\$f" in \*\.vars\.json\|\*\.assets\.json\|\*\/index\.json\) continue;; esac/.test(skill)
-    && /find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"/.test(skill) && !/<every screen json>/.test(skill));
+    && new RegExp(String.raw`find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 ${RUNNER_RE} "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"`).test(skill) && !/<every screen json>/.test(skill));
   check("checklist: the TEXT-property sentence is an instruction (the audit does not judge it); dividers are LINE layers",
     /The audit does not judge a text\s+driven by a TEXT property/.test(cl) && !/is judged by its `props` value/.test(cl) && /Dividers \(LINE layers\)/.test(cl));
   check("audit-design + checklist: a SECTION-nested target has no index row — search design/export/pages first",

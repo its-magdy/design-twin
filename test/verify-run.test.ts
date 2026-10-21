@@ -1,7 +1,7 @@
 // one verification run on disk: status v2 written by the tools, atomic
 // writes, --publish from a staging directory, and --wait on a run. Runs design-to-code/verify-run.ts in-process
 // and `verify-screen --status / --wait` as the CLI, in temp projects (invented names).
-// Run with:  node test/verify-run.test.ts
+// Run with:  bun test/verify-run.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

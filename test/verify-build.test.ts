@@ -1,6 +1,6 @@
 // Offline tests for design-to-code/verify-build.ts (the build-screen Stop-hook gate) and for the
 // committed claude-plugin/scripts/ bundles it ships in.
-//   node test/verify-build.test.ts
+//   bun test/verify-build.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { BehaviourCheck, CodeConnectMap, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { hookRunsScript } from "./plugin-invocation.ts";
 import { codeMap, must, parseAs, readFixture, screenExport } from "./fixtures.ts";
 import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
@@ -354,7 +355,7 @@ console.log("verification.recorded — the tool's block:");
   // the open deltas [] of a record of ANOTHER report, beside a report that lists some: the record is not this build's
   const other = verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: "design/verify/other.report.json", deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]);
   check(`a recorded deltas [] beside another report that lists a delta → the record is of another report, record it (got ${JSON.stringify(other)})`,
-    other.length === 1 && /^verification\.recorded\.deltas is \[\] but design\/verify\/other\.report\.json lists 1 delta\(s\) — the record is of another report; if design\/verify\/other\.report\.json is this build's, record it \(node .*verify-screen\.\w+.* --compare --record-plan\)$/.test(other[0] ?? "")
+    other.length === 1 && /^verification\.recorded\.deltas is \[\] but design\/verify\/other\.report\.json lists 1 delta\(s\) — the record is of another report; if design\/verify\/other\.report\.json is this build's, record it \(bun --no-install --no-env-file .*verify-screen\.\w+.* --compare --record-plan\)$/.test(other[0] ?? "")
     && verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: REC.report, deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]).length === 0);
   // a key no record writes does not make a recorded@1 a @2 block: ONE block naming it, the plan read the older way
   const v1Hand = recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand", residuals: [] } });
@@ -695,7 +696,7 @@ for (const ev of ["SubagentStop", "Stop"]) {
 }
 // The hook as Claude Code runs a shell-form command on Windows without Git Bash: through PowerShell, the bundle as shipped.
 if (process.platform === "win32") {
-  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `bun --no-install --no-env-file "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
   const failing = () => project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const legacy = failing(), real = failing();
   const l = viaPowerShell({ cwd: legacy }), r = viaPowerShell({ cwd: real, hook_event_name: "SubagentStop" });
@@ -868,8 +869,8 @@ console.log("a visible design node with no anchor blocks; hidden ones never coun
   check("[anchors] the live Guided Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(bMsg) && /^3 visible/.test(bMsg));
   // blocking messages are SAVED into the plan (verification.hook.blocking), a committed file —
   // they name scripts in words, never by the per-machine absolute path the printed hints carry.
-  check("no blocking message (saved into the plan) carries a script path or a `node \"…\"` command",
-    r.blocking.length > 0 && r.blocking.every((m) => !/node "|[\\/]scripts[\\/][a-z-]+\.(js|ts)|design-to-code[\\/]/.test(m)) && /the plan-skeleton script/.test(bMsg));
+  check("no blocking message (saved into the plan) carries a script path or a `bun …`/`node \"…\"` command",
+    r.blocking.length > 0 && r.blocking.every((m) => !/node "|bun --no-install|[\\/]scripts[\\/][a-z-]+\.(js|ts)|design-to-code[\\/]/.test(m)) && /the plan-skeleton script/.test(bMsg));
   const fixed = fxPlan(GP);
   must(fixed.anchors, "fixed.anchors")["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));
@@ -2034,7 +2035,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 // An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
 void build(tmp).then(async () => {
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
-  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
+  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: bun claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
     fs.copyFileSync(path.join(SCRIPTS, "drift-lint.js"), path.join(out, "drift-lint.js"));
@@ -2082,13 +2083,14 @@ void build(tmp).then(async () => {
   const posRoot = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const pos = await timed([path.join(posRoot, "design", "plan", "login.json")], {});
   check(`a plan path as an argument is checked without touching stdin (exit ${pos.code} in ${pos.ms} ms)`, pos.code === 2 && pos.ms < 2000 && /brand-600/.test(pos.stderr));
-  type HooksJson = { hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout: number }> }>> };
+  type HooksJson = { hooks: Record<string, Array<{ hooks: Array<{ command: string; args?: string[]; timeout: number }> }>> };
   const isHooksJson = (x: unknown): x is HooksJson => isJsonObject(x) && isJsonObject(x.hooks) && Object.values(x.hooks).every((list) => Array.isArray(list) && list.every((e) => isJsonObject(e) && Array.isArray(e.hooks)));
   const hooks = readFixture(path.join(import.meta.dirname, "..", "claude-plugin", "hooks", "hooks.json"), isHooksJson);
   const subagentStop = must(hooks.hooks.SubagentStop, "hooks.hooks.SubagentStop");
   const h = must(must(subagentStop[0], "hooks.hooks.SubagentStop[0]").hooks[0], "hooks.hooks.SubagentStop[0].hooks[0]");
-  check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js and gives it longer than its own 60 s cut-off",
-    /scripts\/verify-build\.js"?$/.test(h.command) && h.timeout > 60);
+  const gate = hookRunsScript(h, "verify-build");
+  check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js in exec form ({command: \"bun\", args: [--no-install, --no-env-file, …]}) and gives it longer than its own 60 s cut-off",
+    gate.ok && gate.form === "exec" && h.timeout > 60);
 
   // ---------------------------------------------------------------- first-class auditGate
   // Real audit: design/audit/Studio_Configurations.json (5 blockers, copied verbatim from a

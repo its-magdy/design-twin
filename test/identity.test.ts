@@ -6,7 +6,7 @@
 // export is keyed on the Figma KEY. Names are not unique: that export holds two `Spacing / Space 4` (24 and 16) and two
 // `Spacing / Space 2`, and its screens' component keys were all re-minted by a file duplication.
 //
-// Run with:  node test/identity.test.ts
+// Run with:  bun test/identity.test.ts
 // P1_SRC=<dir holding design-to-code/ and bridge/> runs the same checks against another checkout
 // (that is how the "fails before" half of each check was demonstrated).
 import fs from "node:fs";
