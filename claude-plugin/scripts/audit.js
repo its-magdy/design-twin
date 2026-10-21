@@ -356,15 +356,85 @@ var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
 // bridge/src/stdio.ts
-import { format } from "node:util";
+import { format, inspect } from "node:util";
 function installQueuedConsole(o = {}) {
   trackWrites(process.stdout);
   trackWrites(process.stderr);
-  const line = (s) => (...a) => {
-    s.write(format(...a) + "\n");
+  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
+  const err = process.stderr;
+  let indent = "";
+  const write = (s, text) => {
+    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
   };
-  console.log = console.info = console.debug = line(o.logTo === "stderr" ? process.stderr : process.stdout);
-  console.warn = console.error = line(process.stderr);
+  const line = (s) => (...a) => {
+    write(s, format(...a));
+  };
+  console.log = console.info = console.debug = line(out);
+  console.warn = console.error = line(err);
+  console.dir = (item, options) => {
+    write(out, inspect(item, { customInspect: false, ...options }));
+  };
+  console.dirxml = line(out);
+  console.table = (data) => {
+    write(out, inspect(data));
+  };
+  console.write = (...data) => {
+    let n = 0;
+    for (const d of data) {
+      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
+      if (b.length) {
+        out.write(b);
+        n += b.length;
+      }
+    }
+    return n;
+  };
+  console.clear = () => {
+    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
+  };
+  console.trace = (...a) => {
+    const e = new Error(format(...a));
+    e.name = "Trace";
+    Error.captureStackTrace(e, console.trace);
+    write(err, e.stack ?? `Trace: ${e.message}`);
+  };
+  console.assert = (cond, ...a) => {
+    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
+  };
+  console.group = console.groupCollapsed = (...a) => {
+    if (a.length) write(out, format(...a));
+    indent += "  ";
+  };
+  console.groupEnd = () => {
+    indent = indent.slice(0, -2);
+  };
+  const counts = /* @__PURE__ */ new Map();
+  console.count = (label = "default") => {
+    const n = (counts.get(label) ?? 0) + 1;
+    counts.set(label, n);
+    write(out, `${label}: ${n}`);
+  };
+  console.countReset = (label = "default") => {
+    counts.delete(label);
+  };
+  const timers = /* @__PURE__ */ new Map();
+  const elapsed = (label) => {
+    const t = timers.get(label);
+    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
+  };
+  console.time = (label = "default") => {
+    timers.set(label, performance.now());
+  };
+  console.timeLog = (label = "default", ...a) => {
+    const e = elapsed(label);
+    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
+    else write(out, [e, ...a.map((x) => format(x))].join(" "));
+  };
+  console.timeEnd = (label = "default") => {
+    const e = elapsed(label);
+    timers.delete(label);
+    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
+  };
 }
 var inFlight = /* @__PURE__ */ new Map();
 function trackWrites(s) {
@@ -414,11 +484,27 @@ function runCli(main2, o, argv = process.argv.slice(2)) {
     done(o.errorCode ?? 1);
   };
   cliDepth++;
+  let settled = false;
+  const leave = () => {
+    if (!settled) {
+      settled = true;
+      cliDepth--;
+    }
+  };
   try {
     const r = main2(argv);
-    if (typeof r === "number") done(r);
-    else r.then(done, fail);
+    if (typeof r === "number") {
+      leave();
+      done(r);
+    } else r.then((c) => {
+      leave();
+      done(c);
+    }, (e) => {
+      leave();
+      fail(e);
+    });
   } catch (e) {
+    leave();
     fail(e);
   }
 }
