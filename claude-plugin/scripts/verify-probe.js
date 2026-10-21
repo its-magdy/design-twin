@@ -200,7 +200,7 @@ var readBytes = (f) => {
 };
 function syncOnce(cmd, args, o, attempt) {
   const t0 = Date.now();
-  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024 };
+  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
   const stdin = o.input !== void 0 ? "pipe" : "ignore";
   const done = (s, stdout, stderr) => ({
     status: s.error !== void 0 && !s.pid ? null : s.status ?? null,

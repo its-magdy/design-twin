@@ -57,7 +57,9 @@ const readBytes = (f: string): Buffer => { try { return fs.readFileSync(f); } ca
 
 function syncOnce(cmd: string, args: readonly string[], o: SyncOpts, attempt: number): ProcResult {
   const t0 = Date.now();
-  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL" as const, maxBuffer: 256 * 1024 * 1024 };
+  // shell: false spelled out — the argv goes to the program as is, never through a shell (the default, but stated so a
+  // reader, and code scanning, need not trace every caller to know it)
+  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL" as const, maxBuffer: 256 * 1024 * 1024, shell: false };
   const stdin = o.input !== undefined ? "pipe" : "ignore";
   // a child that never started (ENOENT, EACCES: an error and no pid) has no exit status — null, as the type says (Bun
   // leaves it undefined there)
