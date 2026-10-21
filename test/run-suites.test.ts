@@ -2,22 +2,24 @@
 // suite that exits 0 without its checks line as failed, warns on SKIPPED locally and fails on it under CI=true, forwards
 // every suite's output, runs one suite at a time, kills a hung suite, and refuses an unlisted test file. A
 // SIGTERM/SIGHUP to the runner kills the running suite, a suite is done when it exits (a lingering grandchild cannot
-// hold the run), a slow reader still gets the SUMMARY, `0/0` fails, the Windows lint command, verify-values' skip.
-//   node test/run-suites.test.ts
+// hold the run), an exit the runtime never reports fails fast, a slow reader still gets the SUMMARY, `0/0` fails, the lint command, BUN_OPTIONS, verify-values' skip.
+//   bun test/run-suites.test.ts
 // The suites it runs are tiny fake scripts in a temp dir (DT_RUN_SUITES_LIST); the real list is only ever asked for
 // `--list` (and the coverage guard, against a temp directory of empty files), and for verify-values with no browser.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn, spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
+import { runAsync, runSync } from "./spawn-helper.ts";
+import { bunOptions, command } from "./run-suites.ts";
 import { killBrowsers } from "./drive-e2e-fixture.ts";
 import { killPidTree, killTree, limit, poolSize, runNode, type KillHost } from "./pool.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { childPids, killChildTree, type ProcHost } from "../design-to-code/kill-tree.ts";
 
 const RUNNER = path.join(import.meta.dirname, "run-suites.ts");
+const ASSERT_URL = pathToFileURL(path.join(import.meta.dirname, "assert.ts")).href;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "run-suites-"));
 const read = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
 
@@ -48,7 +50,9 @@ const suite = {
 const g = spawn(process.execPath, ["-e", "setTimeout(() => {}, 25000)"], { stdio: ["ignore", "inherit", "inherit"] });
 fs.writeFileSync(${JSON.stringify(path.join(tmp, "linger.pid"))}, String(g.pid)); g.unref();
 console.log("\\n1/1 checks passed");`),
-  big: fake("big", `const row = "x".repeat(99) + "\\n"; process.stdout.write(row.repeat(4000)); console.log("\\n1/1 checks passed");`),
+  // (`big` ends through assert.ts, as a real suite does: after a 400 KB process.stdout.write, check() and report() must land
+  // after it, whole — under Bun a bare console.log there is dropped, or overtakes the queued write)
+  big: fake("big", `import { check, report } from ${JSON.stringify(ASSERT_URL)}; const row = "x".repeat(99) + "\\n"; process.stdout.write(row.repeat(4000)); check("big", true); report();`),
   zero: fake("zero", `console.log("\\n0/0 checks passed");`),
 };
 const list = (names: (keyof typeof suite)[]): string => {
@@ -57,10 +61,13 @@ const list = (names: (keyof typeof suite)[]): string => {
   return f;
 };
 interface Run { status: number | null; out: string; err: string }
+// runSync: file-backed capture (Bun's spawnSync can hand back an empty stdout under load, #46142). Its 60 s cap SIGKILLs
+// the runner alone, so the runner's own per-suite cap is kept under it (45 s): a regression that hangs a fake still ends
+// in time, and the runner kills that fake's group instead of leaving it behind.
 const runner = (args: string[], env: Record<string, string>, removeCI = true): Run => {
-  const e: Record<string, string | undefined> = { ...process.env, ...env };
+  const e: Record<string, string | undefined> = { DT_SUITE_TIMEOUT_MS: "45000", DT_KILL_GRACE_MS: "1000", ...process.env, ...env };
   if (removeCI && !("CI" in env)) delete e.CI;
-  const r = spawnSync(process.execPath, [RUNNER, ...args], { encoding: "utf8", timeout: 60_000, env: e });
+  const r = runSync(process.execPath, [RUNNER, ...args], { timeoutMs: 60_000, env: e });
   return { status: r.status, out: r.stdout, err: r.stderr };
 };
 const lines = (s: string): string[] => s.split("\n");
@@ -86,7 +93,7 @@ try {
     /\bfailing\b/.test(failedLine) && /\bnosummary\b/.test(failedLine) && /\bpartial\b/.test(failedLine) && !/\b(pass|after|skipped)\b/.test(failedLine));
   check("a suite that exits 0 without its `N/N checks passed` line says why", /nosummary\s+FAIL\s+-\s+.*ended without its `N\/N checks passed` line/.test(sum));
   check("a suite that exits 0 with p < t is failed (1/2 checks passed)", /partial\s+FAIL\s+1\/2\s+.*1\/2 checks passed/.test(sum));
-  check("the failed suites carry a rerun hint", /rerun: node /.test(sum));
+  check("the failed suites carry a rerun hint (`bun <file>`)", /rerun: bun /.test(sum) && !/rerun: node /.test(sum));
   check("the SKIPPED suite is listed as skipped with the CI warning", /^SKIPPED \(no playwright\): skipped$/m.test(sum) && /CI runs these/.test(sum) && /^skipped\s+skipped\s/m.test(sum));
   check("each suite's own output (its check lines and `N/N checks passed`) is forwarded live, before the summary",
     /✓ pass-check-a/.test(mixed.out.slice(0, mixed.out.lastIndexOf("SUMMARY"))) && /✗ FAIL failing-check-b/.test(mixed.out) && (mixed.out.match(/^2\/2 checks passed$/gm) ?? []).length >= 1);
@@ -122,17 +129,15 @@ try {
     fs.rmSync(pidFile, { force: true });
     const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: list(["hangpid", "after"]), DT_KILL_GRACE_MS: "500" };
     delete e.CI;
-    const child = spawn(process.execPath, [RUNNER], { env: e, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); });
-    const exited = new Promise<number | null>((r) => child.on("close", (code) => r(code)));
+    const { child, done } = runAsync(process.execPath, [RUNNER], { env: e, detached: false });
     await until(() => pidIn(pidFile) > 0, 10_000);
     const suitePid = pidIn(pidFile);
-    child.kill(sig);
-    const code = await Promise.race([exited, sleep(15_000).then(() => -1)]);
+    child?.kill(sig);
+    const r = await Promise.race([done, sleep(15_000).then(() => null)]);
+    const code = r === null ? -1 : r.status, out = r?.stdout ?? "";
     const gone = await until(() => suitePid > 0 && !alive(suitePid), 3_000);
     if (suitePid > 0 && alive(suitePid)) try { process.kill(suitePid, "SIGKILL"); } catch { /* gone */ }
-    if (code === -1) child.kill("SIGKILL");
+    if (code === -1) child?.kill("SIGKILL");
     check(`${sig} to the runner kills the running suite (no orphan), skips the rest, prints the summary, exits 130`,
       suitePid > 0 && gone && code === 130 && /SUMMARY/.test(out) && /hangpid\s+FAIL\s.*interrupted/.test(out) && /after\s+not run/.test(out));
   }
@@ -153,38 +158,43 @@ try {
     // a slow reader on the runner's stdout: exit() must not drop everything still queued in the pipe (the SUMMARY)
     const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: list(["big"]) };
     delete e.CI;
-    const r = spawnSync("sh", ["-c", `"${process.execPath}" "${RUNNER}" | (sleep 2; cat)`], { encoding: "utf8", timeout: 60_000, env: e });
+    const r = runSync("sh", ["-c", `"${process.execPath}" "${RUNNER}" | (sleep 2; cat)`], { timeoutMs: 60_000, env: e });
     check("with a slow reader on a piped stdout the runner's output is complete: the suite's 400 KB, then the SUMMARY",
       (r.stdout.match(/^x{99}$/gm) ?? []).length === 4000 && /SUMMARY/.test(r.stdout) && /1 suites: 1 passed, 0 FAILED/.test(r.stdout));
+  }
+  {
+    // Bun #45365's shape (an exit the runtime never reports): the liveness poll ends the suite as FAILED `exit lost` within
+    // seconds — not at the cap (45 s here, 30 min for real) — its output still forwarded, and the next suite still runs
+    const t2 = Date.now();
+    const lost = runner([], { DT_RUN_SUITES_LIST: list(["pass", "after"]), DT_RUNNER_DROP_EXIT: "1" });
+    const ms = Date.now() - t2;
+    check(`a suite whose exit event never arrives is FAILED as \`exit lost\` by the liveness poll, in seconds (${ms} ms for two), not at the cap; the next suite still runs`,
+      lost.status === 1 && /^pass\s+FAIL\s+2\/2\s.*exit lost: pid \d+ ended but no exit event arrived/m.test(lost.out) && /AFTER-SUITE-RAN/.test(lost.out) && /✓ pass-check-a/.test(lost.out) && ms < 15_000);
   }
   {
     const zero = runner([], { DT_RUN_SUITES_LIST: list(["zero", "after"]) });
     check("a suite that prints `0/0 checks passed` asserted nothing: FAIL", zero.status === 1 && /zero\s+FAIL\s.*0\/0 checks/.test(zero.out) && /^FAILED: zero$/m.test(zero.out));
   }
 
-  // ---- the lint command on Windows goes through cmd.exe (spawning npm.cmd without a shell throws EINVAL)
-  console.log("\nrun-suites — the lint command per platform:");
+  // ---- both kinds run the running bun: a suite `bun <file>`, a lint `bun run --silent <script>` (bun rejects npm's `-s`);
+  // on Windows the same (bun.exe is a real executable: no cmd.exe shim as npm.cmd needed), only not detached
+  console.log("\nrun-suites — the command per kind and platform:");
   {
-    const empty = path.join(tmp, "list-empty.json");
-    fs.writeFileSync(empty, "[]");
-    const probe = `import { command } from ${JSON.stringify(pathToFileURL(RUNNER).href)};
-const lint = { name: "lint:any", kind: "lint", file: "lint:any" };
-console.log("CMD " + JSON.stringify({
-  win: command(lint, "win32", { ComSpec: "C:\\\\Windows\\\\cmd.exe" }),
-  winJs: command(lint, "win32", { npm_execpath: "C:\\\\npm\\\\bin\\\\npm-cli.js" }),
-  winNode: command({ name: "x", kind: "node", file: "x.test.ts" }, "win32", {}),
-  posix: command(lint, "linux", {}),
-}));`;
-    const r = spawnSync(process.execPath, ["--input-type=module", "-e", probe], { encoding: "utf8", timeout: 30_000, env: { ...process.env, DT_RUN_SUITES_LIST: empty } });
-    const line = lines(r.stdout).find((l) => l.startsWith("CMD ")) ?? "";
-    interface Cmd { cmd: string; args: string[]; detached: boolean; windowsVerbatimArguments?: boolean }
-    let c: { win?: Cmd; winJs?: Cmd; winNode?: Cmd; posix?: Cmd } = {};
-    try { c = JSON.parse(line.slice(4) || "{}") as typeof c; } catch { /* ✗ below */ }
-    check("win32 without npm_execpath: cmd.exe /d /s /c \"npm run -s lint:any\" (verbatim), not detached",
-      c.win?.cmd === "C:\\Windows\\cmd.exe" && c.win.args.join(" ") === `/d /s /c "npm run -s lint:any"` && c.win.windowsVerbatimArguments === true && c.win.detached === false);
-    check("win32 with an npm-cli.js execpath: node runs it directly; a node suite is not detached on win32; posix: npm, detached",
-      c.winJs?.cmd === process.execPath && c.winJs.args[0] === "C:\\npm\\bin\\npm-cli.js" && c.winNode?.detached === false
-      && c.posix?.cmd === "npm" && c.posix.args.join(" ") === "run -s lint:any" && c.posix.detached === true);
+    const lint = { name: "lint:any", kind: "lint", file: "lint:any" } as const;
+    const one = { name: "x", kind: "suite", file: "x.test.ts" } as const;
+    const posix = command(lint, "linux"), win = command(lint, "win32"), posixSuite = command(one, "darwin"), winSuite = command(one, "win32");
+    check(`a lint is \`<bun> run --silent <script>\`, detached on POSIX, not on win32 (saw ${JSON.stringify([posix, win])})`,
+      posix.cmd === process.execPath && posix.args.join(" ") === "run --silent lint:any" && posix.detached
+      && win.cmd === process.execPath && win.args.join(" ") === "run --silent lint:any" && !win.detached);
+    check(`a suite is \`<bun> <file>\`, detached on POSIX, not on win32 (saw ${JSON.stringify([posixSuite, winSuite])})`,
+      posixSuite.cmd === process.execPath && posixSuite.args.join(" ") === "x.test.ts" && posixSuite.detached
+      && winSuite.cmd === process.execPath && winSuite.args.join(" ") === "x.test.ts" && !winSuite.detached);
+    // end to end through `bun run --silent`: a script that does not exist is a FAILED lint with a `bun run` rerun hint
+    const lintList = path.join(tmp, "list-lint.json");
+    fs.writeFileSync(lintList, JSON.stringify([{ name: "lint:nope", kind: "lint", file: "dt-no-such-script" }, { name: "after", file: suite.after }]));
+    const l = runner([], { DT_RUN_SUITES_LIST: lintList });
+    check("a lint whose `bun run` fails is FAILED (exit ≠ 0), the next suite still runs, and the rerun hint is `bun run <script>`",
+      l.status === 1 && /^lint:nope\s+FAIL\s.*exit [1-9]/m.test(l.out) && /AFTER-SUITE-RAN/.test(l.out) && /rerun: bun run dt-no-such-script$/m.test(l.out));
   }
 
   // ---- verify-values' own local chromium skip is reported `skipped`, not a plain pass
@@ -202,20 +212,34 @@ console.log("CMD " + JSON.stringify({
   const unknown = runner(["no-such-suite"], { DT_RUN_SUITES_LIST: list(["pass"]) });
   check("an unknown name is a usage error (exit 2, names it)", unknown.status === 2 && /no suite matches "no-such-suite"/.test(unknown.err));
 
-  // ---- the compile cache the runner hands its suites (a user's own setting wins; NODE_DISABLE_COMPILE_CACHE is Node's to honour)
-  console.log("\nrun-suites — NODE_COMPILE_CACHE for the suites:");
+  // ---- BUN_OPTIONS: every suite (and every bun it starts) runs with --no-install --no-env-file, after the caller's own
+  console.log("\nrun-suites — BUN_OPTIONS for the suites:");
   {
+    check("[bun-options] unset → `--no-install --no-env-file`; the caller's own options kept first; a flag already there is not repeated",
+      bunOptions(undefined) === "--no-install --no-env-file" && bunOptions("") === "--no-install --no-env-file"
+      && bunOptions("--smol") === "--smol --no-install --no-env-file" && bunOptions("  --no-env-file   --smol ") === "--no-env-file --smol --no-install");
+    // end to end: the suite sees BUN_OPTIONS, and a bun the suite starts in a dir holding a .env does not load it
+    const envDir = path.join(tmp, "with-dotenv");
+    fs.mkdirSync(envDir, { recursive: true });
+    fs.writeFileSync(path.join(envDir, ".env"), "DT_FROM_DOTENV=leaked\n");
+    const childSrc = "process.stdout.write(String(process.env.DT_FROM_DOTENV))";
     const probeList = path.join(tmp, "list-envprobe.json");
-    fs.writeFileSync(probeList, JSON.stringify([{ name: "envprobe", file: fake("envprobe", `console.log("CC=" + (process.env.NODE_COMPILE_CACHE ?? "<unset>") + " DIS=" + (process.env.NODE_DISABLE_COMPILE_CACHE ?? "<unset>")); console.log("\\n1/1 checks passed");`) }]));
+    fs.writeFileSync(probeList, JSON.stringify([{ name: "envprobe", file: fake("envprobe", `import { spawnSync } from "node:child_process";
+const r = spawnSync(process.execPath, ["-e", ${JSON.stringify(childSrc)}], { cwd: ${JSON.stringify(envDir)}, encoding: "utf8" });
+console.log("OPTS=" + (process.env.BUN_OPTIONS ?? "<unset>") + " DOTENV=" + r.stdout); console.log("\\n1/1 checks passed");`) }]));
     const probe = (set: Record<string, string>): string => {
       const e: Record<string, string | undefined> = { ...process.env, DT_RUN_SUITES_LIST: probeList, ...set };
       delete e.CI;
-      for (const k of ["NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE"]) if (!(k in set)) delete e[k];
-      return spawnSync(process.execPath, [RUNNER], { encoding: "utf8", timeout: 60_000, env: e }).stdout;
+      if (!("BUN_OPTIONS" in set)) delete e.BUN_OPTIONS;
+      return runSync(process.execPath, [RUNNER], { timeoutMs: 60_000, env: e }).stdout;
     };
-    check("[cache] by default a suite gets NODE_COMPILE_CACHE=<this checkout>/node_modules/.cache/designtwin-node-compile-cache (per checkout and per user, not a shared /tmp path)", probe({}).includes(`CC=${path.join(path.dirname(import.meta.dirname), "node_modules", ".cache", "designtwin-node-compile-cache")} `));
-    check("[cache] a NODE_COMPILE_CACHE the user set wins", probe({ NODE_COMPILE_CACHE: path.join(tmp, "mine") }).includes(`CC=${path.join(tmp, "mine")} `));
-    check("[cache] NODE_DISABLE_COMPILE_CACHE reaches the suite untouched (Node honours it)", /DIS=1$/m.test(probe({ NODE_DISABLE_COMPILE_CACHE: "1" })));
+    const plain = probe({});
+    check(`[bun-options] by default a suite gets BUN_OPTIONS=--no-install --no-env-file, and a bun it starts in a dir with a .env does not load it (saw ${JSON.stringify(/^OPTS=.*$/m.exec(plain)?.[0] ?? "")})`,
+      /^OPTS=--no-install --no-env-file DOTENV=undefined$/m.test(plain));
+    // control: the same child without the flag does load it (else the check above would prove nothing)
+    const leaked = runSync(process.execPath, ["-e", childSrc], { cwd: envDir, env: { ...process.env, BUN_OPTIONS: "" }, timeoutMs: 30_000 });
+    check(`[bun-options] control: without --no-env-file that bun does load the .env (saw ${JSON.stringify(leaked.stdout)})`, leaked.stdout === "leaked");
+    check("[bun-options] a BUN_OPTIONS the caller set is kept, ours added after it", /^OPTS=--smol --no-install --no-env-file DOTENV=undefined$/m.test(probe({ BUN_OPTIONS: "--smol" })));
   }
 
   // ---- the real list + the coverage guard
@@ -229,7 +253,7 @@ console.log("CMD " + JSON.stringify({
   check("…the browser suites keep their place (verify-probe-e2e after verify-probe, verify-own-pixels after verify-probe-drive-e2e)",
     real.out.indexOf("verify-probe-e2e ") > real.out.indexOf("verify-probe ") && real.out.indexOf("verify-own-pixels") > real.out.indexOf("verify-probe-drive-e2e"));
   const pkg = JSON.parse(read(path.join(testDir, "..", "package.json")) || "{}") as { scripts?: Record<string, string> };
-  check("`npm test` is the runner (package.json scripts.test === \"node test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "node test/run-suites.ts" && typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
+  check("`bun run test` is the runner (package.json scripts.test === \"bun test/run-suites.ts\"); the lints stay scripts", pkg.scripts?.test === "bun test/run-suites.ts" &&typeof pkg.scripts.typecheck === "string" && typeof pkg.scripts["lint:any"] === "string" && typeof pkg.scripts["lint:types"] === "string");
 
   // ---- --fast: skips exactly the four probe e2e suites, `not run` in the summary, exit unaffected, never looks like a full pass
   console.log("\nrun-suites — --fast:");
@@ -248,8 +272,8 @@ console.log("CMD " + JSON.stringify({
   check("[fast] --fast skips the four slow suites (never started), runs the others, and exits 0 although they are `not run`",
     fastRun.status === 0 && /^start quick$/m.test(read(LOG)) && /^start quick2$/m.test(read(LOG)) && SLOW.every((n) => !new RegExp(`start ${n}`).test(read(LOG))) && /2 passed, 0 FAILED, 0 skipped, 4 not run/.test(fastSum));
   check("[fast] the SUMMARY lists each skipped suite as `not run` with the reason `--fast`", SLOW.every((n) => lines(fastSum).some((l) => l.startsWith(n + " ") && /\bnot run\b/.test(l) && /--fast\s*$/.test(l))));
-  check("[fast] the run ends with the loud line (4 of the probe e2e suites, names them, not the full suite, run `npm test`, CI's other matrix legs run them)",
-    /^--fast: skipped 4 of the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`npm test`.*CI's other matrix legs run them$/m.test(fastRun.out) && !/CI runs everything/.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
+  check("[fast] the run ends with the loud line (4 of the probe e2e suites, names them, not the full suite, run `bun run test`, CI's other matrix legs run them)",
+    /^--fast: skipped 4 of the probe e2e suites \(verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e\) .*NOT the full suite.*`bun run test`.*CI's other matrix legs run them$/m.test(fastRun.out) && !/CI runs everything/.test(fastRun.out) && (lines(fastRun.out.trimEnd()).pop() ?? "").startsWith("--fast:"));
   check("[fast] without --fast the same list runs all six suites", (() => { const r = runner([], { DT_RUN_SUITES_LIST: fastList }); return r.status === 0 && /6 suites: 6 passed/.test(r.out) && !/--fast/.test(r.out); })());
   check("[fast] under CI=true --fast is allowed and still prints the warning", (() => { const r = runner(["--fast"], { DT_RUN_SUITES_LIST: fastList, CI: "true" }); return r.status === 0 && /^--fast: skipped/m.test(r.out); })());
   const fastFail = runner(["--fast"], { DT_RUN_SUITES_LIST: named([{ name: "bad", src: traced("bad", `console.log("\\n0/1 checks passed"); process.exit(1);`) }, ...SLOW.map((n) => ({ name: n, src: okSrc(n) }))], "fail") });
@@ -277,32 +301,33 @@ console.log("CMD " + JSON.stringify({
     })());
 
 
-  check("[fast] `npm run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"node test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "node test/run-suites.ts --fast");
+  check("[fast] `bun run test:fast` is the runner with --fast (package.json scripts[\"test:fast\"] === \"bun test/run-suites.ts --fast\")", pkg.scripts?.["test:fast"] === "bun test/run-suites.ts --fast");
 
   // CI splits the run over a matrix (.github/workflows/test.yml): each `include:` entry is a leg (from its `- leg:` line); a leg
-  // without `node:` or `os:` is on the primary Node and OS. There, one leg is `--fast` and the others name suites — between them every
-  // suite runs exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Node version or OS
+  // without `bun:` or `os:` is on the primary Bun and OS. There, one leg is `--fast` and the others name suites — between them every
+  // suite runs exactly once (the named ones are exactly what --fast leaves out, none twice). A leg on another Bun version or OS
   // runs `--fast` alone, and every leg blocks: none is `allow-failure`, and the job has no continue-on-error, so any leg's failure
   // fails `test result`.
   const wf = read(path.join(testDir, "..", ".github", "workflows", "test.yml"));
   const inc = /^( *)include:\n((?:(?:\1 +.*|[ \t]*)\n)*)/m.exec(wf)?.[2] ?? "";
   const legs = inc.split(/^\s*- (?=leg:)/m).slice(1).map((l) => ({
+    bun: /^\s*bun: (.+)$/m.exec(l)?.[1]?.trim(),
     node: /^\s*node: (.+)$/m.exec(l)?.[1]?.trim(),
     os: /^\s*os: (.+)$/m.exec(l)?.[1]?.trim(),
     allowFailure: /^\s*allow-failure: true\s*$/m.test(l),
     suites: (/^\s*suites: (.+)$/m.exec(l)?.[1] ?? "").trim().split(/\s+/).filter(Boolean),
   }));
-  const primary = legs.filter((l) => l.node === undefined && l.os === undefined);
+  const primary = legs.filter((l) => l.bun === undefined && l.os === undefined);
   const primaryFast = primary.filter((l) => l.suites.includes("--fast"));
   const legNamed = primary.filter((l) => !l.suites.includes("--fast")).flatMap((l) => l.suites);
-  check("[ci] the workflow's Test step runs the runner with the leg's suites (`node test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: node test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
+  check("[ci] the workflow's Test step runs the runner with the leg's suites (`bun test/run-suites.ts ${{ matrix.suites }}`)", /^\s+run: bun test\/run-suites\.ts \$\{\{ matrix\.suites \}\}$/m.test(wf));
   check("[ci] every `suites:` line in the workflow is one matrix leg's (each `- leg:` under `include:` has its own)",
     legs.length > 0 && legs.every((l) => l.suites.length > 0) && legs.length === [...wf.matchAll(/^\s+suites: /gm)].length);
-  check("[ci] on the primary Node exactly one matrix leg is `--fast` and it names no suites", primaryFast.length === 1 && primaryFast[0]?.suites.join(" ") === "--fast");
-  check("[ci] the other primary-Node legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
+  check("[ci] on the primary Bun exactly one matrix leg is `--fast` and it names no suites", primaryFast.length === 1 && primaryFast[0]?.suites.join(" ") === "--fast");
+  check("[ci] the other primary-Bun legs name exactly the suites --fast leaves out, each once (no suite dropped from CI, none run twice)",
     legNamed.length === SLOW.length && new Set(legNamed).size === legNamed.length && [...legNamed].sort().join(",") === [...SLOW].sort().join(","));
-  check("[ci] every leg on another Node version (`node:`) is `--fast` alone (an extra Node version runs the quick suites only)",
-    legs.filter((l) => l.node !== undefined).every((l) => l.suites.join(" ") === "--fast"));
+  check("[ci] every leg on another Bun version (`bun:`) is `--fast` alone (an extra Bun version runs the quick suites only), and no leg names a `node:` version (Bun only)",
+    legs.filter((l) => l.bun !== undefined).every((l) => l.suites.join(" ") === "--fast") && legs.every((l) => l.node === undefined));
   check("[ci] every leg on another OS (`os:`) is `--fast` alone, and the job runs each leg on its `os:` (else the pinned Ubuntu image)",
     legs.some((l) => l.os !== undefined) && legs.filter((l) => l.os !== undefined).every((l) => l.suites.join(" ") === "--fast")
     && /^ {4}runs-on: \$\{\{ matrix\.os \|\| 'ubuntu-24\.04' \}\}$/m.test(wf));

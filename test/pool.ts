@@ -5,9 +5,9 @@
 //   const q = limit(poolSize());          // a queue running at most n of its tasks at once
 //   const P = { a: q(() => probe(…)), … }; // queued up front, awaited where their checks are
 //
-// Each task is still its own `node verify-probe.js` process with its own chromium (process isolation is what the suites
+// Each task is still its own `bun verify-probe.ts` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { runAsync } from "./spawn-helper.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,28 +62,29 @@ export const killTree = (p: { pid?: number | undefined; kill: (signal: NodeJS.Si
   return false;
 };
 
-/** Runs `node <script> ...args` in `cwd` asynchronously (a suite's server lives in the test's own process, so a spawnSync
+/** Runs `bun <script> ...args` in `cwd` asynchronously (a suite's server lives in the test's own process, so a spawnSync
  *  would stop it answering). Never rejects and never hangs on a failed start: a spawn that throws synchronously or emits
  *  "error" (EAGAIN under load) resolves with status null and "spawn failed: <message>" appended to stderr.
  *  killAfterMs > 0: a run that has not closed by then is killed with everything it started (POSIX: the child leads its own
  *  process group and the group gets SIGKILL; Windows: taskkill /T /F by pid; the child alone when that fails — treeKilled
- *  says which) and reported killed — a hung process fails the test instead of hanging it. `node` is the running binary
+ *  says which) and reported killed — a hung process fails the test instead of hanging it. `bun` is the running binary
  *  (process.execPath), so a script path or `-e` source both work.
  *  `env`: the child's WHOLE environment, passed to spawn as is — it replaces this process's, nothing is merged (a caller that
- *  wants to add a variable spreads process.env itself); omitted, the child inherits this process's. */
-export const runNode = (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => new Promise((resolve) => {
-  const t0 = Date.now();
-  let p: ChildProcessWithoutNullStreams;
-  try { p = spawn(process.execPath, [script, ...args], { cwd, ...(env !== undefined ? { env } : {}), ...(killAfterMs > 0 && process.platform !== "win32" ? { detached: true } : {}) }); }
-  catch (e) { resolve({ status: null, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}\n`, ms: Date.now() - t0, killed: false, treeKilled: false }); return; }
-  let stdout = "", stderr = "", killed = false, treeKilled = false;
-  const timer = killAfterMs > 0 ? setTimeout(() => { killed = true; treeKilled = killTree(p); }, killAfterMs) : undefined;
-  p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-  p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-  p.on("error", (e) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}spawn failed: ${e.message}\n`, ms: Date.now() - t0, killed, treeKilled }); });
+ *  wants to add a variable spreads process.env itself); omitted, the child inherits this process's.
+ *  It goes through runAsync (test/spawn-helper.ts), so it settles on close, on exit + the pipes' end, on an exit the runtime
+ *  reported before the listeners existed (Bun #45483), or on a pid its liveness poll finds gone (#45365) — a run recovered
+ *  that way carries a `[spawn-helper] …` line in stderr, so a check on the output still sees something went wrong. */
+export const runNode = async (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => {
+  let treeKilled = false;
+  const { done } = runAsync(process.execPath, [script, ...args], {
+    cwd, ...(env !== undefined ? { env } : {}), detached: killAfterMs > 0 && process.platform !== "win32",
+    ...(killAfterMs > 0 ? { timeoutMs: killAfterMs } : {}), kill: (c) => (treeKilled = killTree(c)),
+  });
+  const r = await done;
   // a killed run's status is null everywhere (Windows: a process ended by taskkill or TerminateProcess exits with code 1)
-  p.on("close", (status) => { clearTimeout(timer); resolve({ status: killed ? null : status, stdout, stderr, ms: Date.now() - t0, killed, treeKilled }); });
-});
+  const stderr = r.stderr + (r.error ? `spawn failed: ${r.error.message}\n` : "") + (r.lost && !r.timedOut ? `[spawn-helper] ${r.lost}\n` : "");
+  return { status: r.timedOut || r.error ? null : r.status, stdout: r.stdout, stderr, ms: r.ms, killed: r.timedOut, treeKilled };
+};
 
 /** A run's own verify dir (verifyCase): the dir, the expectation's copy in it and the set's base there (`<dir>/<set>`). */
 export interface VerifyCase { dir: string; expected: string; base: string }
