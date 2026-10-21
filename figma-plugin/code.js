@@ -217,8 +217,7 @@
     return node[key];
   }
   function rgbaToHex(c) {
-    var _a;
-    return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: (_a = c.a) != null ? _a : 1 });
+    return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a == null ? 1 : c.a });
   }
   var solidHex = (p) => rgbaToHex({ r: p.color.r, g: p.color.g, b: p.color.b, ...ifDefined("a", p.opacity) });
   function solidFromFills(fills) {
@@ -991,10 +990,7 @@
   function parseCommandRequest(cmd, args) {
     if (!isCmd(cmd)) return { ok: false, error: "unknown cmd: " + cmd };
     const a = isRecord(args) ? args : {};
-    const bad = () => {
-      var _a;
-      return { ok: false, error: (_a = argsShapeError(cmd, a)) != null ? _a : `bad ${cmd} args` };
-    };
+    const bad = () => ({ ok: false, error: argsShapeError(cmd, a) || `bad ${cmd} args` });
     switch (cmd) {
       case "ping":
         return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
@@ -2288,7 +2284,6 @@
     return nonEmpty(out);
   }
   async function effectMap(map, conv) {
-    var _a;
     if (!map || typeof map !== "object") return void 0;
     const out = {};
     for (const [index, entry] of Object.entries(map)) {
@@ -2296,19 +2291,18 @@
       const { properties, ...fields } = entry;
       const extra = {};
       putNonEmpty(extra, "properties", await bindingMap(properties, conv));
-      putNonEmpty(out, index, Object.assign((_a = await bindingMap(fields, conv)) != null ? _a : {}, extra));
+      putNonEmpty(out, index, Object.assign(await bindingMap(fields, conv) || {}, extra));
     }
     return nonEmpty(out);
   }
   async function motionMap(map, conv) {
-    var _a;
     if (!map || typeof map !== "object") return void 0;
     const { fills, strokes, effects, ...scalars } = map;
     const indexed = {};
     putNonEmpty(indexed, "fills", await paintMap(fills, conv));
     putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
     putNonEmpty(indexed, "effects", await effectMap(effects, conv));
-    return nonEmpty(Object.assign((_a = await bindingMap(scalars, conv)) != null ? _a : {}, indexed));
+    return nonEmpty(Object.assign(await bindingMap(scalars, conv) || {}, indexed));
   }
   async function collectMotion(node) {
     const out = {};
@@ -3346,12 +3340,12 @@
   function resolvePages(wanted, all) {
     const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
     const pick = (sel, matches, how) => {
-      var _a;
       if (matches.length > 1) {
         throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) \u2014 use its id. Available pages:
   ${avail()}`);
       }
-      return (_a = matches[0]) != null ? _a : null;
+      const only = matches[0];
+      return only === void 0 ? null : only;
     };
     const resolveOne = (sel) => {
       const byId = all.find((p) => p.id === sel);
@@ -3612,7 +3606,6 @@
     return { designSystem };
   }
   async function collectFull(opts) {
-    var _a;
     resetRun();
     applyOpts(opts);
     const allPages = !!(opts && opts.allPages);
@@ -3685,7 +3678,8 @@
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
       scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : (_a = pages[0]) == null ? void 0 : _a.name),
+      // `pages.map(...)[0]` rather than `pages[0]?.name`: the plugin bundle is ES2019, which has no `?.`.
+      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : pages.map((p) => p.name)[0]),
       ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
       ...ifDefined("flows", flows.length ? flows : void 0),
       ...ifDefined("pageSettings", pageSettings.length ? pageSettings : void 0),
@@ -3847,7 +3841,7 @@
           // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
           // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
           pluginVersion: "0.1.0",
-          fileKey: fileKey != null ? fileKey : null,
+          fileKey: fileKey === void 0 ? null : fileKey,
           fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
         };
         return r;

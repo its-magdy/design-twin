@@ -83,7 +83,7 @@ async function dispatch(req: CommandRequest, id: string | undefined): Promise<Co
         // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
         // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
         pluginVersion: __PLUGIN_VERSION__,
-        fileKey: fileKey ?? null,
+        fileKey: fileKey === undefined ? null : fileKey,
         fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
       };
       return r;

@@ -179,7 +179,7 @@ async function effectMap<B, O extends object>(
     const { properties, ...fields } = entry;
     const extra: { properties?: Record<string, O> } = {};
     putNonEmpty(extra, "properties", await bindingMap(properties, conv));
-    putNonEmpty(out, index, Object.assign((await bindingMap(fields, conv)) ?? {}, extra));
+    putNonEmpty(out, index, Object.assign((await bindingMap(fields, conv)) || {}, extra));
   }
   return nonEmpty(out);
 }
@@ -194,7 +194,7 @@ async function motionMap<B extends object, O extends object>(
   putNonEmpty(indexed, "fills", await paintMap(fills, conv));
   putNonEmpty(indexed, "strokes", await paintMap(strokes, conv));
   putNonEmpty(indexed, "effects", await effectMap(effects, conv));
-  return nonEmpty(Object.assign((await bindingMap(scalars, conv)) ?? {}, indexed));
+  return nonEmpty(Object.assign((await bindingMap(scalars, conv)) || {}, indexed));
 }
 
 // The whole motion surface on a node -> compact { timelines?, manualTracks?, animations?, styles? }.
