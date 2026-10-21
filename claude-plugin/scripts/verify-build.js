@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-build.ts
-import fs12 from "node:fs";
+import fs11 from "node:fs";
 import path11 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
@@ -88,7 +88,7 @@ function walkWithHidden(root, fn, opts) {
 }
 
 // design-to-code/audit-gate.ts
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 import path3 from "node:path";
 
 // bridge/src/hex-color.ts
@@ -190,9 +190,60 @@ function legacyBlockerIds(findings) {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+function exitFlushed(code, capMs = 2e3) {
+  const exit = () => process.exit(code);
+  setTimeout(exit, capMs).unref();
+  process.stderr.write("", () => process.stdout.write("", exit));
+}
+
+// design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -246,7 +297,7 @@ function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
   const unknownFlags = () => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -274,7 +325,7 @@ ${usage}`;
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode);
 }
 
 // design-to-code/read-json.ts
@@ -332,19 +383,6 @@ function readRegularFile(file) {
 function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
   return "doc" in r ? r.doc : null;
-}
-
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
 }
 
 // design-to-code/map-validate.ts
@@ -482,7 +520,7 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -770,7 +808,7 @@ var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, S
 var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 
 // bridge/src/project-layout.ts
-import fs3 from "node:fs";
+import fs2 from "node:fs";
 import path2 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
@@ -787,12 +825,12 @@ var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, re
 var slashed = (p) => p.split(path2.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function listPlans(dir) {
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  if (!fs2.existsSync(dir)) return [];
+  return fs2.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/cross-check.ts
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli3(main, { name: "cross-check" });
 
 // design-to-code/audit.ts
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
@@ -807,22 +845,22 @@ function reportFindings(auditDoc) {
   const str = (v) => typeof v === "string" && v ? v : void 0;
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli4(main, { name: "audit" });
 
 // design-to-code/audit-gate.ts
 function locateAuditFile(cwd, screenFile, screenName) {
   const dir = path3.join(cwd, AUDIT_DIR);
-  if (!fs4.existsSync(dir)) return null;
+  if (!fs3.existsSync(dir)) return null;
   const base = screenFile ? path3.basename(screenFile, ".json") : null;
   const candidates = [];
   if (base) candidates.push(path3.join(dir, base + ".json"));
   let entries = [];
   try {
-    entries = fs4.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
+    entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs4.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
+  for (const c of candidates) if (fs3.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
   const wantSlug = alnumKey(screenName);
   if (wantSlug) {
     const stem = (f) => f.replace(/\.json$/, "");
@@ -851,46 +889,46 @@ function auditGateStatus(cwd, screenFile, screenName) {
 import path8 from "node:path";
 
 // bridge/src/json-file.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto2 from "node:crypto";
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 import path4 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs5.openSync(dir, "r");
+    const fd = fs4.openSync(dir, "r");
     try {
-      fs5.fsyncSync(fd);
+      fs4.fsyncSync(fd);
     } finally {
-      fs5.closeSync(fd);
+      fs4.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
   const dir = path4.dirname(path4.resolve(file));
-  fs5.mkdirSync(dir, { recursive: true });
+  fs4.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs5.openSync(tmp, "wx", opts.mode);
+      const fd = fs4.openSync(tmp, "wx", opts.mode);
       try {
-        fs5.writeFileSync(fd, data);
-        fs5.fsyncSync(fd);
+        fs4.writeFileSync(fd, data);
+        fs4.fsyncSync(fd);
       } finally {
-        fs5.closeSync(fd);
+        fs4.closeSync(fd);
       }
     } else {
-      fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
-    fs5.renameSync(tmp, file);
+    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
+    fs4.renameSync(tmp, file);
   } catch (e) {
     try {
-      fs5.rmSync(tmp, { force: true });
+      fs4.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -900,7 +938,7 @@ function writeFileAtomic(file, data, opts = {}) {
 
 // bridge/src/file-lock.ts
 import crypto3 from "node:crypto";
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 import os from "node:os";
 import path5 from "node:path";
 var STALE_MS = 3e4;
@@ -929,7 +967,7 @@ var LockLost = class extends LockBusy {
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs6.readlinkSync("/proc/self/ns/pid");
+    return fs5.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -961,7 +999,7 @@ function processState(p) {
 }
 var read = (file) => {
   try {
-    return fs6.readFileSync(file, "utf8");
+    return fs5.readFileSync(file, "utf8");
   } catch {
     return null;
   }
@@ -975,7 +1013,7 @@ function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs6.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs5.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -986,16 +1024,16 @@ function isStale(file, text, staleMs) {
 }
 var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
-  const fd = fs6.openSync(file, "wx");
+  const fd = fs5.openSync(file, "wx");
   const mine = stampOf(token);
   try {
-    fs6.writeSync(fd, mine);
+    fs5.writeSync(fd, mine);
   } catch (e) {
-    fs6.closeSync(fd);
-    fs6.rmSync(file, { force: true });
+    fs5.closeSync(fd);
+    fs5.rmSync(file, { force: true });
     throw e;
   }
-  fs6.closeSync(fd);
+  fs5.closeSync(fd);
   return read(file) === mine ? mine : null;
 }
 function breakStale(lockFile, seen, staleMs = STALE_MS) {
@@ -1007,7 +1045,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (errCode(e) !== "EEXIST") throw e;
     const g = read(guard);
     if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
-      fs6.unlinkSync(guard);
+      fs5.unlinkSync(guard);
     } catch {
     }
     return false;
@@ -1017,7 +1055,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
     if (read(guard) !== mine) return false;
     try {
-      fs6.unlinkSync(lockFile);
+      fs5.unlinkSync(lockFile);
     } catch (e) {
       if (errCode(e) === "ENOENT") return false;
       throw e;
@@ -1025,7 +1063,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     return true;
   } finally {
     if (read(guard) === mine) try {
-      fs6.rmSync(guard, { force: true });
+      fs5.rmSync(guard, { force: true });
     } catch {
     }
   }
@@ -1038,7 +1076,7 @@ var sleepSync = (ms) => {
 function acquireFileLock(lockFile, opts = {}) {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
   const token = crypto3.randomBytes(8).toString("hex");
-  fs6.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  fs5.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
   let firstTransientAt = null;
   const transientYet = (e) => {
@@ -1074,7 +1112,7 @@ function acquireFileLock(lockFile, opts = {}) {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
           if (stillMine()) try {
-            fs6.rmSync(lockFile, { force: true });
+            fs5.rmSync(lockFile, { force: true });
           } catch {
           }
         },
@@ -1106,7 +1144,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs7.readFileSync(file, "utf8");
+    return fs6.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -1139,7 +1177,7 @@ function updateJsonLike(file, fn, opts = {}) {
 }
 
 // design-to-code/content-hash.ts
-import fs8 from "node:fs";
+import fs7 from "node:fs";
 import path6 from "node:path";
 function stripPullTimes(v, parentKey) {
   if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
@@ -1160,7 +1198,7 @@ function fileHashes(files, cwd, cached) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256Hex(cached?.(rel) ?? fs8.readFileSync(path6.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256Hex(cached?.(rel) ?? fs7.readFileSync(path6.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
@@ -1170,7 +1208,7 @@ function fileHashes(files, cwd, cached) {
 var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
 var isFile = (abs) => {
   try {
-    return fs8.statSync(abs).isFile();
+    return fs7.statSync(abs).isFile();
   } catch {
     return false;
   }
@@ -1262,26 +1300,26 @@ function waiversHash(plan) {
 }
 
 // design-to-code/run-cache.ts
-import fs9 from "node:fs";
+import fs8 from "node:fs";
 import path7 from "node:path";
 var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs9.statSync(p).isDirectory();
+    return fs8.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs9.existsSync(p);
+var exists = (p) => fs8.existsSync(p);
 function realpath(p) {
-  if (typeof fs9.realpathSync.native === "function") {
+  if (typeof fs8.realpathSync.native === "function") {
     try {
-      return fs9.realpathSync.native(p);
+      return fs8.realpathSync.native(p);
     } catch {
     }
   }
-  return fs9.realpathSync(p);
+  return fs8.realpathSync(p);
 }
 function canonical2(p) {
   const abs = path7.resolve(p);
@@ -1587,14 +1625,14 @@ function visibility(doc) {
   for (const r of screenRoots(doc)) tally(r, null);
   return { visible, hidden, hiddenRoots };
 }
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli5(main, { name: "plan-skeleton" });
 
 // design-to-code/verify-locate.ts
-import fs10 from "node:fs";
+import fs9 from "node:fs";
 import path10 from "node:path";
 function exportDirOf(cwd) {
   const e = path10.join(cwd, EXPORT_DIR);
-  return fs10.existsSync(path10.join(e, "pages")) ? e : path10.join(cwd, DESIGN_DIR);
+  return fs9.existsSync(path10.join(e, "pages")) ? e : path10.join(cwd, DESIGN_DIR);
 }
 function indexRows(exportDir) {
   const root = readJsonOrNull(path10.join(exportDir, "pages", "index.json"), isPagesRootIndex);
@@ -1689,7 +1727,7 @@ function behaviourRef(x) {
 }
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path10.join(cwd, VERIFY_DIR);
-  if (!fs10.existsSync(dir)) return [];
+  if (!fs9.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
     plan.file ? path10.basename(String(plan.file)).replace(/\.json$/i, "") : null,
@@ -1700,33 +1738,33 @@ function locateReports(plan, planFile, cwd, exp) {
   const nodeId = planNodeId(plan, planFile, e);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs10.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs9.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path10.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
     const expFile = path10.join(dir, stem + ".expected.json");
-    if (!fs10.existsSync(expFile) && fs10.existsSync(expFile + ".retired")) continue;
+    if (!fs9.existsSync(expFile) && fs9.existsSync(expFile + ".retired")) continue;
     const expFrame = () => {
       const x = readJsonOrNull(expFile, isJsonObject);
       return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null;
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs10.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && fs9.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs10.statSync(abs).mtimeMs;
+      mtimeMs = fs9.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs10.existsSync(expFile)) {
+    if (want && fs9.existsSync(expFile)) {
       try {
-        expectationChanged = sha256Hex(fs10.readFileSync(expFile)) !== want;
+        expectationChanged = sha256Hex(fs9.readFileSync(expFile)) !== want;
       } catch {
       }
     }
@@ -1754,7 +1792,7 @@ function locateReports(plan, planFile, cwd, exp) {
 }
 
 // design-to-code/hook-input.ts
-import fs11 from "node:fs";
+import fs10 from "node:fs";
 function parseHookPayload(raw) {
   if (!raw.trim()) return {};
   try {
@@ -1768,13 +1806,13 @@ function readHookInput(opts) {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs11.fstatSync(0);
+    st = fs10.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parseHookPayload(fs11.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parseHookPayload(fs10.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -1950,7 +1988,7 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs12.statSync(file).mtimeMs > cutoff;
+    return now - fs11.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
@@ -2282,7 +2320,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs12.existsSync(path11.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs11.existsSync(path11.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -2307,7 +2345,7 @@ function verificationWarnings(plan) {
 function recordedReportWarnings(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  if (!fs12.existsSync(path11.resolve(cwd, rec.report))) {
+  if (!fs11.existsSync(path11.resolve(cwd, rec.report))) {
     return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
   }
   const bytes = readRegularFile(path11.resolve(cwd, rec.report));
@@ -2502,8 +2540,8 @@ function readFiles(rels, cwd, bytes) {
   for (const rel of rels) {
     const abs = path11.join(cwd, rel);
     try {
-      if (!fs12.statSync(abs).isFile()) continue;
-      const buf = fs12.readFileSync(abs);
+      if (!fs11.statSync(abs).isFile()) continue;
+      const buf = fs11.readFileSync(abs);
       out.push({ rel, text: buf.toString("utf8") });
       bytes?.set(rel, buf);
     } catch {
@@ -2611,7 +2649,7 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
 var hasTwConfig = (dir) => {
   try {
-    return fs12.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+    return fs11.readdirSync(dir).some((n) => TW_CONFIG.test(n));
   } catch {
     return false;
   }
@@ -2619,7 +2657,7 @@ var hasTwConfig = (dir) => {
 function packageDirOf(cwd, rel) {
   const root = path11.resolve(cwd);
   for (let d = path11.dirname(path11.resolve(cwd, rel)); d.startsWith(root); d = path11.dirname(d)) {
-    if (fs12.existsSync(path11.join(d, "package.json"))) return d;
+    if (fs11.existsSync(path11.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -2630,7 +2668,7 @@ function projectScan(cwd, limit = 2e3) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs12.readdirSync(dir, { withFileTypes: true });
+      entries = fs11.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -2642,7 +2680,7 @@ function projectScan(cwd, limit = 2e3) {
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path11.relative(cwd, abs).split(path11.sep).join("/"), text: fs12.readFileSync(abs, "utf8") });
+          css.push({ rel: path11.relative(cwd, abs).split(path11.sep).join("/"), text: fs11.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -2731,7 +2769,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs12.existsSync(path11.join(cwd, f)));
+  const absent = listed.filter((f) => !fs11.existsSync(path11.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -2739,12 +2777,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs12.statSync(path11.join(cwd, rel)).isFile();
+      return fs11.statSync(path11.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs12.readFileSync(path11.join(cwd, rel), "utf8") });
+  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs11.readFileSync(path11.join(cwd, rel), "utf8") });
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -3040,12 +3078,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs12.openSync(file, "r");
+  const fd = fs11.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(chunk);
     let carry = [];
     for (; ; ) {
-      const n = fs12.readSync(fd, buf, 0, chunk, null);
+      const n = fs11.readSync(fd, buf, 0, chunk, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -3059,7 +3097,7 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs12.closeSync(fd);
+    fs11.closeSync(fd);
   }
 }
 var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
@@ -3225,7 +3263,7 @@ function checkAndRecord(p, cwd, graph) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs12.statSync(p.file);
+        const s = fs11.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -3236,7 +3274,7 @@ function checkAndRecord(p, cwd, graph) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs12.utimesSync(p.file, was.times[0], was.times[1]);
+        fs11.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
@@ -3380,18 +3418,13 @@ async function main(argv) {
   }
   return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
+if (import.meta.main) {
   const watchdog = setTimeout(() => {
     console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s while ${phase} \u2014 nothing was blocked; re-run \`${scriptCmd("verify-build")} <plan.json>\` to check the plan directly`);
-    process.exit(1);
+    exitFlushed(1);
   }, HOOK_TIMEOUT_MS());
   watchdog.unref();
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }, (e) => {
-    console.error(`verify-build: ${e instanceof Error && e.stack || String(e)}`);
-    process.exitCode = 1;
-  });
+  runCli(main, { name: "verify-build" });
 }
 export {
   USAGE2 as USAGE,

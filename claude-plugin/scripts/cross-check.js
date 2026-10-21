@@ -2,7 +2,7 @@
 
 
 // design-to-code/cross-check.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 import path5 from "node:path";
 
 // design-to-code/types.ts
@@ -285,10 +285,54 @@ import { parseArgs } from "node:util";
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -342,7 +386,7 @@ function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
   const unknownFlags = () => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -370,7 +414,7 @@ ${usage}`;
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode);
 }
 
 // design-to-code/catalog-input.ts
@@ -419,23 +463,10 @@ function readDocFile(file, what, guard, hint) {
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-  process.exit(2);
+  exitCli(2);
 }
 function readOptionalDoc(file, what, guard) {
   return fs2.existsSync(file) ? readDocFile(file, what, guard) : null;
-}
-
-// bridge/src/is-main.ts
-import fs3 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
 }
 
 // design-to-code/map-validate.ts
@@ -573,7 +604,7 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -886,7 +917,7 @@ function contrastRatio(a, b) {
 }
 
 // design-to-code/design-system-dir.ts
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 import path2 from "node:path";
 
 // bridge/src/design-system-layout.ts
@@ -925,7 +956,7 @@ var COMPONENTS = "components.json";
 var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 function readDesignSystemDir(dir) {
   const local = path2.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, COMPONENTS));
+  const isLibrary = !fs3.existsSync(local) && fs3.existsSync(path2.join(dir, COMPONENTS));
   return {
     tokens: readOptionalDoc(path2.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
     components: readOptionalDoc(isLibrary ? path2.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
@@ -940,11 +971,11 @@ function readDesignSystemDir(dir) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 import path4 from "node:path";
 
 // bridge/src/project-layout.ts
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 import path3 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
@@ -964,11 +995,11 @@ var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every ver
 var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
 function looksLikeExportDir(dir) {
   try {
-    if (!fs5.statSync(dir).isDirectory()) return false;
+    if (!fs4.statSync(dir).isDirectory()) return false;
   } catch {
     return false;
   }
-  return EXPORT_MARKERS.some((m) => fs5.existsSync(path3.join(dir, m)));
+  return EXPORT_MARKERS.some((m) => fs4.existsSync(path3.join(dir, m)));
 }
 function findExportDir(cwd) {
   const modern = path3.join(cwd, EXPORT_DIR);
@@ -981,9 +1012,9 @@ function findExportDir(cwd) {
 }
 function findMapFile(cwd) {
   const modern = path3.join(cwd, MAP_FILE);
-  if (fs5.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  if (fs4.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
   const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
-  if (fs5.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  if (fs4.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
@@ -1034,15 +1065,15 @@ function variablesContext(screenFiles, varsFile, opts) {
     const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
     const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
     const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs6.existsSync(sibling)) variablesPath = sibling;
+    if (fs5.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs5.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
     const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
+    if (fs5.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
@@ -1715,7 +1746,7 @@ function exportSiblings(files) {
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
     const pages = path5.dirname(path5.dirname(f));
-    if (path5.basename(pages) === "pages" && fs7.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
+    if (path5.basename(pages) === "pages" && fs6.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
   }
   if (!roots.size) return null;
   return () => {
@@ -2110,10 +2141,10 @@ function toMarkdown(res) {
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs8 = res.findings.filter((f) => f.severity === sev);
-    if (!fs8.length) continue;
-    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
-    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}`);
+    const fs7 = res.findings.filter((f) => f.severity === sev);
+    if (!fs7.length) continue;
+    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
+    for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
   const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
@@ -2193,9 +2224,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {
-    fs7.mkdirSync(path5.dirname(out), { recursive: true });
-    fs7.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs7.writeFileSync(out + ".md", toMarkdown(res));
+    fs6.mkdirSync(path5.dirname(out), { recursive: true });
+    fs6.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs6.writeFileSync(out + ".md", toMarkdown(res));
     console.error(`wrote ${out}.json and ${out}.md`);
   } else {
     process.stdout.write(toMarkdown(res));
@@ -2204,7 +2235,7 @@ function main(argv) {
   for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
   return gate && res.summary.blockers > 0 ? 1 : 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "cross-check" });
 export {
   ABSURD_NUMBER,
   SEVERITY_ORDER,

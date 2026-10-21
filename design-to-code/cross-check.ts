@@ -54,7 +54,7 @@ import type {
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { findMapFile, findExportDir } from "../bridge/src/project-layout.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 
@@ -1578,7 +1578,7 @@ function toMarkdown(res: CrossCheckReport): string {
 
 export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
-// CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/export/design-system]
+// CLI: bun design-to-code/cross-check.ts <screen.json>... [--design-system design/export/design-system]
 //        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
@@ -1659,4 +1659,4 @@ function main(argv: string[]): number {
   return gate && res.summary.blockers > 0 ? 1 : 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "cross-check" }); // exitCode, never exit(): every printed line drains first (proc.ts)

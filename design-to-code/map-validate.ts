@@ -13,7 +13,7 @@
 import type { CodeConnectMap, MapValidationResult } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { readJsonFile } from "./catalog-input.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { isRecord, nullProto } from "../bridge/src/json-util.ts";
 
 const STATUSES = ["active", "deprecated", "needs-review"];
@@ -154,7 +154,7 @@ isCodeConnectMap.expected = "a valid component map (the map-validate script list
 
 export { validateMap, isCodeConnectMap };
 
-// CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
+// CLI: bun design-to-code/map-validate.ts <codeconnect.local.json>
 function main(argv: string[]): number {
   const file = argv[0];
   const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
@@ -167,4 +167,4 @@ function main(argv: string[]): number {
   return 1;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "map-validate" }); // exitCode, never exit(): every printed line drains first (proc.ts)

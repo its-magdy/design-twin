@@ -8,10 +8,54 @@ import { fileURLToPath } from "node:url";
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
@@ -56,20 +100,7 @@ function readDocFile(file, what, guard, hint) {
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-  process.exit(2);
-}
-
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
+  exitCli(2);
 }
 
 // bridge/src/json-util.ts
@@ -237,7 +268,7 @@ function main(argv) {
 ${res.errors.length} error(s)`);
   return 1;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "map-validate" });
 export {
   isCodeConnectMap,
   validateMap

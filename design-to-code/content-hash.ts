@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { spawnSync } from "node:child_process";
+import { runSync } from "./proc.ts";
 import { isRecord, isUnknownArray } from "../bridge/src/json-util.ts";
 
 // Deep copy without the pull's timestamps. Key order is kept (the exporter writes it deterministically).
@@ -51,8 +51,9 @@ function fileHashes(files: unknown, cwd: string, cached?: (rel: string) => Uint8
 // file hashes are what status is decided on — a commit does not say whether the tree was dirty.
 function gitHead(cwd: string): string | null {
   try {
-    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
-    const h = r.status === 0 && String(r.stdout || "").trim();
+    // exit 0 must come with a sha: an empty capture (Bun #46142) is re-run once, then reads as "no head"
+    const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2000, expect: /^[0-9a-f]{40}\s*$/ });
+    const h = r.status === 0 && r.stdout.trim();
     return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
   } catch { return null; }
 }

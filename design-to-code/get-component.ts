@@ -17,7 +17,7 @@ import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { assertNotManifest } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 
 export type GetComponentResult =
   | { found: false }
@@ -82,7 +82,7 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
 
 export { getComponent, findComponent, resolveVariantsFile };
 
-// CLI: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
+// CLI: bun design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
 function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
@@ -115,4 +115,4 @@ function main(argv: string[]): number {
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "get-component" }); // exitCode, never exit(): every printed line drains first (proc.ts)

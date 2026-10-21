@@ -52,7 +52,7 @@ import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpac
 import { toNative, platformOf } from "./tokens-native.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { MERGED_VARIABLES_FILE, TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
@@ -1392,7 +1392,7 @@ function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: st
   return 1;
 }
 
-// CLI: node design-to-code/tokens.ts <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
+// CLI: bun design-to-code/tokens.ts <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
 // --native swiftui | compose | flutter | react-native (a build-screen profile name works too) also
 // writes ONE native token file next to the others — move it into the app's source tree and import it
 // from every screen (see tokens-native.ts for why and for the shape of each file).
@@ -1513,4 +1513,4 @@ function main(args: string[]): number {
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "tokens" }); // exitCode, never exit(): every printed line drains first (proc.ts)

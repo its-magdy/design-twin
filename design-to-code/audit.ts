@@ -66,7 +66,7 @@ import type {
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey } from "./map-util.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
 import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
@@ -1532,7 +1532,7 @@ void _allBlockerCodes;
 
 export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, reportFindings, findExistingAuditFor, BLOCKER_CODES };
 
-// CLI: node design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
+// CLI: bun design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
 // --gate: exit 1 if any blocker was found (default is always exit 0 — findings are advice unless --gate is set).
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
@@ -1653,4 +1653,4 @@ function main(argv: string[]): number {
   return gate && res.summary.blockers > 0 ? 1 : 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "audit" }); // exitCode, never exit(): every printed line drains first (proc.ts)

@@ -24,7 +24,7 @@ import { cliArity, cliParse, scriptCmd } from "./cli-args.ts";
 import { visibleInstances } from "./component-match.ts";
 import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import { readCatalogSet, unionCatalog, catalogSetLine } from "./design-system-dir.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { nullProto } from "../bridge/src/json-util.ts";
 import { writeJsonLike } from "../bridge/src/json-file.ts";
 
@@ -219,7 +219,7 @@ function proposalsIn(doc: unknown): ComponentProposal[] | null {
 
 export { bootstrap, bootstrapFromProposals, proposalsIn };
 
-// CLI: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>]
+// CLI: bun design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
 // manifest since the split and carries no `components` array (see bridge/src/design-system-layout.ts).
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
@@ -324,4 +324,4 @@ function main(argv: string[]): number {
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "map-bootstrap" }); // exitCode, never exit(): every printed line drains first (proc.ts)

@@ -29,7 +29,7 @@ import type {
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { readCatalogSet, unionCatalog, catalogSetLine, discoverCatalogs } from "./design-system-dir.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 
@@ -400,7 +400,7 @@ export { driftLint, discoverExtraCatalogs, validateMap, isScreenDoc, screenCover
 // would die on it with a TypeError and a stack. The catalog and the screens are checked by their
 // doc-guards.ts / export-shape.ts guards as they are read — a wrong file is a one-line error, exit 2.
 
-// CLI: node design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
+// CLI: bun design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
 //        [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]
 // Beside the named catalog it also reads components.library.json in the same dir and every
 // libraries/<dir>/components.json of the export (design-system-dir.ts readCatalogSet), and names them all.
@@ -486,8 +486,8 @@ async function main(argv: string[]): Promise<number> {
       console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
   }
-  // A rejection main() did not catch still crashes the process (it is not handled below).
+  // A rejection main() did not catch is one `drift-lint: <stack>` line and exit 1 (runCli).
   return res.errors.length ? 1 : 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) void main(process.argv.slice(2)).then((code) => { process.exitCode = code; }); // exitCode, not exit(): every printed line flushes first
+if (import.meta.main) runCli(main, { name: "drift-lint" }); // exitCode, not exit(): every printed line flushes first (proc.ts)

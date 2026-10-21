@@ -58,7 +58,7 @@ import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { EXPORT_DIR, EXPORT_SUBDIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeStem } from "./verify-sets.ts";
 import { openRunSets } from "./verify-status.ts";
@@ -361,4 +361,4 @@ function main(argv: string[]): number {
   return 1;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "resolve-screen" }); // exitCode, never exit(): every printed line drains first (proc.ts)
