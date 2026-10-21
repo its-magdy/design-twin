@@ -37,9 +37,9 @@ that screen's own `.vars.json`, it is simply `space-4: 24px`.
 ## Generate
 
 ```bash
-node "<scripts>/tokens.js" design/export/design-system/tokens.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
-node "<scripts>/tokens.js" design/export/design-system/tokens.json <css dir> --web tailwind
-node "<scripts>/tokens.js" design/export/design-system/tokens.json <theme dir> --native swiftui   # or compose | flutter | react-native
+bun --no-install --no-env-file "<scripts>/tokens.js" design/export/design-system/tokens.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
+bun --no-install --no-env-file "<scripts>/tokens.js" design/export/design-system/tokens.json <css dir> --web tailwind
+bun --no-install --no-env-file "<scripts>/tokens.js" design/export/design-system/tokens.json <theme dir> --native swiftui   # or compose | flutter | react-native
 ```
 
 It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json` and a
@@ -52,14 +52,14 @@ there, and keep that set under `design/`, not the app's source tree.
 ## Is the generated file current? Which variable is this colour?
 
 Each CSS / native file starts with a `designtwin-source: <dir>/<input> · <n> variables · sha256 <12>` line.
-`node "<scripts>/tokens.js" <tokens.json> --check <generated file>` writes nothing and
+`bun --no-install --no-env-file "<scripts>/tokens.js" <tokens.json> --check <generated file>` writes nothing and
 says whether the file is still current (exit 0), stale after a re-pull (1) or has no such line (2,
 regenerate once) — also 2 when it was generated from a different file (it names that file: check against it,
 never regenerate from a narrower one; a design-system and a library `tokens.json` are told apart by their parent
 directory) or the command line is wrong (usage errors in `--check`/`--lookup` are 2, never 1); a later pull that
 merges new variables says the generated file is now behind.
 
-To find the variable behind a colour: `node "<scripts>/tokens.js" <library tokens.json> --lookup <hex>` (repeatable;
+To find the variable behind a colour: `bun --no-install --no-env-file "<scripts>/tokens.js" <library tokens.json> --lookup <hex>` (repeatable;
 COLOR variables, per mode, through aliases; exit 1 when none, 2 on a usage error; pass `ffbc1c` or a quoted
 `'#ffbc1c'` — an unquoted `#` starts a shell comment).
 

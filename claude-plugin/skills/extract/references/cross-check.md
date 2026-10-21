@@ -27,7 +27,7 @@ names that reproduce the visuals and are not a port of the catalog.
 ## Running it
 
 ```bash
-node "<scripts>/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
+bun --no-install --no-env-file "<scripts>/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
   --design-system design/export/design-system [--out design/audit/<Screen>__<id>.cross]
 ```
 
@@ -83,7 +83,7 @@ Show the user the list — instance name → catalog name and id, and the eviden
 `name+no-props`) — and let them accept entries. Set `"confirmed": true` on exactly those, then
 
 ```bash
-node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json \
+bun --no-install --no-env-file "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json \
   --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json
 ```
 

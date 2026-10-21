@@ -6,7 +6,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
+          command: bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
           timeout: 90
 ---
 
@@ -60,7 +60,7 @@ its export directly in `design/` — every path below works either way, just dro
   a name ending in a space sanitises to a trailing `_`). Read the index rather than reconstructing a filename.
   The Figma layer name and the visible on-screen title are often different strings ("build the Members screen"
   when no layer is named that): resolve with
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`, which prints the one
+  `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`, which prints the one
   screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (an existing plan keeps its own name) — or stops
   and prints the candidates (a match only once spaces, `-` and `_` are ignored is one too) — confirm a candidate by
   node id with the user rather than building from a guess.
@@ -74,7 +74,7 @@ its export directly in `design/` — every path below works either way, just dro
   a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
   are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
   `hygiene` before generating a theme from it. It holds only the variables bound by pulled nodes: look up
-  library colours with `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <library tokens.json> --lookup <hex>`
+  library colours with `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <library tokens.json> --lookup <hex>`
   on the library catalog (COLOR variables, per mode, through aliases; pass `ffbc1c` or a quoted `'#ffbc1c'` —
   an unquoted `#` starts a shell comment).
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
@@ -87,10 +87,10 @@ its export directly in `design/` — every path below works either way, just dro
   what to do then. **`design/export/assets/`** — real icon/image files, named after their Figma layer
   and deduped by content.
 - **`design/codeconnect.local.json`** — Figma component → code component, keyed by the stable publish
-  **`key`**. Scaffold with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js"
+  **`key`**. Scaffold with `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js"
   design/export/design-system/components.local.json --out design/codeconnect.local.json` (re-running
   merges, never overwrites your edits). *(Older projects keep it at the repo root; `dtwin doctor` finds either. Prefer the `design/` location.)*
-- **`design/tokens.dtcg.json`** (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> design/`)
+- **`design/tokens.dtcg.json`** (`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> design/`)
   plus **`design/tokens.json`** overrides — Figma value → your token. The input you feed `tokens.js` changes the
   values (a pulled library's catalog, the defining file's design system, the screen's own `.vars.json`, the merged
   union last); `theme-tokens.md` has the order and why. Add the flag your profile names to also get ONE theme
@@ -157,7 +157,7 @@ Copy this checklist into your notes and keep it updated:
      depends on the answer:
 
      ```
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" <screen json> \
+     bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" <screen json> \
        --design-system design/export/design-system
      ```
 
@@ -167,18 +167,18 @@ Copy this checklist into your notes and keep it updated:
      counts first: with D = 0 mapping by name is safe — record it in the plan and carry on).
    - **Component map — check for the catalog first:** `ls design/export/design-system/components.local.json`
      (a single-screen pull does not write it). It exists → run drift-lint **with the screen**:
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" design/codeconnect.local.json
+     `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" design/codeconnect.local.json
      design/export/design-system/components.local.json --screen <screen json>`, and fix an `ok:false` map before
      generating against it. No map yet → bootstrap only this screen's components with
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
+     `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
      --out design/codeconnect.local.json --screen <screen json>` and have the user confirm that short list. No
      catalog at all → offer `dtwin pull --design-system`, or build without a map (every instance `verdict:"new"`).
-     After a hand edit, check the map with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js"
+     After a hand edit, check the map with `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js"
      design/codeconnect.local.json`. `gates.md` has each branch in full.
    - Read the `.png`, then skim the tree top-down. Collect every `annotations[]` and `devStatusNote`.
      Theme first: `variableModes`/`resolvedModes` tell you which mode this frame shows.
    - **Audit.** If `design/audit/<screen>.json` exists, read its verdict, findings, `crossFile` and
-     questions. If not, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" <screen json> --platform <p>
+     questions. If not, run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" <screen json> --platform <p>
      --design-system design/export/design-system --out design/audit/<screen> --gate --grid <N>`, with `<N>` the
      design's real spacing step (`gates.md` says where to read it, and when to re-run against a pulled library).
      The script ships with this plugin, so the audit always runs. `--gate` makes the process exit non-zero on any
@@ -193,7 +193,7 @@ Copy this checklist into your notes and keep it updated:
    layers, mistyped token names and wrong values "pass"):
 
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-skeleton.js" <screen json> <screen .vars.json> \
+   bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/plan-skeleton.js" <screen json> <screen .vars.json> \
      design/export/design-system --out design/plan/<Layer>__<id>.json [--route /<route>] [--seed-from design/plan/<sibling>.json]
    ```
 
@@ -249,7 +249,7 @@ Copy this checklist into your notes and keep it updated:
      (same hex/value or token name actually found by grep — not "closest existing token") or
      **MISSING**. On a project that has **no** token source of its own yet, generate one once rather than
      hand-writing one per screen (two screens built in separate sessions then disagree about what
-     `color/primary` is called): `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" …` — `--native <profile>` on a
+     `color/primary` is called): `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" …` — `--native <profile>` on a
      native stack, the `--web` target your web profile names, no flag for plain `tokens.css`; `theme-tokens.md`
      says which input to feed it — a shell shared by several screens needs every screen's tokens — and how to
      wire the file in. A project that already has a theme keeps it, and its names win. Fill a MISSING row only
@@ -390,10 +390,10 @@ Copy this checklist into your notes and keep it updated:
      into `design/verify/`, and a dev server reloads a page still open on it):
 
      ```
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json \
+     bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify
+     bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json \
        --url <url> --out design/verify [--steps <plan.json>]   # web: renders, measures every node, writes <Layer>__<id>.measured.json + .png
-     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
+     bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
        design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json --out design/verify
      ```
 
@@ -439,9 +439,9 @@ Copy this checklist into your notes and keep it updated:
    - **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
      **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
      `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>`.
+     `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>`.
    - **Status is computed, never stored**:
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>` derives it from the
+     `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>` derives it from the
      hook's result, the hashes of `files[]` and the verify report. Write `status` yourself only as `"abandoned"`
      or `"awaiting-user"` (and back to `"pending"`); `hook-and-status.md` lists every status and what blocks.
 
@@ -465,7 +465,7 @@ Copy this checklist into your notes and keep it updated:
    field, designed → built, the user's reason) under verification evidence — accepted is not "matches".
 
    `static-only` means "built, not visually verified" — never "matches the design". If the hook
-   blocks, fix what it listed and re-run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself
+   blocks, fix what it listed and re-run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself
    until it passes, then end the turn — the hook does not check the stop that follows its own block.
 
 ## Building several screens in one session
@@ -475,13 +475,13 @@ one screen, **delegate one layer per `designtwin:screen-builder` agent** after s
 navigation and tokens: give it the layer name/id and the shared files to reuse. It has this skill
 preloaded, runs the same Stop-hook gate, and reports back only files created, components reused,
 missing tokens, defaults assumed, and unresolved fidelity gaps — under ~10 lines. When the builders have
-returned, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` and report each plan's computed
+returned, run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` and report each plan's computed
 status — not the one a builder expected.
 
 For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** agent over checking your own work:
 hand it `design/verify/<Layer>__<id>.expected.json`; it renders, measures every node, drives the designed interactions
 and writes `design/verify/<Layer>__<id>.measured.json` — measurements, not a verdict. You run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json [--interactions design/verify/<Layer>__<id>.evidence.json] --record-plan --out design/verify`
+`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json [--interactions design/verify/<Layer>__<id>.evidence.json] --record-plan --out design/verify`
 on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
 `verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
 gets a NEW run (`--status <Layer>__<id> --phase queued --new-run`, its id passed to the verifier): an ended run takes no

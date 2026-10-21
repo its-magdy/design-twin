@@ -1,13 +1,30 @@
 {
-  "description": "Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the plugin's two agents are gated here. (1) SubagentStop gates the designtwin:screen-builder subagent with the same plan check build-screen runs. The script reads the hook JSON from stdin (only when stdin is not a terminal, never waiting on a silent pipe), exits immediately when design/plan/ has no open plan and no unreadable one, checks only the plans the subagent's own tool calls wrote (Write/Edit, or the plan-skeleton call's --out in a Bash or PowerShell command; other shell commands are not read) and the plan that alone lists a file it wrote with Write/Edit — nothing when it claimed none, e.g. it edited only files several plans share, and then it blocks once (decision block; the reason, which Claude Code delivers to the subagent as its next instruction, names the open plans and has the builder run verify-build <plan.json> on the plan it built and name that plan in its report, or say it built none — a SubagentStop systemMessage was observed not to be displayed by Claude Code 2.1.299, so the builder is told instead), and its next stop (stop_hook_active) passes unchecked, so it never loops (nor is it sent back when its transcript already holds that request, or holds no tool call — an internal agent, not a build); a plan it wrote that cannot be read is its claim and blocks (unless its raw JSON says status abandoned or awaiting-user); every open plan when the payload carries no readable agent transcript — on a checked plan it blocks only on an unexplained colour literal, an unanchored visible design node or (web profiles) no data-dt-node tag at all, never writes plan.status, and stops itself at 60 s — the timeout below is the harness's backstop. (2) PreToolUse guards the designtwin:visual-verifier subagent's Bash, PowerShell and Write calls (the payload's agent_type; a call from anyone else gets no answer, so the normal permission flow applies): it refuses a write outside design/verify/ and the run cache node_modules/.cache/designtwin-verify/ (or to a tool-owned file there), a pattern kill (pkill, killall, …), a dependency or Playwright browser install, verify-screen --migrate (it renames verify sets and rewrites plans — the caller's call), and dangerouslyDisableSandbox (a PowerShell call is judged like a Bash one — its quoting, Stop-Process -Name / Get-Process … | Stop-Process as pattern kills; as for Bash, the files a command writes are not read) — a deny decision with the reason on stdout, exit 0; a payload it cannot read is allowed and logged to stderr.",
+  "description": "Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the plugin's two agents are gated here. Both gates run a bundled script on Bun in exec form (no shell: `bun --no-install --no-env-file <script>`, so neither a .env nor a missing package in the user's project can change the hook's environment or make Bun fetch a module from the registry), and (0) SessionStart first checks that Bun >= 1.4.2 is on PATH — a POSIX sh script, since it cannot itself need Bun (Git Bash runs it on Windows) — printing install guidance (https://bun.sh/install) as a systemMessage, and telling Claude as additionalContext, when it is not; it never blocks. (1) SubagentStop gates the designtwin:screen-builder subagent with the same plan check build-screen runs. The script reads the hook JSON from stdin (only when stdin is not a terminal, never waiting on a silent pipe), exits immediately when design/plan/ has no open plan and no unreadable one, checks only the plans the subagent's own tool calls wrote (Write/Edit, or the plan-skeleton call's --out in a Bash or PowerShell command; other shell commands are not read) and the plan that alone lists a file it wrote with Write/Edit — nothing when it claimed none, e.g. it edited only files several plans share, and then it blocks once (decision block; the reason, which Claude Code delivers to the subagent as its next instruction, names the open plans and has the builder run verify-build <plan.json> on the plan it built and name that plan in its report, or say it built none — a SubagentStop systemMessage was observed not to be displayed by Claude Code 2.1.299, so the builder is told instead), and its next stop (stop_hook_active) passes unchecked, so it never loops (nor is it sent back when its transcript already holds that request, or holds no tool call — an internal agent, not a build); a plan it wrote that cannot be read is its claim and blocks (unless its raw JSON says status abandoned or awaiting-user); every open plan when the payload carries no readable agent transcript — on a checked plan it blocks only on an unexplained colour literal, an unanchored visible design node or (web profiles) no data-dt-node tag at all, never writes plan.status, and stops itself at 60 s — the timeout below is the harness's backstop. (2) PreToolUse guards the designtwin:visual-verifier subagent's Bash, PowerShell and Write calls (the payload's agent_type; a call from anyone else gets no answer, so the normal permission flow applies): it refuses a write outside design/verify/ and the run cache node_modules/.cache/designtwin-verify/ (or to a tool-owned file there), a pattern kill (pkill, killall, …), a dependency or Playwright browser install, verify-screen --migrate (it renames verify sets and rewrites plans — the caller's call), and dangerouslyDisableSandbox (a PowerShell call is judged like a Bash one — its quoting, Stop-Process -Name / Get-Process … | Stop-Process as pattern kills; as for Bash, the files a command writes are not read) — a deny decision with the reason on stdout, exit 0; a payload it cannot read is allowed and logged to stderr. The PreToolUse guard is onFailure block: when it cannot run at all (bun missing, a crash, its timeout) the verifier's call is refused, never let through unguarded; the SubagentStop gate is not (a gate that cannot run must not trap the builder in a stop loop).",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/check-bun.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "matcher": "^(designtwin:)?screen-builder$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js\"",
+            "command": "bun",
+            "args": [
+              "--no-install",
+              "--no-env-file",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
+            ],
             "timeout": 90
           }
         ]
@@ -19,8 +36,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verifier-guard.js\"",
-            "timeout": 10
+            "command": "bun",
+            "args": [
+              "--no-install",
+              "--no-env-file",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/verifier-guard.js"
+            ],
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       }

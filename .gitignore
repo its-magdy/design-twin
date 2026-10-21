@@ -19,6 +19,6 @@ out-allpages/
 # ~/.config/design-twin/bridge-token — see bridge/README.md. FIGMA_BRIDGE_TOKEN still overrides it.)
 .claude/settings.local.json
 
-# The bridge's tsc emit (npm run build --workspace bridge / prepack). Not committed: dev runs
-# bridge/src/*.ts directly, and the published package is built on prepack.
+# The bridge's old tsc emit. It has none any more (Bun runs and ships bridge/src/*.ts as is); kept ignored so
+# a dist/ left in an older checkout is never committed.
 bridge/dist/

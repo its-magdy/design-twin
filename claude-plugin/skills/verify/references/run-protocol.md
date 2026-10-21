@@ -26,7 +26,7 @@ A pass takes minutes and prints nothing, so the caller cannot tell progress from
 the tool, never by hand — the tool stamps `rev`, `at` and the file hashes itself, atomically:
 
 ```bash
-node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase <p> --run <id> [--detail "<one line>"]
+bun --no-install --no-env-file "<scripts>/verify-screen.js" --status <Layer>__<id> --phase <p> --run <id> [--detail "<one line>"]
 ```
 
 `<Layer>__<id>` is the verify set's name (a variant's `<Layer>__<id>.<slug>` too), and the set has one status, keyed
@@ -68,7 +68,7 @@ when its record replaced another run that had ended.
 ## Waiting on a run
 
 ```bash
-node "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>
+bun --no-install --no-env-file "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>
 ```
 
 Exit 0 done and the measured file matches (and the evidence file, when the run published one), 1 failed or
@@ -107,7 +107,7 @@ run it again. `--status` and `--wait` resolve
 `--dir` (default `design/verify`) against the current directory; from anywhere but the project root pass `--dir`
 (an absolute path works).
 
-Never reinstall dependencies (`npm ci`, `npm install`) during a verify run: it clears `node_modules/.cache` — the
+Never reinstall dependencies (`npm ci`, `npm install`, `bun install`, …) during a verify run: it clears `node_modules/.cache` — the
 live status and the staged files with it.
 
 ## What writes into the project, and when
@@ -134,7 +134,7 @@ stage dir, `node_modules/.cache/designtwin-verify/stage/<runId>/` (`--status` pr
 it), close the browser, then publish in one step:
 
 ```bash
-node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
+bun --no-install --no-env-file "<scripts>/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
 ```
 
 `done` checks the measured file first, then copies: it refuses (exit 1, nothing copied) when `measured.json` is
@@ -149,12 +149,13 @@ config.
 A throwaway script written to look at something goes in `node_modules/.cache/designtwin-verify/scratch/`
 (project-local, writable from the project root, created on demand) — never under `src/` or `design/`, where the
 project's linter, type-checker and dev server pick it up. Delete it when done. Write it (e.g. `scratch/drive.cjs`)
-with the Write tool, never a shell heredoc (`cat <<EOF`) or `node -e`: Claude Code asks for approval of those for a
+with the Write tool, never a shell heredoc (`cat <<EOF`) or `bun -e`: Claude Code asks for approval of those for a
 script holding braces and quotes.
 
 Two allow rules cover this. `Edit(node_modules/.cache/designtwin-verify/**)` lets the Write tool write there (Claude
 Code checks file writes against `Edit(...)` rules only, so a `Write(...)` path rule is never consulted; the same tree
-holds the staged evidence). `Bash(node node_modules/.cache/designtwin-verify/scratch/*)` lets the script run.
+holds the staged evidence). `Bash(bun --no-install --no-env-file node_modules/.cache/designtwin-verify/scratch/*)` lets the script run
+(started exactly that way: `bun --no-install --no-env-file node_modules/.cache/designtwin-verify/scratch/drive.cjs`).
 
 ## Processes
 
@@ -177,9 +178,9 @@ approve a bypass (nor the user, when you are the orchestrator). Three kinds:
   to get round it.
 
 Then write status phase `blocked` (detail = the denied command) and hand back "blocked on permissions: done /
-remaining", suggesting the user approve it or add a narrow allow rule for `node …/verify-probe.js` /
-`node …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` plus
-`Bash(node node_modules/.cache/designtwin-verify/scratch/*)` when a scratch script or staged evidence was denied.
+remaining", suggesting the user approve it or add a narrow allow rule for `bun --no-install --no-env-file …/verify-probe.js` /
+`bun --no-install --no-env-file …/verify-screen.js`, and `Edit(node_modules/.cache/designtwin-verify/**)` plus
+`Bash(bun --no-install --no-env-file node_modules/.cache/designtwin-verify/scratch/*)` when a scratch script or staged evidence was denied.
 
 ## Bounded runs
 

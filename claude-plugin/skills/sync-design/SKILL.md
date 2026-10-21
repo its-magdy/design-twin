@@ -6,7 +6,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
+          command: bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
           timeout: 90
 ---
 
@@ -47,7 +47,7 @@ writes the real path here, not there).
 ```
 
 1. **Find what was built.** First resolve which screen the user means:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`. It prints the one
+   `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`. It prints the one
    screen it resolved and its `stem`, or stops and prints the candidates — show those and ask, rather than syncing
    against a guess or resolving through `design/plan/*.json`'s free-text `screen` field (a human's string, and a
    sibling plan from the same build may not have one). Once resolved, the plan of its node — `design/plan/<stem>.json`
@@ -67,7 +67,7 @@ writes the real path here, not there).
 2. **Snapshot before anything is re-pulled.** A pull overwrites the export in place, and after that
    there is nothing left to compare against:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" --snapshot \
+   bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" --snapshot \
      design/export/pages/<Page>/<Screen>__<id>.json design/export
    ```
    The screen file brings its `.vars.json`, `.assets.json` and `pages/index.json` with it; the export
@@ -133,8 +133,8 @@ writes the real path here, not there).
 
 4. **Diff, and show it before editing.**
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/pages/<Page>/<Screen>__<id>.json --out design/changes/<screen>.md
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export --out design/changes/<screen>-shared.md
+   bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export/pages/<Page>/<Screen>__<id>.json --out design/changes/<screen>.md
+   bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/design-diff.js" design/export --out design/changes/<screen>-shared.md
    ```
    The second is one report for `variables.json` and every design-system file: a section per file that
    changed, one line for those that did not, and a **Not compared** list with the reason for each of
@@ -160,8 +160,8 @@ writes the real path here, not there).
 
 5. **Patch only what changed.** You do not need to set the plan's `status` back to `"pending"` by
    hand: editing any file listed in the plan's `files[]` re-opens it on its own (the Stop hook hashes
-   those files, and a changed hash makes `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` compute `"stale"`, not
-   `"verified"`). Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>`
+   those files, and a changed hash makes `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status` compute `"stale"`, not
+   `"verified"`). Run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status <plan.json>`
    (the plan found in step 1, under whatever name it has) to confirm; the Stop hook checks this work like any build regardless — make the patch with Write/Edit, not
    `sed`/`cp`/a redirect, which it does not read (build-screen's `hook-and-status.md`). A re-export also reopens
    every waiver in the plan's `waivers[]` (each is bound to the export's content hash): re-run the
@@ -182,7 +182,7 @@ writes the real path here, not there).
        `components[]` for the component `key`, tell the user which built screens use it, and update
        `design/codeconnect.local.json` (then drift-lint) before touching any screen.
      - *token value changed* (token diff) — the screen code does not change; the token source does.
-       Re-run `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> <outDir>` (add `--native <profile>` on a
+       Re-run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> <outDir>` (add `--native <profile>` on a
        native stack) or update the project's theme
        file, whichever the project uses. A token that was *removed or renamed* leaves stale
        `tokens[]` rows in every plan that resolved to it — list those plans; don't fix only this one.
@@ -192,7 +192,7 @@ writes the real path here, not there).
        `status:"awaiting-user"`, ask, record the `decision`.
      - *component / props / overrides* — a variant swap is a prop change on the mapped component, not
        new markup. If `mainComponent.key` changed, look the new key up in `design/codeconnect.local.json`
-       and run drift-lint: `node "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" design/codeconnect.local.json design/export/design-system/components.local.json`.
+       and run drift-lint: `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" design/codeconnect.local.json design/export/design-system/components.local.json`.
      - *added subtree* — build just that subtree the way build-screen step 3 would (mapped component
        → native control → new), and place it where the new tree puts it among its siblings.
      - *removed subtree* — remove its code, then the imports, handlers, state and strings only it

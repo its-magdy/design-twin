@@ -24,7 +24,7 @@ the branches below.
 Run the drift check **with the screen**, which is the only form whose number means anything here:
 
 ```bash
-node "<scripts>/drift-lint.js" design/codeconnect.local.json \
+bun --no-install --no-env-file "<scripts>/drift-lint.js" design/codeconnect.local.json \
   design/export/design-system/components.local.json --screen <screen json>
 ```
 
@@ -37,7 +37,7 @@ exit 0, like the audit's. drift-lint (and MCP `design_drift_lint`) always reads 
 `--screen`/`--from-proposals` (a full bootstrap stubs just the named catalog). So a component from a pulled library
 is mapped, not orphaned. Fix an `ok:false` map before generating against it; heed a stale-snapshot warning.
 
-After any hand edit, check the map's shape with `node "<scripts>/map-validate.js" design/codeconnect.local.json` —
+After any hand edit, check the map's shape with `bun --no-install --no-env-file "<scripts>/map-validate.js" design/codeconnect.local.json` —
 drift-lint assumes a well-formed map. Entry `status` is `active` | `deprecated` | `needs-review`; an optional
 free-text `note` is allowed; any other key is rejected.
 
@@ -48,7 +48,7 @@ a full bootstrap on a real catalog stubs every component in the file (hundreds, 
 about to be built) and produces a confirm list nobody can evaluate:
 
 ```bash
-node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json \
+bun --no-install --no-env-file "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json \
   --out design/codeconnect.local.json --screen <screen json>
 ```
 
@@ -73,7 +73,7 @@ something to reuse (step 2), and the step-6 report says in one line that no comp
 If `design/audit/<screen>.json` exists, read its verdict, findings, `crossFile` and questions. If not, run
 
 ```bash
-node "<scripts>/audit.js" <screen json> --platform <p> \
+bun --no-install --no-env-file "<scripts>/audit.js" <screen json> --platform <p> \
   --design-system design/export/design-system --out design/audit/<screen> --gate --grid <N>
 ```
 

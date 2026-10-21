@@ -33,8 +33,8 @@ The repo ships **three products**, installed separately:
 | Piece | What it is | How you install it |
 |---|---|---|
 | `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest |
-| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | From a clone (not on npm): root `npm install`, `npm run build --workspace bridge`, `npm link --workspace bridge` |
-| `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies. | `claude plugin install` |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | From a clone (not on npm): root `bun install`, then `bun link` in `bridge/` |
+| `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies beyond Bun on PATH. | `claude plugin install` |
 
 There are three ways to get a design out of Figma:
 
@@ -53,7 +53,9 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 ## Prerequisites
 
 - The **Figma desktop app**. A browser tab can't import a development plugin. Any plan works, including free.
-- **Node.js 24.2+** (CI runs on 24 and 26).
+- **[Bun](https://bun.sh/install) 1.4.2+** (CI runs 1.4.3, and the 1.4.2 floor on Linux). Everything here runs on Bun — the
+  CLI, the MCP server, the plugin's scripts and hooks; Node is not supported. Install: `curl -fsSL https://bun.sh/install | bash`
+  (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows).
 - **Claude Code**, for the skills.
 - **git**, to clone this repo.
 
@@ -66,13 +68,12 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 ```bash
 git clone https://github.com/its-magdy/design-twin.git
 cd design-twin
-npm install
-npm run build --workspace bridge   # dtwin's bin is bridge/dist/figma-pull.js, which is gitignored
-npm link --workspace bridge        # or: cd bridge && npm link — puts `dtwin` on your PATH
+bun install
+(cd bridge && bun link)   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer); no build step
 dtwin --version
 ```
 
-If you skip `npm link`, use `node /path/to/design-twin/bridge/src/figma-pull.ts` wherever this README says `dtwin`.
+If you skip `bun link`, use `bun /path/to/design-twin/bridge/src/figma-pull.ts` wherever this README says `dtwin`.
 
 ### 2. Import the Figma plugin
 
@@ -116,7 +117,8 @@ design/
 ```
 
 It also creates the bridge token if one doesn't exist, and it never overwrites an existing file.
-With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json`. Enable it with `/mcp`, then
+With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json` (it runs the server with the absolute path of the
+`bun` that ran `dtwin init`, as `bun --no-install --no-env-file <clone>/bridge/src/figma-mcp.ts`). Enable it with `/mcp`, then
 restart Claude Code.
 
 ### 2. Connect the Figma plugin
@@ -286,23 +288,23 @@ it there, and `dtwin doctor` reports which layout it found.
 Everything runs offline, without Figma:
 
 ```bash
-npm ci
-node test/harness.ts              # Figma plugin extractor, against a mock `figma`
-node test/bridge.test.ts          # CLI + bridge
-node test/design-to-code.test.ts  # tokens, maps, drift-lint
+bun install --frozen-lockfile
+bun test/harness.ts              # Figma plugin extractor, against a mock `figma`
+bun test/bridge.test.ts          # CLI + bridge
+bun test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
-Every other `test/*.test.ts` suite runs the same way. `npm test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `node test/run-suites.ts <name>…` runs a subset. `npm run test:fast` skips three of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `npm test` before committing, CI's other matrix legs run them. `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once. `TESTING.md`
+Every other `test/*.test.ts` suite runs the same way. `bun run test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `bun test/run-suites.ts <name>…` runs a subset. `bun run test:fast` skips four of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `bun run test` before committing (not `bun test`, which is Bun's own test runner), CI's other matrix legs run them. `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once. `TESTING.md`
 lists each suite and the live-Figma checks (the run-suites summary is the authority for check counts). The plugin's `code.js` and
-`claude-plugin/scripts/` are committed build output (the bridge's `dist/` is gitignored, built on
-demand or on `prepack`). After editing their sources, rebuild them:
+`claude-plugin/scripts/` are committed build output (the bridge has none: it runs and ships as TypeScript). After
+editing their sources, rebuild them:
 
 ```bash
-npm run build
+bun run build
 ```
 
-That runs each workspace's own build — `tsc` → `bridge/dist/` for the bridge, esbuild →
-`figma-plugin/code.js` for the plugin — and then `node claude-plugin/build-scripts.ts` to re-bundle
+That runs each workspace's own build — esbuild → `figma-plugin/code.js` for the plugin (the bridge has nothing to
+build) — and then `bun claude-plugin/build-scripts.ts` to re-bundle
 `claude-plugin/scripts/`.
 
 CI fails if the committed build output doesn't match what the sources produce.
