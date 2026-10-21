@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
 // lint:any — the "no `any` in hand-written TypeScript" gate (owner rule).
 //
 // Scans test/, design-to-code/, bridge/src/ and figma-plugin/src/ (recursively, node_modules skipped), plus the
@@ -136,9 +136,10 @@ for (const file of sources()) {
     hits.push(`${rel}:${ln + 1}: double assertion (as unknown as): ${(lines[ln] ?? "").trim().slice(0, 140)}`);
   }
 }
+// Through the streams and process.exitCode, never console.* + process.exit(): under Bun a long hit list into a pipe would
+// lose its tail (console.* drops what meets a full pipe; exit() drops what is still queued).
 if (hits.length) {
-  console.error(hits.join("\n"));
-  console.error(`lint:any — ${hits.length} hit(s). Type JSON.parse results in place (\`as T\` / \`const x: T = …\`), never \`any\`; cast a computed \`import()\` result with \`as T\`; never \`as unknown as T\` — build the value (test/fixtures.ts) or narrow it with a runtime check.`);
-  process.exit(1);
-}
-console.log("lint:any — 0 hits");
+  process.stderr.write(hits.join("\n") + "\n");
+  process.stderr.write(`lint:any — ${hits.length} hit(s). Type JSON.parse results in place (\`as T\` / \`const x: T = …\`), never \`any\`; cast a computed \`import()\` result with \`as T\`; never \`as unknown as T\` — build the value (test/fixtures.ts) or narrow it with a runtime check.\n`);
+  process.exitCode = 1;
+} else process.stdout.write("lint:any — 0 hits\n");

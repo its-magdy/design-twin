@@ -3,7 +3,8 @@
     "module": "nodenext",
     "target": "es2024",
     "lib": ["es2024"],
-    "types": ["node"],
+    // Bun runs everything (bun-types also brings @types/node): Bun.*, bun:test, and the node: modules as Bun ships them
+    "types": ["bun"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
