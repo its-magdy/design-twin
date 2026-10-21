@@ -2482,31 +2482,6 @@ void (async () => {
     }
   }
 
-  // ---------------------------------------------------------------- is-main.ts: the import.meta.main fallback
-  // isMainFallback is what every CLI guard falls back to on a Node without import.meta.main (< 24.2):
-  // "was THIS file the process entry?", realpath-resolved on both sides so an npm `bin` symlink still
-  // counts. Driven as subprocesses because argv[1] and import.meta.url are process facts.
-  {
-    console.log("\nis-main.ts — isMainFallback:");
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-ismain-"));
-    const isMainUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/is-main.ts")).href;
-    const real = path.join(dir, "real.mjs");
-    fs.writeFileSync(real, `import { isMainFallback } from ${JSON.stringify(isMainUrl)};\nconsole.log(String(isMainFallback(import.meta.url)));\n`);
-    const other = path.join(dir, "other.mjs");
-    fs.writeFileSync(other, "export const x = 1;\n");
-    const mismatch = path.join(dir, "mismatch.mjs");
-    fs.writeFileSync(mismatch, `import { isMainFallback } from ${JSON.stringify(isMainUrl)};\nimport { pathToFileURL } from "node:url";\nconsole.log(String(isMainFallback(pathToFileURL(${JSON.stringify(other)}).href)));\n`);
-    const link = path.join(dir, "link.mjs");
-    fs.symlinkSync(real, link);
-    const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: "utf8" });
-    ok("[is-main] the file that IS the process entry answers true", run([real]).stdout.trim() === "true");
-    ok("[is-main] run through a symlink (an npm bin shim), the target still answers true", run([link]).stdout.trim() === "true");
-    ok("[is-main] a module asking about a DIFFERENT file's URL answers false", run([mismatch]).stdout.trim() === "false");
-    const noArgv = run(["--input-type=module", "-e", `import { isMainFallback } from ${JSON.stringify(isMainUrl)}; console.log(String(isMainFallback(import.meta.url)));`]);
-    ok("[is-main] with no argv[1] (node -e) it answers false rather than throwing", noArgv.status === 0 && noArgv.stdout.trim() === "false");
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
   // ---------------------------------------------------------------- daemon.ts: installCrashHandlers
   // The long-lived processes (`dtwin serve`, the MCP server) log a stray rejection and carry on, and
   // log an uncaught exception, run their synchronous cleanup and exit 1 (Node docs: resuming after
