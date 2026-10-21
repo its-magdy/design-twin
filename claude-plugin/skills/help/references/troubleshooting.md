@@ -143,10 +143,18 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 - **`bun: command not found`, a hook error naming `bun`, or the SessionStart notice "Design Twin needs Bun ≥ 1.4.2"**
   → every plugin script and hook, `dtwin` and the MCP server run on Bun (Node is not supported). Install it from
   https://bun.sh/install (`curl -fsSL https://bun.sh/install | bash`; Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`)
-  or upgrade with `bun upgrade`, then restart Claude Code. Installed but still not found → it is not on the PATH Claude
+  or upgrade it the way it was installed (`bun upgrade` for the official installer, `brew upgrade bun`,
+  `npm install -g bun@latest`, `scoop update bun`; a canary build of 1.4.2 counts as older than 1.4.2), then restart
+  Claude Code. Installed but still not found → it is not on the PATH Claude
   Code was started with (the installer adds `~/.bun/bin` to your shell profile; an app launched from the dock or Start
   menu may not read it): start Claude Code from a new terminal, or put `~/.bun/bin` on the system PATH. Until then the
-  visual-verifier's guard blocks that agent's Bash/Write calls (a guard that cannot run never lets a call through).
+  visual-verifier's guard cannot run, and its Bash/Write calls go through **unguarded** (the guard's hook runs on every
+  agent's calls, so it fails open rather than block the whole session) — do not run `/designtwin:verify` until Bun works.
+  On Windows without Git for Windows the notice itself cannot appear (the check is a `sh` script, and Claude Code then
+  runs hooks in PowerShell): a SessionStart hook error naming `sh` means the same thing — install Git for Windows, or Bun.
+- **`dtwin doctor` says the MCP registration cannot start** (a `bun` or `figma-mcp.ts` that moved, a Node-era
+  `node …/dist/figma-mcp.js` entry, bun without `--no-install --no-env-file`) → run `dtwin init --mcp` in the project:
+  it rewrites that entry in place to the installed bun and `figma-mcp.ts`, then restart Claude Code.
 - **A script "not found" / `Module not found "/scripts/…"`** → the command ran with an empty plugin
   path. The scripts ship at `<plugin>/scripts/<name>.js`. Claude Code writes the real plugin path into a
   skill's or agent's own text when it loads it, but `CLAUDE_PLUGIN_ROOT` is NOT an environment variable in

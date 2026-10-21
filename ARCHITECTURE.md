@@ -374,8 +374,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   the `.mcp.json` `dtwin init --mcp` writes (absolute `bun` path), and the `dtwin` bin's shebang; the probe also
   accepts a Playwright/axe-core only from the project's own `node_modules`. In this repo, `bunfig.toml` sets
   the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`. The plugin's
-  SessionStart hook checks `bun` is on PATH and new enough, and the verifier guard is `onFailure: block`, so a
-  missing `bun` refuses the verifier's calls instead of letting them through unguarded.
+  SessionStart hook checks `bun` is on PATH and new enough (on startup, resume, fork, clear and compact) and, when it
+  is not, says so to the user and to Claude — including that the verifier guard cannot run. The guard fails open
+  (no `onFailure: block`): Claude Code ignores hooks in a plugin agent's frontmatter, so its PreToolUse entry runs on
+  every agent's Bash/Write/PowerShell call, and fail-closed a missing `bun` would block the whole session. On Windows
+  without Git Bash the `sh` check itself cannot run (a hook error; a `"shell": "powershell"` twin would error at every
+  macOS/Linux start instead).
 - Output: Bun's `console.*` writes the fd directly and drops what meets a full pipe, and an exit drops what is still
   queued on one. So every entry point (`dtwin`, the MCP server, the daemon, each design-to-code script) routes console
   through the stream queue and ends on `process.exitCode`, or with `exitFlushed` when something still holds the loop

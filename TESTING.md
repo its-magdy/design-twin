@@ -60,6 +60,9 @@ bun test/verify-build.test.ts         # expect: all checks pass, exit 0 — the 
 bun test/verifier-guard.test.ts       # expect: all checks pass, exit 0 — the visual-verifier's PreToolUse guard: scoped by
                                        # agent_type, the write allow-list, refused pattern kills / installs / sandbox bypass,
                                        # the shipped bundle's deny JSON + exit 0, fail-open on bad input, the hooks.json matcher
+bun test/plugin-hooks.test.ts         # expect: all checks pass, exit 0 — SessionStart's Bun check (check-bun.sh against a
+                                       # fake bun: floor, canary-of-floor, upgrade advice per install method, missing bun) and
+                                       # that no session-wide hook fails closed (the verifier guard fails open; why: hooks.json)
 bun test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
                                        # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
                                        # --seed-from) and the visibility rule verify-build.js walks with

@@ -354,10 +354,12 @@ console.log("\nregistration (hooks.json, the agent's name and tools):");
   const handler: unknown = isJsonObject(entry) && Array.isArray(entry.hooks) ? entry.hooks.find((h) => hookRunsScript(h, "verifier-guard").ok) : undefined;
   check("hooks.json runs the bundled verifier-guard.js on PreToolUse (bun --no-install --no-env-file), with a timeout above its own 5 s stdin cut-off",
     entry !== undefined && isJsonObject(handler) && handler.type === "command" && typeof handler.timeout === "number" && handler.timeout > 5);
-  // a missing `bun` (or a guard that cannot start) is a NON-blocking hook error in Claude Code: the guard must fail closed
-  // on that, not silently let every verifier call through. Exec form ({command: "bun", args}) runs with no shell.
-  check("…in exec form ({command: \"bun\", args: [--no-install, --no-env-file, …]}), and a guard that cannot start blocks the call (onFailure: \"block\")",
-    hookRunsScript(handler, "verifier-guard").form === "exec" && isJsonObject(handler) && handler.onFailure === "block");
+  // The entry is session-wide (a plugin agent's frontmatter hooks are ignored, so it cannot be scoped to the verifier):
+  // fail-closed (onFailure "block"), a missing or slow `bun` would refuse EVERY Bash/Write/PowerShell call of the session.
+  // So a guard that cannot start is a non-blocking hook error, and SessionStart's Bun check says the verifier is then
+  // unguarded (test/plugin-hooks.test.ts). Exec form ({command: "bun", args}) runs with no shell.
+  check("…in exec form ({command: \"bun\", args: [--no-install, --no-env-file, …]}), failing open: no onFailure \"block\" on a session-wide entry",
+    hookRunsScript(handler, "verifier-guard").form === "exec" && isJsonObject(handler) && handler.onFailure !== "block");
   // Claude Code's matcher rule: only letters, digits, _, -, spaces, `,` and `|` → a list of exact names; anything else → an unanchored regex.
   const matches = (tool: string): boolean => /^[A-Za-z0-9_\- ,|]*$/.test(matcher)
     ? matcher === "" || matcher === "*" || matcher.split(/[|,]/).map((s) => s.trim()).includes(tool)
