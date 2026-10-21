@@ -1,10 +1,16 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
+// The shebang runs this TypeScript source directly (it is what the package's `bin` points at — there is
+// no build). `--no-install`: Bun never auto-installs a package a project lacks from the network (a
+// missing dependency is an error, not a download); `--no-env-file`: the project's .env is not loaded
+// into this process (a FIGMA_BRIDGE_PORT there would silently move the bridge). `env -S` splits the
+// line into its arguments on Linux and macOS alike.
+//
 // ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor`,
 // `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before server-core loads.
 // `dtwin mcp` routes to the MCP server (figma-mcp.ts). This is the officially-supported registration
-// shape (`npx -y designtwin mcp`), and it must not disturb any existing invocation: the branch is taken
+// shape (`bunx designtwin mcp`), and it must not disturb any existing invocation: the branch is taken
 // ONLY when this file is the process entry AND the first argument is exactly "mcp", so `dtwin …` and
-// importing this module from the test suites are untouched, and `node bridge/src/figma-mcp.ts` still
+// importing this module from the test suites are untouched, and `bun bridge/src/figma-mcp.ts` still
 // works when invoked directly. Everything that reads argv lives inside the async `cli()`, where a
 // plain `return` stops the rest of the CLI (arg parsing, bridge setup) from ever loading in MCP mode;
 // the module top level holds only side-effect-free imports and the pure, test-driven helpers.
@@ -14,171 +20,9 @@
 // design system + all page frames (or the current selection), and writes them to
 // disk. The agent then Reads those files selectively (context-economical).
 //
-// Usage:
-// Quick start (Figma file open, the "Design Twin" plugin running):
-//   dtwin list                        # what is in the file: pages + their top-level LAYERS, with ids
-//   dtwin screenshot 12:34            # a reference PNG of one node — look before you pull
-//   dtwin pull --node 12:34           # export ONE screen into design/export (tokens, tree, assets)
-//   dtwin doctor                      # something not working? checks token, port, daemon, plugin, project
-//   More than one Figma file connected? Add --client <fileKey|part of the file name> to every command
-//   above that reaches the plugin — see `dtwin list clients` for the address book.
-//
-// Where things land: everything a pull writes goes under design/export/ and nowhere else, so that
-// directory can be deleted and re-pulled without touching design/target.json, design/codeconnect.local.json,
-// design/plan/ or design/audit/ — the files you own. `design/README.md` (written by init) says so too.
-//
-// Commands (each is shorthand for a flag documented below — the flags keep working unchanged):
-//   dtwin pull [outDir] [flags]              = dtwin [outDir] [flags].          See pull --help
-//   dtwin list [pages|libraries|clients]     = --list | --list-pages | --list-libraries | --list-clients
-//   dtwin list children <id|url>             = --children <id|url>.             See list --help
-//   dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>.           See screenshot --help
-//   dtwin whoami                             = --whoami
-//   dtwin serve | stop | status              = --serve | --stop | --daemon-status
-//   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | …  See token --help
-//   dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
-//   dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
-//   dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help
-//   dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help
-//   dtwin help                               = --help
-//   dtwin --version                          print the installed version
-//
-//   Every command above answers `--help` with its own page, and none of them does anything else
-//   while doing so.
-//   A command is only recognised as the FIRST argument: `dtwin design` still pulls into ./design.
-//   For an outDir spelled like a command, write `dtwin pull list` or `dtwin ./list`.
-//
-// Full reference:
-//   dtwin init [--mcp]          # set up the project you are BUILDING: design/, target.json, the bridge
-//                               # token, (optionally) .mcp.json — then prints the steps left. See init --help
-//   dtwin [outDir]              # full: design-system.json + current-page frames + assets
-//   dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
-//   dtwin [outDir] --selection  # just the current selection
-//   dtwin [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
-//   dtwin [outDir] --node <id>  # ONE node, fully exported (properties + assets) — the
-//                                            # "paste a Figma link" path. Takes a bare id, dash form,
-//                                            # percent-encoded id, or a whole figma.com URL. Unlike
-//                                            # --children (peek only) and --screenshot (PNG only) this
-//                                            # walks the subtree and exports its assets, same as a
-//                                            # --page pull would for that subtree. The CLI twin of the
-//                                            # MCP figma_export_url tool.
-//   dtwin [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
-//                                                   # walk, no assets (the cheap "just the design
-//                                                   # system" pull). Each catalogued component/variant
-//                                                   # carries its OWN fills/strokes/effects/cornerRadius/
-//                                                   # opacity/blendMode (`visuals`) — plain synchronous
-//                                                   # property reads, not the async cost this mode
-//                                                   # exists to avoid. NOTE: this is the component
-//                                                   # NODE's own paint (its default/base variant look),
-//                                                   # not per-instance overrides elsewhere in the file —
-//                                                   # and components consumed from a published library
-//                                                   # (not defined in this file) are NOT covered: pull
-//                                                   # --as-library on the source library file for those.
-//                                                   # Add --variant-visuals for the SET's own variants'
-//                                                   # real paint too (see below) — the one read option
-//                                                   # this mode accepts.
-//   dtwin [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
-//                                                   # every variable with full per-mode values, every
-//                                                   # style, every component. Run it with the LIBRARY
-//                                                   # file open, not the design file that consumes it.
-//                                                   # Writes <outDir>/libraries/<slug>-<fileKey8>/ (by
-//                                                   # default design/export/libraries/…) and
-//                                                   # never touches design-system/.
-//   dtwin [outDir] --timeout N  # seconds to wait for the export (default: 300,
-//                                            # 900 with --all-pages, 120 for --selection); also
-//                                            # raises the list commands' own 300s budget
-//
-// Optional Tier-1 reads (opt-in — each costs extra Plugin-API work):
-//   --css            # Figma's own computed CSS per node (getCSSAsync) — the design-to-code oracle
-//   --measurements   # measurement redlines (spacing specs the designer placed) for the exported page(s).
-//                    # NOT Dev-Mode-only: per developers.figma.com only add/edit/deleteMeasurement are.
-//   --plugin-data    # own-scope plugin data stamped on nodes
-//   --motion         # motion/animation reads (timelines, keyframe tracks, animations, styles)
-//   --shared-data    # cross-plugin shared data (Tokens Studio applied tokens via getSharedPluginData)
-//   --variant-visuals  # walk each COMPONENT_SET's variants and attach their REAL layout/fills/radius/
-//                      # tokens (not the set wrapper's own selection-chrome visuals). One node walk
-//                      # per variant, so slower on large systems. The ONE read option --design-system
-//                      # and --as-library both accept (see below) — it enriches the component catalog
-//                      # they build, unlike the others which need a page/node walk neither does.
-//
-// Look before you pull (cheap RELATIVE to an export — no recursion, no assets, no node properties;
-// prints JSON to stdout):
-//   dtwin --list         # pages + their top-level frames (ids to deep-pull next).
-//                                     # Loads each page (Figma warns loading pages is slow on large
-//                                     # files) — cheap next to an export, not free. Use --list-pages
-//                                     # if you only need the page names.
-//   dtwin --list-pages   # page names only (near-free: does not load any page)
-//   dtwin --children <id>  # ONE node's direct children only (peek inside a frame from
-//                                        # --list before committing to a full recursive --page pull)
-//   dtwin --screenshot <id> [--scale N]  # on-demand PNG of ONE node (a component/instance
-//                                        # buried in a dense screen, say) — the visual-validation
-//                                        # counterpart to --list/--children. WRITES assets/<id>_ref.png
-//                                        # (with --scale: assets/<id>_shot@<N>x.png)
-//                                        # (unlike --list/--children, which only print), but is still
-//                                        # cheap: it skips serialize() and the recursive asset walk, so
-//                                        # exportAsync on the node itself is the only cost. --scale
-//                                        # overrides the default (auto, capped at 2048px on the longest
-//                                        # side). Mirrors Figma's own get_screenshot tool (single-node,
-//                                        # called on demand) rather than pre-rendering every node.
-//   dtwin --list-libraries  # which design libraries this file draws on (local + enabled
-//                                        # team libraries), their variable collections, and how many
-//                                        # of their components this file USES. The discovery step
-//                                        # before a pull, exactly as --list is before --page.
-//                                        # Honest limits: Figma exposes NO API to enumerate a
-//                                        # library's full contents, so component counts are
-//                                        # USAGE-derived; and libraries can only be enabled in the
-//                                        # Figma UI (never via API), so an export is silently scoped
-//                                        # to whatever was enabled at export time. Empty results are
-//                                        # a NORMAL outcome (free plan / no library enabled), not a
-//                                        # failure — they are reported as such.
-//                                        # Requires the plugin manifest's "teamlibrary" permission:
-//                                        # RE-IMPORT/reload the plugin in Figma after updating, or a
-//                                        # stale plugin silently returns nothing.
-//   dtwin --whoami       # who is connected: plugin instance id, file name, whether
-//                                     # figma.fileKey is available, socket uptime, and how many times
-//                                     # a new connection displaced an earlier one — read from the
-//                                     # daemon when one holds the port, so the numbers are real
-//                                     # either way. The probe for
-//                                     # "can two Figma files use the bridge at once?" — run it from
-//                                     # each open file and compare instanceId. Costs nothing (no page
-//                                     # load, no node walk, no assets) and writes no files.
-//   --json               # machine output for the two that print a TABLE (--list-clients, --list-libraries).
-//                        # The others above already print JSON; there it is accepted as a no-op.
-//   These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
-//   --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
-//   --timeout DOES apply to them — to the command AND to the wait for the plugin to connect
-//   (default: 10 min at a terminal, 90 s when stderr is not a TTY, e.g. run by an agent).
-//
-// Speed:
-//   --no-assets      # skip the per-node SVG/PNG export pass (the dominant cost on a big file).
-//                    # Structure + tokens are unaffected; the manifest reports how many were skipped.
-//
-// Keep the connection open (daemon):
-//   dtwin --serve          # hold the bridge open until stopped. Every command above then
-//                                       # routes through it automatically and skips the reconnect.
-//   dtwin --stop           # stop it
-//   dtwin --daemon-status  # is one running, and is the plugin connected?
-//   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
-//   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
-//   Not on Windows yet: there --serve / --stop refuse, nothing shares the bridge, and one MCP session or
-//   dtwin command holds it at a time.
-//
-// The bridge token (auth for the plugin -> bridge handshake). Generated once on the first bridge
-// start, saved to a per-user config file (0600), and reused forever after — so you paste it into the
-// plugin ONCE. These commands need no plugin and no bridge:
-//   dtwin --token-status   # where it lives, which source wins, its fingerprint — never the token
-//   dtwin --show-token     # print the token itself (stdout only, so `| pbcopy` works)
-//   dtwin --rotate-token   # replace it — you must then re-paste it into the plugin
-//   dtwin --forget-token   # delete it; the next bridge start mints a new one
-//   dtwin --token-file <p> # read the token from <p> for this run instead of the stored one
-//   Precedence: --token-file > FIGMA_BRIDGE_TOKEN > the saved file > mint a new one.
-//   There is no `--token <value>`: argv is world-readable via `ps`, so passing a secret there leaks
-//   it to every other user on the machine. Use --token-file, or the env var.
-//
-// Port:
-//   The bridge listens on 8787. FIGMA_BRIDGE_PORT=8788|8789 runs it on another of the three ports the
-//   plugin tries, e.g. a second bridge beside the MCP server. There is no --port flag, and DTWIN_PORT is not read.
-//
-// The Figma file must be open with the "Design Twin" plugin running.
+// Usage: the USAGE constant below (after the imports) is the reference for every command and flag —
+// it is exactly what `dtwin --help` prints, so the help can never drift from the one place they are
+// documented.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -220,22 +64,181 @@ import type { ReadOptName } from "./read-opts.ts";
 import * as daemon from "./daemon.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
 import { ifDefined, isUnknownArray } from "./json-util.ts";
-import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
+// The package's own package.json, imported (not read by a path at run time, so a compiled binary has it
+// too): `dtwin --version` prints its version.
+import pkg from "../package.json" with { type: "json" };
 
-// --help / -h: print the usage header above and exit 0. Handled in cli() BEFORE server-core is loaded,
-// so help has no side effects at all — no token minted, no port bound. The text is the header comment
-// itself (from "Usage:" down), read back from this file, so the help can never drift from the one
-// place the flags are documented.
+// --help / -h: print USAGE and exit 0. Handled in cli() BEFORE server-core is loaded, so help has no
+// side effects at all — no token minted, no port bound. A constant, not text read back from this file
+// at run time: a compiled `dtwin` binary has no source file beside it to read.
+const USAGE = `Usage:
+Quick start (Figma file open, the "Design Twin" plugin running):
+  dtwin list                        # what is in the file: pages + their top-level LAYERS, with ids
+  dtwin screenshot 12:34            # a reference PNG of one node — look before you pull
+  dtwin pull --node 12:34           # export ONE screen into design/export (tokens, tree, assets)
+  dtwin doctor                      # something not working? checks token, port, daemon, plugin, project
+  More than one Figma file connected? Add --client <fileKey|part of the file name> to every command
+  above that reaches the plugin — see \`dtwin list clients\` for the address book.
+
+Where things land: everything a pull writes goes under design/export/ and nowhere else, so that
+directory can be deleted and re-pulled without touching design/target.json, design/codeconnect.local.json,
+design/plan/ or design/audit/ — the files you own. \`design/README.md\` (written by init) says so too.
+
+Commands (each is shorthand for a flag documented below — the flags keep working unchanged):
+  dtwin pull [outDir] [flags]              = dtwin [outDir] [flags].          See pull --help
+  dtwin list [pages|libraries|clients]     = --list | --list-pages | --list-libraries | --list-clients
+  dtwin list children <id|url>             = --children <id|url>.             See list --help
+  dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>.           See screenshot --help
+  dtwin whoami                             = --whoami
+  dtwin serve | stop | status              = --serve | --stop | --daemon-status
+  dtwin token [status|show|rotate|forget]  = --token-status | --show-token | …  See token --help
+  dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
+  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
+  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help
+  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help
+  dtwin help                               = --help
+  dtwin --version                          print the installed version
+
+  Every command above answers \`--help\` with its own page, and none of them does anything else
+  while doing so.
+  A command is only recognised as the FIRST argument: \`dtwin design\` still pulls into ./design.
+  For an outDir spelled like a command, write \`dtwin pull list\` or \`dtwin ./list\`.
+
+Full reference:
+  dtwin init [--mcp]          # set up the project you are BUILDING: design/, target.json, the bridge
+                              # token, (optionally) .mcp.json — then prints the steps left. See init --help
+  dtwin [outDir]              # full: design-system.json + current-page frames + assets
+  dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
+  dtwin [outDir] --selection  # just the current selection
+  dtwin [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
+  dtwin [outDir] --node <id>  # ONE node, fully exported (properties + assets) — the
+                                           # "paste a Figma link" path. Takes a bare id, dash form,
+                                           # percent-encoded id, or a whole figma.com URL. Unlike
+                                           # --children (peek only) and --screenshot (PNG only) this
+                                           # walks the subtree and exports its assets, same as a
+                                           # --page pull would for that subtree. The CLI twin of the
+                                           # MCP figma_export_url tool.
+  dtwin [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
+                                                  # walk, no assets (the cheap "just the design
+                                                  # system" pull). Each catalogued component/variant
+                                                  # carries its OWN fills/strokes/effects/cornerRadius/
+                                                  # opacity/blendMode (\`visuals\`) — plain synchronous
+                                                  # property reads, not the async cost this mode
+                                                  # exists to avoid. NOTE: this is the component
+                                                  # NODE's own paint (its default/base variant look),
+                                                  # not per-instance overrides elsewhere in the file —
+                                                  # and components consumed from a published library
+                                                  # (not defined in this file) are NOT covered: pull
+                                                  # --as-library on the source library file for those.
+                                                  # Add --variant-visuals for the SET's own variants'
+                                                  # real paint too (see below) — the one read option
+                                                  # this mode accepts.
+  dtwin [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
+                                                  # every variable with full per-mode values, every
+                                                  # style, every component. Run it with the LIBRARY
+                                                  # file open, not the design file that consumes it.
+                                                  # Writes <outDir>/libraries/<slug>-<fileKey8>/ (by
+                                                  # default design/export/libraries/…) and
+                                                  # never touches design-system/.
+  dtwin [outDir] --timeout N  # seconds to wait for the export (default: 300,
+                                           # 900 with --all-pages, 120 for --selection); also
+                                           # raises the list commands' own 300s budget
+
+Optional Tier-1 reads (opt-in — each costs extra Plugin-API work):
+  --css            # Figma's own computed CSS per node (getCSSAsync) — the design-to-code oracle
+  --measurements   # measurement redlines (spacing specs the designer placed) for the exported page(s).
+                   # NOT Dev-Mode-only: per developers.figma.com only add/edit/deleteMeasurement are.
+  --plugin-data    # own-scope plugin data stamped on nodes
+  --motion         # motion/animation reads (timelines, keyframe tracks, animations, styles)
+  --shared-data    # cross-plugin shared data (Tokens Studio applied tokens via getSharedPluginData)
+  --variant-visuals  # walk each COMPONENT_SET's variants and attach their REAL layout/fills/radius/
+                     # tokens (not the set wrapper's own selection-chrome visuals). One node walk
+                     # per variant, so slower on large systems. The ONE read option --design-system
+                     # and --as-library both accept (see below) — it enriches the component catalog
+                     # they build, unlike the others which need a page/node walk neither does.
+
+Look before you pull (cheap RELATIVE to an export — no recursion, no assets, no node properties;
+prints JSON to stdout):
+  dtwin --list         # pages + their top-level frames (ids to deep-pull next).
+                                    # Loads each page (Figma warns loading pages is slow on large
+                                    # files) — cheap next to an export, not free. Use --list-pages
+                                    # if you only need the page names.
+  dtwin --list-pages   # page names only (near-free: does not load any page)
+  dtwin --children <id>  # ONE node's direct children only (peek inside a frame from
+                                       # --list before committing to a full recursive --page pull)
+  dtwin --screenshot <id> [--scale N]  # on-demand PNG of ONE node (a component/instance
+                                       # buried in a dense screen, say) — the visual-validation
+                                       # counterpart to --list/--children. WRITES assets/<id>_ref.png
+                                       # (with --scale: assets/<id>_shot@<N>x.png)
+                                       # (unlike --list/--children, which only print), but is still
+                                       # cheap: it skips serialize() and the recursive asset walk, so
+                                       # exportAsync on the node itself is the only cost. --scale
+                                       # overrides the default (auto, capped at 2048px on the longest
+                                       # side). Mirrors Figma's own get_screenshot tool (single-node,
+                                       # called on demand) rather than pre-rendering every node.
+  dtwin --list-libraries  # which design libraries this file draws on (local + enabled
+                                       # team libraries), their variable collections, and how many
+                                       # of their components this file USES. The discovery step
+                                       # before a pull, exactly as --list is before --page.
+                                       # Honest limits: Figma exposes NO API to enumerate a
+                                       # library's full contents, so component counts are
+                                       # USAGE-derived; and libraries can only be enabled in the
+                                       # Figma UI (never via API), so an export is silently scoped
+                                       # to whatever was enabled at export time. Empty results are
+                                       # a NORMAL outcome (free plan / no library enabled), not a
+                                       # failure — they are reported as such.
+                                       # Requires the plugin manifest's "teamlibrary" permission:
+                                       # RE-IMPORT/reload the plugin in Figma after updating, or a
+                                       # stale plugin silently returns nothing.
+  dtwin --whoami       # who is connected: plugin instance id, file name, whether
+                                    # figma.fileKey is available, socket uptime, and how many times
+                                    # a new connection displaced an earlier one — read from the
+                                    # daemon when one holds the port, so the numbers are real
+                                    # either way. The probe for
+                                    # "can two Figma files use the bridge at once?" — run it from
+                                    # each open file and compare instanceId. Costs nothing (no page
+                                    # load, no node walk, no assets) and writes no files.
+  --json               # machine output for the two that print a TABLE (--list-clients, --list-libraries).
+                       # The others above already print JSON; there it is accepted as a no-op.
+  These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
+  --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
+  --timeout DOES apply to them — to the command AND to the wait for the plugin to connect
+  (default: 10 min at a terminal, 90 s when stderr is not a TTY, e.g. run by an agent).
+
+Speed:
+  --no-assets      # skip the per-node SVG/PNG export pass (the dominant cost on a big file).
+                   # Structure + tokens are unaffected; the manifest reports how many were skipped.
+
+Keep the connection open (daemon):
+  dtwin --serve          # hold the bridge open until stopped. Every command above then
+                                      # routes through it automatically and skips the reconnect.
+  dtwin --stop           # stop it
+  dtwin --daemon-status  # is one running, and is the plugin connected?
+  Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
+  exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
+  Not on Windows yet: there --serve / --stop refuse, nothing shares the bridge, and one MCP session or
+  dtwin command holds it at a time.
+
+The bridge token (auth for the plugin -> bridge handshake). Generated once on the first bridge
+start, saved to a per-user config file (0600), and reused forever after — so you paste it into the
+plugin ONCE. These commands need no plugin and no bridge:
+  dtwin --token-status   # where it lives, which source wins, its fingerprint — never the token
+  dtwin --show-token     # print the token itself (stdout only, so \`| pbcopy\` works)
+  dtwin --rotate-token   # replace it — you must then re-paste it into the plugin
+  dtwin --forget-token   # delete it; the next bridge start mints a new one
+  dtwin --token-file <p> # read the token from <p> for this run instead of the stored one
+  Precedence: --token-file > FIGMA_BRIDGE_TOKEN > the saved file > mint a new one.
+  There is no \`--token <value>\`: argv is world-readable via \`ps\`, so passing a secret there leaks
+  it to every other user on the machine. Use --token-file, or the env var.
+
+Port:
+  The bridge listens on 8787. FIGMA_BRIDGE_PORT=8788|8789 runs it on another of the three ports the
+  plugin tries, e.g. a second bridge beside the MCP server. There is no --port flag, and DTWIN_PORT is not read.
+
+The Figma file must be open with the "Design Twin" plugin running.`;
+
 function usageText(): string {
-  const lines = fs.readFileSync(import.meta.filename, "utf8").split("\n");
-  const start = lines.findIndex((l) => l.startsWith("// Usage:"));
-  const out: string[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i];
-    if (line === undefined || !line.startsWith("//")) break;
-    out.push(line.replace(/^\/\/ ?/, ""));
-  }
-  return "dtwin — pull a design out of a running Figma file (Design Twin plugin) onto disk.\n\n" + out.join("\n");
+  return "dtwin — pull a design out of a running Figma file (Design Twin plugin) onto disk.\n\n" + USAGE;
 }
 
 const plog = (m: string) => console.error("[dtwin] " + m);
@@ -1328,7 +1331,7 @@ async function cli(argv: string[]): Promise<void> {
     }
   }
   if (argv[0] === "--version" || argv[0] === "-v") {
-    console.log((JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version);
+    console.log(pkg.version);
     process.exit(0);
   }
   if (argv.some((a) => a === "--help" || a === "-h")) {
@@ -1382,7 +1385,7 @@ async function cli(argv: string[]): Promise<void> {
 
 // Only actually pull when RUN. Importing this file (test/bridge.test.ts drives parseArgs and
 // writeJson directly) must not open a WebSocket server and sit there waiting for Figma.
-if (import.meta.main ?? isMainFallback(import.meta.url)) await cli(process.argv.slice(2));
+if (import.meta.main) await cli(process.argv.slice(2));
 
 // writeJson is exported for the test suite: it's the ONE place a design-system.json / screen.json
 // actually lands on disk, and the freshness stamp (`exportedAt`/`file`, stamped by the plugin itself —

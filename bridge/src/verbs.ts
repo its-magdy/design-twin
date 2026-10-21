@@ -44,7 +44,7 @@ const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-
 // is the one thing that must never be answered with an error. Every verb has its own page here (or
 // answers through its own entry point, OWN_HELP_ROUTED); only `help` prints the full `dtwin --help`.
 // `dtwin seed` answers its own --help (it is routed before verbHelp runs), and so does
-// `node bridge/src/seed-components.ts --help` — both print this one string.
+// `bun bridge/src/seed-components.ts --help` — both print this one string.
 export const SEED_HELP =
   "dtwin seed [codeRoot] [outDir] [--dry-run]\n\n" +
   "  Pre-populate <outDir>/components.json from the Code Connect files already in your codebase —\n" +

@@ -2,7 +2,7 @@
 // function — no port, no socket file, so this suite can run next to anything. It is fed the way a
 // socket with setEncoding("utf8") feeds it: string chunks cut anywhere.
 // The socket round trips (a real server-core bridge behind a real daemon) live in bridge.test.ts.
-// Run with:  node test/daemon-framing.test.ts
+// Run with:  bun test/daemon-framing.test.ts
 import { PassThrough } from "node:stream";
 import { check, report } from "./assert.ts";
 import { framer } from "../bridge/src/daemon.ts";

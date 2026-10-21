@@ -1,14 +1,14 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
 // figma-mcp — WRITE plane (also exposes read tools).
 // Exposes an MCP server to Claude Code over STDIO, and internally hosts the localhost WebSocket
 // bridge the Figma plugin connects to. Use for code -> design (interactive authoring). For bulk
 // reads prefer the dtwin CLI (files on disk).
 //
 // Run via .mcp.json: { "mcpServers": { "designtwin": { "type":"stdio",
-//   "command":"node", "args":["<abs path>/bridge/dist/figma-mcp.js"] } } }
-// — bridge/dist/figma-mcp.js for an npm install (tsc-emitted), bridge/src/figma-mcp.ts for a repo
-// checkout (Node runs the TypeScript source directly). `dtwin init --mcp` writes whichever one sits
-// beside the dtwin that ran it.
+//   "command":"<abs path to bun>", "args":["--no-install","--no-env-file","<abs path>/bridge/src/figma-mcp.ts"] } } }
+// — Bun runs the TypeScript source directly, for an npm install and a repo checkout alike (the package
+// ships src/; there is no build). `dtwin init --mcp` writes exactly that entry, naming the bun that ran
+// it and the figma-mcp.ts beside it; the two flags are the shebang's (figma-pull.ts says why).
 //
 // ESM TypeScript like the rest of bridge/src/ (the MCP SDK is ESM-only). The bridge core and the other
 // bridge modules are imported directly, typed by their own source.
@@ -592,7 +592,10 @@ const READ_ONLY = { readOnlyHint: true } as const;
 // trigger from a test.
 import { readSnapshotInfo, lastScreenExport } from "./snapshot-meta.ts";
 
-const server = new McpServer({ name: "designtwin", version: "0.1.0" });
+// The version the server reports in its MCP `initialize` answer: the package's own, never a literal that
+// drifts from it.
+import pkg from "../package.json" with { type: "json" };
+const server = new McpServer({ name: "designtwin", version: pkg.version });
 
 server.registerTool(
   "figma_status",
@@ -1035,20 +1038,20 @@ server.registerTool(
 
 // ---------------------------------------------------------------- design-to-code layer (no Figma)
 // These two read the EXPORT ON DISK, not the live file, so they work with no plugin connected and
-// cost nothing. The design-to-code layer is otherwise reachable only by a human typing `node design-to-code/...`
+// cost nothing. The design-to-code layer is otherwise reachable only by a human typing `bun design-to-code/...`
 // — without these the agent has the figma_* tools and no way in, and the map and the codegen skill drift
 // into two different formats. Registering them here is what makes that layer exist for its actual
 // consumer.
 // Loaded LAZILY, on call, and never at module scope. ../../design-to-code/ is a SIBLING of this package
 // root (bridge/), so npm — whose `files` cannot reach outside the package root — does not ship it.
-// Importing it eagerly would take the whole server down with MODULE_NOT_FOUND on an `npm i -g designtwin`
+// Importing it eagerly would take the whole server down with a module-not-found on a `bun add -g designtwin`
 // install, killing the other twelve tools over two that merely cannot work. So the server always
 // starts and only these two report, precisely, that they need the repo checkout.
 // The slice of each layer module this server calls, declared HERE (over doc-types.ts shapes) rather
 // than as `typeof import("../../design-to-code/x.ts")`: even a type-only reference pulls that file and
-// its imports into the bridge program, which tsc rejects (TS6059 — rootDir is bridge/src; see
-// doc-types.ts). So dist/ has no dependency of any kind on the layer — only the dynamic import below,
-// which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult,
+// its imports into the bridge program, and the published package (src/ alone) would then name files it
+// does not ship (see doc-types.ts). So bridge/src has no dependency of any kind on the layer — only the
+// dynamic import below, which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult,
 // design-to-code/drift-lint.ts driftLint() and the validateMap() it re-exports from map-validate.ts;
 // keep them in step (test/mcp-smoke.test.ts checks the real modules still satisfy these at compile time).
 export interface GetComponentModule {
@@ -1068,21 +1071,20 @@ export interface DriftLintModule {
     { coverage: unknown; warnings: Array<{ code: string; message: string }>; catalogsRead: string[] };
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
-  // A file: URL, not a "../" string: tsc's rewriteRelativeImportExtensions wraps a computed relative
-  // specifier in a helper that turns "x.ts" into "x.js" at runtime, and the layer only exists as .ts.
-  const href = new URL("../../design-to-code/" + mod, import.meta.url).href;
-  try {
-    return (await import(href)) as T;
-  } catch (e) {
-    // Only the layer file itself missing means "not in this install". A missing dependency of it also throws
-    // ERR_MODULE_NOT_FOUND, but with that dependency's url; that error, and any other one, is passed on.
-    if ((e as { code?: unknown; url?: unknown }).code !== "ERR_MODULE_NOT_FOUND" || (e as { url?: unknown }).url !== href) throw e;
+  // The layer sits beside bridge/ in a repo checkout and nowhere in the npm package. Whether it is there
+  // is asked of the file system, before the import: the import's own failure cannot say it — a missing
+  // dependency OF the layer fails the same way, and the error's code and url fields differ between
+  // runtimes (Bun reports neither the way Node did). Any error from an import of a file that IS there
+  // is passed on as it is.
+  const url = new URL("../../design-to-code/" + mod, import.meta.url);
+  if (!fs.existsSync(url)) {
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
         `Design Twin repository, not with the published npm package — run this MCP server from a repo ` +
-        `checkout (node bridge/src/figma-mcp.ts) to use it. Everything else on this server works either way.`
+        `checkout (bun bridge/src/figma-mcp.ts) to use it. Everything else on this server works either way.`
     );
   }
+  return (await import(url.href)) as T;
 }
 const getComponent = async (catalogFile: string, handle: string) =>
   (await loadLayer<GetComponentModule>("get-component.ts", "design_get_component")).getComponent(
@@ -1194,7 +1196,7 @@ server.registerTool(
     } catch (e) {
       throw new Error(
         `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +
-          `\`node design-to-code/map-bootstrap.ts <componentsLocal> > ${mapRel}\`.`
+          `\`bun design-to-code/map-bootstrap.ts <componentsLocal> > ${mapRel}\`.`
       );
     }
     const layer = await driftLintLayer();
@@ -1204,7 +1206,7 @@ server.registerTool(
     if (!valid.ok) {
       return errorResult(
         valid.errors.map((e) => `ERROR  [map-invalid] ${mapPath}: ${e.path || "(root)"}: ${e.message}`).join("\n") +
-          `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`node design-to-code/map-validate.ts ${mapPath}\`.`
+          `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`bun design-to-code/map-validate.ts ${mapPath}\`.`
       );
     }
     const catalogFile = componentsLocalPath(a.exportDir);

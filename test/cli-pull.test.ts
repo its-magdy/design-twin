@@ -1,5 +1,5 @@
 // The CLI against a FAKE plugin (timing line, screenshot size, whoami addressing).
-//   node test/cli-pull.test.ts
+//   bun test/cli-pull.test.ts
 // The real `dtwin` process is spawned (it opens its own bridge on FIGMA_BRIDGE_PORT=8789, like a user's
 // direct pull with no daemon running); the plugin side is a plain `ws` client that dials in, says hello and
 // answers each command — the same shape bridge.test.ts fakes. Port 8789 is this suite's alone (bridge.test.ts
@@ -8,8 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import WebSocket from "ws";
-import type { RawData } from "ws";
+import { WsClient } from "./ws-client.ts";
+import type { RawData } from "./ws-client.ts";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply } from "./fixtures.ts";
 import { formatDone } from "../bridge/src/figma-pull.ts";
@@ -29,12 +29,12 @@ interface FakePlugin { opened: Promise<void>; stop(): void }
 /** Dials the bridge (retrying until it listens — the CLI is still starting), announces itself, answers commands. */
 function fakePlugin(hello: { instanceId: string; file: string; fileKey: string }, handlers: Record<string, Handler>, opts: { startAfterMs?: number } = {}): FakePlugin {
   let stopped = false;
-  let ws: WebSocket | null = null;
+  let ws: WsClient | null = null;
   let resolveOpened: () => void = () => {};
   const opened = new Promise<void>((r) => { resolveOpened = r; });
   const dial = () => {
     if (stopped) return;
-    const c = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${TOKEN}`, { origin: "null" });
+    const c = new WsClient(`ws://127.0.0.1:${PORT}/?token=${TOKEN}`, { origin: "null" });
     ws = c;
     c.on("error", () => { /* not listening yet — the close handler redials */ });
     c.on("open", () => { c.send(JSON.stringify({ type: "hello", ...hello, page: "Home", pluginVersion: "0.0.0" })); resolveOpened(); });

@@ -1,5 +1,5 @@
 // CLI help surface: per-verb help pages, the `--out` hint, the port override.
-//   node test/cli-help.test.ts
+//   bun test/cli-help.test.ts
 // No bridge, no plugin and no port: every case is a pure function or a `--help`/`token status` spawn.
 import fs from "node:fs";
 import os from "node:os";

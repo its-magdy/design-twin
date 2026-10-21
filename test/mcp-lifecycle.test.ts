@@ -1,13 +1,14 @@
 // The MCP server's lifecycle (stdin EOF, signals) and the MCP half of the outDir pre-check
 // and the .prev kept on a full spill.
-//   node test/mcp-lifecycle.test.ts
+//   bun test/mcp-lifecycle.test.ts
 // Boots the REAL bridge/src/figma-mcp.ts as a subprocess and speaks MCP's stdio JSON-RPC to it by hand
 // (an SDK client cannot destroy its own stdout pipe or end stdin without the SIGTERM that follows), with
 // a fake plugin on the bridge's WebSocket and raw frames on the daemon socket it serves.
 //
-// Port rule: NOTHING here binds 8787–8789. The server runs under test/fixtures/no-shared-port.mjs, which
-// rewrites its TCP listen to an ephemeral port and prints it (`[no-shared-port] 8789 -> <port>`);
-// FIGMA_BRIDGE_PORT=8789 then only names the daemon socket, which lives under a short per-run TMPDIR
+// Port rule: NOTHING here binds 8787–8789. The server runs with server-core's test seam
+// DT_TEST_EPHEMERAL_PORT=1, which binds the bridge on an ephemeral port and prints it
+// (`[bridge] DT_TEST_EPHEMERAL_PORT: 8789 -> <port>`); FIGMA_BRIDGE_PORT=8789 then only names the daemon
+// socket, which lives under a short per-run TMPDIR
 // (/tmp/dtl-…: a unix socket path is capped at 104 bytes on macOS, and /var/folders/… is too long; Windows
 // has no /tmp, and no daemon socket either, so there it is under os.tmpdir()).
 // HOME (USERPROFILE, APPDATA on Windows) is isolated and the token fixed, so nothing is minted into a real
@@ -19,9 +20,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import WebSocket from "ws";
-import type { RawData } from "ws";
+import { WsClient } from "./ws-client.ts";
+import type { RawData } from "./ws-client.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
@@ -29,8 +29,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
-// As a file: URL — `--import` takes a module specifier, and a bare `D:\…` path reads as the URL scheme `d:` on Windows.
-const PRELOAD = pathToFileURL(path.join(import.meta.dirname, "fixtures", "no-shared-port.mjs")).href;
 const TOKEN = "lifecycle-test-token";
 // Short, and resolved: /tmp is /private/tmp on macOS, and the server's getcwd() is the resolved form.
 const BASE = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "dtl-")));
@@ -97,7 +95,7 @@ interface Server {
 }
 let seq = 0;
 const servers: Server[] = [];
-/** Spawn figma-mcp under the no-shared-port preload. `tmp` defaults to a fresh dir of its own. */
+/** Spawn figma-mcp with its bridge on an ephemeral port (DT_TEST_EPHEMERAL_PORT). `tmp` defaults to a fresh dir of its own. */
 function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: string } = {}): Server {
   const dir = path.join(BASE, "s" + ++seq);
   const home = path.join(dir, "home");
@@ -111,9 +109,9 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   // USERPROFILE (os.homedir), TEMP / TMP (os.tmpdir), APPDATA (token-store's config dir) on Windows.
   Object.assign(env, {
     HOME: home, USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), TMPDIR: tmp, TEMP: tmp, TMP: tmp,
-    FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "",
+    FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "", DT_TEST_EPHEMERAL_PORT: "1",
   }, opts.env ?? {});
-  const p = spawn(process.execPath, ["--import", PRELOAD, MCP], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
+  const p = spawn(process.execPath, [MCP], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
   let err = "";
   let exit: Exit | null = null;
   p.stderr.setEncoding("utf8");
@@ -153,7 +151,7 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
     sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp }),
     err: () => err,
     exit: () => exit,
-    wsPort: () => { const m = /\[no-shared-port\] 8789 -> (\d+)/.exec(err); return m ? Number(m[1]) : null; },
+    wsPort: () => { const m = /\[bridge\] DT_TEST_EPHEMERAL_PORT: 8789 -> (\d+)/.exec(err); return m ? Number(m[1]) : null; },
     rpc,
     call: async (name, args, ms) => {
       const r = await rpc("tools/call", { name, arguments: args }, ms);
@@ -186,7 +184,7 @@ async function initialize(s: Server): Promise<boolean> {
 
 // ---------------------------------------------------------------- a fake plugin
 interface Frame { m: Record<string, unknown>; at: number }
-interface Plugin { ws: WebSocket; frames: Frame[]; hang: boolean; full: (() => object) | null; close(): void }
+interface Plugin { ws: WsClient; frames: Frame[]; hang: boolean; full: (() => object) | null; close(): void }
 const screenReply = () => ({
   screenName: "Sample",
   screen: { exportedAt: "2026-10-01T00:00:00.000Z", screen: "Sample", manifest: { nodes: 1 }, nodes: [{ id: "9:1", name: "Sample", type: "FRAME", box: { x: 0, y: 0, w: 100, h: 100 } }] },
@@ -194,7 +192,7 @@ const screenReply = () => ({
   assets: [],
 });
 async function fakePlugin(port: number): Promise<Plugin> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+  const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
   await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
   ws.on("error", () => { /* the server went away */ });
   const pl: Plugin = { ws, frames: [], hang: false, full: null, close: () => { try { ws.terminate(); } catch { /* gone */ } } };

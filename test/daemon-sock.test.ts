@@ -286,6 +286,40 @@ if (uid === undefined) {
     check("a regular file at the old location is not a daemon", daemon.legacySock(8790, place) === null);
   }
 
+  // Socket path length (daemon.ts "Length"). macOS holds a socket path to 103 bytes, and a path over it is
+  // refused by sockPath with the fix named — not left to the running Bun (a recent one binds it through the
+  // directory, an older one fails ENAMETOOLONG; Node silently bound a truncated path). Linux has no limit
+  // to hold to: Bun binds and connects any length through /proc/self/fd.
+  {
+    const long = "/" + "d".repeat(90) + "/designtwin-8789.sock";
+    check("length: on macOS a socket path over 103 bytes is refused, naming its length, the limit and the fix",
+      /it is 112 bytes, and a Unix socket path on macOS is limited to 103\. Point XDG_RUNTIME_DIR or TMPDIR at a shorter directory/.test(daemon.sockLengthProblem(long, "darwin") ?? ""));
+    check("length: 103 bytes is still fine on macOS", daemon.sockLengthProblem("/" + "d".repeat(81) + "/designtwin-8789.sock", "darwin") === null);
+    check("length: Linux (and the rest) hold no limit", daemon.sockLengthProblem(long, "linux") === null);
+    if (uid !== undefined) {
+      const deep = path.join(fs.mkdtempSync(path.join(base, "len-")), "x".repeat(110));
+      fs.mkdirSync(deep, { mode: 0o700 });
+      const darwinPlace: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: deep }, tmpdir: deep, platform: "darwin" };
+      check("length: sockPath refuses an over-long macOS path, and sockProblem reports it for doctor",
+        (() => { try { daemon.sockPath(8790, darwinPlace); return false; } catch (e) { return /a Unix socket path on macOS is limited to 103/.test(String(e)); } })()
+        && /limited to 103/.test(daemon.sockProblem(8790, darwinPlace) ?? ""));
+      if (process.platform === "linux") {
+        // The real thing on Linux: a daemon socket at a path past sun_path's 108 bytes is bound and found.
+        const place: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: deep }, tmpdir: deep };
+        const sock = daemon.sockPath(8790, place);
+        const fake = net.createServer((c) => {
+          c.setEncoding("utf8");
+          c.on("data", daemon.framer(() => { c.write(JSON.stringify({ ok: true, result: { daemon: true, pid: 1, port: 8790 } }) + "\n"); }));
+        });
+        await new Promise<void>((r) => fake.listen(sock, () => r()));
+        const conn = await daemon.connect(8790, place);
+        check(`length: on Linux a ${Buffer.byteLength(sock)}-byte socket path (over sun_path's 108) is bound and a daemon there is found`,
+          Buffer.byteLength(sock) > 108 && conn !== null && fs.existsSync(sock));
+        await new Promise<void>((r) => fake.close(() => r()));
+      }
+    }
+  }
+
   fs.rmSync(base, { recursive: true, force: true });
   report();
 }
