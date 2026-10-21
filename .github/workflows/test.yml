@@ -80,11 +80,12 @@ jobs:
       # the visual e2e); locally they skip when no browser is installed, in CI they must run.
       # https://playwright.dev/docs/ci — in the background, overlapping the checks below; its failure fails the `wait`. Not
       # cached: that page advises against it (restoring takes about as long as downloading). bunx runs the playwright
-      # bin bun install just linked (node_modules/.bin), so the browser matches the locked playwright version.
+      # bin bun install just linked (node_modules/.bin), so the browser matches the locked playwright version; --bun runs
+      # that bin on Bun — bunx otherwise honours its `#!/usr/bin/env node` shebang and starts whatever node is on PATH.
       - name: Install Playwright's chromium
         id: chromium
         background: true
-        run: bunx playwright install --with-deps chromium
+        run: bunx --bun playwright install --with-deps chromium
 
       - name: Typecheck
         if: matrix.leg == 'fast'

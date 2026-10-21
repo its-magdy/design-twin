@@ -282,7 +282,7 @@ function summary(results: readonly Result[], t0: number, fast: boolean): number 
   }
   if (skipped.length) {
     console.log(`SKIPPED (no playwright): ${skipped.map((r) => r.name).join(", ")}`);
-    console.log("  warning: CI runs these — install a browser to run them here: bunx playwright install chromium");
+    console.log("  warning: CI runs these — install a browser to run them here: bunx --bun playwright install chromium");
   }
   if (fast) console.log(`\n--fast: skipped ${fastSkipped.length} of the probe e2e suites (${fastSkipped.map((r) => r.name).join(", ") || "none picked"}) — this is NOT the full suite: run \`bun run test\` before committing; CI's other matrix legs run them`);
   return failed.length || interruptedNotRun.length ? 1 : 0;

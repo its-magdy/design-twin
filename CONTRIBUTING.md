@@ -11,7 +11,7 @@ You need [Bun](https://bun.sh/install) 1.4.2+ and git (no Node: every script, su
 git clone https://github.com/its-magdy/design-twin.git
 cd design-twin
 bun install --frozen-lockfile
-bunx playwright install chromium   # the browser suites; without it they are skipped locally
+bunx --bun playwright install chromium   # the browser suites; without it they are skipped locally
 ```
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit, [bridge/README.md](bridge/README.md) covers the
