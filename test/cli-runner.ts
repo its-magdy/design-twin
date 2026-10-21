@@ -7,11 +7,13 @@
 // A Bun child costs ~30 ms of start-up, most of a CLI-heavy suite's time. So the first `spawnFirst` runs of a runner (and
 // further runs, a few at most, until one has exited 0) are real children (proc.ts runSync: the CLI end to end — argv, the exit code after the output, the streams), and every
 // later run calls the module's main(argv) inside the suite's process (test/in-process.ts runMainSync: the same argv, cwd,
-// stdout/stderr and exit code, process.exit turned into a return). An in-process run whose non-zero exit code no child of
-// this runner has produced yet is then run again as a child, and the child's result is the one returned — so every exit
-// code a suite meets comes from a real process at least once. Re-running is safe for what ends non-zero here (a usage
-// error, a refusal, a failed check: nothing or the same files written); a child whose code differs from the in-process
-// run's throws, naming both — pass { spawn: true } for a call that cannot run twice.
+// stdout/stderr and exit code, process.exit turned into a return). An in-process run is then run again as a child, and the
+// child's result is the one returned, when its exit code — 0 included — is one no child of this runner has produced yet
+// (so every exit code a suite meets comes from a real process at least once), and whenever main THREW (an uncaught error
+// is exit 1 with a stack: a crash in-process — state another check left in this process, say — must not pass for the
+// exit 1 a child gave earlier for a real reason; the child shows whether the CLI really crashes). Re-running is safe for
+// what ends that way here (a usage error, a refusal, a failed check: nothing or the same files written); a child whose
+// code differs from the in-process run's throws, naming both — pass { spawn: true } for a call that cannot run twice.
 // Always a real child: `spawn: true`, an `env` or `input` of its own (main() would see this process's), the runner's
 // `spawnIf(args)` (a mode whose main returns a Promise, which cannot run synchronously; a main that returns one anyway is
 // an error of the suite, thrown), and every run under DT_SPAWN=1 (the whole surface as children, e.g. to bisect a
@@ -46,9 +48,11 @@ export function cliRunner(script: string, main: Main | null,
   return (args, o = {}) => {
     if (main === null || SPAWN_ALL || o.spawn || o.env !== undefined || o.input !== undefined || spawnIf?.(args) === true
       || s.spawned < spawnFirst || (!s.codes.has(0) && s.spawned < spawnFirst + 6)) return child(args, o); // exit 0 from a child too
-    let promised = false;
+    let promised = false, threw = false;
     const r = runMainSync((argv) => {
-      const v = main(argv);
+      let v: number | Promise<number>;
+      // process.exit(n) reaches here as a throw too (runMainSync's Exit): that is an exit, not a crash
+      try { v = main(argv); } catch (e) { threw = !(e instanceof Error && e.constructor.name === "Exit" && /^process\.exit\(/.test(e.message)); throw e; }
       if (typeof v === "number") return v;
       promised = true;
       v.catch(() => undefined);
@@ -56,9 +60,10 @@ export function cliRunner(script: string, main: Main | null,
     }, args, o.cwd !== undefined ? { cwd: o.cwd } : {});
     if (promised) throw new Error(`cli-runner: ${label} ${args.join(" ")} returned a Promise in-process — spawn that mode (spawnIf)`);
     s.inProc++;
-    if (r.status === 0 || s.codes.has(r.status)) return { status: r.status, stdout: r.out, stderr: r.err };
+    if (!threw && s.codes.has(r.status)) return { status: r.status, stdout: r.out, stderr: r.err };
     const c = child(args, o);
-    if (c.status !== r.status) throw new Error(`cli-runner: ${label} ${args.join(" ")} exited ${r.status} in-process but ${c.status} as a child (re-run) — pass { spawn: true } for this call\n${c.stderr}`);
+    const how = threw ? ` (main threw: ${r.err.trim().split("\n")[0] ?? ""})` : "";
+    if (c.status !== r.status) throw new Error(`cli-runner: ${label} ${args.join(" ")} exited ${r.status} in-process${how} but ${c.status} as a child (re-run) — pass { spawn: true } for this call\n${c.stderr}`);
     return c;
   };
 }

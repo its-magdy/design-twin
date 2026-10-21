@@ -377,39 +377,26 @@ var BUN_DEPS = /* @__PURE__ */ new Set([
 var NPM_VALUED = /* @__PURE__ */ new Set(["--prefix", "-C", "--workspace", "-w", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--registry", "--tag", "--omit", "--include", "--before", "--otp", "--scope"]);
 var PNPM_VALUED = /* @__PURE__ */ new Set(["-C", "--dir", "--filter", "-F", "--loglevel", "--reporter", "--registry", "--store-dir"]);
 var YARN_VALUED = /* @__PURE__ */ new Set(["--cwd", "--cache-folder", "--modules-folder", "--global-folder", "--registry", "--network-timeout"]);
-var BUN_VALUED = /* @__PURE__ */ new Set([
-  "--cwd",
-  "--config",
-  "-c",
-  "-e",
-  "--eval",
-  "-p",
-  "--print",
-  "--env-file",
-  "--preload",
-  "-r",
-  "--require",
-  "--import",
-  "--tsconfig-override",
-  "--install",
-  "--conditions",
-  "--main-fields",
-  "--define",
-  "-d",
-  "--loader",
-  "-l",
-  "--port",
-  "--console-depth",
-  "--title",
-  "--elide-lines",
-  "--filter",
-  "-F",
-  "--shell",
-  "--user-agent",
-  "--dns-result-order",
-  "--unhandled-rejections"
+var BUN_BOOLEAN = /* @__PURE__ */ new Set([
+  "--no-install",
+  "--no-env-file",
+  "--bun",
+  "-b",
+  "--smol",
+  "--hot",
+  "--watch",
+  "--no-clear-screen",
+  "--if-present",
+  "--silent",
+  "--prefer-offline",
+  "--prefer-latest",
+  "--no-macros",
+  "--preserve-symlinks",
+  "-i"
 ]);
-var NPX_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
+var NPX_BOOLEAN = /* @__PURE__ */ new Set(["--yes", "-y", "--no", "--no-install", "--bun", "-b", "--silent", "--quiet", "-q", "--verbose", "--prefer-offline", "--prefer-online", "--offline"]);
+var PM_BOOLEAN = /* @__PURE__ */ new Set(["--silent", "-s", "--quiet", "-q", "--verbose", "--yes", "-y", "--global", "-g", "--offline", "--prefer-offline", "--frozen-lockfile", "--no-color"]);
+var PACKAGE_MANAGERS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "npx", "pnpx", "bunx"]);
 var PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 var PID_LOOKUPS = /* @__PURE__ */ new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
 var PS_LOOKUPS = /* @__PURE__ */ new Set(["get-process", "gps", "get-nettcpconnection", "get-netudpconnection", "get-ciminstance", "get-wmiobject", "netstat", "tasklist"]);
@@ -489,6 +476,7 @@ function killsEverything(args) {
 var REASON = {
   kill: "pattern kills (pkill, killall, fuser -k, taskkill /IM, Stop-Process -Name / Get-Process \u2026 | Stop-Process, a kill fed by pgrep/pidof/lsof/ps, kill -1 / kill 0) take down the user's own servers and editors. Close only what you opened: stop only a PID you started and recorded (`kill <pid>`) \u2014 its whole tree with `kill -- -<pgid>` (the process group you started) or its children with `pkill -P <pid>` \u2014 and reuse a dev server the user already runs (PowerShell: `Stop-Process -Id <pid>`).",
   install: "installing or reinstalling dependencies is the user's call, never the verifier's \u2014 and `npm ci`/`npm install` clear node_modules/.cache, the live status and your staged evidence with it. Write status `blocked` with the command as the detail and hand it back to the caller.",
+  upgrade: "`bun upgrade` replaces the user's own bun \u2014 the one every project and tool of theirs runs on \u2014 and is the user's call, never the verifier's. Write status `blocked` with the command as the detail and hand it back to the caller.",
   playwright: `installing Playwright or its browsers is the user's call (it edits the project's dependencies and downloads ~150 MB). No usable renderer (\`${scriptCmd("verify-probe")} --check\` exit 3): stop and ask the user, with the install line the probe printed and its cost.`,
   sandbox: 'a permission denial is not a sandbox violation: never bypass the sandbox. Retry a transient no-verdict denial unchanged (at most twice); otherwise write status `blocked` and hand back "blocked on permissions: done / remaining" with a narrow allow rule for the owner to add.',
   migrate: "`verify-screen --migrate` renames verify sets and rewrites the plans in design/plan/ \u2014 the caller's call, never the verifier's. Name the legacy-named set (and its node id) in your hand-back instead."
@@ -551,36 +539,52 @@ function commandVerdict(cmd, line, depth, ps) {
     return null;
   }
   if (p === "npm") {
-    const s = firstArg(words, 1, NPM_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (NPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "exec" || sub === "x") return npxVerdict(words, s + 1);
+    for (const s of pmTargets(words, NPM_VALUED)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (NPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "exec" || sub === "x") {
+        const v = npxVerdict(words, s + 1, line, depth, ps);
+        if (v) return v;
+      }
+    }
     return null;
   }
-  if (p === "npx" || p === "pnpx" || p === "bunx") return npxVerdict(words, 1);
+  if (p === "npx" || p === "pnpx" || p === "bunx") return npxVerdict(words, 1, line, depth, ps);
   if (p === "pnpm") {
-    const s = firstArg(words, 1, PNPM_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (PNPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "dlx" || sub === "exec" || sub === "x") return npxVerdict(words, s + 1);
-    return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+    for (const s of pmTargets(words, PNPM_VALUED)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (PNPM_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "dlx" || sub === "exec" || sub === "x") {
+        const v = npxVerdict(words, s + 1, line, depth, ps);
+        if (v) return v;
+      }
+      if (PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    }
+    return null;
   }
   if (p === "yarn") {
-    let s = firstArg(words, 1, YARN_VALUED);
-    if ((words[s] ?? "").toLowerCase() === "workspace" && s + 2 < words.length) s += 2;
-    const sub = (words[s] ?? "").toLowerCase();
-    if (s >= words.length && !args.some((a) => /^(-v|--version|-h|--help)$/.test(a))) return REASON.install;
-    if (YARN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "dlx" || sub === "exec") return npxVerdict(words, s + 1);
-    return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+    if (firstArg(words, 1, YARN_VALUED) >= words.length && !args.some((a) => /^(-v|--version|-h|--help)$/.test(a))) return REASON.install;
+    for (let s of pmTargets(words, YARN_VALUED)) {
+      if ((words[s] ?? "").toLowerCase() === "workspace" && s + 2 < words.length) s += 2;
+      const sub = (words[s] ?? "").toLowerCase();
+      if (YARN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "dlx" || sub === "exec") {
+        const v = npxVerdict(words, s + 1, line, depth, ps);
+        if (v) return v;
+      }
+      if (PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    }
+    return null;
   }
   if (p === "bun") {
-    for (const s of bunSubcommands(words)) {
+    for (let k = 1; k < words.length; k++) if (runsPlaywrightCli(words, k)) return REASON.playwright;
+    for (const s of bunTargets(words, 1, BUN_BOOLEAN)) {
       const sub = (words[s] ?? "").toLowerCase();
       if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "upgrade") return REASON.upgrade;
       if (sub === "pm" && (words[firstArg(words, s + 1)] ?? "").toLowerCase() === "trust") return REASON.install;
       if (sub === "x") {
-        const v = npxVerdict(words, s + 1);
+        const v = npxVerdict(words, s + 1, line, depth, ps);
         if (v) return v;
         continue;
       }
@@ -591,37 +595,65 @@ function commandVerdict(cmd, line, depth, ps) {
         }
         continue;
       }
-      const t = sub === "run" ? firstArg(words, s + 1, BUN_VALUED) : s;
-      if (runsPlaywrightCli(words, t)) return REASON.playwright;
+      for (const t of sub === "run" ? bunTargets(words, s + 1, BUN_BOOLEAN) : [s]) {
+        const v = packageManagerVerdict(words, t, line, depth, ps);
+        if (v) return v;
+      }
     }
     return null;
   }
   if (PLAYWRIGHT_PKG.test(p) && playwrightInstall(words, 1)) return REASON.playwright;
-  if (p === "node" && runsPlaywrightCli(words, firstArg(words, 1))) return REASON.playwright;
+  if (p === "node") {
+    for (let k = 1; k < words.length; k++) if (runsPlaywrightCli(words, k)) return REASON.playwright;
+  }
   return null;
 }
 var createsPlaywright = (words, s) => {
   const sub = (words[s] ?? "").toLowerCase();
   return (sub === "init" || sub === "innit" || sub === "create" || sub === "c") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
 };
-function bunSubcommands(words) {
-  const byValue = firstArg(words, 1, BUN_VALUED);
-  let bare = 1;
-  while (bare < words.length && (words[bare] ?? "").startsWith("-") && words[bare] !== "--") bare++;
-  if (words[bare] === "--") bare++;
-  return byValue === bare ? [byValue] : [byValue, bare];
+function bunTargets(words, from, booleans) {
+  const out = [];
+  const option = (w) => w.startsWith("-") && w !== "-";
+  for (let i = from; i < words.length; i++) {
+    const w = words[i] ?? "";
+    if (w === "--") {
+      if (i + 1 < words.length) out.push(i + 1);
+      break;
+    }
+    if (option(w)) continue;
+    out.push(i);
+    const prev = words[i - 1] ?? "";
+    if (i > from && option(prev) && !prev.includes("=") && !booleans.has(prev)) continue;
+    break;
+  }
+  return out;
+}
+function pmTargets(words, valued) {
+  const first = firstArg(words, 1, valued);
+  return [.../* @__PURE__ */ new Set([...first < words.length ? [first] : [], ...bunTargets(words, 1, PM_BOOLEAN)])];
+}
+function packageManagerVerdict(words, t, line, depth, ps) {
+  const w = (words[t] ?? "").toLowerCase();
+  const name = prog(/^@/.test(w) ? w : w.replace(/@.*$/, ""));
+  if (!PACKAGE_MANAGERS.has(name) || depth >= 4) return null;
+  return commandVerdict([name, ...words.slice(t + 1)], line, depth + 1, ps);
 }
 function runsPlaywrightCli(words, s) {
   const w = words[s] ?? "";
   return (PLAYWRIGHT_PKG.test(w.toLowerCase()) || PLAYWRIGHT_PKG.test(prog(w)) || PLAYWRIGHT_CLI.test(w)) && playwrightInstall(words, s + 1);
 }
-function npxVerdict(words, from) {
+function npxVerdict(words, from, line, depth, ps) {
   const c = words.findIndex((w, k) => k >= from && (w === "-c" || w === "--call"));
-  if (c >= 0 && words[c + 1] !== void 0) return bashVerdict(words[c + 1] ?? "", 1);
-  const s = firstArg(words, from, NPX_VALUED);
-  const pkg = (words[s] ?? "").toLowerCase();
-  if (/^create-playwright(@.*)?$/.test(pkg)) return REASON.playwright;
-  return PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
+  if (c >= 0 && words[c + 1] !== void 0) return depth < 4 ? bashVerdict(words[c + 1] ?? "", depth + 1, ps) : null;
+  for (const s of bunTargets(words, from, NPX_BOOLEAN)) {
+    const pkg = (words[s] ?? "").toLowerCase();
+    if (/^create-playwright(@.*)?$/.test(pkg)) return REASON.playwright;
+    if (PLAYWRIGHT_PKG.test(pkg) && playwrightInstall(words, s + 1)) return REASON.playwright;
+    const v = packageManagerVerdict(words, s, line, depth, ps);
+    if (v) return v;
+  }
+  return null;
 }
 function bashVerdict(command, depth = 0, ps = false) {
   for (const cmd of simpleCommands(command, { powershell: ps })) {
@@ -684,7 +716,7 @@ var USAGE = [
   "",
   "Refuses, for the designtwin:visual-verifier subagent only: a file write outside design/verify/ and the run cache",
   "(node_modules/.cache/designtwin-verify/), or to a tool-owned file in design/verify/; a pattern kill (pkill, killall, \u2026);",
-  "a dependency install or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
+  "a dependency install, `bun upgrade` or a Playwright browser install; a Bash or PowerShell call with dangerouslyDisableSandbox;",
   "verify-screen --migrate (it renames verify sets and rewrites plans).",
   "(A PowerShell call is judged like a Bash one; as for Bash, the files a command writes are not read.)",
   'A refusal is {"hookSpecificOutput":{"permissionDecision":"deny",\u2026}} on stdout; every answer exits 0.',

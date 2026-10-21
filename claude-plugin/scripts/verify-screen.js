@@ -100,8 +100,8 @@ function syncOnce(cmd, args, o, attempt) {
   const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024 };
   const stdin = o.input !== void 0 ? "pipe" : "ignore";
   const done = (s, stdout, stderr) => ({
-    status: s.status,
-    signal: s.signal,
+    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
+    signal: s.signal ?? null,
     stdout,
     stderr,
     ms: Date.now() - t0,
@@ -110,19 +110,27 @@ function syncOnce(cmd, args, o, attempt) {
     timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
     attempts: attempt
   });
+  const piped = () => {
+    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
+    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
+    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  };
   let dir = null;
   if (o.capture !== "pipe") try {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
   } catch {
   }
-  if (dir === null) {
-    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
-    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
-    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
-  }
+  if (dir === null) return piped();
   const outF = path.join(dir, "out"), errF = path.join(dir, "err");
   try {
-    const out = fs.openSync(outF, "wx+"), err = fs.openSync(errF, "wx+");
+    let out = null, err = null;
+    try {
+      out = fs.openSync(outF, "wx+");
+      err = fs.openSync(errF, "wx+");
+    } catch {
+      if (out !== null) fs.closeSync(out);
+      return piped();
+    }
     let s;
     try {
       s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
@@ -143,7 +151,7 @@ function runSync(cmd, args, o = {}) {
   const valid = (r3) => o.expect === void 0 ? true : o.expect === "stdout" ? r3.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r3.stdout) || o.expect.test(r3.stderr) : o.expect(r3);
   let r = syncOnce(cmd, args, o, 1);
   if (!valid(r) && r.status === 0 && !r.error) {
-    process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
 `);
     r = syncOnce(cmd, args, o, 2);
   }
@@ -195,11 +203,12 @@ function fileHashes(files, cwd, cached) {
   }
   return out;
 }
+var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
 function gitHead(cwd) {
   try {
-    const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: /^[0-9a-f]{40}\s*$/ });
+    const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
     const h = r.status === 0 && r.stdout.trim();
-    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+    return h && OBJECT_ID_LINE.test(h) ? h : null;
   } catch {
     return null;
   }

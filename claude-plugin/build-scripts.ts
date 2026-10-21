@@ -44,11 +44,23 @@ function inlinedCliGuard(entry: string): Plugin {
   };
 }
 
+// The file mode is part of the output too: a bundle whose source starts with a shebang (esbuild keeps it on line 1 —
+// design-diff's `#!/usr/bin/env -S bun --no-install --no-env-file`) is executable (0755), every other one is not (0644),
+// whatever mode a previous build or a checkout left — so the committed scripts/ and a rebuild agree on the exec bit
+// (test/verify-build.test.ts compares both). Not on Windows, which has no such bit.
+function setMode(file: string): void {
+  if (process.platform === "win32") return;
+  const fd = fs.openSync(file, "r");
+  const head = Buffer.alloc(2);
+  try { fs.readSync(fd, head, 0, 2, 0); } finally { fs.closeSync(fd); }
+  fs.chmodSync(file, head.toString("latin1") === "#!" ? 0o755 : 0o644);
+}
+
 function build(outDir: string): Promise<BuildResult[]> {
   fs.mkdirSync(outDir, { recursive: true });
-  return Promise.all(ENTRIES.map((n) => {
+  return Promise.all(ENTRIES.map(async (n) => {
     const entry = path.resolve(SRC, n + ".ts");
-    return esbuild.build({
+    const result = await esbuild.build({
       entryPoints: [entry],
       outdir: outDir,
       // esbuild writes each inlined module's path (relative to the working dir) into the output as a
@@ -65,6 +77,8 @@ function build(outDir: string): Promise<BuildResult[]> {
       plugins: [inlinedCliGuard(entry)],
       logLevel: "silent",
     });
+    setMode(path.join(outDir, n + ".js"));
+    return result;
   }));
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
 // design-diff.ts — what CHANGED between two exports of the same screen (or the same token file).
 //
 // A re-pull overwrites the export in place, and "the designer changed the header" then has no answer
@@ -532,9 +532,10 @@ function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: str
 
 /** The bytes `rel` (relative to cwd, `/`-separated) has in HEAD, or null: not a repo, not committed, no git. Captured
  *  through a file (proc.ts runSync): an exit-0 run with no bytes (Bun #46142) is run once more before it counts, and a
- *  blob that is still empty then is not taken for a committed copy — an export or an asset is never an empty file. */
+ *  blob that is still empty then is not taken for a committed copy — an export or an asset is never an empty file. That
+ *  re-run is expected here (a committed empty file is ordinary), so it is quiet: no `[spawn-helper]` line on the user's stderr. */
 function gitShowHead(cwd: string, rel: string): Buffer | null {
-  const r = runSync("git", ["show", "HEAD:./" + rel], { cwd, binary: true, expect: "stdout", timeoutMs: 60_000 });
+  const r = runSync("git", ["show", "HEAD:./" + rel], { cwd, binary: true, expect: "stdout", quiet: true, timeoutMs: 60_000 });
   return r.status === 0 && !r.lost && r.stdoutBytes ? r.stdoutBytes : null;
 }
 
