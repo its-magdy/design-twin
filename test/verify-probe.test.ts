@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { runSync } from "../design-to-code/proc.ts";
+import { runAsync, runSync } from "../design-to-code/proc.ts";
 import type { ProcResult } from "../design-to-code/proc.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import * as VSH from "../design-to-code/verify-shared.ts";
@@ -390,11 +390,41 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   t("only playwright-core → playwright-core", () => rc.ok && rc.pkg === "playwright-core");
   const none = project("none", []);
   const rn = resolvePlaywright(none);
-  // under a bare `bun` (this suite) the project's require answers a package the project lacks from Bun's auto-install cache
-  // (downloaded from npm): each is then named as resolved outside the project and never loaded — "not installed" otherwise
-  t("nothing installed → not ok, the reason names <project>/package.json and the hint is the npm install command", () =>
+  // none of them on disk in the project: each is "not installed" without being resolved at all (a resolve is what would
+  // download it — Bun's auto-install — or find a NODE_PATH / global copy, which is not the project's either)
+  t("nothing installed → not ok, the reason names <project>/package.json, each package is `not installed`, and the hint is the npm install command", () =>
     !rn.ok && rn.reason.includes(path.join(none, "package.json")) && rn.hint === "npm i -D playwright && npx playwright install chromium"
-    && ["playwright", "@playwright/test", "playwright-core"].every((n) => rn.reason.includes(`${n}: not installed`) || rn.reason.includes(`${n}: resolved outside the project's node_modules`)));
+    && ["playwright", "@playwright/test", "playwright-core"].every((n) => rn.reason.includes(`${n}: not installed`)) && !rn.reason.includes("resolved outside"));
+  {
+    // The download itself, not just its answer, must never happen: a bun with auto-install ON (no --no-install, no BUN_OPTIONS,
+    // started outside this repo so its bunfig's `auto = "disable"` does not apply, an empty install cache) resolving
+    // Playwright and axe-core for a project that has neither, against a stand-in registry that records every request.
+    // Resolving them first and refusing the answer after (the check this replaced) sent 3 package requests here.
+    const hits: string[] = [];
+    const registry = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req) => { hits.push(new URL(req.url).pathname); return new Response("{}", { status: 404 }); } });
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dt-probe-noinstall-"));
+    const env: NodeJS.ProcessEnv = { ...process.env, BUN_CONFIG_REGISTRY: `http://127.0.0.1:${registry.port}/`, npm_config_registry: `http://127.0.0.1:${registry.port}/`, BUN_INSTALL_CACHE_DIR: path.join(cwd, "cache") };
+    delete env.BUN_OPTIONS;
+    const src = `const m = await import(${JSON.stringify(path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts"))});`
+      + ` console.log(JSON.stringify({ pw: m.resolvePlaywright(${JSON.stringify(none)}), axe: m.resolveAxe(${JSON.stringify(none)}) }));`;
+    const { done } = runAsync(process.execPath, ["-e", src], { cwd, env, timeoutMs: 60_000 });
+    const r = await done;
+    void registry.stop(true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+    const out: unknown = (() => { try { return JSON.parse(r.stdout) as unknown; } catch { return null; } })();
+    t(`a bun with auto-install on asks the registry for nothing: a package the project lacks is never resolved (requests: ${JSON.stringify(hits)}; exit ${r.status})`,
+      () => r.status === 0 && hits.length === 0 && JSON.stringify(out).includes("playwright: not installed") && JSON.stringify(out).includes("axe-core not installed in the project"));
+  }
+  {
+    // packageDirInProject: what is looked at before anything is resolved
+    const pdp = (VP as Partial<typeof VP>).packageDirInProject;
+    const nested = path.join(onlyTest, "apps", "web");
+    fs.mkdirSync(path.join(nested, "node_modules", "playwright"), { recursive: true }); // a directory with no package.json: not a package
+    t("packageDirInProject: <dir>/node_modules/<name> with a package.json, from the project up through its ancestors; none → null",
+      () => pdp !== undefined && pdp(onlyTest, "@playwright/test") === path.join(onlyTest, "node_modules", "@playwright", "test")
+        && pdp(nested, "@playwright/test") === path.join(onlyTest, "node_modules", "@playwright", "test")
+        && pdp(nested, "playwright") === null && pdp(none, "playwright") === null);
+  }
   {
     // installedInProject: the guard every resolved package passes before it is loaded
     const ws = path.join(tmp, "ws"), app = path.join(ws, "apps", "web"), store = path.join(ws, "node_modules", ".pnpm", "axe-core@4.0.0", "node_modules", "axe-core");

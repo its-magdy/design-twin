@@ -12,10 +12,12 @@
 //
 // Playwright is the PROJECT's: resolved with createRequire(<project>/package.json) — playwright, then
 // @playwright/test, then playwright-core — never bundled, never installed, and no browser is ever
-// downloaded by this script. Its types are `import type` only (erased from the bundle). A package that resolves
-// anywhere but a node_modules/<name> of the project or an ancestor (installedInProject) is not loaded: Bun resolves a
-// package the project does not have by installing it from npm into its global cache (auto-install) — the hooks and
-// skills run this script with `bun --no-install`, and this check holds even when a caller forgets the flag.
+// downloaded by this script. Its types are `import type` only (erased from the bundle). A package is only resolved once a
+// node_modules/<name>/package.json of the project or an ancestor is on disk (packageDirInProject): asked for a package the
+// project does not have, Bun's resolver installs it from npm into its global cache (auto-install) — a download, before any
+// check on the answer could refuse it. The hooks and skills run this script with `bun --no-install`; the look-before-resolve
+// holds even when a caller forgets the flag, and what does resolve must still be inside that node_modules/<name>
+// (installedInProject), or it is not loaded.
 //
 // The whole run is bounded (--max-time: a page whose script never yields would hang the verifier for good).
 // Every measurement belongs to a run, named in the measured file: --run <id>'s, else one the probe starts itself and
@@ -119,12 +121,24 @@ export function projectRequire(dir: string): ReturnType<typeof createRequire> {
   return createRequire(path.join(path.resolve(dir), "package.json"));
 }
 
+/** The first <d>/node_modules/<name> holding a package.json, for the project dir and then each ancestor — the directories
+ *  the resolution walks (a workspace root's hoisted copy counts) — or null: the project does not have `name`. Asked BEFORE
+ *  the project's require resolves `name`, because resolving is what downloads: Bun answers a package that no node_modules
+ *  of the project has by installing it from npm into its global cache (auto-install) unless it runs with --no-install, so
+ *  a resolve that is only allowed once this finds the package can never fetch it. Only a look at the disk: nothing loaded. */
+export function packageDirInProject(dir: string, name: string): string | null {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    const pkg = path.join(d, "node_modules", ...name.split("/"));
+    if (fs.existsSync(path.join(pkg, "package.json"))) return pkg;
+    if (path.dirname(d) === d) return null;
+  }
+}
+
 /** Whether `file` (what the project's require resolved `name` to) is that package as the PROJECT has it installed: inside
- *  <d>/node_modules/<name> for the project dir or one of its ancestors — the directories Node's resolution walks; a
- *  workspace root's hoisted copy counts — compared as real paths, so a pnpm symlink into node_modules/.pnpm/ counts too.
- *  Anything else is refused BEFORE it is loaded (loading runs its code): Bun's auto-install answers a package the project
- *  lacks with a copy from its global install cache (~/.bun/install/cache/…, downloaded from npm), and NODE_PATH or a
- *  global folder are not the project's either. */
+ *  <d>/node_modules/<name> for the project dir or one of its ancestors — compared as real paths, so a pnpm symlink into
+ *  node_modules/.pnpm/ counts too. The second line of defence, after packageDirInProject: the resolution may still
+ *  answer from elsewhere (NODE_PATH, a global folder, an exports map pointing out of the package), and that is not the
+ *  project's — refused BEFORE it is loaded (loading runs its code). */
 export function installedInProject(dir: string, name: string, file: string): boolean {
   const real = (p: string): string | null => { try { return fs.realpathSync(p); } catch { return null; } };
   const target = real(file) ?? path.resolve(file);
@@ -141,6 +155,7 @@ export function resolvePlaywright(dir: string): Resolution {
   const req = projectRequire(abs);
   const tried: string[] = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
+    if (packageDirInProject(abs, name) === null) { tried.push(`${name}: not installed`); continue; } // never resolved: no download
     let file: string;
     try { file = req.resolve(name); } catch { tried.push(`${name}: not installed`); continue; }
     if (!installedInProject(abs, name, file)) { tried.push(notInProject(name, file)); continue; }
@@ -161,10 +176,12 @@ export function resolvePlaywright(dir: string): Resolution {
 /** the PROJECT's axe-core — never bundled, never installed; absent → the a11y.axe check is not-run. */
 export type AxeResolution = { ok: true; source: string; version: string; file: string } | { ok: false; why: string };
 export function resolveAxe(dir: string): AxeResolution {
+  // not on disk in the project → absent, without resolving it (a resolve is what would download it: packageDirInProject)
+  if (packageDirInProject(dir, "axe-core") === null) return { ok: false, why: "axe-core not installed in the project (optional)" };
   const req = projectRequire(dir);
   let file: string;
   try { file = req.resolve("axe-core"); } catch { return { ok: false, why: "axe-core not installed in the project (optional)" }; }
-  // a copy from anywhere else (Bun's auto-install cache) is not the project's: as absent, and never loaded
+  // a copy from anywhere else (NODE_PATH, a global folder) is not the project's: as absent, and never loaded
   if (!installedInProject(dir, "axe-core", file)) return { ok: false, why: "axe-core not installed in the project (optional)" };
   let mod: unknown;
   try { mod = req("axe-core"); } catch (e) { return { ok: false, why: `axe-core failed to load (${firstLine(e)})` }; }
