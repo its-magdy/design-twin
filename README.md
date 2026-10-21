@@ -73,7 +73,10 @@ bun install
 dtwin --version
 ```
 
-If you skip `bun link`, use `bun /path/to/design-twin/bridge/src/figma-pull.ts` wherever this README says `dtwin`.
+If you skip `bun link`, use `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever this
+README says `dtwin` — the two flags keep your project's `.env` out of the bridge and stop Bun fetching a missing package
+from the registry (the linked `dtwin` gets them from its shebang, `#!/usr/bin/env -S bun …`, which needs an `env` with
+`-S`: GNU coreutils ≥ 8.30 or macOS; on BusyBox/Alpine, run the `bun --no-install --no-env-file …` form instead).
 
 ### 2. Import the Figma plugin
 

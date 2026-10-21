@@ -8,7 +8,10 @@
 //
 // Rules it keeps:
 //   - Never overwrites. Every file it would write is skipped, and said so, if it already exists;
-//     .mcp.json is MERGED (an existing "figma" entry is left exactly as it is).
+//     .mcp.json is MERGED (an existing "figma" entry is left exactly as it is). The one exception is
+//     an entry of OURS that can no longer start (mcpEntryProblems: a bun or figma-mcp.ts that is gone,
+//     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags): --mcp re-points that entry, under
+//     its own key and keeping its other fields, at this install — and says so (--dry-run only says so).
 //   - Needs no bridge, no plugin, no port: it only touches the project directory and the per-user
 //     token file, so it works while a daemon or the MCP server holds 8787.
 //   - The MCP registration is opt-in (--mcp): the MCP server binds the same port as the CLI, so a
@@ -25,7 +28,7 @@ import { z } from "zod";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import * as LAYOUT from "./project-layout.ts";
-import { isRecord } from "./json-util.ts";
+import { ifDefined, isRecord } from "./json-util.ts";
 import { exitCli } from "./stdio.ts";
 
 /** One .mcp.json server entry, as init writes it. */
@@ -65,6 +68,10 @@ export type InitAction =
 export interface PlanOptions {
   mcp?: boolean;
   mcpEntry?: McpEntry;
+  /** Why no entry may be written from this install (bunxRefusal), or absent. */
+  refuseMcp?: string;
+  /** How entries already in .mcp.json are looked at (mcpEntryProblems). */
+  probe?: EntryProbe;
   /** The resolved bridge token (token-store resolve()) — only its source/path/created are read. */
   token: Pick<ResolvedToken, "source" | "path" | "created">;
 }
@@ -84,8 +91,73 @@ const MCP_KEY = "designtwin";
 const isOurMcpEntry = (e: unknown): boolean => {
   // Untyped JSON from the user's .mcp.json: only an object can carry `args` (JSON has no other shape that does).
   const args: unknown = e && typeof e === "object" ? (e as { args?: unknown }).args : undefined;
-  return !!e && Array.isArray(args) && (args.some((a) => /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
+  return !!e && Array.isArray(args) && (args.some((a) => FIGMA_MCP_SCRIPT.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
 };
+const FIGMA_MCP_SCRIPT = /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/;
+
+// The flags every user-facing bun invocation carries (the bin shebang's): no auto-install from the registry, and the
+// project's .env stays out of the server's environment.
+const BUN_FLAGS = ["--no-install", "--no-env-file"] as const;
+
+/** The bun to name in .mcp.json: the one on PATH (Bun.which) when it IS the bun running now — a stable spelling such as
+ *  ~/.bun/bin/bun or Homebrew's /opt/homebrew/bin/bun, which survives an upgrade — else this process's own executable.
+ *  process.execPath alone is the resolved file, and for a Homebrew (or any versioned) install that is a versioned path
+ *  (…/Cellar/bun/1.4.2/bin/bun) the next `brew upgrade` deletes, leaving Claude Code a server it cannot start. */
+function stableBunPath(execPath: string = process.execPath, onPath: string | null = Bun.which("bun")): string {
+  if (!onPath) return execPath;
+  try { return fs.realpathSync(onPath) === fs.realpathSync(execPath) ? onPath : execPath; } catch { return execPath; }
+}
+
+/** The bunx cache directory `dir` sits in, or null. `bunx designtwin …` installs the package into a cache tree
+ *  (`<tmp or install cache>/.bunx-<uid>/<pkg>`, `<tmp>/bunx-<uid>-<pkg>` on Windows and older Bun) that Bun refreshes
+ *  and deletes on its own schedule, so a .mcp.json path into it is a server that one day does not start. */
+function bunxCacheOf(dir: string): string | null {
+  const m = /^(.*?[\\/]\.?bunx-[^\\/]+)(?:[\\/]|$)/.exec(dir);
+  return m?.[1] ?? null;
+}
+const bunxRefusal = (cache: string): string =>
+  `this dtwin runs from a bunx cache (${cache}) that Bun replaces or deletes on its own — a .mcp.json entry pointing into it would stop starting one day. ` +
+  "Install it for good (in a clone: `bun install`, then `cd bridge && bun link`), and run `dtwin init --mcp` from that install";
+
+/** How to look at the machine (seams for the suites): does a path exist, and what does a bare command resolve to. */
+export interface EntryProbe {
+  exists?: (p: string) => boolean;
+  which?: (cmd: string) => string | null;
+  /** Where a relative path in the entry resolves from (Claude Code starts the server in the project root). */
+  cwd?: string;
+}
+
+/** What is wrong with an .mcp.json entry of OURS (isOurMcpEntry), one phrase each — empty when it will start: its command
+ *  exists, it runs on Bun (not Node, not the old bridge/dist build), its server script exists outside a bunx cache, and
+ *  bun gets the two flags before that script. The ONE rule for init (repair it) and doctor (report it). */
+function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => Bun.which(c), cwd = process.cwd() }: EntryProbe = {}): string[] {
+  if (!isRecord(e) || typeof e.command !== "string" || e.command === "") return ["it has no `command`"];
+  const command = e.command;
+  const args = Array.isArray(e.args) ? e.args.map(String) : [];
+  const out: string[] = [];
+  const base = path.basename(command).toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
+  const nodeShaped = ["node", "nodejs", "npx", "npm"].includes(base);
+  if (nodeShaped) out.push(`it runs on Node (\`${command}\`) — Design Twin runs on Bun only`);
+  const found = /[\\/]/.test(command) ? exists(path.resolve(cwd, command)) : which(command) !== null;
+  if (!found) out.push(`its command \`${command}\` ${/[\\/]/.test(command) ? "does not exist" : "is not on PATH"}`);
+  const i = args.findIndex((a) => FIGMA_MCP_SCRIPT.test(a));
+  const script = args[i];
+  if (script === undefined) return out; // the `bunx designtwin mcp` form: nothing more to check than its command
+  const abs = path.resolve(cwd, script);
+  // figma-mcp.js / .mjs (bridge/dist, or the older bridge/figma-mcp.mjs) is the Node-era build: the package ships .ts now
+  if (/\.m?js$/.test(script)) out.push(`it points at the old Node build (${script})`);
+  else if (!exists(abs)) out.push(`its server script ${script} does not exist`);
+  const cache = bunxCacheOf(abs);
+  if (cache) out.push(`its server script is in a bunx cache (${cache}) that Bun replaces or deletes on its own`);
+  if (!nodeShaped) {
+    if (base !== "bun") out.push(`it does not run the server with bun (\`${command}\`)`);
+    else {
+      const missing = BUN_FLAGS.filter((f) => { const at = args.indexOf(f); return at < 0 || at > i; });
+      if (missing.length) out.push(`bun runs it without ${missing.join(" and ")} (a project's .env would reach the server, and a missing import would be fetched from the registry)`);
+    }
+  }
+  return out;
+}
 
 // Does package.json list vite in dependencies or devDependencies?
 function usesVite(cwd: string): boolean {
@@ -134,7 +206,7 @@ function detectProfile(cwd: string): { profile: string; because: string } | null
 
 // Pure planner: what init WOULD do in `cwd`. Returns { actions:[{kind, path?, content?, note}], steps:[…] }.
 // Split from the writer so the test suite can assert the plan without touching a real HOME.
-function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitAction[] {
+function plan(cwd: string, { mcp = false, mcpEntry, refuseMcp, probe, token }: PlanOptions): InitAction[] {
   const actions: InitAction[] = [];
   const rel = (p: string) => path.relative(cwd, p) || ".";
 
@@ -213,8 +285,20 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
       // Ours under ANY key (older inits wrote "figma"): a second entry would start a second server
       // and the two would fight over port 8787.
       const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
-      if (mine) actions.push({ kind: "skip", path: rel(file), note: `Design Twin's MCP server is already registered as "${mine}" — left as is` });
+      // Ours, but it cannot start: a bun or a figma-mcp.ts that has since moved (a deleted clone, a Homebrew upgrade, a
+      // bunx cache Bun cleaned), or a Node-era entry (`node …/bridge/dist/figma-mcp.js`). Left as is, Claude Code would
+      // show a failed server and no tools; the one write that fixes it is re-pointing THAT entry, under its own key, at
+      // this install. Every other field the user put on it (env, …) is kept.
+      const broken = mine === undefined ? [] : mcpEntryProblems(servers[mine], { cwd, ...probe });
+      const old = mine === undefined ? undefined : servers[mine];
+      if (mine !== undefined && broken.length && refuseMcp) actions.push({ kind: "skip", path: rel(file), note: `the "${mine}" entry needs repair (${broken.join("; ")}), but ${refuseMcp}` });
+      else if (mine !== undefined && broken.length && mcpEntry && isRecord(old)) {
+        const next = { ...doc, mcpServers: { ...servers, [mine]: { ...old, command: mcpEntry.command, args: mcpEntry.args } } };
+        actions.push({ kind: "write", merge: true, path: rel(file), content: JSON.stringify(next, null, 2) + "\n", note: `REPAIRED the "${mine}" MCP server entry — ${broken.join("; ")}. It now runs ${[mcpEntry.command, ...mcpEntry.args].join(" ")} (restart Claude Code to pick it up)` });
+      }
+      else if (mine) actions.push({ kind: "skip", path: rel(file), note: `Design Twin's MCP server is already registered as "${mine}" — left as is${broken.length ? ` (it needs repair: ${broken.join("; ")})` : ""}` });
       else if (servers[MCP_KEY]) actions.push({ kind: "skip", path: rel(file), note: `already has a "${MCP_KEY}" server that is not Design Twin's — left as is` });
+      else if (refuseMcp) actions.push({ kind: "skip", path: rel(file), note: `not registered: ${refuseMcp}` });
       else {
         const next = { ...doc, mcpServers: { ...servers, [MCP_KEY]: mcpEntry } };
         // merge:true — the ONE write allowed onto an existing file: it re-serialises the user's own
@@ -252,7 +336,9 @@ function main(argv: string[]): void {
       "  It does NOT create codeconnect.local.json, plan/, audit/ or verify/ — those are written later,\n" +
       "  on demand, by map-bootstrap.ts, build-screen, audit-design and verify respectively.\n" +
       "  …makes sure a bridge token exists, and prints the remaining steps.\n\n" +
-      "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten)\n" +
+      "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten;\n" +
+      "             an entry of ours that can no longer start — a moved bun or figma-mcp.ts, a Node-era\n" +
+      "             entry — is repaired in place, and the output says so)\n" +
       "  --dry-run  print what would happen; write nothing (no token is created either)\n\n" +
       "  Never overwrites an existing file."
     );
@@ -266,12 +352,17 @@ function main(argv: string[]): void {
   // Absolute paths to THIS install's server and to the bun running it now: works for a repo clone and a
   // global install alike, and needs no network at Claude Code start-up (unlike `bunx designtwin mcp`).
   // The server is the figma-mcp.ts that sits beside THIS file (a checkout and an install both carry the
-  // source; there is no build). The command is process.execPath, not "bun": Claude Code starts the server
+  // source; there is no build). The command is an absolute bun, not "bun": Claude Code starts the server
   // with ITS environment, whose PATH may not have the ~/.bun/bin a shell profile adds — and the bun that
-  // ran init is one this package is known to work with. The flags are the shebang's (figma-pull.ts):
-  // no auto-install from the network, and the project's .env stays out of the server's environment.
-  const mcpEntry: McpEntry = { command: process.execPath, args: ["--no-install", "--no-env-file", path.join(import.meta.dirname, "figma-mcp.ts")] };
-  const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, token });
+  // ran init is one this package is known to work with, spelt the way that survives its upgrades
+  // (stableBunPath). The flags are the shebang's (figma-pull.ts): no auto-install from the network, and
+  // the project's .env stays out of the server's environment.
+  const mcpEntry: McpEntry = { command: stableBunPath(), args: [...BUN_FLAGS, path.join(import.meta.dirname, "figma-mcp.ts")] };
+  // Run through `bunx designtwin init`: this very file is in bunx's cache, so no entry may point at it.
+  const cache = bunxCacheOf(import.meta.dirname);
+  const refuseMcp = cache ? bunxRefusal(cache) : undefined;
+  if (cache && !argv.includes("--mcp")) log(`note    this dtwin runs from a bunx cache (${cache}) — install it for good (in a clone: \`bun install\`, then \`cd bridge && bun link\`) to have \`dtwin\` on PATH and to register the MCP server`);
+  const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, ...ifDefined("refuseMcp", refuseMcp), token });
   if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
@@ -320,4 +411,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson, usesTailwind, usesVite };
+export { detectProfile, plan, apply, main, isOurMcpEntry, mcpEntryProblems, stableBunPath, bunxCacheOf, readMcpJson, usesTailwind, usesVite };

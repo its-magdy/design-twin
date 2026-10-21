@@ -659,6 +659,25 @@ interface BridgeOptions {
   settleMs?: number;
 }
 
+const DEFAULT_MAX_PAYLOAD_MB = 128;
+const MiB = 1024 * 1024;
+/** The bridge's per-frame cap from FIGMA_BRIDGE_MAX_PAYLOAD_MB. It bounds a single frame so a malformed/huge payload can't
+ *  OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large file can raise it. Bun.serve
+ *  takes it as `maxPayloadLength`, an unsigned 32-bit byte count, so a value past 4096 MB is clamped to just under 4 GiB
+ *  and `mb` says so (the too-big diagnosis quotes it — the cap in force, not the number typed).
+ *  A value that is not a finite number above 0 falls back to the default, with a `warning`: `ws` read 0 (and below) as
+ *  "unlimited", but Bun.serve has no unlimited — 0 there refuses every non-empty frame — and a typo must not become either one. */
+function maxPayloadFromEnv(raw: string | undefined): { mb: number; bytes: number; warning?: string } {
+  const v = (raw ?? "").trim();
+  if (v === "") return { mb: DEFAULT_MAX_PAYLOAD_MB, bytes: DEFAULT_MAX_PAYLOAD_MB * MiB };
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) {
+    return { mb: DEFAULT_MAX_PAYLOAD_MB, bytes: DEFAULT_MAX_PAYLOAD_MB * MiB, warning: `FIGMA_BRIDGE_MAX_PAYLOAD_MB=${JSON.stringify(raw)} is not a number of megabytes above 0 — using the default ${DEFAULT_MAX_PAYLOAD_MB} MB (there is no "unlimited")` };
+  }
+  const bytes = Math.max(1, Math.min(Math.floor(n * MiB), 0xffffffff));
+  return { mb: Math.round((bytes / MiB) * 100) / 100, bytes };
+}
+
 function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
   // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
@@ -673,12 +692,10 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   if (TOKEN === null) throw new Error("no bridge token could be resolved");
   const token: string = TOKEN;
 
-  // maxPayload bounds a single frame so a malformed/huge payload can't OOM the process; 128 MB is ~2x
-  // a realistic asset-heavy full export, and an unusually large file can raise it via
-  // FIGMA_BRIDGE_MAX_PAYLOAD_MB. Bun.serve takes it as `maxPayloadLength`, an unsigned 32-bit byte
-  // count (it clamps above that), so the cap a person can actually set is just under 4 GiB.
-  const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
-  const maxPayloadBytes = Math.min(Math.max(0, Math.floor(maxPayloadMb * 1024 * 1024)), 0xffffffff);
+  // The per-frame cap (maxPayloadFromEnv): FIGMA_BRIDGE_MAX_PAYLOAD_MB, or 128 MB.
+  const payload = maxPayloadFromEnv(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB);
+  if (payload.warning) console.error("[bridge] " + payload.warning);
+  const { mb: maxPayloadMb, bytes: maxPayloadBytes } = payload;
   const admit = admitWith(token);
 
   // Commit a freshly-minted token to disk now that one is actually being used. Resolution happened at
@@ -1250,4 +1267,4 @@ export type { BridgeOptions };
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, createRegistry, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
+export { createBridge, maxPayloadFromEnv, createRegistry, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
