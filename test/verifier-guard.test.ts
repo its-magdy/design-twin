@@ -124,6 +124,11 @@ const BASH_OK: readonly string[] = [
   "find design/export/pages -name '*.json' ! -name '*.vars.json' -print0 | xargs -0 bun --no-install --no-env-file \"/plugins/designtwin/scripts/cross-check.js\"",
   "bun --no-install --no-env-file -e 'console.log(require(\"node:fs\").existsSync(\"design/verify\"))'", "bun --no-install --no-env-file --print 'process.version'",
   "bun --no-install --no-env-file node_modules/.cache/designtwin-verify/scratch/drive.cjs",
+  // what follows the plugin's script is the script's own, even words that name a subcommand (the walk past an option's
+  // possible value stops at the script: --no-install / --no-env-file are known to take none)
+  "bun --no-install --no-env-file /p/verify-screen.js --status install --phase i --run add", "bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-probe.js\" --check --project install",
+  "bun --no-install --no-env-file \"/plugins/designtwin/scripts/audit.js\" \"$f\" --platform web --json | bun --no-install --no-env-file -e 'const d = await Bun.stdin.json(); console.log(d.summary)'",
+  "npx --yes vite --port 5174", "bunx vite --port 5174", "npm exec vite -- --port 5174", "pnpm dlx serve dist", "npm --silent run dev", "pnpm --filter web dev",
 ];
 for (const c of BASH_OK) check(c, allowed(bash(c)));
 
@@ -161,6 +166,14 @@ const INSTALLS: readonly string[] = [
   "npm --loglevel silent install", "npm --cache /tmp/npm-cache ci", "npm -w web install", "npm --prefix=web i",
   "yarn workspace web add vite", "yarn workspace web remove vite", "yarn --cwd web add axe-core", "pnpm --filter web add axe-core",
   "npm init vite@latest", "npm create vite",
+  // an option the guard has no list entry for, taking a value: bun dispatches on the first word not starting with "-",
+  // npm/pnpm/yarn parse their own — every word that could be the subcommand is judged
+  "bun --jsx-factory h install", "bun --jsx-factory h add playwright", "bun --extension-order .ts i", "bun --cwd . install", "bun --fetch-preconnect x ci",
+  "bun --jsx-factory h exec 'npm ci'", "bun --jsx-factory h pm trust esbuild", "npm --fetch-retries 3 install", "pnpm --network-concurrency 4 add vite", "yarn --mutex file add vite",
+  // a package manager run as the package (bunx / npx / npm exec / dlx) or as the bin bun runs: judged as that command
+  "bunx bun install", "bun x bun install", "bunx bun@1.4 install", "bunx --bun bun add x", "bunx npm i", "npx npm i", "npm exec npm install", "npm exec -- npm ci",
+  "npx -p npm npm i", "npx --yes pnpm add vite", "pnpm dlx yarn add vite", "yarn dlx npm install", "bun x npm ci", "bun run npm install", "bun npm install",
+  "bun --jsx-factory h run pnpm add x",
 ];
 for (const c of INSTALLS) check(c, denied(bash(c)));
 
@@ -180,6 +193,13 @@ const PW: readonly string[] = [
   // Playwright's own installer
   "npm init playwright@latest", "npm init playwright", "npm create playwright", "npm innit playwright", "yarn create playwright",
   "pnpm create playwright", "bun create playwright", "npx create-playwright", "npx create-playwright@latest",
+  // a value-taking option no list of the guard's names (bun has dozens, and adds more): `playwright install` is refused
+  // wherever it stands on a bun / node line, and bunx / npx read their package like bun's target
+  "bun --jsx-factory h playwright install", "bun --extension-order .ts playwright install", "bun --fetch-preconnect https://x playwright install chromium",
+  "bun --max-http-header-size 99 playwright install", "bun --jsx-runtime classic playwright install-deps", "bun --jsx-import-source h ./node_modules/.bin/playwright install",
+  "bun run --jsx-factory h playwright install", "bun --jsx-factory h run playwright install", "bun --jsx-factory h -- playwright install",
+  "bun --cpu-prof-name x node_modules/playwright/cli.js install", "bun --jsx-factory h x playwright install", "node --require x node_modules/playwright/cli.js install",
+  "node --import tsx ./node_modules/playwright/cli.js install", "npx --loglevel silent playwright install", "bunx --some-new-opt v playwright install",
 ];
 for (const c of PW) check(c, denied(bash(c)));
 {
@@ -194,6 +214,10 @@ for (const c of PW) check(c, denied(bash(c)));
   check("`<pm> init|create playwright` and create-playwright get the Playwright reason; another initializer the install one",
     ["npm init playwright@latest", "yarn create playwright", "pnpm create playwright", "npx create-playwright"].every((c) => /installing Playwright/.test(reason(c)))
     && /reinstalling dependencies/.test(reason("npm init vite@latest")));
+  check("`bun upgrade` (it replaces the user's own bun) is refused with its own reason, behind any options, through bunx and a shell",
+    ["bun upgrade", "bun upgrade --canary", "bun --silent upgrade", "bun --jsx-factory h upgrade", "bunx bun upgrade", "sh -c 'bun upgrade'"].every((c) => /replaces the user's own bun/.test(reason(c)) && /status `blocked`/.test(reason(c))));
+  check("a package manager run as a package gets the verdict of the command it then is: the Playwright one for its Playwright install",
+    /installing Playwright/.test(reason("npx npm exec playwright install")) && /installing Playwright/.test(reason("bunx bun x playwright install")) && /reinstalling dependencies/.test(reason("bunx bun@latest ci")));
 }
 
 console.log("\nBash — refused (verify-screen --migrate: it renames verify sets and rewrites plans):");
@@ -257,6 +281,8 @@ console.log("\nPowerShell — refused (installs, Playwright):");
 const PS_INSTALLS: readonly string[] = [
   "npm install", "npm.cmd ci", "pnpm add -D playwright", "yarn", "bun add axe-core", "npx playwright install chromium", "npx.cmd playwright install",
   "npm init playwright@latest", "& npm install", "pwsh -c 'npm ci'", "cd apps/web; npm install",
+  "bun.exe --jsx-factory h playwright install", "& bun --jsx-factory h playwright install", "& \"C:\\Users\\me\\.bun\\bin\\bun.exe\" --extension-order .ts playwright install",
+  "pwsh -c \"bun --jsx-factory h playwright install\"", "bunx.exe bun install", "npx.cmd npm i", "bun upgrade",
 ];
 for (const c of PS_INSTALLS) check(c, denied(ps(c)));
 
