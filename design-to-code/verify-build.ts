@@ -588,7 +588,7 @@ function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cw
   if (exact) return { ref: exact };
   const base = json(path.posix.basename(want));
   const byBase = reports.filter((r) => path.posix.basename(r.rel) === base);
-  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
   return { ref: null, missing: want };
 }
 // ONE report speaks for the run — the one verification.a11y.report names, else the plan's own (newestOwn); its fail count is of

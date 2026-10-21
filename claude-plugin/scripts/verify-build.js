@@ -2925,7 +2925,7 @@ function a11yReportOf(named, reports, ctx = {}) {
   if (exact) return { ref: exact };
   const base = json(path14.posix.basename(want));
   const byBase = reports.filter((r) => path14.posix.basename(r.rel) === base);
-  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
   return { ref: null, missing: want };
 }
 function behaviourWarnings(plan, reports, ctx = {}) {

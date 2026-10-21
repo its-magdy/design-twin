@@ -1797,6 +1797,10 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     check("equal measuredAt → the newer mtime breaks the tie", against(bw(plan(), [D, B])) === D.rel && against(bw(plan(), [B, D])) === D.rel);
     const N = sp("design/verify/N.report.json", null, 99, 5);
     check("a report with no measuredAt is the oldest, whatever its mtime", against(bw(plan(), [N, C])) === C.rel && against(bw(plan(), [C, N])) === C.rel);
+    // a11y.report a bare name two reports share (other dirs): among them, the recorded one speaks too, not the later measuredAt
+    const X = sp("design/verify/x/Crates.report.json", "2026-09-01T00:00:00Z", 0, 6), Y = sp("design/verify/y/Crates.report.json", "2026-10-09T00:00:00Z", 9, 7);
+    const shared = (recordedReport: string): Plan => ({ verification: { mode: "rendered", a11y: { violations: 99, report: "Crates.report.json" }, recorded: rec1(recordedReport) } });
+    check("a11y.report a basename two reports share → the recorded one among them speaks", against(bw(shared(X.rel), [Y, X])) === X.rel && against(bw(shared(Y.rel), [X, Y])) === Y.rel);
   }
   check("[behaviour] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
   // ONE behaviour warning for the run — the plan's own report (or the one a11y.report names) — with its
