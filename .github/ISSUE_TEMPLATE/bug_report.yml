@@ -52,4 +52,4 @@ body:
     id: environment
     attributes:
       label: Environment
-      placeholder: macOS 15, Node 24.11, Figma desktop 125.x, Claude Code 2.x
+      placeholder: macOS 15, Bun 1.4.3, Figma desktop 125.x, Claude Code 2.x

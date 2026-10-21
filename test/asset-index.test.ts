@@ -3,7 +3,7 @@
 // the `.assets.json` owner fields, hidden reuse of a visible twin's file and the
 // geometry-fallback warning. Fixtures use the PLUGIN's shapes: `Asset.file` is the bare name, the tree's
 // pointer is `assets/<name>`, `kind` absent (or "reference"), box is w/h. Names are invented.
-// Run with:  node test/asset-index.test.ts
+// Run with:  bun test/asset-index.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

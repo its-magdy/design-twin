@@ -6,11 +6,12 @@
   "description": "Figma plugin (main thread) for the free-plan design-to-code read pipeline. TypeScript source in src/, bundled to code.js which manifest.json loads.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "node build.ts",
-    "watch": "node build.ts --watch"
+    "build": "bun build.ts",
+    "watch": "bun build.ts --watch"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.141.0",
+    "acorn": "8.19.0",
     "esbuild": "^0.28.1",
     "typescript": "^7.0.2"
   }

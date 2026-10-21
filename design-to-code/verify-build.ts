@@ -65,7 +65,7 @@ import { alnumKey, getOrInit } from "./map-util.ts";
 import { parsePlanText, recordedEdits, reportRecordNames, updatePlan, verificationFacts } from "./plan-record.ts";
 import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { exitFlushed, runCli } from "./proc.ts";
 import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, listPlans } from "../bridge/src/project-layout.ts";
 import { parseSetName } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
@@ -1804,14 +1804,16 @@ export {
 };
 export type { ExportHit, ReportMatch, ReportRef } from "./verify-locate.ts";
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
+if (import.meta.main) {
+  // A step that hangs: say so and end, with what was printed so far flushed first (exitFlushed, capped — never a bare
+  // exit(), which drops what a pipe has not taken yet).
   const watchdog = setTimeout(() => {
     console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s while ${phase} — nothing was blocked; re-run \`${scriptCmd("verify-build")} <plan.json>\` to check the plan directly`);
-    process.exit(1);
+    exitFlushed(1);
   }, HOOK_TIMEOUT_MS());
   watchdog.unref();
-  // exitCode, not exit(): on macOS a pipe write is asynchronous, and exit() would cut a long --json
-  // listing or the itemised block message short. stdin is paused+unref'd and the watchdog unref'd, so
-  // nothing keeps the process alive once main() is done.
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => { console.error(`verify-build: ${(e instanceof Error && e.stack) || String(e)}`); process.exitCode = 1; });
+  // exitCode, not exit() (runCli): a pipe write is asynchronous (macOS under Node; everywhere under Bun once the pipe is
+  // full), and exit() would cut a long --json listing or the itemised block message short. stdin is paused+unref'd and
+  // the watchdog unref'd, so nothing keeps the process alive once main() is done.
+  runCli(main, { name: "verify-build" });
 }

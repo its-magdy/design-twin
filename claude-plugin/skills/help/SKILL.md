@@ -31,7 +31,7 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 | | Manual export | `dtwin` CLI | `figma-mcp` server |
 |---|---|---|---|
 | What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
-| Setup | **None** — no bridge, no token | Once, from a clone: `npm install`, `npm run build --workspace bridge`, `npm link --workspace bridge`; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
+| Setup | **None** — no bridge, no token | Once, from a clone: `bun install`, then `bun link` in `bridge/` (Bun ≥ 1.4.2 — the CLI, the MCP server and the plugin's scripts all run on it); the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
@@ -54,15 +54,15 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
   stays up; retry the call). Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
-- **Windows: no sharing (yet).** `dtwin serve` / `dtwin stop` refuse there (Node cannot make the local
-  socket private to the user), so one MCP session or `dtwin` command holds the bridge at a time; the
+- **Windows: no sharing (yet).** `dtwin serve` / `dtwin stop` refuse there (the local socket cannot be
+  made private to the user there), so one MCP session or `dtwin` command holds the bridge at a time; the
   others get a port-in-use error saying so. Close the other session (or wait for the command), then retry.
 
 ## What each one lets Claude actually do
 
 **Through the CLI**, Claude runs `dtwin`. Check `which dtwin` first — it is normally already a
 global binary, and only if it is missing are you inside a clone of the Design Twin repo, where every
-`dtwin` is `node bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
+`dtwin` is `bun bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
 `dtwin list --help`, `dtwin pull --help`, `dtwin whoami --help`, `dtwin mcp --help` — every verb has one)
 without doing anything else while doing so. The output directory is positional and defaults to `design/export` (`dtwin pull`
@@ -113,14 +113,20 @@ writeToDisk:true}` for look-alikes) → `figma_export_url {url:"<node id>", writ
 merges `.mcp.json` without overwriting anything, and prints the steps that are clicks in Figma. The
 manual version:
 
+**Bun first, whichever lane.** The plugin's scripts and hooks, the `dtwin` CLI and the MCP server all run on
+**Bun ≥ 1.4.2** (Node is not supported). Install it from https://bun.sh/install — `curl -fsSL https://bun.sh/install | bash`
+(macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows) — and restart Claude Code so `bun` is on
+its PATH. The plugin's SessionStart hook prints this when `bun` is missing or older than 1.4.2.
+
 1. **Import the Figma plugin.** Figma desktop → **Plugins → Development → Import plugin from
    manifest…** → pick `figma-plugin/manifest.json` from a clone of the Design Twin repo.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
-   - **The CLI** → `which dtwin`; if it isn't there, in a clone of this repo run `npm install`,
-     `npm run build --workspace bridge` and `npm link --workspace bridge` (it is not on npm), or use
-     `node bridge/src/figma-pull.ts` in place of `dtwin`. There is no token to make by hand: the first bridge start generates one, saves it per-user
+   - **The CLI** → `which dtwin`; if it isn't there, in a clone of this repo run `bun install`,
+     then `bun link` inside `bridge/` (it is not on npm; `dtwin` lands in `~/.bun/bin`), or use
+     `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in place of `dtwin` (the two flags keep the
+     project's `.env` and Bun's auto-install out of it, as the linked `dtwin`'s shebang does). There is no token to make by hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
      it into the plugin's **Bridge token** field (Save) and neither side asks again.
      `dtwin token show` reprints it, `dtwin token rotate` replaces it, `dtwin token` says which token
@@ -134,14 +140,14 @@ manual version:
      file name is the form to reach for: `figma.fileKey` is gated to private plugins, so on a
      self-imported plugin it is `null` and cannot address anything.
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
-     that project* pointing at the absolute path of `bridge/dist/figma-mcp.js` (built and linked) or
-     `bridge/src/figma-mcp.ts` (repo checkout) (`dtwin init --mcp` writes it); enable it via `/mcp` and
+     that project* running `bridge/src/figma-mcp.ts` by absolute path on Bun (`command`: the absolute `bun`, `args`:
+     `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` — `dtwin init --mcp` writes it); enable it via `/mcp` and
      restart. No token goes in that file — the MCP server reads the same per-user stored token.
 3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
    code token — hand-authored; do NOT confuse with the generated `design/export/design-system/tokens.json`,
    which is Figma's own raw values), and the component map `design/codeconnect.local.json` (scaffold it with
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`).
+   `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`).
    `build-screen` documents all three. Both `design/export/design-system/` paths above exist only after a
    `dtwin pull --design-system` (or a full pull) — see the table below.
 
@@ -191,7 +197,7 @@ imports the Figma plugin does need one, since `figma-plugin/manifest.json` exist
 - **`designtwin:visual-verifier`** — renders a built screen, measures every node against the design's
   own numbers, checks that every component on the frame was actually built and that every designed
   interaction works, and writes the measurements to `design/verify/`. It returns measurements rather
-  than a verdict: `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
+  than a verdict: `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
   asserts. Never edits app code. If the probe exits 3 (no usable browser), the install line it prints is the
   user's call; a Chromium they already have cached works too — `verify-probe.js --browser-path <executable>` (on macOS
   the binary inside the `.app`, `…/Contents/MacOS/…`; only guaranteed with the bundled Chromium).

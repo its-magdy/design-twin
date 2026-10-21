@@ -1,7 +1,7 @@
 // Two MCP servers on one port — i.e. two Claude Code sessions in projects that both registered
 // `designtwin`. The second must not die on EADDRINUSE; it must share the first one's bridge, and take
 // the bridge over when that session ends.
-//   node test/mcp-share.test.ts
+//   bun test/mcp-share.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

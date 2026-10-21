@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
 // design-diff.ts — what CHANGED between two exports of the same screen (or the same token file).
 //
 // A re-pull overwrites the export in place, and "the designer changed the header" then has no answer
@@ -40,7 +40,6 @@
 //     is the change; the sublayers are counted on it, not listed.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import type {
   Box, CatalogBrief, CatalogComponent, CatalogDiff, ComponentsCatalog, DesignSystemManifest, DiffCategory, DiffNodeRef, DiffReport, DiffResult, DirDiffResult,
   AnimationStyle, EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
@@ -60,7 +59,7 @@ import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
 import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { DESIGN_DIR, EXPORT_DIR, MERGED_VARIABLES_FILE, SNAPSHOT_DIR, looksLikeExportDir } from "../bridge/src/project-layout.ts";
 import { LIBRARY_FILE_NAMES, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli, runSync } from "./proc.ts";
 
 // The generic key loops below compare WHATEVER a document or node carries, named field or not; they
 // read through types.ts `bag()` (the interfaces there name SOME keys and have no string index).
@@ -525,10 +524,19 @@ function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: str
   for (const [a, h] of Object.entries(now.hashes)) {
     let before: string | undefined;
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
-    else if (prev.kind === "git") { try { before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + (relUnder(cwd, path.join(now.root, a)) ?? path.relative(cwd, path.join(now.root, a))).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
+    else if (prev.kind === "git") { const b = gitShowHead(cwd, (relUnder(cwd, path.join(now.root, a)) ?? path.relative(cwd, path.join(now.root, a))).split(path.sep).join("/")); if (b) before = hashAssetBytes(a, b); }
     if (before && before !== h) out.add(a);
   }
   return out;
+}
+
+/** The bytes `rel` (relative to cwd, `/`-separated) has in HEAD, or null: not a repo, not committed, no git. Captured
+ *  through a file (proc.ts runSync): an exit-0 run with no bytes (Bun #46142) is run once more before it counts, and a
+ *  blob that is still empty then is not taken for a committed copy — an export or an asset is never an empty file. That
+ *  re-run is expected here (a committed empty file is ordinary), so it is quiet: no `[spawn-helper]` line on the user's stderr. */
+function gitShowHead(cwd: string, rel: string): Buffer | null {
+  const r = runSync("git", ["show", "HEAD:./" + rel], { cwd, binary: true, expect: "stdout", quiet: true, timeoutMs: 60_000 });
+  return r.status === 0 && !r.lost && r.stdoutBytes ? r.stdoutBytes : null;
 }
 
 // See the header: drop a baseline that IS the current export, then the most recent one wins.
@@ -565,10 +573,9 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   }
   try {
     const rel = (relUnder(cwd, path.resolve(cwd, file)) ?? path.relative(cwd, path.resolve(cwd, file))).split(path.sep).join("/");
-    const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
-    const doc: unknown = JSON.parse(text);
-    found.push({ doc, source: "git HEAD", kind: "git" });
-  } catch { /* not a repo, or not committed */ }
+    const bytes = gitShowHead(cwd, rel);
+    if (bytes) found.push({ doc: JSON.parse(bytes.toString("utf8")) as unknown, source: "git HEAD", kind: "git" });
+  } catch { /* committed, but not JSON */ }
   const firstFound = found[0];
   if (firstFound === undefined) return null;
   // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged
@@ -785,7 +792,7 @@ function diffDirectory(dir: string, json: boolean, out: string | undefined): num
 
 const isDirectory = (p: string): boolean => fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json | export dir>... [--force]\n       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]\n       ${scriptCmd("design-diff")} <export dir> [--json] [--out <file>]   (${MERGED_VARIABLES_FILE} + every design-system file present, one report)`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); return argv.length ? 0 : 2; }
   const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
@@ -928,6 +935,6 @@ function main(argv: string[]): number {
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "design-diff" }); // exitCode, never exit(): every printed line drains first (proc.ts)
 
 export { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, directoryMarkdown, exportSetFiles, snapshotPath, previous, redrawnAssets, assetHashes };

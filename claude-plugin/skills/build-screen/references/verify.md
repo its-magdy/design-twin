@@ -117,8 +117,8 @@ prints `run <id>`, and ends it: `done` once the files are written, `failed` on a
 measurement by that run, and a re-run is a new run. It never measures beside another open run of the screen: while a
 `visual-verifier` or verify-skill run is in flight (it writes the same `design/verify/<Layer>__<id>.*` files) the probe
 refuses with exit 2 before starting anything — wait for that run
-(`node "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>`), or, only if nothing is running it any more (its agent
-stopped or crashed), end it: `node "<scripts>/verify-screen.js" --status <Layer>__<id> --phase failed --run <id>`.
+(`bun --no-install --no-env-file "<scripts>/verify-screen.js" --wait <Layer>__<id> --run <id>`), or, only if nothing is running it any more (its agent
+stopped or crashed), end it: `bun --no-install --no-env-file "<scripts>/verify-screen.js" --status <Layer>__<id> --phase failed --run <id>`.
 
 Every non-zero exit, an error, or a stop signal (Ctrl-C, a command timeout's SIGTERM, a closed terminal) ends your own
 run `failed` before the probe exits. Two cases leave it at `measuring` — a probe killed outright (SIGKILL), and an exit

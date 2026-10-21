@@ -7,7 +7,7 @@
 //   ring-a/-b     two DIFFERENT icons: same skeleton, a 1.5 vs 1.2 stroke width (0.3 apart)
 //   chevron-a/-b  two DIFFERENT icons: an up and a down chevron (9.6 apart)
 //   avatar-raster a 2-path SVG shell around an embedded <image> (payload shrunk to a 1x1 PNG)
-// Run with:  node test/asset-compare.test.ts
+// Run with:  bun test/asset-compare.test.ts
 import fs from "node:fs";
 import path from "node:path";
 import { ok, report } from "./assert.ts";

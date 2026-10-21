@@ -45,8 +45,8 @@ S="<screen>"                                     # the user's name for it, e.g. 
 cat design/target.json                           # -> profile (always exists once init has run;
                                                  #    profile may be null, meaning nobody decided yet)
 ls design/plan/*.json                            # a multi-frame plan is not named after THIS screen
-node -e 'const fs = require("fs"); if (!fs.existsSync("design/plan")) process.exit(0); for (const f of fs.readdirSync("design/plan").filter((n) => n.endsWith(".json")).sort()) { const d = JSON.parse(fs.readFileSync("design/plan/" + f, "utf8")); console.log("design/plan/" + f, "->", d.screen ?? "-", "| node:", d.nodeId ?? "-", "| target:", d.target === undefined ? "-" : JSON.stringify(d.target), "| files:", (d.files ?? []).length); }'
-node -e 'const fs = require("fs"), f = "design/export/pages/index.json"; if (!fs.existsSync(f)) process.exit(0); for (const p of JSON.parse(fs.readFileSync(f, "utf8")).pageDirs ?? []) console.log(p.page ?? "-", p.index ?? "-")'
+bun --no-install --no-env-file -e 'const fs = require("fs"); if (!fs.existsSync("design/plan")) process.exit(0); for (const f of fs.readdirSync("design/plan").filter((n) => n.endsWith(".json")).sort()) { const d = JSON.parse(fs.readFileSync("design/plan/" + f, "utf8")); console.log("design/plan/" + f, "->", d.screen ?? "-", "| node:", d.nodeId ?? "-", "| target:", d.target === undefined ? "-" : JSON.stringify(d.target), "| files:", (d.files ?? []).length); }'
+bun --no-install --no-env-file -e 'const fs = require("fs"), f = "design/export/pages/index.json"; if (!fs.existsSync(f)) process.exit(0); for (const p of JSON.parse(fs.readFileSync(f, "utf8")).pageDirs ?? []) console.log(p.page ?? "-", p.index ?? "-")'
 ```
 
 Five things to know before running the commands above:
@@ -76,7 +76,7 @@ Five things to know before running the commands above:
   the PNG.
 - **The user's name for the screen (e.g. "Members") may not be the Figma layer name (e.g. `people `,
   trailing space).** Resolve it with
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`: it prints the one
+  `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`: it prints the one
   screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (the name a set of
   that node already has, so a frame renamed in Figma keeps it; an existing plan keeps its own name) — or stops (exit 1) and prints the candidates (with the
   field each matched on) — show those and ask, rather than picking the nearest name or reading a plan's free-text
@@ -94,7 +94,7 @@ in the project and a browser it can launch. Run this **from the web app's own pa
 whose `package.json` has the dev server — in a monorepo that is the app, e.g. `apps/web`, not the root):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check [--project <app dir>]
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check [--project <app dir>]
 ```
 
 It resolves the project's Playwright and launches Chromium once (exit 0 = ok, nothing written).
@@ -103,15 +103,15 @@ Exit 3 → stop and ask before step 3 (step 2 needs no browser), saying exactly 
 it (the probe prints them: `npm i -D playwright`, then `npx playwright install chromium`, a large browser
 download). Never run either yourself — only the user does, or says so: one edits the project's
 dependencies, the other a large download. "No playwright package" can be a false negative — a Yarn
-Plug'n'Play project (no `node_modules`; run the same check through `yarn node`; pass `--project`), or a project that drives
-the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of
+Plug'n'Play project (no `node_modules`) needs `nodeLinker: node-modules` in .yarnrc.yml and a `yarn install` (the user's
+call) before the probe can find Playwright, or a project that drives the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of
 `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md` (simulator, emulator, `flutter`) the same way. The only way
 on without a renderer is the agent's `static-only` mode, which the report marks as not rendered.
 
 ## 2. Emit the design's own numbers, as data
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
   design/export/pages/<Page>/<Screen>__<id>.json \
   [--out design/verify] [--variant <slug>]
 ```
@@ -131,7 +131,7 @@ exit 2, with a suggested slug when one fits. There is no `--force`: it is a usag
 **A legacy-named set** (a nickname, `<Screen>@320`, `<Screen>-r1` — written before sets were named by node) is
 renamed by `verify-screen.js --migrate`. `--expect` writes the `<Layer>__<id>` set beside one and notes it; `--compare`
 and the probe refuse a legacy-named expectation (exit 2), and `--status` refuses a node that has only legacy-named
-sets. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --migrate` first — a dry run that lists each rename
+sets. Run `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --migrate` first — a dry run that lists each rename
 and each set it skips, and why — then `--migrate --apply`. It moves every file of a set (the live status too) and
 rewrites the paths a plan's `verification` records. A legacy variant — a set that extends another set name of its
 node (`<Screen>@320`, `<Screen>.dark`, `<Screen>-r1` beside `<Screen>`), or the frame's layer name with a suffix after
@@ -181,12 +181,12 @@ Pass several screen files if the build covers a flow; the expectation merges the
 
 `verify-screen.js` has **no browser**. `--compare` diffs two JSON files; rendering, measuring and
 driving interactions happen in the agent, and arrive as data. Read `references/run-protocol.md` first: give the
-verifier a new run id (`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase queued --new-run`)
+verifier a new run id (`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase queued --new-run`)
 — each verifier pass and each re-verify round gets its own new run id — and wait on it with
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --wait <Layer>__<id> --run <id>` (exit 0 done, 1 failed or `blocked`,
+`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --wait <Layer>__<id> --run <id>` (exit 0 done, 1 failed or `blocked`,
 5 timeout or no progress, 6 run cache not accessible) rather than a hand-rolled poll loop.
 
-On web the verifier first closes every page and browser of the app it opened, then runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> [--steps <plan.json>]` (the plan found in step 1 — an existing plan keeps whatever name it was written under, a variant set `<Layer>__<id>.<slug>` uses its node's plan, and a frame that is not its plan's `nodeId` uses that plan too) — which waits for the frame's tag (`[data-dt-node="<frame id>"]`, its default `--ready`) after every load — a page that shows at least half of the screen root's other tags but not the root's, and no other screen's tagged root, is measured with the note "the screen root is not tagged", and a plan with `"tagging": {"off": true, …}` has no default (pass `--ready <root selector>` or `--ready none`; `references/probe-driving.md`) — then matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: the designed interactions the probe did not drive (and pressed states) and components it judges absent, in `<Layer>__<id>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never written there directly. `--browser-path <executable>` (also on `--check`) launches a Chromium the user already has cached instead of Playwright's own — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); not an executable file is exit 3, and it is only guaranteed with the bundled Chromium. `measured.json` says `custom`, never the path. Exit 4 (kept navigating, reloaded, unreachable, `--ready` timeout, a `--steps` step that failed, a reload that undid an in-place `--steps` click on both passes, or the probe's own `--max-time` bound, default 180000 ms, or the page or browser closed or crashed) writes nothing, and the probe counts it in the run's status: after the first failed attempt (exit 3 or 4) it prints `status run <id> measuring — failed probe attempt 1 of 2: …` and the agent re-runs it once — after an exit 4 at once, after an exit 3 only once the user has fixed the renderer (ask them first, never install it); the second ends the run `failed` itself (`status run <id> failed — …`) and the agent reports the navigation log (a closed or crashed page or browser prints none: if it recurs, run `--check`). While the user answers an exit 3 the run stays open at `measuring`: it resumes with the same `--run <id>`, never `--new-run`, and an orchestrator's `--wait` on it may end meanwhile in exit 5 `stalled` — the question pending, not a hang: `--wait` again with the same id once the user has answered (`references/run-protocol.md`).
+On web the verifier first closes every page and browser of the app it opened, then runs the shipped probe — `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> [--steps <plan.json>]` (the plan found in step 1 — an existing plan keeps whatever name it was written under, a variant set `<Layer>__<id>.<slug>` uses its node's plan, and a frame that is not its plan's `nodeId` uses that plan too) — which waits for the frame's tag (`[data-dt-node="<frame id>"]`, its default `--ready`) after every load — a page that shows at least half of the screen root's other tags but not the root's, and no other screen's tagged root, is measured with the note "the screen root is not tagged", and a plan with `"tagging": {"off": true, …}` has no default (pass `--ready <root selector>` or `--ready none`; `references/probe-driving.md`) — then matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: the designed interactions the probe did not drive (and pressed states) and components it judges absent, in `<Layer>__<id>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never written there directly. `--browser-path <executable>` (also on `--check`) launches a Chromium the user already has cached instead of Playwright's own — the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); not an executable file is exit 3, and it is only guaranteed with the bundled Chromium. `measured.json` says `custom`, never the path. Exit 4 (kept navigating, reloaded, unreachable, `--ready` timeout, a `--steps` step that failed, a reload that undid an in-place `--steps` click on both passes, or the probe's own `--max-time` bound, default 180000 ms, or the page or browser closed or crashed) writes nothing, and the probe counts it in the run's status: after the first failed attempt (exit 3 or 4) it prints `status run <id> measuring — failed probe attempt 1 of 2: …` and the agent re-runs it once — after an exit 4 at once, after an exit 3 only once the user has fixed the renderer (ask them first, never install it); the second ends the run `failed` itself (`status run <id> failed — …`) and the agent reports the navigation log (a closed or crashed page or browser prints none: if it recurs, run `--check`). While the user answers an exit 3 the run stays open at `measuring`: it resumes with the same `--run <id>`, never `--new-run`, and an orchestrator's `--wait` on it may end meanwhile in exit 5 `stalled` — the question pending, not a hang: `--wait` again with the same id once the user has answered (`references/run-protocol.md`).
 
 `references/probe-driving.md` is the one copy of the driving rules: `--steps` (pass the plan found in step 1; a plan
 with no `navigate` list runs no steps), which page loads belong to a step, the overlay drive and the dialog contract, the
@@ -207,7 +207,7 @@ selector it drove. It never edits app code, and it never writes the report it is
 ## 4. Compute the verdict
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
   design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json \
   [--interactions design/verify/<Layer>__<id>.evidence.json] [--record-plan] --out design/verify   # --interactions only when the verifier wrote that file
 ```
@@ -322,7 +322,7 @@ intended ("keep the 16 px, it's our type scale"), and only on their explicit wor
 delta looks small, never to get a screen to pass — record it and re-run the compare:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --accept design/verify/<Layer>__<id>.report.json \
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --accept design/verify/<Layer>__<id>.report.json \
   (--node <nodeId> --field "<label>" | --group <groupId>) --reason "<the user's reason>" --by "<the user>"
 ```
 

@@ -38,10 +38,10 @@ from its manifest** — Figma reads `editorType` only at import.
 ## Develop
 
 ```sh
-npm install          # @figma/plugin-typings + esbuild + typescript
-npm run typecheck    # tsc --noEmit  (the whole point: catches property-name / mixed / null bugs)
-npm run build        # esbuild src/main.ts -> code.js  (commit the result)
-npm run watch        # rebuild on save
+bun install          # @figma/plugin-typings + esbuild + typescript
+bun run typecheck    # tsc --noEmit  (the whole point: catches property-name / mixed / null bugs)
+bun run build        # esbuild src/main.ts -> code.js  (commit the result)
+bun run watch        # rebuild on save
 ```
 
 Then in Figma: **Plugins → Development → Import plugin from manifest…** → `manifest.json`.

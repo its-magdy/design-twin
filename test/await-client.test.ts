@@ -1,7 +1,7 @@
 // server-core's client registry and its one wait for a Figma client (awaitClient): every front-end
 // (figma-pull's own bridge, the daemon, the MCP server) waits for a target through it before a request.
 // Driven with plain objects in place of sockets — binds no port.
-// Run with:  node test/await-client.test.ts
+// Run with:  bun test/await-client.test.ts
 import { getEventListeners } from "node:events";
 import { ok, report } from "./assert.ts";
 
@@ -40,10 +40,12 @@ const trackingSetTimeout = (fn: () => void, ms?: number): NodeJS.Timeout => {
   return t;
 };
 globalThis.setTimeout = Object.assign(trackingSetTimeout, { __promisify__: realSetTimeout.__promisify__ });
-globalThis.clearTimeout = (t?: NodeJS.Timeout | string | number): void => {
+// Bun's global clearTimeout also takes its own Timer type; this suite only ever arms NodeJS.Timeout ones
+// (trackingSetTimeout above), so anything else is passed straight through untracked.
+globalThis.clearTimeout = ((t?: NodeJS.Timeout | string | number): void => {
   if (t !== undefined && typeof t === "object") armed.delete(t);
   realClearTimeout(t);
-};
+}) as typeof realClearTimeout;
 const keepAlive = setInterval(() => {}, 1000);
 
 /** Runs one wait with timer tracking on; reports how long it took and what it left behind. */

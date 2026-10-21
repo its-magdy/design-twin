@@ -25,7 +25,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
+import { cliRunner } from "./cli-runner.ts";
+import { main as resolveScreenMain } from "../design-to-code/resolve-screen.ts";
+// the first runs are real children, the rest resolve-screen.ts's main in-process (test/cli-runner.ts)
+const resolveCli = cliRunner(path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), resolveScreenMain);
 import { check as ok, report } from "./assert.ts";
 import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths, screenStem } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
@@ -207,8 +211,8 @@ ok("a query that hits only texts[] ('Units') is needs-confirmation, never resolv
 console.log("\nresolve-screen — the empty-state sibling collision:");
 
 // The real empty-state sibling of "Jet Roles" — node 7314:83742, layer name `Jet roles` (lowercase
-// r), visible title ALSO "Jet Roles" — pulled live with this worktree's bridge
-// (`node bridge/figma-pull.js /tmp/p3-pull-310 --node 7314:83742 --client "TideStack (Copy)"`) and
+// r), visible title ALSO "Jet Roles" — pulled live with the bridge of the time (then a Node script; today the same pull
+// is `dtwin /tmp/p3-pull-310 --node 7314:83742 --client "TideStack (Copy)"`) and
 // pruned into test/fixtures/livetest3/pages-titled/__Optimization_management_/Jet_roles__7314_83742.json
 // the same way as the fixture's other pages-titled/ files. The row below is exactly what write-out.js
 // would index for it (name/title/texts/id/w/h/nodes/reference all copied from that real pull's own
@@ -345,7 +349,7 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
       kindOf("7314:87192") === "node id" && kindOf("Jet Roles") === "exact" && kindOf("positions___7314_87192") === "carried id");
   }
   const cliIn = (cwd: string | undefined, ...a: string[]): { status: number | null; err: string; out: string } => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), ...a], { encoding: "utf8", cwd });
+    const r = resolveCli(a, cwd !== undefined ? { cwd } : {});
     return { status: r.status, err: r.stderr, out: r.stdout };
   };
   const cli = (...a: string[]): { status: number | null; err: string; out: string } => cliIn(undefined, ...a);
@@ -381,7 +385,7 @@ console.log("\nresolve-screen — a non-root dir says so; <Layer>__<a>_<b> basen
       fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: [{ page: "P", dir: "P" }], layers: [{ name, id: "3:3", type: "FRAME", page: "P", file: "pages/P/3_3.json" }] }));
     };
     index("Old");
-    const q = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__3_3", "--phase", "queued", "--new-run"], { encoding: "utf8", cwd: proj });
+    const q = runSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__3_3", "--phase", "queued", "--new-run"], { cwd: proj });
     index("New");
     const r = cliIn(proj, exp, "3:3");
     ok(`a status-only run Old__3_3 is open and the frame is renamed "New": \`stem Old__3_3\` (status ${q.status}: ${q.stderr.trim()}; got ${JSON.stringify(r.out.split("\n")[1])})`,
@@ -499,7 +503,7 @@ console.log("\nresolve-screen — nodeIdFromStem/nodeIdFromSafe invert the names
   ok("[fold] control: with no plan dir, 'RotaPrefs' matches nothing", noPlan.status === "not-found");
   const planFold = resolveScreen(dir, "RotaPrefs", { planDir: path.join(dir, "plan") });
   ok(`[fold] the plan header's screenName is folded too ('RotaPrefs' -> 'Rota Prefs' -> the candidate 4:1; got ${foldIds(planFold)})`, foldIds(planFold) === "4:1");
-  const cli4c = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "resolve-screen.ts"), dir, "SeedSwaps"], { encoding: "utf8" });
+  const cli4c = resolveCli([dir, "SeedSwaps"]);
   ok(`[4c] the CLI: exit 1, 'matched only ignoring spaces/-/_ — confirm with the node id', the candidate listed, no stem line (got ${cli4c.status}: ${cli4c.stderr.trim()})`,
     cli4c.status === 1 && /^error {2}'SeedSwaps' matched only ignoring spaces\/-\/_ — confirm with the node id/m.test(cli4c.stderr) && /^ {2}1:1 {2}Seed Swaps/m.test(cli4c.stderr) && !/^stem /m.test(cli4c.stdout));
   ok("[fold] a fold never reaches into a substring: 'Swap' is a text-search candidate list, not a resolve", (() => { const r = resolveScreen(dir, "Swap"); return r.status === "needs-confirmation" && r.stage === "text search"; })());

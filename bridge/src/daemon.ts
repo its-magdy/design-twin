@@ -31,6 +31,7 @@ import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ConnectionInfo, ProgressTick, RequestOptions } from "./server-core.ts";
+import { exitFlushed } from "./stdio.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
 //
@@ -229,9 +230,15 @@ export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between 
 // Windows (no process.getuid) keeps os.tmpdir() unchanged: a per-user directory there, and POSIX
 // mode bits do not apply. (No daemon listens there anyway: see daemonSupported.)
 //
-// Length: a Unix socket path is limited by sockaddr_un.sun_path (Node: "107 bytes on Linux and 103
-// bytes on macOS"; longer throws). A macOS tmpdir is ~48 bytes, so
-// `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock` is ~84 bytes there; /run/user/<uid>/designtwin-<port>.sock ~36.
+// Length: the kernel limits a Unix socket address to sockaddr_un.sun_path — 108 bytes on Linux, 104 on
+// macOS, each with its terminating NUL. Bun does not hand a longer path to the kernel as it is: on Linux
+// it binds and connects through /proc/self/fd/<dir fd>/<name> (bun-usockets bsd.c), so any length works
+// there. On macOS, only a recent Bun has the equivalent (fchdir into the directory, then the bare name);
+// an older one fails with ENAMETOOLONG — and Node, before it, silently TRUNCATED the path and bound a
+// different file. So on macOS a path over 103 bytes is refused here, by sockPath, with the fix named
+// (MAX_SOCK_PATH_BYTES), rather than left to whichever of those the running Bun does. It takes a long
+// TMPDIR to get there: a default macOS tmpdir is ~48 bytes, so `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock`
+// is ~84 bytes; /run/user/<uid>/designtwin-<port>.sock (Linux, XDG_RUNTIME_DIR) ~36.
 
 /** Why `dir` is not safe to hold this user's socket, or null when it is. */
 export function privateDirProblem(dir: string, uid: number): string | null {
@@ -315,10 +322,25 @@ export function sockPath(port?: number, place: SockPlace = {}): string {
   return path.join(dir, checkedSockName(port, place, dir));
 }
 
+/** The longest socket path (bytes, without the NUL) `platform` is held to — see "Length" above. Only
+ *  macOS has one: on Linux Bun reaches any length through /proc/self/fd. */
+export const MAX_SOCK_PATH_BYTES: Partial<Record<NodeJS.Platform, number>> = { darwin: 103 };
+
+/** Why `sock` is too long to be a socket path on `platform`, or null. */
+export function sockLengthProblem(sock: string, platform: NodeJS.Platform = process.platform): string | null {
+  const max = MAX_SOCK_PATH_BYTES[platform];
+  const bytes = Buffer.byteLength(sock);
+  if (max === undefined || bytes <= max) return null;
+  return `refusing to use ${sock} as the dtwin daemon socket: it is ${bytes} bytes, and a Unix socket path on ${platform === "darwin" ? "macOS" : platform} is limited to ${max}. ` +
+    "Point XDG_RUNTIME_DIR or TMPDIR at a shorter directory only you can access.";
+}
+
 function checkedSockName(port: number | undefined, place: SockPlace, dir: string): string {
   const name = sockName(port, place);
   const uid = placeUid(place);
   const sock = path.join(dir, name);
+  const tooLong = sockLengthProblem(sock, place.platform);
+  if (tooLong) throw new Error(tooLong);
   const bad = uid === undefined ? null : sockFileProblem(sock, uid);
   if (bad) throw new Error(`refusing to use ${sock} as the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
   return name;
@@ -437,19 +459,34 @@ function unlinkOnExit(sock: string): () => void {
 //    process. It is not safe to resume normal operation after 'uncaughtException'."
 //  - unhandledRejection: log only. A stray rejected promise (a tool whose caller went away, a late
 //    socket write) must not take down the user's whole stdio MCP session or a daemon mid-export with it.
-// Installed at most once per process: figma-mcp re-serves after every `dtwin stop`.
+// Installed at most once per process: figma-mcp re-serves after every `dtwin stop`. Each call's `cleanup` is kept,
+// though (the MCP server installs first, with its own; a serve() that installs too adds the daemon's shutdown), and all
+// of them run, in order, each in its own try — the returned function drops that cleanup again (a stopped daemon).
+// The cleanups are what release the PORT and the socket: Bun.serve's stop() and net.Server's close() stop listening
+// synchronously, so by the time the exit waits on stderr the port is already free for the next bridge. That wait is
+// capped short (CRASH_FLUSH_CAP_MS): a host restarting the server right away must not find the old process still
+// holding 8787 — or still alive — because a reader stopped draining its stderr.
+const CRASH_FLUSH_CAP_MS = 200;
+// The first SIGINT / SIGTERM's wait for stderr (serve() below); a second one does not wait at all.
+const SIGNAL_FLUSH_CAP_MS = 300;
 let crashHandlersInstalled = false;
-export function installCrashHandlers(log: (m: string) => void, cleanup?: () => void): void {
-  if (crashHandlersInstalled) return;
+const crashCleanups = new Set<() => void>();
+export function installCrashHandlers(log: (m: string) => void, cleanup?: () => void): () => void {
+  if (cleanup) crashCleanups.add(cleanup);
+  const forget = (): void => { if (cleanup) crashCleanups.delete(cleanup); };
+  if (crashHandlersInstalled) return forget;
   crashHandlersInstalled = true;
   process.on("unhandledRejection", (reason) => {
     log("unhandled promise rejection (continuing): " + errMsg(reason));
   });
   process.on("uncaughtException", (e) => {
+    // Say why, release (synchronously: the port and socket are free before anything waits), then wait — briefly — for
+    // those lines to reach stderr.
     log("uncaught exception — exiting: " + errMsg(e));
-    if (cleanup) { try { cleanup(); } catch { /* exiting anyway */ } }
-    process.exit(1);
+    for (const c of [...crashCleanups]) { try { c(); } catch { /* exiting anyway */ } }
+    exitFlushed(1, CRASH_FLUSH_CAP_MS);
   });
+  return forget;
 }
 
 // Requests are SERIALIZED, not multiplexed. server-core's `pending` map is id-keyed and would happily
@@ -652,6 +689,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
 
     let forgetExit: (() => void) | null = null;
+    let forgetCrash: (() => void) | null = null;
     // Idempotent: the idle check, `__shutdown`, a signal and a host's own shutdown can all race.
     function shutdown() {
       if (stopped) return;
@@ -661,6 +699,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       try { server.close(); } catch { /* already closed */ }
       try { fs.unlinkSync(sock); } catch { /* already gone */ }
       if (forgetExit) { forgetExit(); forgetExit = null; }
+      if (forgetCrash) { forgetCrash(); forgetCrash = null; }
       // Abort every outstanding request BEFORE the bridge closes. This fires first: each in-flight
       // abort makes server-core send its cancel frame and drop the request from `pending`, so
       // bridge.close() below finds nothing left to cancel for it (were one sent twice, the plugin
@@ -672,14 +711,25 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
     // socket nobody is listening on. `as const`: process.on's overload wants NodeJS.Signals, not string.
-    if (signals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { shutdown(); process.exit(0); });
+    // shutdown() releases the socket file, the socket and the port synchronously; the exit then waits for the log lines
+    // to reach stderr — briefly (SIGNAL_FLUSH_CAP_MS: Ctrl-C must feel instant, and a supervisor's SIGKILL follows its
+    // SIGTERM soon after). A SECOND signal is a person (or supervisor) insisting: exit at once, waiting on nothing.
+    if (signals) {
+      let signalled = false;
+      for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => {
+        if (signalled) { exitFlushed(0, 0); return; }
+        signalled = true;
+        shutdown();
+        exitFlushed(0, SIGNAL_FLUSH_CAP_MS);
+      });
+    }
     // A host that exits some other way (the MCP server ends when its stdio closes) still must not
     // leave the socket file behind for the next probe to trip over. One process-level hook, and this
     // socket is forgotten again on shutdown (the MCP server re-serves after every `dtwin stop`).
     else forgetExit = unlinkOnExit(sock);
     // shutdown() is synchronous (closes the servers, unlinks the socket file), so it is exactly the
     // "synchronous cleanup" the Node docs allow an uncaughtException handler before it exits.
-    if (crashHandlers) installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
+    if (crashHandlers) forgetCrash = installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
 
     const handle: ServeHandle = {
       sock,

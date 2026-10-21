@@ -67,9 +67,9 @@ and blockers of each before deciding which need the full step-4-6 review:
 ```
 for f in design/export/pages/*/*.json; do
   case "$f" in *.vars.json|*.assets.json|*/index.json) continue;; esac
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" "$f" --platform <platform> \
+  bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" "$f" --platform <platform> \
     --design-system design/export/design-system --json | \
-    node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(JSON.stringify(d.summary), d.findings.filter((x) => x.severity === "blocker").map((x) => x.code))'
+    bun --no-install --no-env-file -e 'const d = JSON.parse(await Bun.stdin.text()); console.log(JSON.stringify(d.summary), d.findings.filter((x) => x.severity === "blocker").map((x) => x.code))'
 done
 ```
 
@@ -83,7 +83,7 @@ stops the run):
 
 ```
 find design/export/pages -name '*.json' ! -name '*.vars.json' ! -name '*.assets.json' ! -name index.json -print0 | \
-  xargs -0 node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" --design-system design/export/design-system \
+  xargs -0 bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" --design-system design/export/design-system \
   --out design/audit/<name>.cross
 ```
 
@@ -100,7 +100,7 @@ report the pair once, not once per screen.
    the list of candidates and ask which. **The same rule applies to a name that WAS passed:** the
    Figma layer name and the on-screen title are often different strings ("Members" is the frame
    named `people `), and a near-match is a different screen ("Members" matching only "Member Details"), not a fuzzy
-   hit. Resolve with `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`: it
+   hit. Resolve with `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>" design/plan`: it
    prints the one screen it resolved, or stops and prints the candidates (name, id, size, node count,
    `dtwin screenshot <id>`) — return those and ask, rather than auditing a guess. Find the screen
    through the index, never by guessing a filename: the root
@@ -136,7 +136,7 @@ report the pair once, not once per screen.
    by eye across thousands of nodes:
 
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" design/export/pages/<Page>/<Screen>__<id>.json \
+   bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" design/export/pages/<Page>/<Screen>__<id>.json \
      --platform <platform> \
      --design-system design/export/design-system
    ```

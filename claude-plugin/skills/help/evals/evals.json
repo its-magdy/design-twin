@@ -44,12 +44,12 @@
     {
       "id": 4,
       "prompt": "i ran dtwin --list and it just dies with EADDRINUSE, port 8787 already in use. what now?",
-      "expected_output": "Diagnoses from the troubleshooting reference: only one bridge can hold 8787. Tells the user to check dtwin --daemon-status first (a daemon means ordinary commands route through it), otherwise the MCP server or a stale node process holds the port; if the MCP server is the holder and files are wanted, use writeToDisk: true on the MCP export tools rather than killing it.",
+      "expected_output": "Diagnoses from the troubleshooting reference: only one bridge can hold 8787. Tells the user to check dtwin --daemon-status first (a daemon means ordinary commands route through it), otherwise the MCP server or a stale bun process holds the port; if the MCP server is the holder and files are wanted, use writeToDisk: true on the MCP export tools rather than killing it.",
       "files": [],
       "expectations": [
         "Explains that only one bridge process can hold port 8787 at a time",
         "Suggests dtwin --daemon-status as the first check",
-        "Names the MCP server (or a stale node process) as the likely holder",
+        "Names the MCP server (or a stale bun process) as the likely holder",
         "Mentions writeToDisk: true on the MCP export tools as the way to get files while the MCP server holds the port",
         "Does not invent flags or tools that do not exist"
       ]

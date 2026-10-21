@@ -1,7 +1,7 @@
 // Offline tests for figma-plugin/ui.html — the plugin window's script, run against a fake DOM and a
 // fake WebSocket. Covers the bridge connection states (the part a designer reads) and the markup the
 // script depends on.
-//   node test/ui.test.ts
+//   bun test/ui.test.ts
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";

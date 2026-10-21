@@ -18,5 +18,7 @@ CLI/MCP surface, read these directly rather than guessing:
 - `ARCHITECTURE.md` — the two front-ends over one bridge (CLI = batch reads to disk; MCP = the same
   reads as live tools + the only write path, `figma_write`), plugin two-context model, security.
 
-In this repo, `dtwin` is `node bridge/src/figma-pull.ts` (not on PATH unless the package is installed
-elsewhere) — e.g. `node bridge/src/figma-pull.ts --list`.
+In this repo, `dtwin` is `bun bridge/src/figma-pull.ts` (not on PATH unless the package is linked with
+`bun link`) — e.g. `bun bridge/src/figma-pull.ts --list`. The whole repo is Bun-only (≥ 1.4.2; no Node): `bun install`,
+`bun run typecheck`, `bun run test` for the suites (a bare `bun test` is Bun's own runner: bunfig.toml points it at
+`test/spawn-stress/` only, the spawn-stress workflow's bun:test files), `bun test/<suite>.test.ts` for one suite.

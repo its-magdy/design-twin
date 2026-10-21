@@ -12,7 +12,7 @@
 //   - It never opens a WebSocket to a port someone else holds: the bridge registers every WS client as
 //     a PLUGIN client, so a probe would disturb routing for whoever owns that bridge (and a
 //     wrong-token probe spams its log). A held port is identified with a plain HTTP GET instead — a
-//     `ws` server answers 426 Upgrade Required.
+//     bridge answers 426 Upgrade Required.
 //   - server-core is imported LAZILY (probePlugin's `await import()`) and only once the port is known to
 //     be valid and free: it exits the process on a bad FIGMA_BRIDGE_PORT (at module load) and on
 //     EADDRINUSE (in createBridge). Those are findings for doctor to report, not ways for it to die.
@@ -36,20 +36,24 @@ import { readSnapshotInfo } from "./snapshot-meta.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
-import { isOurMcpEntry, readMcpJson } from "./init.ts";
+import { isOurMcpEntry, mcpEntryProblems, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
 // The manifest's allowedDomains ports and the FIGMA_BRIDGE_PORT parse — ports.ts, the same list and
 // parse server-core.ts binds from. Its own dependency-free module, so reading it never loads
 // server-core (which exits the process on a bad FIGMA_BRIDGE_PORT — the very case this exists to diagnose).
 import { ALLOWED_PORTS, parsePortEnv } from "./ports.ts";
 import { dtwinPortWarning } from "./verbs.ts";
+// The package's own package.json, imported rather than read by a path at run time (so it resolves in a
+// compiled binary too): engines.bun is the Bun version this install needs.
+import pkg from "../package.json" with { type: "json" };
 import type { ClientRow, Bridge } from "./server-core.ts";
+import { exitCli } from "./stdio.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 /** Every check this report can carry, by id — what `--json` consumers key on. */
-export type CheckId = "node" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
+export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
 
 /** One line of the report. `next` is the single next step (absent, or undefined, when there is none). */
 export interface Check {
@@ -92,14 +96,20 @@ const fail = (id: CheckId, title: string, detail: string, next?: string): Check 
 
 // ---------------------------------------------------------------- pure checks
 
-// `range` is package.json's engines.node. Only the ">=N" shape this package uses is understood;
-// anything else is reported as unknown rather than guessed at.
-function checkNode(version: string, range: string | null | undefined): Check {
-  const m = /^>=\s*(\d+)/.exec(range || "");
-  const major = Number(String(version).replace(/^v/, "").split(".")[0]);
-  if (!m) return warn("node", "Node.js", `${version} (could not read the required version from package.json)`);
-  if (major >= Number(m[1])) return ok("node", "Node.js", `${version} (needs ${range})`);
-  return fail("node", "Node.js", `${version} is too old — this package needs ${range}`, "install a newer Node.js (nodejs.org, or your version manager)");
+// `version` is the running Bun (Bun.version — NOT process.version, which under Bun reports the Node.js
+// release Bun is compatible with, e.g. v26.3.0, and says nothing about Bun itself). `range` is
+// package.json's engines.bun, matched with Bun's own semver (Bun.semver.satisfies), so any range
+// syntax the field can hold is understood. An absent or unreadable range is reported as unknown
+// rather than guessed at — and "unreadable" is decided here, because Bun.semver.satisfies is lenient
+// to a fault: a range with no version in it at all ("", "x", "not a range!") satisfies everything.
+function checkBun(version: string, range: string | null | undefined): Check {
+  const v = String(version).replace(/^v/, "");
+  const unread = (): Check => warn("bun", "Bun", `${v} (could not read the required version from package.json)`);
+  if (!range || !/\d+\.\d+/.test(range)) return unread();
+  let satisfied: boolean;
+  try { satisfied = Bun.semver.satisfies(v, range); } catch { return unread(); }
+  if (satisfied) return ok("bun", "Bun", `${v} (needs ${range})`);
+  return fail("bun", "Bun", `${v} is too old — this package needs ${range}`, "upgrade the way it was installed: `bun upgrade` (the official installer), `brew upgrade bun` (Homebrew), `npm install -g bun@latest` (npm), `scoop update bun` (Scoop) — or reinstall from https://bun.sh/install");
 }
 
 // `s` is tokenStore.status(). `pluginCheck` is the ALREADY-COMPUTED plugin check
@@ -208,6 +218,18 @@ function resolvePort(raw: string | undefined): { port: number; problem?: undefin
   const parsed = parsePortEnv(raw);
   if (parsed.port !== undefined) return { port: parsed.port };
   return { problem: fail("port", "Port", `FIGMA_BRIDGE_PORT=${parsed.invalid} is not one of ${ALLOWED_PORTS.join(", ")} — the Figma plugin may only open sockets to ports named in its manifest, so nothing could ever connect`, `unset FIGMA_BRIDGE_PORT, or set it to one of ${ALLOWED_PORTS.join(", ")}`) };
+}
+
+// DT_TEST_EPHEMERAL_PORT is the suites' seam (server-core.ts createBridge): at "1" every bridge this shell starts binds a
+// random port, which the Figma plugin — limited to the manifest's three — can never reach. Left exported in a shell, it
+// reads exactly like "the plugin never connects"; say so before that hunt starts. Any other value is ignored by the
+// bridge, but it is still a test variable that has escaped into a real environment.
+function ephemeralPortWarning(env: NodeJS.ProcessEnv): Check | null {
+  const v = env.DT_TEST_EPHEMERAL_PORT;
+  if (v === undefined || v === "") return null;
+  return warn("port", "Port", v === "1"
+    ? "DT_TEST_EPHEMERAL_PORT=1 is set — a test-only seam: every bridge started from this environment binds a random port the Figma plugin can never reach"
+    : `DT_TEST_EPHEMERAL_PORT=${JSON.stringify(v)} is set — a test-only variable (the bridge acts on it only at "1")`, "unset DT_TEST_EPHEMERAL_PORT");
 }
 
 // `probe` is probePort()'s result; `st` the daemon status for the same port; `envPort` the value of
@@ -413,7 +435,11 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
     if (servers) {
       const found = servers;
       const mine = Object.keys(found).find((k) => isOurMcpEntry(found[k]));
+      // Registered, but it cannot start (init.ts mcpEntryProblems): Claude Code would show the server failed and offer no
+      // tools, with nothing here to say why. A ✗, not a note — and init --mcp is the repair (it rewrites that entry).
+      const broken = mine === undefined ? [] : mcpEntryProblems(found[mine], { cwd });
       if (!mine) out.push(ok("mcp", "MCP registration", "not registered in .mcp.json (optional — `dtwin init --mcp` adds it)"));
+      else if (broken.length) out.push(fail("mcp", "MCP registration", `registered as "${mine}" in .mcp.json, but Claude Code cannot reliably start it as written: ${broken.join("; ")}`, "run `dtwin init --mcp` from the install you use — it rewrites that entry to this bun and its figma-mcp.ts — then restart Claude Code"));
       else if (mine === "designtwin") out.push(ok("mcp", "MCP registration", 'registered as "designtwin" in .mcp.json'));
       else out.push(warn("mcp", "MCP registration", `registered under the legacy key "${mine}" — it still works, but new setups use "designtwin" ("figma" collides with Figma's own MCP server)`, `rename the "${mine}" key in .mcp.json to "designtwin", then restart Claude Code`));
     }
@@ -480,7 +506,7 @@ async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
 
 // `onCheck` sees each result the moment it is known, and `onWait` fires before the one slow step (the
 // plugin wait). Printing only at the end meant a caller with a short timeout — an agent shelling out —
-// got NOTHING, not even the instant Node/token answers, if the plugin wait outlived it.
+// got NOTHING, not even the instant Bun/token answers, if the plugin wait outlived it.
 export interface RunOptions {
   cwd?: string;
   waitSec?: number;
@@ -491,23 +517,20 @@ export interface RunOptions {
 async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOptions = {}): Promise<Report> {
   const checks: Check[] = [];
   const add = (...cs: Check[]) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
-  // A package.json without `engines.node` reads as null — checkNode then reports the range as unreadable.
-  const engines = (() => {
-    try {
-      return (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string; engines?: { node?: string } }).engines?.node ?? null;
-    } catch { return null; }
-  })();
-  add(checkNode(process.version, engines));
+  // A package.json without `engines.bun` reads as null — checkBun then reports the range as unreadable.
+  add(checkBun(Bun.version, (pkg as { engines?: { bun?: string } }).engines?.bun ?? null));
 
   const tok = tokenStore.status();
   // A shadowed token's real answer depends on the plugin check below — emit it
   // once that is known, rather than a static "make sure" note before anything has actually been
-  // checked. Every other case is unaffected and keeps its original position, right after Node.js.
+  // checked. Every other case is unaffected and keeps its original position, right after Bun.
   if (!tok.shadowed) add(checkToken(tok));
 
   // DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
   const portWarning = dtwinPortWarning(process.env);
   if (portWarning) add(warn("port", "Port", portWarning));
+  const seam = ephemeralPortWarning(process.env);
+  if (seam) add(seam);
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
   let pluginCheck: Check;
   let viaDaemon = false;
@@ -587,13 +610,13 @@ async function main(argv: string[]): Promise<void> {
     if (a === undefined) continue; // cannot happen: i < argv.length
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
-      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Node version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
-      process.exit(0);
+      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Bun version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
+      exitCli(0);
     } else if (a === "--wait" || a.startsWith("--wait=")) {
       const v = a === "--wait" ? argv[++i] : a.slice("--wait=".length);
       waitSec = Number(v);
-      if (!v || !Number.isFinite(waitSec) || waitSec < 0) { console.error(`[dtwin doctor] error: --wait needs a number of seconds. ${usage}`); process.exit(1); }
-    } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); process.exit(1); }
+      if (!v || !Number.isFinite(waitSec) || waitSec < 0) { console.error(`[dtwin doctor] error: --wait needs a number of seconds. ${usage}`); exitCli(1); }
+    } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); exitCli(1); }
   }
   // Human output streams; --json stays one document at the end (a consumer parses it whole).
   const report = await run(json ? { waitSec } : {
@@ -606,4 +629,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };

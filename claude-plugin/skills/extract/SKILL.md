@@ -58,9 +58,9 @@ server is already running, use its own export tools with `writeToDisk: true` ins
 the CLI.
 
 **Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when it was linked from a clone
-(`npm link --workspace bridge`; the package is not on npm).
+(`bun install`, then `bun link` in its `bridge/` folder; the package is not on npm).
 Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
-`node bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
+`bun bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
 export buttons, which need nothing.
 
 ## Discover, then scope — never open with a whole-file pull
@@ -227,7 +227,7 @@ but no `w`/`h`; its `reference` sits in the layer file, and it has no `.vars.jso
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
 is very often NOT the Figma layer name — a layer named `people ` (trailing space) can be the frame
 whose on-screen `<h1>` reads "Members". Every skill resolves with the one shared script,
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`. The query may also
+`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" design/plan`. The query may also
 be a `<Layer>__<id>` basename or a path to the screen's `.json` (or `.vars.json`); a folder that is not an export
 root (no `pages/index.json`) prints `not an export root` and the root to pass instead. How it decides:
 
@@ -290,7 +290,7 @@ one original (names and values line up while every key differs), or the screen m
 exported. One command answers it:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
   --design-system design/export/design-system
 ```
 
@@ -307,9 +307,9 @@ its report; this is the standalone form for when you have only just pulled.
 into the stack's own theme file once, instead of re-mapping values on every screen:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> design/export/   # DTCG json + tokens.css + a tokens/ set dir
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <css dir> --web tailwind
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <theme dir> --native swiftui   # or compose | flutter | react-native
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> design/export/   # DTCG json + tokens.css + a tokens/ set dir
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <css dir> --web tailwind
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <tokens.json> <theme dir> --native swiftui   # or compose | flutter | react-native
 ```
 
 Which `tokens.json` to feed it changes the values, not just the coverage — read `references/theme-tokens.md` before

@@ -17,8 +17,8 @@ concurrency:
 jobs:
   # One leg per runner, so the slow browser suites neither queue behind each other nor share a CPU (their Budget checks
   # are load-sensitive). `fast` is every suite but the probe e2e ones (run-suites --fast) plus the repo checks; the other
-  # primary-Node legs name exactly those suites between them, and a leg with `node:` (or `os:`) runs `--fast` alone on that
-  # Node (or OS) — test/run-suites.test.ts holds this matrix to FAST_SKIP, so a suite cannot drop out of CI.
+  # primary legs name exactly those suites between them, and a leg with `bun:` (another Bun version) or `os:` runs `--fast`
+  # alone on that Bun (or OS) — test/run-suites.test.ts holds this matrix to FAST_SKIP, so a suite cannot drop out of CI.
   test:
     name: test (${{ matrix.leg }})
     # pinned, not ubuntu-latest: the Budget checks' margins were measured on this image
@@ -32,9 +32,14 @@ jobs:
         include:
           - leg: fast
             suites: --fast
-          # the same quick suites on the next Node LTS (package.json engines is >=24.2)
-          - leg: fast-node26
-            node: 26
+          # the same quick suites on the oldest Bun package.json's engines allows (>=1.4.2); every other leg runs the
+          # version packageManager pins
+          - leg: fast-bun-1.4.2
+            bun: 1.4.2
+            suites: --fast
+          # the same quick suites on macOS (Apple silicon) — where Bun's child-process bugs show (see spawn-stress.yml)
+          - leg: fast-macos
+            os: macos-15
             suites: --fast
           # the same quick suites on Windows (the dtwin daemon is not supported there, and its checks skip with that reason)
           - leg: fast-windows
@@ -51,47 +56,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # The Bun version lives in one place: package.json "packageManager" (bun@1.4.3), which setup-bun reads; a leg's
+      # `bun:` overrides it. Dependabot does not bump packageManager — move it (and this comment) by hand.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # explicit: node-version-file would resolve engines' >=24.2 to the newest Node, not 24
-          node-version: ${{ matrix.node || 24 }}
-          cache: npm
+          bun-version: ${{ matrix.bun }}
+          bun-version-file: package.json
 
+      # Bun's global package cache (tarballs, not node_modules): an exact-key hit skips the downloads, the install still
+      # links node_modules from it and checks every package against bun.lock. Keyed per OS on the lockfile only — the
+      # restore-keys fallback takes an older cache, and the install fetches whatever it lacks.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      # --frozen-lockfile: a bun.lock that does not match package.json fails here instead of being rewritten.
       - name: Install
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # Every leg runs browser suites (the probe e2e ones, and in `fast` verify-probe, verify-values, verify-own-pixels and
       # the visual e2e); locally they skip when no browser is installed, in CI they must run.
       # https://playwright.dev/docs/ci — in the background, overlapping the checks below; its failure fails the `wait`. Not
-      # cached: that page advises against it (restoring takes about as long as downloading).
+      # cached: that page advises against it (restoring takes about as long as downloading). bunx runs the playwright
+      # bin bun install just linked (node_modules/.bin), so the browser matches the locked playwright version; --bun runs
+      # that bin on Bun — bunx otherwise honours its `#!/usr/bin/env node` shebang and starts whatever node is on PATH.
       - name: Install Playwright's chromium
         id: chromium
         background: true
-        run: npx playwright install --with-deps chromium
+        run: bunx --bun playwright install --with-deps chromium
 
       - name: Typecheck
         if: matrix.leg == 'fast'
-        run: npm run typecheck
+        run: bun run typecheck
 
       # Committed build artifacts must match their sources: rebuild, then fail on any diff.
       # (claude-plugin/scripts/ is also checked byte-for-byte by test/verify-build.test.ts.)
-      # bridge/dist/ is built here too but is gitignored, so it is not part of the diff.
       - name: Committed build artifacts are in sync
         if: matrix.leg == 'fast'
         run: |
-          npm run build
+          bun figma-plugin/build.ts
+          bun claude-plugin/build-scripts.ts
           git diff --exit-code -- figma-plugin/code.js claude-plugin/scripts
 
-      # The suites run the bridge from src/; smoke the tsc-emitted tree the npm package ships (`npm run build` above emitted it).
-      - name: Emitted bridge runs
+      # The bridge ships its TypeScript as is (no build): smoke the CLI the way a linked `dtwin` starts it.
+      - name: Bridge CLI runs
         if: matrix.leg == 'fast'
-        run: node bridge/dist/figma-pull.js --help && node bridge/dist/figma-pull.js --version
+        run: bun --no-install --no-env-file bridge/src/figma-pull.ts --help && bun --no-install --no-env-file bridge/src/figma-pull.ts --version
 
       - wait: chromium
 
       # lint:any and lint:types run as the first two suites of the `fast` leg.
       - name: Test
-        run: node test/run-suites.ts ${{ matrix.suites }}
+        run: bun test/run-suites.ts ${{ matrix.suites }}
 
   # The one check a ruleset requires: a leg's check name changes when a leg is added or renamed, this one does not. It runs
   # even when a leg failed or was cancelled (a job skipped because its `needs` failed would not block a merge).

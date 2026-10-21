@@ -1,7 +1,7 @@
 // the generated scripting quick keys, `design/export/SCHEMA.md`, that write-out.ts
 // writes next to the data on every pull that writes to disk (writeScreen + writeExport), and the pull-time
 // line (a design-system export of a file that consumes a library says it is not the catalog).
-// Run with:  node test/quick-keys.test.ts
+// Run with:  bun test/quick-keys.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

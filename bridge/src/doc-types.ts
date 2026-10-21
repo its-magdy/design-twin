@@ -4,7 +4,7 @@
 // library-layout.ts split). The design-to-code layer's types.ts re-exports every name here (`export
 // type *`) except ScreenDoc, which it declares narrower — a local declaration shadows the star export, so a
 // name added here that types.ts also declares is silently its local one. Its consumers import from there; the bridge imports from here so its tsc program stays inside
-// rootDir `src`.
+// its own src/ (the published package ships src/ alone).
 //
 // Types only: no runtime code and NO imports at all (not even `import type`), no Node types, ES2019-safe —
 // the plugin-shared modules (pages-layout, design-system-layout, library-layout) import it, so it is

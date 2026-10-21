@@ -1,7 +1,7 @@
 // Offline validation harness for figma-plugin/code.js.
 // Loads code.js in a VM with a mock `figma`, then drives serialize()/dumpVariables()/buildDesignSystem()
 // against a representative fake node tree. Verifies the extraction transforms produce correct JSON.
-// This needs NO Figma app — run it with:  node test/harness.ts
+// This needs NO Figma app — run it with:  bun test/harness.ts
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -19,7 +19,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
-// Plugin API typings are not visible to test/tsconfig.json — `types: ["node"]` — and would not describe
+// Plugin API typings are not visible to test/tsconfig.json — `types: ["bun"]` — and would not describe
 // these partial doubles anyway.)
 
 /** Any fake Plugin API object: a scene node, a page, a style, a main component, a write target. */

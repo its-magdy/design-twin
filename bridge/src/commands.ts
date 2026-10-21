@@ -434,7 +434,7 @@ export type ParsedRequest = { ok: true; req: CommandRequest } | { ok: false; err
 export function parseCommandRequest(cmd: string, args: unknown): ParsedRequest {
   if (!isCmd(cmd)) return { ok: false, error: "unknown cmd: " + cmd };
   const a: Record<string, unknown> = isRecord(args) ? args : {};
-  const bad = (): ParsedRequest => ({ ok: false, error: argsShapeError(cmd, a) ?? `bad ${cmd} args` });
+  const bad = (): ParsedRequest => ({ ok: false, error: argsShapeError(cmd, a) || `bad ${cmd} args` });
   switch (cmd) {
     case "ping": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
     case "whoami": return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();

@@ -1,16 +1,19 @@
-// Tests that the design-to-code CLIs never lose the tail of a long stdout.
-//   node test/cli-exit.test.ts
+// Tests that the design-to-code CLIs (and the dtwin CLI, MCP server and daemon) never lose the tail of a long stdout.
+//   bun test/cli-exit.test.ts
 // A CLI that writes to process.stdout and then calls process.exit() is cut off when stdout is a pipe:
 // pipe writes are asynchronous on POSIX, so whatever the consumer has not yet read (past the 64 KiB pipe
 // buffer) is dropped (https://nodejs.org/api/process.html#a-note-on-process-io). The fix is `main()` returning
 // an exit code, set as process.exitCode, so every printed byte flushes first.
 //   1. behaviour: run the CLIs with a synthetic screen whose report is far larger than the pipe buffer, into
 //      a deliberately slow reader, and demand every byte;
-//   2. static guard: no design-to-code/*.ts calls process.exit() outside a reasoned allow-list.
+//   2. the queued console (bridge/src/stdio.ts) covers every console method that prints, and runCli's exitCli scope ends
+//      when main settles;
+//   3. static guard: no design-to-code/*.ts or bridge/src/*.ts calls process.exit() outside a reasoned allow-list.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { check, report } from "./assert.ts";
 import { catalog, parseAs, screenExport } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
@@ -84,22 +87,82 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-// ---------------------------------------------------------------- 2. the pattern cannot come back
-
-// file → [how many process.exit( calls it may hold, why]. Anything else must `return` a code from main().
-const ALLOWED: Record<string, [number, string]> = {
-  "cli-args.ts": [1, "cliParse rejects a bad command line before the tool has written anything to stdout"],
-  "catalog-input.ts": [3, "input-file guards: every current caller reads its inputs before writing any stdout, and they print only to stderr — a NEW caller must do the same, or this exit truncates piped output again"],
-  "verify-build.ts": [1, "the hook watchdog: it fires when the process is hung (a stuck read), where a clean exit is not available"],
-  "verify-probe.ts": [1, "exitFlushed: when the process is still up 1 s after main returned (Playwright waiting up to 30 s on a browser slow to quit), or on a stop signal that ended the probe's own run (the listener replaces Node's default exit), and only inside the stderr/stdout write callbacks, so every printed byte has flushed; the exit runs Playwright's exit hook, which kills that browser"],
-};
-console.log("no process.exit() in design-to-code/*.ts outside the allow-list:");
-for (const f of fs.readdirSync(D2C).filter((x) => x.endsWith(".ts")).sort()) {
-  const lines = fs.readFileSync(path.join(D2C, f), "utf8").split("\n");
-  const hits = lines.flatMap((l, i) => (l.trimStart().startsWith("//") ? [] : (l.match(/\bprocess\.exit\(/g) ?? []).map(() => i + 1)));
-  const allowed = ALLOWED[f]?.[0] ?? 0;
-  check(`${f}: ${hits.length} process.exit() call(s), ${allowed} allowed${hits.length > allowed ? ` (lines ${hits.join(", ")}) — return the code from main() and set process.exitCode` : ""}`, hits.length === allowed);
+// ---------------------------------------------------------------- 2. the queued console and runCli's scope (bridge/src/stdio.ts)
+{
+  console.log("\nstdio.ts — every console method through the queue; exitCli throws only while a CLI's main runs:");
+  const stdioUrl = JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "..", "bridge", "src", "stdio.ts")).href);
+  const bun = (code: string, env: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, ...env }, timeout: 15_000 });
+  // Methods that print nothing (the inspector's), the only ones installQueuedConsole may leave as the runtime made them.
+  const SILENT = ["profile", "profileEnd", "timeStamp", "takeHeapSnapshot", "record", "recordEnd", "screenshot", "context", "createTask", "Console"];
+  const left = bun(`import { installQueuedConsole } from ${stdioUrl};
+    const before = Object.fromEntries(Object.getOwnPropertyNames(console).map((k) => [k, console[k]]));
+    installQueuedConsole({ logTo: "stderr" });
+    process.stdout.write(JSON.stringify(Object.keys(before).filter((k) => typeof before[k] === "function" && console[k] === before[k])));`);
+  const untouched = ((): string[] => { try { return JSON.parse(left.stdout) as string[]; } catch { return ["<unreadable: " + left.stdout + left.stderr + ">"]; } })();
+  const missed = untouched.filter((k) => !SILENT.includes(k));
+  check(`installQueuedConsole replaces every console method that can print (left as is: ${untouched.join(", ") || "none"})` + (missed.length ? ` — NOT rerouted: ${missed.join(", ")}` : ""), left.status === 0 && missed.length === 0);
+  // The MCP server's mode: not one byte of any of them on stdout (it carries JSON-RPC only), all of it on stderr.
+  const all = bun(`import { installQueuedConsole } from ${stdioUrl};
+    installQueuedConsole({ logTo: "stderr" });
+    console.log("m-log"); console.info("m-info"); console.debug("m-debug"); console.warn("m-warn"); console.error("m-error");
+    console.dir({ m: "dir" }); console.dirxml("m-dirxml"); console.table([{ m: "table" }]); console.trace("m-trace");
+    console.assert(false, "m-assert"); console.assert(true, "m-never");
+    console.group("m-group"); console.log("m-inner"); console.groupEnd(); console.groupCollapsed("m-collapsed"); console.groupEnd();
+    console.count("m-count"); console.count("m-count"); console.countReset("m-count"); console.count("m-count");
+    console.time("m-time"); console.timeLog("m-time", "m-extra"); console.timeEnd("m-time"); console.timeEnd("m-none");
+    console.write("m-write\\n"); console.clear();`);
+  const wants = ["m-log", "m-info", "m-debug", "m-warn", "m-error", "m: 'dir'", "m-dirxml", "m: 'table'", "Trace: m-trace", "Assertion failed: m-assert",
+    "m-group\n  m-inner", "m-collapsed", "m-count: 1\nm-count: 2\nm-count: 1", "m-extra", "No such label 'm-none'", "m-write"];
+  const absent = wants.filter((w) => !all.stderr.includes(w));
+  check(`logTo "stderr": every method's text reaches stderr (${absent.length ? "missing: " + absent.join(" | ") : "all " + wants.length}), the one passing assert prints nothing`,
+    all.status === 0 && absent.length === 0 && !all.stderr.includes("m-never") && /m-time: \d+\.\d{3}ms m-extra/.test(all.stderr) && /m-time: \d+\.\d{3}ms\n/.test(all.stderr));
+  check(`…and stdout stays empty (${all.stdout.length} bytes)`, all.stdout === "");
+  // runCli's scope: exitCli throws CliExit while main runs (sync or async), and no longer once it has settled — a server a
+  // CLI started (dtwin mcp) then sees exitCli exactly as when launched directly.
+  const scope = bun(`import { runCli, insideCli } from ${stdioUrl};
+    const seen = [];
+    runCli(() => { seen.push("sync:" + insideCli()); return 0; }, { name: "t" });
+    seen.push("after-sync:" + insideCli());
+    runCli(() => { throw new Error("boom"); }, { name: "t", errorLine: () => "thrown", errorCode: 0 });
+    seen.push("after-throw:" + insideCli());
+    runCli(async () => { await null; seen.push("async:" + insideCli()); return 0; }, { name: "t" });
+    seen.push("pending:" + insideCli());
+    runCli(async () => { await null; throw new Error("late"); }, { name: "t", errorLine: () => "rejected", errorCode: 0 });
+    setTimeout(() => process.stdout.write(seen.join(",") + ",settled:" + insideCli() + "\\n"), 20);`);
+  check(`runCli: insideCli() is true only while a main runs and false once every main has settled (${scope.stdout.trim()})`,
+    scope.status === 0 && scope.stdout.trim() === "sync:true,after-sync:false,after-throw:false,pending:true,async:true,settled:false");
+  // `dtwin mcp`'s load-time failure is still that CLI's exit code, with its one line out first (exitCli inside runCli).
+  const mcp = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "mcp"], { encoding: "utf8", env: { ...process.env, FIGMA_BRIDGE_PORT: "9999" }, input: "", timeout: 15_000 });
+  check(`dtwin mcp with FIGMA_BRIDGE_PORT=9999: exit 1 with the port's one line, not a "failed to start" stack (exit ${mcp.status})`,
+    mcp.status === 1 && /FIGMA_BRIDGE_PORT=9999 is not one of 8787, 8788, 8789/.test(mcp.stderr) && !/failed to start/.test(mcp.stderr) && mcp.stdout === "");
 }
-for (const [f, [n, why]] of Object.entries(ALLOWED)) check(`allow-list entry ${f} (${n}: ${why}) still exists`, fs.existsSync(path.join(D2C, f)));
+
+// ---------------------------------------------------------------- 3. the pattern cannot come back
+
+// file (repo-relative) → [how many process.exit( calls it may hold, why]. Anything else must `return` a code from main()
+// (process.exitCode), end through exitCli / exitFlushed (bridge/src/stdio.ts), or set process.exitCode and let the loop end.
+// Both trees are scanned: the dtwin CLI, the MCP server and the daemon (bridge/src) end the same way the design-to-code
+// CLIs do. design-to-code no longer calls the runtime's exit outside stdio.ts: cliParse and catalog-input go through
+// exitCli, the verify-build watchdog and verify-probe's grace / stop-signal exit through exitFlushed; in bridge/src the
+// usage/help exits of dtwin, doctor, init and seed go through exitCli, and the exits made while something still holds the
+// loop (a failed command's open bridge, a held port, the daemon's and the MCP server's signal / shutdown backstops, the
+// crash handler) through exitFlushed.
+const ALLOWED: Record<string, [number, string]> = {
+  "bridge/src/stdio.ts": [2, "exitCli outside runCli (a suite calling main() in-process, the MCP server importing a module: an immediate exit, as before — inside runCli it throws CliExit and the code becomes process.exitCode) and exitFlushed (exits only once every counted stdout/stderr write is out, or at its cap: the verify-build hook watchdog, verify-probe's grace timer / stop signal, whose exit runs Playwright's exit hook that kills the browser, and the bridge's exits while a server still holds the loop)"],
+};
+const ROOT = path.join(import.meta.dirname, "..");
+const SCANNED = ["design-to-code", path.join("bridge", "src")];
+console.log("no process.exit() in design-to-code/*.ts or bridge/src/*.ts outside the allow-list:");
+for (const dir of SCANNED) {
+  for (const f of fs.readdirSync(path.join(ROOT, dir)).filter((x) => x.endsWith(".ts")).sort()) {
+    const rel = path.posix.join(...dir.split(path.sep), f);
+    const lines = fs.readFileSync(path.join(ROOT, dir, f), "utf8").split("\n");
+    const hits = lines.flatMap((l, i) => (l.trimStart().startsWith("//") ? [] : (l.match(/\bprocess\.exit\(/g) ?? []).map(() => i + 1)));
+    const allowed = ALLOWED[rel]?.[0] ?? 0;
+    check(`${rel}: ${hits.length} process.exit() call(s), ${allowed} allowed${hits.length > allowed ? ` (lines ${hits.join(", ")}) — return the code from main() and set process.exitCode, or end through exitCli / exitFlushed` : ""}`, hits.length === allowed);
+  }
+}
+check("the scan saw the dtwin entry point (a moved tree would otherwise pass vacuously)", fs.existsSync(path.join(ROOT, "bridge", "src", "figma-pull.ts")) && fs.existsSync(path.join(D2C, "audit.ts")));
+for (const [f, [n, why]] of Object.entries(ALLOWED)) check(`allow-list entry ${f} (${n}: ${why}) still exists`, fs.existsSync(path.join(ROOT, f)));
 
 report();

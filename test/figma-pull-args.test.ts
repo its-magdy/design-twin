@@ -1,6 +1,6 @@
 // figma-pull's argument handling as pure functions: readArgs (what each flag says), validateArgs (the
 // warnings and the refusal the CLI prints) and parseArgs (both, throwing the refusal).
-//   node test/figma-pull-args.test.ts
+//   bun test/figma-pull-args.test.ts
 // No bridge, no plugin, no port, no spawn: the outDir probe is a stub.
 import path from "node:path";
 import { check, report } from "./assert.ts";

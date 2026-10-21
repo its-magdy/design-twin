@@ -1,5 +1,5 @@
 // CLI help surface: per-verb help pages, the `--out` hint, the port override.
-//   node test/cli-help.test.ts
+//   bun test/cli-help.test.ts
 // No bridge, no plugin and no port: every case is a pure function or a `--help`/`token status` spawn.
 import fs from "node:fs";
 import os from "node:os";
@@ -100,7 +100,7 @@ try {
   const h = bs("--help");
   const bad = bs("--nope");
   check("`build-scripts.ts --help` exits 0, prints usage and creates no `--help` directory; another dash argument is a usage error (exit 2, stderr), also writing nothing",
-    h.status === 0 && /usage: node claude-plugin\/build-scripts\.ts/.test(h.stdout) && !fs.existsSync(path.join(cwd, "--help"))
+    h.status === 0 && /usage: bun claude-plugin\/build-scripts\.ts/.test(h.stdout) && !fs.existsSync(path.join(cwd, "--help"))
     && bad.status === 2 && /usage:/.test(bad.stderr) && !fs.existsSync(path.join(cwd, "--nope")));
 } finally {
   fs.rmSync(cwd, { recursive: true, force: true });

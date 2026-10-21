@@ -1,7 +1,7 @@
 // The bounded size check behind the MCP inline-vs-spill decision (bridge/src/json-size.ts): it must answer exactly
 // what `JSON.stringify(value, null, 2).length <= limit` answers, return byte-identical text when it fits, and stop
 // walking once the limit is passed. No port, no bridge: pure functions.
-// Run with:  node test/json-size.test.ts
+// Run with:  bun test/json-size.test.ts
 import { ok, report } from "./assert.ts";
 import { prettyJsonSize, prettyJsonWithin } from "../bridge/src/json-size.ts";
 

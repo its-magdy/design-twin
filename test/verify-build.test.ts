@@ -1,11 +1,12 @@
 // Offline tests for design-to-code/verify-build.ts (the build-screen Stop-hook gate) and for the
 // committed claude-plugin/scripts/ bundles it ships in.
-//   node test/verify-build.test.ts
+//   bun test/verify-build.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import type { Writable } from "node:stream";
 import { checkPlan, computeStatus, colorLiterals, arbitraryPx, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
   scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
@@ -22,6 +23,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { BehaviourCheck, CodeConnectMap, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
+import { hookRunsScript } from "./plugin-invocation.ts";
 import { codeMap, must, parseAs, readFixture, screenExport } from "./fixtures.ts";
 import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
@@ -43,7 +45,7 @@ function project(files: Record<string, string>, plan: unknown, map?: unknown) {
   if (map) fs.writeFileSync(path.join(root, "codeconnect.local.json"), JSON.stringify(map));
   return root;
 }
-const runHook = (root: string, stdin?: object) => spawnSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }), encoding: "utf8" });
+const runHook = (root: string, stdin?: object) => runSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }) });
 // A transcript line as Claude Code writes it: one JSON object per line, tool calls as message.content[] tool_use items.
 const toolUse = (name: string, input: object, sidechain = false) => JSON.stringify({ type: "assistant", isSidechain: sidechain, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_x", name, input }] } });
 const toolResult = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_x", content: text }] } });
@@ -354,7 +356,7 @@ console.log("verification.recorded — the tool's block:");
   // the open deltas [] of a record of ANOTHER report, beside a report that lists some: the record is not this build's
   const other = verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: "design/verify/other.report.json", deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]);
   check(`a recorded deltas [] beside another report that lists a delta → the record is of another report, record it (got ${JSON.stringify(other)})`,
-    other.length === 1 && /^verification\.recorded\.deltas is \[\] but design\/verify\/other\.report\.json lists 1 delta\(s\) — the record is of another report; if design\/verify\/other\.report\.json is this build's, record it \(node .*verify-screen\.\w+.* --compare --record-plan\)$/.test(other[0] ?? "")
+    other.length === 1 && /^verification\.recorded\.deltas is \[\] but design\/verify\/other\.report\.json lists 1 delta\(s\) — the record is of another report; if design\/verify\/other\.report\.json is this build's, record it \(bun --no-install --no-env-file .*verify-screen\.\w+.* --compare --record-plan\)$/.test(other[0] ?? "")
     && verificationContradictions(planWith({ recorded: { ...REC, deltas: [] } }), [reportRef({ rel: REC.report, deltas: [{ nodeId: "1:2", field: "width", severity: "medium", expected: 10, actual: 12 }] })]).length === 0);
   // a key no record writes does not make a recorded@1 a @2 block: ONE block naming it, the plan read the older way
   const v1Hand = recordBlocks({ mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], recorded: { ...v1, note: "hand", residuals: [] } });
@@ -387,7 +389,7 @@ check("[shape] a plan the hook cannot use is WARNED about by name on every stop,
 check("[shape] a plan path argument that is not a plan -> 'cannot read plan(s): <file> (<why>)', exit 1", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-bad-"));
   fs.writeFileSync(path.join(root, "p.json"), JSON.stringify([1, 2]));
-  const r = spawnSync(process.execPath, [HOOK, "p.json"], { encoding: "utf8", cwd: root });
+  const r = runSync(process.execPath, [HOOK, "p.json"], { cwd: root });
   return r.status === 1 && /verify-build: cannot read plan\(s\): p\.json \(is not a plan \(the file holds an array, not an object\)\)/.test(r.stderr);
 })());
 check("[shape] parsePlan names the field: `deviations` as an object is refused (the warning path does not accept anything)", (() => {
@@ -483,7 +485,7 @@ check("planCodeFiles = files[] (as written, in order) then the mapped modules no
   check(`control: a files[] entry missing from the record is still a change → stale "(added to files[])" (got ${st2.status})`,
     st2.status === "stale" && st2.reasons.some((x) => x.includes("src/Screen.tsx (added to files[])")));
   // once the hook records the shell, an edit to it reopens the plan
-  spawnSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root, encoding: "utf8" }); // an explicit check re-records
+  runSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root }); // an explicit check re-records
   const recorded = typeof hookOf(root).files?.["src/shell/Shell.tsx"] === "string";
   fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// edited after the record\n");
   check("once a hook check records it, an edit to the shell is a change again (stale)", recorded && statusOf(root) === "stale");
@@ -511,13 +513,13 @@ check("planCodeFiles(plan, cwd): an extensionless mapModule resolves .tsx/.ts/.j
   check("…editing it → stale", statusOf(root) === "stale");
   // named once in --status, never by the Stop hook (it would repeat on every stop)
   const NOTE = /mapModule path\(s\) not hashed with this plan's code: @\/components\/Footer, ~\/ui\/Badge — not a file under the project \(an `@\/`\/`~\/` alias/;
-  const sj = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
+  const sj = runSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root });
   const rows: unknown = JSON.parse(sj.stdout || "[]");
   const reasons = isStatusRows(rows) ? rows.flatMap((x) => x.reasons) : [];
   check(`verify-build --status: ONE note naming the alias mapModules (got ${JSON.stringify(reasons.filter((x) => /mapModule/.test(x)))})`,
     reasons.filter((x) => NOTE.test(x)).length === 1 && reasons.some((x) => x.startsWith("note: mapModule path(s) not hashed")));
   const hookRun = runHook(root, { cwd: root });
-  const hookSaid = spawnSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root, encoding: "utf8" });
+  const hookSaid = runSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root });
   check("…the Stop hook says nothing about it (no warning on the fast path nor on an explicit check; not among checkPlan's warnings)",
     !/mapModule path\(s\) not hashed/.test(hookRun.stderr + hookSaid.stderr) && hookSaid.status === 0
     && !checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings.some((x) => /mapModule path\(s\) not hashed/.test(x)));
@@ -695,7 +697,7 @@ for (const ev of ["SubagentStop", "Stop"]) {
 }
 // The hook as Claude Code runs a shell-form command on Windows without Git Bash: through PowerShell, the bundle as shipped.
 if (process.platform === "win32") {
-  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `node "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const viaPowerShell = (payload: object) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `bun --no-install --no-env-file "${path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "verify-build.js")}"`], { input: JSON.stringify(payload), encoding: "utf8" });
   const failing = () => project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const legacy = failing(), real = failing();
   const l = viaPowerShell({ cwd: legacy }), r = viaPowerShell({ cwd: real, hook_event_name: "SubagentStop" });
@@ -727,7 +729,7 @@ check("…but one touched an hour ago still blocks", (() => {
 check("DTWIN_PLAN_STALE_HOURS=0 disables the cutoff", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   age(root, 100);
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8", env: { ...process.env, DTWIN_PLAN_STALE_HOURS: "0" } });
+  const r = runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), env: { ...process.env, DTWIN_PLAN_STALE_HOURS: "0" } });
   return r.status === 2 && isStale(path.join(root, "design", "plan", "login.json")) === true;
 })());
 
@@ -868,8 +870,8 @@ console.log("a visible design node with no anchor blocks; hidden ones never coun
   check("[anchors] the live Guided Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(bMsg) && /^3 visible/.test(bMsg));
   // blocking messages are SAVED into the plan (verification.hook.blocking), a committed file —
   // they name scripts in words, never by the per-machine absolute path the printed hints carry.
-  check("no blocking message (saved into the plan) carries a script path or a `node \"…\"` command",
-    r.blocking.length > 0 && r.blocking.every((m) => !/node "|[\\/]scripts[\\/][a-z-]+\.(js|ts)|design-to-code[\\/]/.test(m)) && /the plan-skeleton script/.test(bMsg));
+  check("no blocking message (saved into the plan) carries a script path or a `bun …`/`node \"…\"` command",
+    r.blocking.length > 0 && r.blocking.every((m) => !/node "|bun --no-install|[\\/]scripts[\\/][a-z-]+\.(js|ts)|design-to-code[\\/]/.test(m)) && /the plan-skeleton script/.test(bMsg));
   const fixed = fxPlan(GP);
   must(fixed.anchors, "fixed.anchors")["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));
@@ -884,7 +886,7 @@ console.log("the live plans and reports: neither comes out `verified`:");
   const before = [st(JR), st(GP)];
   check("before the hook runs, the stored \"verified\" is ignored — computed status is pending, and says why",
     fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0] ?? "")));
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const r = runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }) });
   const after = { jr: readFixture(planFile(JR), isPlan), gp: readFixture(planFile(GP), isPlan) };
   const jrText = fs.readFileSync(planFile(JR), "utf8"); // (the hook keeps the plan file's own format)
   check("the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
@@ -893,7 +895,7 @@ console.log("the live plans and reports: neither comes out `verified`:");
     jr.status === "unverified" && /JetRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\) — it predates designtwin\/verify-report@2/.test(jr.reasons.join(" "))
     && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0]?.matchedBy === "layer name");
   check(`Guided Policies: not verified either (got ${gp.status} — its hook run blocked on the unanchored footer)`, gp.status !== "verified" && gp.status === "blocked");
-  const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
+  const cli = runSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root });
   const rows = parseAs(cli.stdout, isStatusRows, "--status --json");
   check("`verify-build.js --status --json` reports the same, and writes nothing", cli.status === 0 && rows.length === 2 && rows.every((x) => x.status !== "verified")
     && fs.readFileSync(planFile(JR), "utf8") === jrText);
@@ -901,7 +903,7 @@ console.log("the live plans and reports: neither comes out `verified`:");
   const gpFixed = readFixture(planFile(GP), isPlan);
   must(gpFixed.anchors, "gpFixed.anchors")["1359:21457"] = { omitted: "duplicate footer" };
   fs.writeFileSync(planFile(GP), JSON.stringify(gpFixed, null, 2));
-  spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }) });
   const gp2 = st(GP);
   check(`with its hook passing, Guided Policies is still not verified — its @1 report must be regenerated (got ${gp2.status})`, gp2.status === "unverified" && /GuidedPolicies\.report\.json is designtwin\/verify-report@1/.test(gp2.reasons.join(" ")));
   // the `<Layer>__<id>` report naming is found by name too
@@ -931,8 +933,8 @@ console.log("end to end — plan-skeleton.js writes the plan, the hook checks it
   const SK = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.ts");
   const E = "design/export/pages/__Optimization_management_";
   const planRel = "design/plan/" + JR + ".json";
-  const g = spawnSync(process.execPath, [SK, `${E}/${JR}.json`, `${E}/${JR}.vars.json`, "design/export/design-system", "--out", planRel], { cwd: root, encoding: "utf8" });
-  const hook = () => spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const g = runSync(process.execPath, [SK, `${E}/${JR}.json`, `${E}/${JR}.vars.json`, "design/export/design-system", "--out", planRel], { cwd: root });
+  const hook = () => runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }) });
   const r1 = hook();
   check("a fresh skeleton (nothing filled) BLOCKS on its one unanchored subtree — the frame — and on nothing else",
     g.status === 0 && r1.status === 2 && /254 visible design node\(s\) have no anchor/.test(r1.stderr) && /7314:87192 'positions'/.test(r1.stderr) && !/raw colour/.test(r1.stderr));
@@ -1007,8 +1009,8 @@ console.log("freshness by content, never by clock:");
   fs.writeFileSync(planFile, JSON.stringify({ status: "pending", screenName: "Jet Roles", nodeId: "7314:87192", route: "/jet-roles", file: `${E}/${JR}.json`,
     files: ["app/src/layout/Header.tsx"], anchors: { "7314:87192": { mapModule: "app/src/layout/Header.tsx" } },
     verification: { mode: "rendered", artifacts: ["app/src/layout/Header.tsx"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }, null, 2));
-  const vs = (args: string[]) => spawnSync(process.execPath, [VS, ...args], { cwd: root, encoding: "utf8" });
-  const hook = () => spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const vs = (args: string[]) => runSync(process.execPath, [VS, ...args], { cwd: root });
+  const hook = () => runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }) });
   const st = () => computeStatus(readFixture(planFile, isPlan), { cwd: root, planFile });
   const x = vs(["--expect", `${E}/${JR}.json`]);
   fs.writeFileSync(path.join(root, "design/verify/m.json"), JSON.stringify({ measuredAt: "2026-09-23T00:00:00Z", renderer: "test", nodes: [] }));
@@ -1076,7 +1078,7 @@ console.log("freshness by content, never by clock:");
   const g0 = st();
   check(`a report written before waivers existed (no inputs.waivers) beside a plan with none still verifies (got ${g0.status})`, g0.status === "verified");
   withReport("pass-with-deviations", null);
-  const g1hook = spawnSync(process.execPath, [HOOK, planFile], { cwd: root, encoding: "utf8" }); // checked by name: the Stop hook's fast path is silent on a plan it already passed
+  const g1hook = runSync(process.execPath, [HOOK, planFile], { cwd: root }); // checked by name: the Stop hook's fast path is silent on a plan it already passed
   const g1 = st();
   check(`every report passing, one "pass-with-deviations" → verified-with-deviations (got ${g1.status}, not unverified)`,
     g1.status === "verified-with-deviations" && /pass-with-deviations/.test(g1.reasons.join(" ")));
@@ -1143,22 +1145,22 @@ console.log("--status on the untouched live plan: precedence, and a why that is 
   // A recorded state: plan as written (stored "verified", no verification.hook), and the
   // original schema-@1 JetRoles.report.json saying fail.
   const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
-  const cli = spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" });
+  const cli = runSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root });
   const row = must(parseAs(cli.stdout, isStatusRows, "--status --json")[0], "status row [0]");
   check(`the untouched Jet Roles plan → pending, with a why naming the ignored stored status, the unrun hook, and the @1 report and its verdict (got ${row.status}; why ${row.why === null ? "null" : "set"})`,
     cli.status === 0 && row.status === "pending" && typeof row.why === "string"
     && /stored "status": "verified" was not confirmed/.test(row.why) && /Stop hook has not checked this plan/.test(row.why)
     && /JetRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\)/.test(row.why) && /Regenerate it/.test(row.why)
     && !/never built|31 component/.test(row.why));
-  const all = parseAs(spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json");
+  const all = parseAs(runSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root }).stdout, isStatusRows, "--status --json");
   check("every non-verified row of --status --json carries a non-empty why", all.length === 2 && all.every((r) => r.status === "verified" || (typeof r.why === "string" && r.why.length > 0)));
   // precedence 2 over 3: an @2 report that FAILS is reported as failed even though the hook never ran
   const rep = readFixture(path.join(root, "design/verify/JetRoles.report.json"), isVerifyReport);
   fs.writeFileSync(path.join(root, "design/verify/JetRoles.report.json"), JSON.stringify(Object.assign(rep, { schema: "designtwin/verify-report@2", headline: "FAIL — nodes measured 76/186" })));
-  const r2 = must(parseAs(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json")[0], "status row [0]");
+  const r2 = must(parseAs(runSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root }).stdout, isStatusRows, "--status --json")[0], "status row [0]");
   check(`precedence: a failing @2 report is "failed" even before the hook has run, and why still says the hook has not (got ${r2.status})`,
     r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why ?? "") && /hook: the build-screen Stop hook has not checked/.test(r2.why ?? ""));
-  check("--help documents the precedence", /First match wins/.test(spawnSync(process.execPath, [HOOK, "--help"], { encoding: "utf8" }).stdout));
+  check("--help documents the precedence", /First match wins/.test(runSync(process.execPath, [HOOK, "--help"]).stdout));
 }
 
 console.log("field-test fixes:");
@@ -1572,9 +1574,9 @@ console.log("field-test fixes:");
       fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
       const file = path.join(root, "design", "plan", "broken.json");
       fs.writeFileSync(file, JSON.stringify({ status: " Abandoned ", tokens: "none" }));
-      const closed = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
+      const closed = runSync(process.execPath, [HOOK, "--status"], { cwd: root });
       fs.writeFileSync(file, JSON.stringify({ status: "pending", tokens: "none" }));
-      const open = spawnSync(process.execPath, [HOOK, "--status"], { cwd: root, encoding: "utf8" });
+      const open = runSync(process.execPath, [HOOK, "--status"], { cwd: root });
       return closed.status === 0 && closed.stderr.includes(`verify-build: ${path.join("design", "plan", "broken.json")} is "abandoned" — skipped (the file is not a valid plan: \`tokens\` must be an array)`)
         && !closed.stderr.includes("cannot read plan")
         && open.status === 0 && open.stderr.includes("cannot read plan ") && open.stderr.includes("broken.json: is not a valid plan: `tokens` must be an array");
@@ -1665,7 +1667,7 @@ console.log("field-test fixes:");
     }
     for (let c = 0; c < 20; c++) w(`src/shared/c${c}.tsx`, "");
     const t0 = Date.now();
-    const r = spawnSync(process.execPath, [HOOK, ...planPaths], { encoding: "utf8", cwd: root });
+    const r = runSync(process.execPath, [HOOK, ...planPaths], { cwd: root });
     const ms = Date.now() - t0;
     console.log(`    (1000+ files / 40 plans: ${ms} ms)`);
     const navWarned = /'Nav' is "reused"/.test(r.stderr), missingWarned = (r.stderr.match(/'Missing' is "reused"/g) || []).length === 1;
@@ -1690,7 +1692,7 @@ const catalogFile = path.join(bootDir, "components.local.json");
 const mapFile = path.join(bootDir, "codeconnect.local.json");
 fs.writeFileSync(catalogFile, JSON.stringify({ components: [{ type: "COMPONENT", key: "k-btn", id: "1:2", name: "Button", props: {} }] }));
 check("--out writes the map file and keeps stdout clean", (() => {
-  const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
+  const r = runSync(process.execPath, [BOOT, catalogFile, "--out", mapFile]);
   return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && must(readFixture(mapFile, isCodeConnectMap).components["k-btn"], "map.components['k-btn']").status === "needs-review";
 })());
 check("re-running --out MERGES into the existing map — hand edits survive", (() => {
@@ -1699,15 +1701,15 @@ check("re-running --out MERGES into the existing map — hand edits survive", ((
   entry.code.module = "@/ui/Button";
   entry.status = "active"; // a hand edit: a real MapStatus, not the bootstrap default
   fs.writeFileSync(mapFile, JSON.stringify(map));
-  const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
+  const r = runSync(process.execPath, [BOOT, catalogFile, "--out", mapFile]);
   const after = must(readFixture(mapFile, isCodeConnectMap).components["k-btn"], "map.components['k-btn']");
   return r.status === 0 && after.code.module === "@/ui/Button" && after.status === "active" && /merged/.test(r.stderr);
 })());
 check("without --out it still prints to stdout (back-compat)", (() => {
-  const r = spawnSync(process.execPath, [BOOT, catalogFile], { encoding: "utf8" });
+  const r = runSync(process.execPath, [BOOT, catalogFile]);
   return r.status === 0 && parseAs(r.stdout, isCodeConnectMap, "map-bootstrap stdout").components["k-btn"] !== undefined;
 })());
-check("an unknown option is refused, not swallowed as a file path", spawnSync(process.execPath, [BOOT, catalogFile, "--output", mapFile], { encoding: "utf8" }).status === 1);
+check("an unknown option is refused, not swallowed as a file path", runSync(process.execPath, [BOOT, catalogFile, "--output", mapFile]).status === 1);
 
 // ---------------------------------------------------------------- report.behaviour → hook WARNINGS, never a block
 console.log("behaviour/a11y in the Stop hook (warnings only):");
@@ -2003,6 +2005,16 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["']axe-core(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports axe-core literally`);
   }
   check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
+  // …and that one call site resolves a package only once the project has it on disk (under Bun, resolving a package the
+  // project lacks downloads it from npm into Bun's global cache — auto-install — so the look comes first:
+  // packageDirInProject), and what it resolves is loaded only from the project's own node_modules (installedInProject).
+  // Their cases are in test/verify-probe.test.ts; both guards must be in the bundle, before each resolve / load.
+  const vp = fs.readFileSync(path.join(SCRIPTS, "verify-probe.js"), "utf8");
+  const guards = [...vp.matchAll(/\binstalledInProject\(/g)].length, looks = [...vp.matchAll(/\bpackageDirInProject\(/g)].length;
+  check(`verify-probe.js checks every resolved Playwright package and axe-core against the project's node_modules before loading it (installedInProject: ${guards} mentions — its definition and the Playwright and axe-core call sites, want 3)`,
+    guards === 3 && /resolved outside the project's node_modules/.test(vp));
+  check(`verify-probe.js resolves Playwright and axe-core only after finding them on disk in the project (packageDirInProject: ${looks} mentions — its definition and the two call sites, want 3)`,
+    looks === 3 && vp.indexOf("packageDirInProject(abs, name)") < vp.indexOf("file = req.resolve(name)") && vp.indexOf("packageDirInProject(dir, \"axe-core\")") < vp.indexOf("file = req.resolve(\"axe-core\")"));
 }
 // the visual diff ports pixelmatch v6.0.0 (ISC) — its licence notice must ship with the code: visual-diff.ts carries it
 // as a `/*! … */` legal comment, which esbuild keeps (moved to the end of the file, legalComments "eof" when bundling)
@@ -2034,14 +2046,23 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 // An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
 void build(tmp).then(async () => {
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
-  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
+  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: bun claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
+  // the exec bit is part of the build: a bundle with a shebang (design-diff.js) 0755, every other 0644 — in a rebuild and in
+  // the committed tree alike (a checkout carries git's mode; Windows has no such bit)
+  if (process.platform !== "win32") {
+    const mode = (f: string): string => (fs.statSync(f).mode & 0o777).toString(8);
+    const want = (f: string): string => fs.readFileSync(f, "latin1").startsWith("#!") ? "755" : "644";
+    const wrong = ENTRIES.flatMap((n) => [path.join(tmp, n + ".js"), path.join(SCRIPTS, n + ".js")]).filter((f) => mode(f) !== want(f)).map((f) => `${path.relative(path.dirname(path.dirname(f)), f)} is ${mode(f)}, want ${want(f)}`);
+    check("each bundle's mode follows its first line, rebuilt and committed: a shebang → 755, else 644" + (wrong.length ? " — " + wrong.join("; ") : ""),
+      wrong.length === 0 && want(path.join(SCRIPTS, "design-diff.js")) === "755");
+  }
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
     fs.copyFileSync(path.join(SCRIPTS, "drift-lint.js"), path.join(out, "drift-lint.js"));
     // The installed plugin dir carries claude-plugin/package.json ({"type": "module"}); without it Node
     // would fall back to syntax detection for these ESM bundles.
     fs.copyFileSync(path.join(SCRIPTS, "..", "package.json"), path.join(out, "package.json"));
-    const r = spawnSync(process.execPath, [path.join(out, "drift-lint.js")], { encoding: "utf8" });
+    const r = runSync(process.execPath, [path.join(out, "drift-lint.js")]);
     return /usage:/.test(r.stdout + r.stderr);
   })());
   // A require cycle once made esbuild wrap tokens.js as an inner module: `require.main === module`
@@ -2050,14 +2071,14 @@ void build(tmp).then(async () => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
     const input = path.join(out, "tokens.json");
     fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
-    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui", "--also-generic"], { encoding: "utf8" });
+    const r = runSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui", "--also-generic"]);
     return r.status === 0 && fs.existsSync(path.join(out, "tokens.dtcg.json")) && /static let aB: Color/.test(fs.readFileSync(path.join(out, "DesignTokens.swift"), "utf8"));
   })());
   check("--native WITHOUT --also-generic writes ONLY the native file, not the generic set, and names the canonical file", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
     const input = path.join(out, "tokens.json");
     fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
-    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    const r = runSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"]);
     return r.status === 0 && fs.existsSync(path.join(out, "DesignTokens.swift")) && !fs.existsSync(path.join(out, "tokens.dtcg.json"))
       && !fs.existsSync(path.join(out, "tokens.css")) && !fs.existsSync(path.join(out, "tokens.resolver.json")) && !fs.existsSync(path.join(out, "tokens"))
       && /wrote DesignTokens\.swift/.test(r.stdout) && /NOT written here.*design\//.test(r.stdout);
@@ -2082,13 +2103,14 @@ void build(tmp).then(async () => {
   const posRoot = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const pos = await timed([path.join(posRoot, "design", "plan", "login.json")], {});
   check(`a plan path as an argument is checked without touching stdin (exit ${pos.code} in ${pos.ms} ms)`, pos.code === 2 && pos.ms < 2000 && /brand-600/.test(pos.stderr));
-  type HooksJson = { hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout: number }> }>> };
+  type HooksJson = { hooks: Record<string, Array<{ hooks: Array<{ command: string; args?: string[]; timeout: number }> }>> };
   const isHooksJson = (x: unknown): x is HooksJson => isJsonObject(x) && isJsonObject(x.hooks) && Object.values(x.hooks).every((list) => Array.isArray(list) && list.every((e) => isJsonObject(e) && Array.isArray(e.hooks)));
   const hooks = readFixture(path.join(import.meta.dirname, "..", "claude-plugin", "hooks", "hooks.json"), isHooksJson);
   const subagentStop = must(hooks.hooks.SubagentStop, "hooks.hooks.SubagentStop");
   const h = must(must(subagentStop[0], "hooks.hooks.SubagentStop[0]").hooks[0], "hooks.hooks.SubagentStop[0].hooks[0]");
-  check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js and gives it longer than its own 60 s cut-off",
-    /scripts\/verify-build\.js"?$/.test(h.command) && h.timeout > 60);
+  const gate = hookRunsScript(h, "verify-build");
+  check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js in exec form ({command: \"bun\", args: [--no-install, --no-env-file, …]}) and gives it longer than its own 60 s cut-off",
+    gate.ok && gate.form === "exec" && h.timeout > 60);
 
   // ---------------------------------------------------------------- first-class auditGate
   // Real audit: design/audit/Studio_Configurations.json (5 blockers, copied verbatim from a

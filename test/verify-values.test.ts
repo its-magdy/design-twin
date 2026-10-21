@@ -2,7 +2,7 @@
 // `buildExpectation` over a plugin-shaped screen export (test/fixtures.ts, invented names); measurements are the shapes probes actually wrote in the field
 // ("20px" strings, ["8px",…] radii, `fill` read off an <img>, a -220 gap, a top-level `notFound`).
 // The last block runs the shipped probe's in-page function in chromium (skipped locally without one; CI fails).
-// Run with:  node test/verify-values.test.ts
+// Run with:  bun test/verify-values.test.ts
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, radiusCorners } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";

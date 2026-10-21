@@ -58,7 +58,7 @@ import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { EXPORT_DIR, EXPORT_SUBDIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeStem } from "./verify-sets.ts";
 import { openRunSets } from "./verify-status.ts";
@@ -308,7 +308,7 @@ export type { ResolveStageKind };
 
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   // --help is the only flag, so every other word is an argument — a screen named "--- Draft ---" is looked up, not parsed
@@ -361,4 +361,4 @@ function main(argv: string[]): number {
   return 1;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "resolve-screen" }); // exitCode, never exit(): every printed line drains first (proc.ts)

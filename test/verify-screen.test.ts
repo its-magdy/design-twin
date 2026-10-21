@@ -5,12 +5,11 @@
 // a body at 16px/#d4d4d4 where the export says 14px/#a0a0a0, a chip whose fill token was never
 // applied, a modal at radius 20 against a spec of 12, two toolbar components never built, and a set
 // of designed interactions nobody exercised.
-// Run with:  node test/verify-screen.test.ts
+// Run with:  bun test/verify-screen.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { liveStatusFile } from "../design-to-code/verify-run.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, tokenFor } from "../design-to-code/verify-compare.ts";
@@ -28,6 +27,10 @@ import { isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.t
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { check as ok, report } from "./assert.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { cliRunner } from "./cli-runner.ts";
+import { main as verifyScreenMain } from "../design-to-code/verify-screen.ts";
+// the first runs are real children, the rest verify-screen.ts's main in-process (test/cli-runner.ts); --wait polls (async): a child
+const verifyScreen = cliRunner(path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), verifyScreenMain, { spawnIf: (a) => a.some((w) => w === "--wait" || w.startsWith("--wait=")) });
 const okOuter = ok;
 
 // A one-frame screen export around the given children (typed IR nodes: fixtures.ts node()).
@@ -477,8 +480,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // the input file's basename or a name the caller typed — so no nickname can start a second artefact set.
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-out-"));
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const vdir = path.join(cwd, "design", "verify");
   const put = (rel: string, d: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(d)); return rel; };
   const screen = (name: string) => ({ exportedAt: "2026-09-22T00:00:00.000Z", screen: name, nodes: [{ type: "FRAME", id: "5:6", name, children: [] }] });
@@ -531,8 +533,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // ---------- the stem is fixed once a set exists; a legacy-named set of the node is noted, never reused ----------
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-stem-"));
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const vdir = path.join(cwd, "design", "verify");
   fs.mkdirSync(vdir, { recursive: true });
   const screenFile = path.join(cwd, "New__5_6.json");
@@ -560,8 +561,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // ---------- --expect --variant <slug>: a second set of the node is a variant, named once ----------
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-variant-"));
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const run = (...a: string[]) => spawnSync(process.execPath, [scriptPath, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const vdir = path.join(cwd, "design", "verify");
   const screenFile = path.join(cwd, "Screen__5_6.json");
   fs.writeFileSync(screenFile, JSON.stringify({ exportedAt: "2026-09-22T00:00:00.000Z", screen: "Screen", nodes: [{ type: "FRAME", id: "5:6", name: "Screen", children: [] }] }));
@@ -846,8 +846,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — evidence is tied to its inputs, CLI:");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-verify-"));
-  const script = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const run = (...a: string[]) => spawnSync(process.execPath, [script, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const src = path.join(FX, GP_FILE);
   // (no export index here: the set is named by the frame's own layer name, `Studio Configurations`)
   const GP = "Studio_Configurations__1359_21337";
@@ -886,10 +885,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // A non-object expectation or measurement is not read as an EMPTY document (--compare would grade
 // nothing and print a verdict about it).
 (() => {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-shape-"));
   const put = (name: string, doc: unknown): string => { fs.writeFileSync(path.join(cwd, name), JSON.stringify(doc)); return name; };
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
   const exp = put("x.expected.json", buildExpectation([doc([textNode("2:1", "T", "Hi", { family: "Poppins", size: 14 })])]));
   const meas = put("m.json", measured([{ nodeId: "2:1", styles: { fontSize: 14 } }]));
@@ -907,9 +905,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 // ---------- --expect says what state the old artefacts are in; a replaced expectation is kept ----------
 (() => {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-dt45-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const vdir = path.join(cwd, "design", "verify");
   const screen = (fill: string) => ({ exportedAt: "2026-10-07T00:00:00.000Z", screen: "Orders",
     nodes: [{ type: "FRAME", id: "5:6", name: "Orders", box: { x: 0, y: 0, w: 800, h: 600 }, fills: [{ type: "solid", color: fill }], children: [] }] });
@@ -976,9 +973,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 // ---------- --compare --record-plan — the plan is the one compare chose; none / several → exit 2 first ----------
 (() => {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-record-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const put = (rel: string, doc: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(doc, null, 4) + "\n"); return rel; };
   const exp = put("design/verify/Orders__1_1.expected.json", buildExpectation([doc([textNode("2:1", "Title", "Orders", { family: "Inter", size: 14 })])]));
   const meas = put("design/verify/Orders__1_1.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 14, fontFamily: "Inter", text: "Orders" } }]));
@@ -1015,9 +1011,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 // ---------- [plans] a frame's plans are found by its node id only; several are a data error ----------
 (() => {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-plans-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const put = (rel: string, d: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof d === "string" ? d : JSON.stringify(d, null, 4) + "\n"); return rel; };
   const docs = [doc([textNode("2:1", "Title", "Bins", { family: "Inter", size: 14 })])]; // frame 1:1
   const exp = put("design/verify/Bins__1_1.expected.json", buildExpectation(docs));
@@ -1065,9 +1060,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 // ---------- a plan named `<Layer>__<id>` describes the frame whose id it carries — an instance sublayer's too ----------
 (() => {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-plan-stem-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => verifyScreen([...a], { cwd });
   const put = (rel: string, doc: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), JSON.stringify(doc, null, 4) + "\n"); return rel; };
   // a --node pull of a layer inside an instance: its frame id is "I5:2;30:7", its files `<Name>__I5_2_30_7.*`
   const e = buildExpectation([doc([textNode("2:1", "Title", "Chip", { family: "Inter", size: 14 })])]);

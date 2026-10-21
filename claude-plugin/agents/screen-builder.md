@@ -23,7 +23,7 @@ still show the plugin-root variable unexpanded (a `$` followed by `{CLAUDE_PLUGI
 shared references it links (the run protocol is `${CLAUDE_PLUGIN_ROOT}/skills/verify/references/run-protocol.md`):
 read it as that plugin path. The skill's own `references/…` and `profiles/…` paths are relative to
 `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/`. Its `references/`/`profiles/` files say `<scripts>`, which means the scripts folder, so run e.g.
-`node "<that folder>/plan-skeleton.js" …`. The variable is not set in the Bash shell, so type the real path, not
+`bun --no-install --no-env-file "<that folder>/plan-skeleton.js" …`. The variable is not set in the Bash shell, so type the real path, not
 `$CLAUDE_PLUGIN_ROOT`, into a command. A script that seems missing is a path to fix, not a check to redo by hand.
 
 Boundaries:
@@ -45,13 +45,13 @@ You cannot ask the user: when the skill says to have the user confirm a list (e.
 stubs), record it in the plan, set `status:"awaiting-user"`, name the list in your hand-back and never
 confirm it on their behalf.
 
-Nothing stores a status: it is computed (`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status`) from the hook's result, the
+Nothing stores a status: it is computed (`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status`) from the hook's result, the
 hashes of `files[]` and the verify report's verdict, and the hook runs after you hand back. Report
 the evidence you have and the status you expect: "rendered (Playwright, design/verify/<Layer>__<id>.png);
 `--compare` verdict pass, 180/254 nodes measured — expect `verified`." Never assert
 `verified`/`static-only` as an accomplished fact, and never write `status` (only `awaiting-user` /
 `abandoned`, as the skill says). If the hook blocks, fix what it listed and re-run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself until it passes, then hand back — the hook
+`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" <plan.json>` yourself until it passes, then hand back — the hook
 does not check the stop that follows its own block.
 
 A delta you cannot or would rather not fix is not yours to accept: never write `waivers[]` or

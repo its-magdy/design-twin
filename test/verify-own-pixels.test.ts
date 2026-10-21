@@ -6,7 +6,7 @@
 // boxes, a control unmounted when the pointer leaves, and a strict style CSP.
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI (CI=true)
-// that is a failure.  Run with:  node test/verify-own-pixels.test.ts
+// that is a failure.  Run with:  bun test/verify-own-pixels.test.ts
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Browser, Page } from "playwright";

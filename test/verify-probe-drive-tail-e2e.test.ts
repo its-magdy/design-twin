@@ -20,7 +20,7 @@
 // probe words it, its browser closed by the probe (Playwright's launcher log says how it ended).
 //
 // needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
-// (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-tail-e2e.test.ts
+// (CI=true) that is a failure.  Run with:  bun test/verify-probe-drive-tail-e2e.test.ts
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

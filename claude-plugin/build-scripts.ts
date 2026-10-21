@@ -5,7 +5,8 @@
 // Many design-to-code modules import ../bridge/src/*.ts, which does not exist there, and a symlink
 // pointing outside the plugin directory is not installed at all — so either one ships a plugin whose
 // Stop hook and every scripts/ call fail. bundle:true inlines those imports, so each output file is
-// self-contained (Node builtins only).
+// self-contained (node: builtins only, which Bun provides). The hooks and skills run each one as
+// `bun --no-install --no-env-file <script>.js`.
 //
 // Why one esbuild build PER ENTRY, with the inlined-CLI-guard plugin: every design-to-code module ends in
 // an `if (import.meta.main) { …CLI… }` block. In an ESM bundle every inlined module's `import.meta` IS the
@@ -15,7 +16,9 @@
 // built on its own, and in every OTHER design-to-code module the plugin rewrites `import.meta.main` to
 // `false` before esbuild sees it; only the entry keeps a live guard (exactly one per bundle).
 //
-// Run from the repo root:  node claude-plugin/build-scripts.ts [outDir]
+// Run from the repo root:  bun claude-plugin/build-scripts.ts [outDir]
+// (esbuild, not Bun's bundler: Bun's turns import.meta.main into an always-true constant when it targets node+esm, and
+// esbuild's output is what the committed files have always been — the byte-for-byte gate below stays meaningful.)
 // test/verify-build.test.ts rebuilds into a temp dir and fails if scripts/ is stale — the same
 // committed-artifact gate figma-plugin/code.js has.
 import path from "node:path";
@@ -41,11 +44,23 @@ function inlinedCliGuard(entry: string): Plugin {
   };
 }
 
+// The file mode is part of the output too: a bundle whose source starts with a shebang (esbuild keeps it on line 1 —
+// design-diff's `#!/usr/bin/env -S bun --no-install --no-env-file`) is executable (0755), every other one is not (0644),
+// whatever mode a previous build or a checkout left — so the committed scripts/ and a rebuild agree on the exec bit
+// (test/verify-build.test.ts compares both). Not on Windows, which has no such bit.
+function setMode(file: string): void {
+  if (process.platform === "win32") return;
+  const fd = fs.openSync(file, "r");
+  const head = Buffer.alloc(2);
+  try { fs.readSync(fd, head, 0, 2, 0); } finally { fs.closeSync(fd); }
+  fs.chmodSync(file, head.toString("latin1") === "#!" ? 0o755 : 0o644);
+}
+
 function build(outDir: string): Promise<BuildResult[]> {
   fs.mkdirSync(outDir, { recursive: true });
-  return Promise.all(ENTRIES.map((n) => {
+  return Promise.all(ENTRIES.map(async (n) => {
     const entry = path.resolve(SRC, n + ".ts");
-    return esbuild.build({
+    const result = await esbuild.build({
       entryPoints: [entry],
       outdir: outDir,
       // esbuild writes each inlined module's path (relative to the working dir) into the output as a
@@ -53,13 +68,17 @@ function build(outDir: string): Promise<BuildResult[]> {
       absWorkingDir: path.join(import.meta.dirname, ".."),
       bundle: true,
       format: "esm",
-      platform: "node",
-      target: "node24",
+      platform: "node", // node: builtins stay imports — Bun implements them
+      // the runtime is Bun, which runs current syntax as is: nothing is lowered (and the output does not move with a
+      // Node version table)
+      target: "esnext",
       // Part of every committed scripts/*.js, so it still names build-scripts.js (the pre-TS name).
       banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.\n" },
       plugins: [inlinedCliGuard(entry)],
       logLevel: "silent",
     });
+    setMode(path.join(outDir, n + ".js"));
+    return result;
   }));
 }
 
@@ -70,11 +89,12 @@ if (import.meta.main) {
   const arg = process.argv[2];
   if (arg?.startsWith("-")) {
     const help = arg === "--help" || arg === "-h";
-    (help ? console.log : console.error)("usage: node claude-plugin/build-scripts.ts [outDir]\n  bundles design-to-code/*.ts into outDir (default: claude-plugin/scripts)");
-    process.exit(help ? 0 : 2);
+    (help ? console.log : console.error)("usage: bun claude-plugin/build-scripts.ts [outDir]\n  bundles design-to-code/*.ts into outDir (default: claude-plugin/scripts)");
+    process.exitCode = help ? 0 : 2; // exitCode, not exit(): the line above drains first
+  } else {
+    const outDir = path.resolve(arg || path.join(import.meta.dirname, "scripts"));
+    build(outDir)
+      .then(() => console.log(`[build-scripts] wrote ${ENTRIES.length} scripts to ${outDir}`))
+      .catch((e: unknown) => { console.error(e); process.exitCode = 1; });
   }
-  const outDir = path.resolve(arg || path.join(import.meta.dirname, "scripts"));
-  build(outDir)
-    .then(() => console.log(`[build-scripts] wrote ${ENTRIES.length} scripts to ${outDir}`))
-    .catch((e: unknown) => { console.error(e); process.exit(1); });
 }

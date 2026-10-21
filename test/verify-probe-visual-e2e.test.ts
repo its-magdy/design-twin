@@ -11,7 +11,7 @@
 // (2048/1440, 2048/5000), which the index's 4-decimal number names — never at that rounded number itself.
 //
 // needs the repo's devDependency playwright (+ chromium). Locally an unavailable renderer prints SKIPPED; in CI (CI=true)
-// that is a failure.  Run with:  node test/verify-probe-visual-e2e.test.ts
+// that is a failure.  Run with:  bun test/verify-probe-visual-e2e.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

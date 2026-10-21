@@ -10,11 +10,16 @@ The plugin's hidden UI iframe is a WebSocket **client**; these processes are the
 The `designtwin` package is not on npm; install it from a clone:
 ```
 git clone https://github.com/its-magdy/design-twin.git && cd design-twin
-npm install                     # ws + @modelcontextprotocol/sdk (+ zod), for every workspace
-npm run build --workspace bridge  # dtwin's bin is dist/figma-pull.js (gitignored, so build it once)
-npm link --workspace bridge     # puts `dtwin` on your PATH
+bun install                     # @modelcontextprotocol/sdk (+ zod), for every workspace
+cd bridge && bun link           # puts `dtwin` in ~/.bun/bin (on your PATH); nothing to build
 ```
-Or skip the link and run `node bridge/src/figma-pull.ts` wherever this README says `dtwin`.
+It needs [Bun](https://bun.sh/install) ≥ 1.4.2 (`engines.bun`); Node is not supported.
+Or skip the link and run `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever
+this README says `dtwin` (those two flags are what the bin's shebang adds: without them, Bun loads the `.env` of the
+project you run it in and may fetch a missing package from the registry).
+The `dtwin` bin's shebang needs an `env` that understands `-S` (GNU coreutils ≥ 8.30, macOS, FreeBSD). Where it
+does not (BusyBox — Alpine and other minimal images), `dtwin` fails before Bun starts; run it as
+`bun --no-install --no-env-file "$(command -v dtwin)" …` (or the path above) instead.
 
 The plugin manifest allows the bridge in **both** dev and published builds
 (`allowedDomains: ws://localhost:{8787,8788,8789}`). Those three ports are the only ones the plugin can dial — `FIGMA_BRIDGE_PORT` is
@@ -28,13 +33,15 @@ validated against them and exits rather than binding a port nothing could ever r
 
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
-Node ≥ 24.2 runs it directly with **zero build** (`node bridge/src/figma-pull.ts …`,
-`node bridge/src/figma-mcp.ts`). The package runs compiled JavaScript instead: `npm run build`
-emits `dist/` (gitignored; also run on `prepack`), and the package's `dtwin` bin — what `npm link` puts on
-your PATH — is `dist/figma-pull.js`.
+Bun runs it directly with **zero build** (`bun bridge/src/figma-pull.ts …`, `bun bridge/src/figma-mcp.ts`), and the
+package ships the same TypeScript: its `dtwin` bin — what `bun link` puts on your PATH — is `src/figma-pull.ts`,
+whose shebang is `#!/usr/bin/env -S bun --no-install --no-env-file` (so a `.env` or a missing package in the
+project you run it from can neither change its environment nor make Bun fetch a module from the registry;
+`env -S` needs GNU coreutils ≥ 8.30 or a BSD/macOS `env` — on BusyBox, call `bun --no-install --no-env-file` on
+the file yourself, see Install above).
+The WebSocket server is Bun's own (`Bun.serve`), so the only runtime dependencies are the MCP SDK and zod.
 ```
-npm run typecheck   # tsc --noEmit
-npm run build       # tsc: src/*.ts -> dist/*.js (what the package and a linked dtwin run)
+bun run typecheck   # tsc --noEmit (the only check there is no emit step)
 ```
 
 ### Bridge token (required)
@@ -93,7 +100,7 @@ Run in the root of the project you are **building** (not this repo):
 
 ```
 dtwin init             # design/ + design/export/, README, target.json, bridge token, next steps
-dtwin init --mcp       # …and register this MCP server in ./.mcp.json (merged, never overwritten)
+dtwin init --mcp       # …and register this MCP server in ./.mcp.json (merged; a broken entry of ours is repaired)
 dtwin init --dry-run   # print what it would do; write nothing, mint no token
 ```
 
@@ -126,7 +133,16 @@ it found.
 
 It needs no bridge, plugin or free port. It never overwrites: an existing `target.json`, an existing
 `designtwin` entry in `.mcp.json` (or this server already registered under any other name), or an
-unparseable `.mcp.json` are all left alone and reported. The server is registered as `designtwin`,
+unparseable `.mcp.json` are all left alone and reported. The one exception is an entry of **ours** that
+can no longer start — its `bun` or `figma-mcp.ts` is gone (a deleted clone, a `brew upgrade` that removed
+the versioned bun it named), or it is a Node-era entry (`node …/bridge/dist/figma-mcp.js`), or bun runs it
+without `--no-install --no-env-file`, or it runs the package by name (`bunx designtwin mcp`, which fetches it
+from the registry or Bun's cache at every start): `--mcp` re-points that entry, under its own key and keeping its other
+fields, at this install, and prints `REPAIRED …` with what was wrong (`--dry-run` only prints it). The entry
+names the bun on your PATH when that is the bun running init (`~/.bun/bin/bun`, Homebrew's
+`/opt/homebrew/bin/bun` — paths that survive an upgrade), else the running bun's own path. Run from a
+`bunx` cache (`bunx designtwin init`), `--mcp` refuses to register anything: Bun replaces or deletes that
+cache on its own, so install the package for good first. The server is registered as `designtwin`,
 never `figma` — that is the name Figma's own MCP server usually has, and Claude Code loads one server
 per name, so the two sit side by side. `--mcp` is
 opt-in because a registered MCP server holds port 8787 for as long as Claude Code runs (`dtwin`
@@ -188,7 +204,7 @@ fill-missing-only — an existing entry's hand-authored fields are never overwri
 entry leaves `import` and `props` for you to fill in. A mapping that carries only a node id (no
 component name) is named through `<outDir>/design-system.json`, so export the design system first;
 without it such mappings are skipped and the run says so. In a clone of this repo the same script
-also runs directly: `node bridge/src/seed-components.ts [codeRoot] [outDir] [--dry-run]`.
+also runs directly: `bun bridge/src/seed-components.ts [codeRoot] [outDir] [--dry-run]`.
 
 ## Something not working: `dtwin doctor`
 
@@ -204,7 +220,7 @@ dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
 Once a plugin connects, the probe can run up to ~6.5 s past `--wait`: the bridge's settle (so a second
 open file is seen), then each file's `hello` (so it is named).
 
-1. **Node.js** version against this package's `engines`.
+1. **Bun** version against this package's `engines.bun` (≥ 1.4.2).
 2. **Bridge token** — saved or not, where, loose file permissions, and whether `FIGMA_BRIDGE_TOKEN` is
    shadowing the saved one. Fingerprint only, never the token.
 3. **Daemon** — running or not, and which files are connected to it (on Windows: a note that it is not
@@ -216,7 +232,11 @@ open file is seen), then each file's `hello` (so it is named).
 6. **Project** (the current directory) — `design/`, `design/target.json`, which export LAYOUT it
    found, the age of the last export, **which Figma files that export mixes**, the component map
    (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
-   registration (a legacy `figma` key still works; new setups use `designtwin`).
+   registration (a legacy `figma` key still works; new setups use `designtwin`). A registered entry that
+   cannot start — its command or `figma-mcp.ts` missing, Node-shaped (`node`, a `bridge/dist` script), bun
+   without `--no-install --no-env-file`, a script in a `bunx` cache, or the package run by name
+   (`bunx designtwin mcp`) — is a ✗ naming `dtwin init --mcp`,
+   which repairs it. `DT_TEST_EPHEMERAL_PORT` (a test-only seam) set in the environment is a note too.
 
    The "which Figma files" line exists because the freshness line describes exactly one file — the
    snapshot doctor happened to pick — and on a project whose screens came from a different Figma file
@@ -359,7 +379,7 @@ Three consequences worth knowing:
   per-pull slice is kept verbatim as the screen's `.vars.json`. When two screens resolve one variable
   differently the newest wins and the disagreement is recorded under `_conflicts` and in `hygiene`.
   It holds only the variables bound by the pulled nodes — to find the variable behind a library colour,
-  look it up on the library catalog: `node <scripts>/tokens.js <library>/tokens.json --lookup <hex>` (`ffbc1c`, or a quoted `'#ffbc1c'`:
+  look it up on the library catalog: `bun --no-install --no-env-file <scripts>/tokens.js <library>/tokens.json --lookup <hex>` (`ffbc1c`, or a quoted `'#ffbc1c'`:
   an unquoted `#` starts a shell comment).
 - **Assets are named after their Figma layer and deduped by content.** `icons/linear/arrow-down` lands
   as `arrow-down.svg`; the same artwork reached through several instance paths is one file carrying
@@ -537,7 +557,7 @@ minutes at a terminal and 90 seconds when stderr is not a TTY (an agent's shell,
 `no Figma plugin connected within Ns`, exit 1, with the next step. A first word that is not a verb
 but is an obvious guess at one (`dtwin export`, `dtwin ls`, `dtwin check`) is refused with the real
 verb instead of being taken as an output folder; `dtwin pull export` still exports into `./export`.
-`--timeout` takes at most 2147483 seconds (about 24 days, the longest delay one Node timer holds);
+`--timeout` takes at most 2147483 seconds (about 24 days, the longest delay one JavaScript timer holds);
 `Infinity`, `0`, a negative or a larger number is refused with a usage error rather than run as an
 export that times out at once.
 
@@ -616,7 +636,7 @@ and "what props does this component *really* take?".
 
 Because the layout matches `design-system/`, existing tooling runs on it unchanged:
 ```
-node design-to-code/tokens.ts design/export/libraries/acme-kit-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+bun design-to-code/tokens.ts design/export/libraries/acme-kit-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
 The generated `tokens.css` / `theme.css` start with a provenance line (`designtwin-source: <dir>/<input> · <n>
 variables · sha256 <12>`); `tokens.js <input> --check <file>` exits 0 when the file is current, 1 when the
@@ -658,7 +678,7 @@ reason to gate them the way `--design-system` gates a page walk. **Two honest li
    `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets) or
    `nodeFile` (standalone components) — absent when nothing was exported for that entry. `entry.variants[]`
    in the slim catalog keeps only `id`/`name`/`key`/`values`. Fetch one component's real node tree(s) with
-   `node design-to-code/get-component.ts design/export/design-system/components.local.json <key|id|name>`.
+   `bun design-to-code/get-component.ts design/export/design-system/components.local.json <key|id|name>`.
 2. It only covers components DEFINED in this file. Components consumed from a published library
    (the `remote:true` entries, recovered via instance-walk — see the honest-limits note above) are
    not covered here; pull `--as-library` on the *source* library file for those. There is no
@@ -701,7 +721,7 @@ started with different values (a terminal, and an MCP server launched by an app)
 A daemon started by an earlier dtwin version listens at `$TMPDIR/designtwin-<port>.sock`: `--stop`
 stops it too, and a port-in-use error names that socket.
 
-> **Not on Windows (yet).** There the socket would be a named pipe, and Node cannot make one private to
+> **Not on Windows (yet).** There the socket would be a named pipe, and Bun cannot make one private to
 > your account (nor let a client check who created it), so another user on the machine could pose as the
 > daemon. So on Windows `--serve` and `--stop` refuse with that reason (exit 1), `--daemon-status`
 > reports no daemon, and nothing shares the bridge: one MCP session or `dtwin` command holds port 8787
@@ -746,9 +766,10 @@ Behaviour worth knowing:
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
-there with an absolute path to the server entry — `bridge/dist/figma-mcp.js` for a built, linked install,
-`bridge/src/figma-mcp.ts` for running from source — under the key `designtwin` (`dtwin init --mcp` picks
-whichever one is running and writes exactly that). Claude Code then launches it over stdio, and its tools surface as
+there that runs `bridge/src/figma-mcp.ts` on Bun — `"command"`: the absolute path of `bun`, `"args"`:
+`["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` — under the key `designtwin` (`dtwin init --mcp`
+writes exactly that, with the `bun` and the clone that ran it; an absolute `bun` keeps working when Claude Code is
+started without `~/.bun/bin` on its PATH). Claude Code then launches it over stdio, and its tools surface as
 `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_status`).
 No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI
 does, so the one you already pasted into the plugin keeps working (set `FIGMA_BRIDGE_TOKEN` in the
@@ -877,6 +898,9 @@ Pre-approve tools in `.claude/settings.json`:
   server stays up and that one tool call errors — retry it after the pull.
 - Windows: no daemon (`dtwin serve` / `stop` refuse) and no sharing — one MCP session or `dtwin` command
   holds the bridge at a time; close the other one first.
+- One WebSocket frame may be at most `FIGMA_BRIDGE_MAX_PAYLOAD_MB` (default 128; clamped just under
+  4096). A value that is not a number above 0 falls back to 128 with a warning — there is no "unlimited".
+  An export over it fails with a message quoting the cap in force.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").

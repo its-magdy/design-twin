@@ -7,6 +7,7 @@
 // Each takes a host stand-in (KillHost / ProcHost), so both platforms' branches are testable on any OS without a live kill.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { runSync } from "./proc.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 /** What killPidTree needs from the host: its platform, a way to run taskkill (spawnSync's result: `error` when it could not
@@ -52,9 +53,13 @@ export const PROC_HOST: ProcHost = {
   self: process.pid,
   readdir: (dir) => fs.readdirSync(dir),
   readFile: (file) => fs.readFileSync(file, "utf8"),
+  // pgrep -P / ps -A, captured through a file (proc.ts runSync): exit 0 says it listed something (pgrep's "none matched" is
+  // exit 1), so an exit 0 with no pid in its output (Bun #46142: a lost capture) is run once more, then reported as an
+  // error — never read as "no children", which would leave the browser running
   run: (cmd, args, timeoutMs) => {
-    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-    return { ...(r.error !== undefined ? { error: r.error } : {}), status: r.status, stdout: typeof r.stdout === "string" ? r.stdout : "" };
+    const r = runSync(cmd, args, { timeoutMs, expect: (x) => x.status !== 0 || /\d/.test(x.stdout) });
+    const error = r.error ?? (r.lost !== undefined ? new Error(`${cmd}: ${r.lost}`) : undefined);
+    return { ...(error !== undefined ? { error } : {}), status: r.status, stdout: r.stdout };
   },
   exists: (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
 };

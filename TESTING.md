@@ -8,11 +8,12 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
-`npm test` runs every suite in order and ends with a summary; `node test/run-suites.ts <name>` runs a subset.
-`npm run test:fast` leaves out the four slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
-ends with a line saying it was not the full run — use it while iterating, `npm test` before a commit; CI's other matrix legs run the four it leaves out (naming only those with `--fast` exits 2: nothing would run).
+`bun run test` runs every suite in order and ends with a summary (a bare `bun test` is Bun's own test runner instead: `bunfig.toml` points it at `test/spawn-stress/` only, the spawn-stress workflow's bun:test files); `bun test/run-suites.ts <name>` runs a subset.
+`bun run test:fast` leaves out the four slow probe e2e suites (verify-probe-e2e, verify-probe-drive-e2e, verify-probe-drive-tail-e2e, verify-probe-behaviour-e2e; ~3 min instead of ~20) and
+ends with a line saying it was not the full run — use it while iterating, `bun run test` before a commit; CI's other matrix legs run the four it leaves out (naming only those with `--fast` exits 2: nothing would run).
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
 The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). The drive e2e's wall-clock-timing cases are a suite of their own, `verify-probe-drive-tail-e2e`, which runs its probes strictly one at a time (no pool); the pooled cases are `verify-probe-drive-e2e`, and the two share `test/drive-e2e-fixture.ts`.
+`DT_TEST_EPHEMERAL_PORT=1` is a test-only seam (`bridge/src/server-core.ts`): the bridge binds an ephemeral port instead of `FIGMA_BRIDGE_PORT`'s and prints the real one on stderr (`[bridge] DT_TEST_EPHEMERAL_PORT: <port> -> <real>`), so `mcp-lifecycle` spawns its MCP servers without contending for 8787–8789. Never set it outside the suites: the plugin can only reach the three ports its manifest names.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
@@ -25,19 +26,19 @@ multi-mode variables), then asserts the emitted JSON. The bundle exposes its rea
 global (`__designExport`) which the harness lifts onto the sandbox.
 
 ```
-cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   # after editing src/
-node test/harness.ts
+cd figma-plugin && bun install && bun run typecheck && bun run build && cd ..   # after editing src/
+bun test/harness.ts
 ```
 
 Expected: every check passes (the run-suites summary has the count; exit 0). Any `✗ FAIL` prints which transform regressed.
-`npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
+`bun run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
 Also always run the syntax check after (re)building the plugin:
 
 ```
-node --check figma-plugin/code.js
-node --check bridge/src/seed-components.ts
+bun build --no-bundle figma-plugin/code.js > /dev/null              # syntax only: a parse error exits 1
+bun build --no-bundle bridge/src/seed-components.ts > /dev/null
 ```
 
 When you add a new extracted field, edit the relevant `figma-plugin/src/*.ts` module, rebuild, then add
@@ -47,46 +48,49 @@ output key). Keep both `typecheck` and the harness green.
 ### `design-to-code/` — design-to-code layer (agent-runnable, no Figma)
 
 The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bootstrap — see
-`design-to-code/README.md`) are plain Node modules with their own offline suite:
+`design-to-code/README.md`) are plain TypeScript modules (run by Bun as they are) with their own offline suite:
 
 ```
-node test/design-to-code.test.ts       # expect: all checks pass, exit 0
-node test/audit.test.ts                # expect: all checks pass, exit 0
-node test/verify-build.test.ts         # expect: all checks pass, exit 0 — the build-screen Stop-hook gate
+bun test/design-to-code.test.ts       # expect: all checks pass, exit 0
+bun test/audit.test.ts                # expect: all checks pass, exit 0
+bun test/verify-build.test.ts         # expect: all checks pass, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
-                                       # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.ts)
-node test/verifier-guard.test.ts       # expect: all checks pass, exit 0 — the visual-verifier's PreToolUse guard: scoped by
+                                       # sync with design-to-code/ (stale? run: bun claude-plugin/build-scripts.ts)
+bun test/verifier-guard.test.ts       # expect: all checks pass, exit 0 — the visual-verifier's PreToolUse guard: scoped by
                                        # agent_type, the write allow-list, refused pattern kills / installs / sandbox bypass,
                                        # the shipped bundle's deny JSON + exit 0, fail-open on bad input, the hooks.json matcher
-node test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
+bun test/plugin-hooks.test.ts         # expect: all checks pass, exit 0 — SessionStart's Bun check (check-bun.sh against a
+                                       # fake bun: floor, canary-of-floor, upgrade advice per install method, missing bun) and
+                                       # that no session-wide hook fails closed (the verifier guard fails open; why: hooks.json)
+bun test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the build-screen plan skeleton generated
                                        # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
                                        # --seed-from) and the visibility rule verify-build.js walks with
-node test/ui.test.ts                   # expect: all checks pass, exit 0 — the plugin window's script against a fake
+bun test/ui.test.ts                   # expect: all checks pass, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.ts          # expect: all checks pass, exit 0 — the JOIN between a screen and the
+bun test/cross-check.test.ts          # expect: all checks pass, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
                                        # that was derived rather than drawn, and auto-discovery of
                                        # design/export/variables.json (never a stale design/variables.json sibling)
-node test/verify-screen.test.ts        # expect: all checks pass, exit 0 — the per-node comparison behind a
+bun test/verify-screen.test.ts        # expect: all checks pass, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
                                        # coverage, reactions and `--interactions` checks, and the rule that an
                                        # unmeasured expectation is not a passed one
-node test/design-diff.test.ts          # expect: all checks pass, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
+bun test/design-diff.test.ts          # expect: all checks pass, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
                                        # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI, the
                                        # export-directory report, a second sync replacing the spent snapshot)
-node test/identity.test.ts             # expect: all checks pass, exit 0 — token and component IDENTITY on livetest-3's
+bun test/identity.test.ts             # expect: all checks pass, exit 0 — token and component IDENTITY on livetest-3's
                                        # real export (test/fixtures/livetest3/): two variables sharing a name are both
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
-node test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the shared node-id/layer-name/indexed-title
+bun test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the shared node-id/layer-name/indexed-title
                                        # resolver every skill uses to turn "the Jet Roles screen" into one exact file
-node test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
-node test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
+bun test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
+bun test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
+bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
 ```
 
 `test/audit.test.ts` drives `design-to-code/audit.ts` (the pre-build design audit behind the
@@ -99,7 +103,8 @@ platform (web 24px / iOS 44pt / Android 48dp targets differ).
 ### `bridge/` — handshake auth + seed CLI
 
 `test/bridge.test.ts` covers the bridge files the plugin harness can't reach: `server-core.ts`'s
-`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host),
+`verifyClientWith` (the handshake check its Bun.serve upgrade runs — the bridge's **only** real access
+control: token, Origin, loopback Host),
 `token-store.ts` (where that token lives between runs — precedence, `0600` permissions, the
 lifecycle commands), the
 `seed-components.ts` CLI driven as a subprocess against a temp directory, `write-out.ts` (the one
@@ -122,7 +127,7 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.ts        # expect: all checks pass, exit 0 — deterministic whether or not
+bun test/bridge.test.ts        # expect: all checks pass, exit 0 — deterministic whether or not
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
@@ -133,13 +138,13 @@ node test/bridge.test.ts        # expect: all checks pass, exit 0 — determinis
 # do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
 # CI/ephemeral escape-hatch token) defeats the "no token there" setup and the
 # `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
-node test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
+bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
                                  # a Figma client every front-end uses (awaitClient: named target, connId, no target,
                                  # leave/abort/close, listeners and timers released), on plain objects — binds no port
-node --check bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
-`verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed
+`verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed
 attacker iframe sends `Origin: null` exactly like the real plugin does, so the suite asserts that
 `Origin: null` **without** a valid token is still rejected (the CSWSH case), alongside DNS-rebinding
 (non-loopback `Host`) and tokens of a different length — which must compare `false` rather than throw,
@@ -222,7 +227,7 @@ index.json to find the LAYER, then read only that file — never a whole directo
 
 Not a default first step (the default is `--list` → `--children <id>` → `--node <id>`): when you need to
 know which library owns a token, or before an `--as-library` pull, run
-`node bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`). It prints the local
+`bun bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`). It prints the local
 file's published assets plus every **enabled** team library, each with its variable collections and a
 component count.
 
@@ -241,12 +246,12 @@ What to check in the output, and what NOT to read into it:
 
 `--list` (or the manual export) only shows a page's TOP-LEVEL frames — no recursion. To see what's
 *inside* one of those frames before committing to a full recursive pull of it, use the node-scoped
-twin: `node bridge/src/figma-pull.ts --children <id>` lists that one node's direct children only (same
+twin: `bun bridge/src/figma-pull.ts --children <id>` lists that one node's direct children only (same
 no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to "pull everything."
 
 ### Visually checking one component after generating code for it
 
-`node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `assets/<id>_ref.png` —
+`bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `assets/<id>_ref.png` —
 skips `serialize()` and the recursive asset walk, so it stays cheap even on a node deep inside a large
 tree. Use it after `build-screen` generates code for a specific component in a dense screen, where the
 one whole-frame reference PNG every export already carries is too zoomed-out to compare against.
@@ -292,7 +297,7 @@ Paint/Text/Effect/Grid style system, plus custom animation styles), `components.
 
 ### Component-map seeding (optional, tested separately)
 
-`dtwin seed [codeRoot] [outDir] [--dry-run]` (= `node bridge/src/seed-components.ts …`) scans the codebase for Code Connect files
+`dtwin seed [codeRoot] [outDir] [--dry-run]` (= `bun bridge/src/seed-components.ts …`) scans the codebase for Code Connect files
 (`figma.connect(...)`, `@FigmaConnect`, or `// url=`/`// component=`/`// source=` templates) and seeds
 `design/components.json`. Verify it finds your mappings and fills `component`/`source`/`nodeId` without
 clobbering hand-authored fields.
@@ -317,7 +322,7 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
       and `components.local.json` `components[]`. Every split file repeats the `exportedAt` stamp, so
       the tooling below is pointed at the part it actually consumes.
 
-### Tokens (`node design-to-code/tokens.ts design/export/design-system/tokens.json ./out`)
+### Tokens (`bun design-to-code/tokens.ts design/export/design-system/tokens.json ./out`)
 - [ ] Command prints `wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+M set files under tokens/) (N variables)` with N matching your variable count.
 - [ ] **References preserved** in `out/tokens.dtcg.json`: a semantic token's `$value` is a `"{group.token}"`
       string, NOT a flattened hex. (A flattened hex here = the themeability bug.)
@@ -330,15 +335,15 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
 - [ ] **Never-silent**: any warning the CLI prints (`warn …`) is a REAL issue in your file (a dangling
       alias, a name collision, a token with no value) — investigate each; there should be none on a clean file.
 
-### Bootstrap → validate (`node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json`)
+### Bootstrap → validate (`bun design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json`)
 - [ ] Every **published** component appears, keyed by its publish key; unpublished ones are keyed by node
       id with `figma.unstable: true`.
 - [ ] Each entry has `status: "needs-review"`, a `code.export` that reads like a component name, and props
       translated by type (VARIANT→`enum` with option values, BOOLEAN→`boolean`, TEXT→`string`/`children`,
       INSTANCE_SWAP→`instance` slot).
-- [ ] `node design-to-code/map-validate.ts design/codeconnect.local.json` prints **`map valid`** (exit 0).
+- [ ] `bun design-to-code/map-validate.ts design/codeconnect.local.json` prints **`map valid`** (exit 0).
 
-### Drift-lint — clean, then inject each drift class (`node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json`)
+### Drift-lint — clean, then inject each drift class (`bun design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json`)
 - [ ] On the fresh bootstrap it reports **0 errors and 0 warnings** (`N/N components mapped`) — bootstrap
       covers every component and every variant option, so a clean file is clean. (No tool flags the
       `TODO: import path` placeholders — they're markers for you to fill in, then confirm the entry.)
@@ -352,8 +357,8 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
       re-run `map-bootstrap … existing`, confirm your value survived).
 - [ ] **Staleness**: a fresh `components.local.json` (just exported) reports no freshness warning; hand-edit
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
-      `unknown-freshness` warning. Override the threshold with `node design-to-code/drift-lint.ts map.json components.local.json --max-age <hours>`
-      (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/src/figma-pull.ts` both surface the
+      `unknown-freshness` warning. Override the threshold with `bun design-to-code/drift-lint.ts map.json components.local.json --max-age <hours>`
+      (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `bun bridge/src/figma-pull.ts` both surface the
       same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/export/design-system.json`
       manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
 
@@ -371,30 +376,30 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
 
 | Command | What |
 |---|---|
-| `node test/harness.ts` | Offline exporter logic test (read + write planes) — expect all checks to pass |
-| `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
-| `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/design-to-code.test.ts` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect all checks to pass |
-| `node test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect all checks to pass |
-| `node test/cross-check.test.ts` | Screen-vs-design-system join — expect all checks to pass |
-| `node test/verify-screen.test.ts` | Per-node verification and its verdict — expect all checks to pass |
-| `node test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
+| `bun test/harness.ts` | Offline exporter logic test (read + write planes) — expect all checks to pass |
+| `cd figma-plugin && bun run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
+| `cd figma-plugin && bun run build` | Rebuild `code.js` from `src/*.ts` |
+| `bun test/design-to-code.test.ts` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect all checks to pass |
+| `bun test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect all checks to pass |
+| `bun test/cross-check.test.ts` | Screen-vs-design-system join — expect all checks to pass |
+| `bun test/verify-screen.test.ts` | Per-node verification and its verdict — expect all checks to pass |
+| `bun test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect all checks to pass |
-| `node bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
-| `node bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
-| `node bridge/src/figma-pull.ts --list-libraries` | Slowest discovery read (a few s to ~15 s): which design libraries this file draws on (prints a table to stdout) |
-| `node bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
-| `node bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
-| `node bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
-| `node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `assets/<id>_ref.png` (writes a file, unlike the row above) |
-| `node bridge/src/figma-pull.ts --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
-| `node bridge/src/figma-pull.ts --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
-| `node bridge/src/figma-pull.ts --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
-| `node bridge/src/figma-pull.ts --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
-| `node --check figma-plugin/code.js` | Syntax check the exporter |
-| `node --check design-to-code/*.ts` | Syntax check the tooling scripts |
-| `dtwin seed . design` (or `node bridge/src/seed-components.ts . design`) | Seed components.json from Code Connect files (code side); `--dry-run` reports only |
-| `node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
-| `node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
-| `node design-to-code/get-component.ts design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
-| `node design-to-code/tokens.ts <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → ONLY theme.css; `--native <p>` → ONLY a native token file; pass `--also-generic` to also write the generic set alongside a target) |
+| `bun bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
+| `bun bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
+| `bun bridge/src/figma-pull.ts --list-libraries` | Slowest discovery read (a few s to ~15 s): which design libraries this file draws on (prints a table to stdout) |
+| `bun bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
+| `bun bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
+| `bun bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
+| `bun bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `assets/<id>_ref.png` (writes a file, unlike the row above) |
+| `bun bridge/src/figma-pull.ts --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
+| `bun bridge/src/figma-pull.ts --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
+| `bun bridge/src/figma-pull.ts --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
+| `bun bridge/src/figma-pull.ts --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
+| `bun build --no-bundle figma-plugin/code.js > /dev/null` | Syntax check the exporter |
+| `bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/*.ts` | Syntax check the tooling scripts (`bun run typecheck` checks their types) |
+| `dtwin seed . design` (or `bun bridge/src/seed-components.ts . design`) | Seed components.json from Code Connect files (code side); `--dry-run` reports only |
+| `bun design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
+| `bun design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
+| `bun design-to-code/get-component.ts design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
+| `bun design-to-code/tokens.ts <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → ONLY theme.css; `--native <p>` → ONLY a native token file; pass `--also-generic` to also write the generic set alongside a target) |

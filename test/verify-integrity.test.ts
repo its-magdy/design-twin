@@ -2,12 +2,12 @@
 // `buildExpectation` over a plugin-shaped screen export (test/fixtures.ts, invented names); measured files and
 // interaction evidence have the shapes the shipped probe and the verifier write (design-to-code/types.ts). The
 // last block runs the CLI's --compare in a temp project with a status file beside the measured one.
-// Run with:  node test/verify-integrity.test.ts
+// Run with:  bun test/verify-integrity.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import * as VS from "../design-to-code/verify-screen.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
@@ -455,7 +455,7 @@ console.log("CLI --compare with the run status beside the measured file:");
 {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dt-integrity-"));
   const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const cli = (...args: string[]) => spawnSync(process.execPath, [VS_TS, ...args], { cwd, encoding: "utf8" });
+  const cli = (...args: string[]) => runSync(process.execPath, [VS_TS, ...args], { cwd });
   const dir = path.join(cwd, "design", "verify");
   fs.mkdirSync(dir, { recursive: true });
   const expFile = path.join(dir, "Garden_Plots__1_1.expected.json");
@@ -521,7 +521,7 @@ console.log("CLI --compare reads the set's ONE status base, and a migrated set's
 {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dt-integrity-base-"));
   const VS_TS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const cli = (...args: string[]) => spawnSync(process.execPath, [VS_TS, ...args], { cwd, encoding: "utf8" });
+  const cli = (...args: string[]) => runSync(process.execPath, [VS_TS, ...args], { cwd });
   const dir = path.join(cwd, "design", "verify");
   fs.mkdirSync(dir, { recursive: true });
   const S = "Garden_Plots__1_1";

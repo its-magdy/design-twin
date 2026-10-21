@@ -15,6 +15,13 @@ const SRC = path.join(import.meta.dirname, "..", "bridge", "src");
 
 const uid = process.getuid?.();
 
+// Where this suite's directories go: a short one. The socket paths built below nest a few levels deep
+// (<base>/b<n>/designtwin-<uid>/designtwin-<port>.sock), and macOS holds a socket path to 103 bytes
+// (daemon.ts MAX_SOCK_PATH_BYTES) — under its ~48-byte os.tmpdir() (/var/folders/…/T) that nesting is
+// ~105 bytes, which sockPath rightly refuses. So on POSIX the base is under /tmp (mkdtemp makes it 0700),
+// as in mcp-lifecycle; Windows has no /tmp (and no socket paths: daemonSupported).
+const TMP_ROOT = process.platform === "win32" ? os.tmpdir() : fs.realpathSync.native("/tmp");
+
 // Where a daemon can run at all (daemonSupported, DAEMON_UNSUPPORTED). The platform is a parameter, so
 // these run on every OS: an injected "win32" refuses serve/stop with the reason before anything is made,
 // and reads every lookup as "no daemon" without looking — even with a live daemon at that location.
@@ -27,7 +34,7 @@ const uid = process.getuid?.();
     /`dtwin serve`/.test(why) && /sharing one bridge between sessions/.test(why) && /not supported on Windows/.test(why)
     && /one MCP session or dtwin command holds the bridge at a time/.test(why) && /close the other one/.test(why));
 
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-u-"));
+  const base = fs.mkdtempSync(path.join(TMP_ROOT, "dtwin-u-"));
   const rejectsWithWhy = async (p: Promise<unknown>): Promise<boolean> => { try { await p; return false; } catch (e) { return e instanceof Error && e.message === why; } };
   // stop / assertNoDaemon on a fresh tmpdir: POSIX would create <tmpdir>/designtwin-<uid> first.
   const fresh = fs.mkdtempSync(path.join(base, "f-"));
@@ -84,7 +91,7 @@ if (uid === undefined) {
   check("without uids the socket directory is the tmpdir, unchanged", daemon.sockDir({ tmpdir: os.tmpdir() }) === os.tmpdir());
   report();
 } else {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-sock-"));
+  const base = fs.mkdtempSync(path.join(TMP_ROOT, "dtwin-sock-"));
   let n = 0;
   const fresh = (): string => { const d = path.join(base, "b" + ++n); fs.mkdirSync(d); return d; };
   const throws = (fn: () => unknown, re: RegExp): boolean => { try { fn(); return false; } catch (e) { return e instanceof Error && re.test(e.message); } };
@@ -284,6 +291,66 @@ if (uid === undefined) {
     await new Promise<void>((r2) => old.close(() => r2()));
     fs.writeFileSync(legacy, "");
     check("a regular file at the old location is not a daemon", daemon.legacySock(8790, place) === null);
+  }
+
+  // Socket path length (daemon.ts "Length"). macOS holds a socket path to 103 bytes, and a path over it is
+  // refused by sockPath with the fix named — not left to the running Bun (a recent one binds it through the
+  // directory, an older one fails ENAMETOOLONG; Node silently bound a truncated path). Linux has no limit
+  // to hold to: Bun binds and connects any length through /proc/self/fd.
+  {
+    const long = "/" + "d".repeat(90) + "/designtwin-8789.sock";
+    check("length: on macOS a socket path over 103 bytes is refused, naming its length, the limit and the fix",
+      /it is 112 bytes, and a Unix socket path on macOS is limited to 103\. Point XDG_RUNTIME_DIR or TMPDIR at a shorter directory/.test(daemon.sockLengthProblem(long, "darwin") ?? ""));
+    check("length: 103 bytes is still fine on macOS", daemon.sockLengthProblem("/" + "d".repeat(81) + "/designtwin-8789.sock", "darwin") === null);
+    check("length: Linux (and the rest) hold no limit", daemon.sockLengthProblem(long, "linux") === null);
+    if (uid !== undefined) {
+      const deep = path.join(fs.mkdtempSync(path.join(base, "len-")), "x".repeat(110));
+      fs.mkdirSync(deep, { mode: 0o700 });
+      const darwinPlace: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: deep }, tmpdir: deep, platform: "darwin" };
+      check("length: sockPath refuses an over-long macOS path, and sockProblem reports it for doctor",
+        (() => { try { daemon.sockPath(8790, darwinPlace); return false; } catch (e) { return /a Unix socket path on macOS is limited to 103/.test(String(e)); } })()
+        && /limited to 103/.test(daemon.sockProblem(8790, darwinPlace) ?? ""));
+      // The limit itself, for real on this platform: a socket path of exactly 103 bytes (macOS's longest,
+      // sun_path's 104 with its NUL) passes sockPath, is bound, and a daemon there is found — on macOS this
+      // is the kernel's own edge, so MAX_SOCK_PATH_BYTES refuses nothing the platform would take. (A bind
+      // that errors instead resolves with nothing bound, and the check fails rather than hanging.)
+      {
+        const max = daemon.MAX_SOCK_PATH_BYTES.darwin ?? 0;
+        const parent = fs.mkdtempSync(path.join(base, "max-"));
+        const room = max - Buffer.byteLength(path.join(parent, "x", "designtwin-8790.sock"));
+        const edge = path.join(parent, "x" + "e".repeat(room));
+        fs.mkdirSync(edge, { mode: 0o700 });
+        const place: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: edge }, tmpdir: edge };
+        let sock = "";
+        try { sock = daemon.sockPath(8790, place); } catch { /* checked below */ }
+        let found = false;
+        if (sock) {
+          const fake = net.createServer((c) => {
+            c.setEncoding("utf8");
+            c.on("data", daemon.framer(() => { c.write(JSON.stringify({ ok: true, result: { daemon: true, pid: 1, port: 8790 } }) + "\n"); }));
+          });
+          const bound = await new Promise<boolean>((r) => { fake.once("error", () => r(false)); fake.listen(sock, () => r(true)); });
+          found = bound && (await daemon.connect(8790, place)) !== null && fs.existsSync(sock);
+          if (bound) await new Promise<void>((r) => fake.close(() => r()));
+        }
+        check(`length: a socket path of exactly ${max} bytes (the macOS limit) passes sockPath, is bound and a daemon there is found (got ${Buffer.byteLength(sock)} bytes)`,
+          max === 103 && Buffer.byteLength(sock) === max && found);
+      }
+      if (process.platform === "linux") {
+        // The real thing on Linux: a daemon socket at a path past sun_path's 108 bytes is bound and found.
+        const place: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: deep }, tmpdir: deep };
+        const sock = daemon.sockPath(8790, place);
+        const fake = net.createServer((c) => {
+          c.setEncoding("utf8");
+          c.on("data", daemon.framer(() => { c.write(JSON.stringify({ ok: true, result: { daemon: true, pid: 1, port: 8790 } }) + "\n"); }));
+        });
+        await new Promise<void>((r) => fake.listen(sock, () => r()));
+        const conn = await daemon.connect(8790, place);
+        check(`length: on Linux a ${Buffer.byteLength(sock)}-byte socket path (over sun_path's 108) is bound and a daemon there is found`,
+          Buffer.byteLength(sock) > 108 && conn !== null && fs.existsSync(sock));
+        await new Promise<void>((r) => fake.close(() => r()));
+      }
+    }
   }
 
   fs.rmSync(base, { recursive: true, force: true });

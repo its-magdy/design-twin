@@ -1,7 +1,7 @@
 // Unit tests of the visual diff's pure parts: the PNG codec and the bridge's header-only pngSize
 // (bridge/src/png.ts), the pixelmatch v6.0.0 port and our shift tolerance / regions / attribution / grid
 // (design-to-code/visual-diff.ts), and the capture's budget (design-to-code/probe-visual.ts). No browser.
-// Run with:  node test/visual-diff.test.ts
+// Run with:  bun test/visual-diff.test.ts
 import { deflateSync, crc32 } from "node:zlib";
 import { PngError, crop, decodePng, encodePng, pngInfo, pngSize, resampleBox } from "../bridge/src/png.ts";
 import type { Rgba } from "../bridge/src/png.ts";

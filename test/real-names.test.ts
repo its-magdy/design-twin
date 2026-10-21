@@ -2,7 +2,7 @@
 // reach a tracked file or path. The field tests ran against a client's real Figma files; their pruned exports became
 // fixtures and their screen names leaked into tests, comments and docs (keep-docs-generic). They were replaced with
 // invented names of the same shape; this suite keeps them out.
-//   node test/real-names.test.ts
+//   bun test/real-names.test.ts
 //
 // The list is NOT in the repo in plain text — only `sha256("dt-banned:" + phrase).slice(0, 16)` of each banned 1-3 word
 // phrase (and of its joined form, e.g. a camel/lowercase identifier). That keeps plain names out of the TREE; it is not

@@ -2,7 +2,7 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs11 from "node:fs";
+import fs10 from "node:fs";
 import path9 from "node:path";
 
 // design-to-code/types.ts
@@ -250,7 +250,7 @@ function walkWithHidden(root, fn, opts) {
 }
 
 // design-to-code/audit-gate.ts
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 import path3 from "node:path";
 
 // bridge/src/hex-color.ts
@@ -318,11 +318,169 @@ import { parseArgs } from "node:util";
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
+// bridge/src/stdio.ts
+import { format, inspect } from "node:util";
+function installQueuedConsole(o = {}) {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
+  const err = process.stderr;
+  let indent = "";
+  const write = (s, text) => {
+    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
+  };
+  const line = (s) => (...a) => {
+    write(s, format(...a));
+  };
+  console.log = console.info = console.debug = line(out);
+  console.warn = console.error = line(err);
+  console.dir = (item, options) => {
+    write(out, inspect(item, { customInspect: false, ...options }));
+  };
+  console.dirxml = line(out);
+  console.table = (data) => {
+    write(out, inspect(data));
+  };
+  console.write = (...data) => {
+    let n = 0;
+    for (const d of data) {
+      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
+      if (b.length) {
+        out.write(b);
+        n += b.length;
+      }
+    }
+    return n;
+  };
+  console.clear = () => {
+    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
+  };
+  console.trace = (...a) => {
+    const e = new Error(format(...a));
+    e.name = "Trace";
+    Error.captureStackTrace(e, console.trace);
+    write(err, e.stack ?? `Trace: ${e.message}`);
+  };
+  console.assert = (cond, ...a) => {
+    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
+  };
+  console.group = console.groupCollapsed = (...a) => {
+    if (a.length) write(out, format(...a));
+    indent += "  ";
+  };
+  console.groupEnd = () => {
+    indent = indent.slice(0, -2);
+  };
+  const counts = /* @__PURE__ */ new Map();
+  console.count = (label = "default") => {
+    const n = (counts.get(label) ?? 0) + 1;
+    counts.set(label, n);
+    write(out, `${label}: ${n}`);
+  };
+  console.countReset = (label = "default") => {
+    counts.delete(label);
+  };
+  const timers = /* @__PURE__ */ new Map();
+  const elapsed = (label) => {
+    const t = timers.get(label);
+    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
+  };
+  console.time = (label = "default") => {
+    timers.set(label, performance.now());
+  };
+  console.timeLog = (label = "default", ...a) => {
+    const e = elapsed(label);
+    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
+    else write(out, [e, ...a.map((x) => format(x))].join(" "));
+  };
+  console.timeEnd = (label = "default") => {
+    const e = elapsed(label);
+    timers.delete(label);
+    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
+  };
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  let settled = false;
+  const leave = () => {
+    if (!settled) {
+      settled = true;
+      cliDepth--;
+    }
+  };
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") {
+      leave();
+      done(r);
+    } else r.then((c) => {
+      leave();
+      done(c);
+    }, (e) => {
+      leave();
+      fail(e);
+    });
+  } catch (e) {
+    leave();
+    fail(e);
+  }
+}
+
+// design-to-code/proc.ts
+var pause = new Int32Array(new SharedArrayBuffer(4));
+
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -376,7 +534,7 @@ function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
   const unknownFlags = () => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -404,7 +562,7 @@ ${usage}`;
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode);
 }
 
 // design-to-code/read-json.ts
@@ -442,19 +600,6 @@ function readJson(file, guard) {
 function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
   return "doc" in r ? r.doc : null;
-}
-
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
 }
 
 // design-to-code/map-validate.ts
@@ -592,7 +737,7 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -859,7 +1004,7 @@ var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, S
 var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 
 // bridge/src/project-layout.ts
-import fs3 from "node:fs";
+import fs2 from "node:fs";
 import path2 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
@@ -877,18 +1022,18 @@ var slashed = (p) => p.split(path2.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function findMapFile(cwd) {
   const modern = path2.join(cwd, MAP_FILE);
-  if (fs3.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  if (fs2.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
   const legacy2 = path2.join(cwd, LEGACY_MAP_FILE);
-  if (fs3.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  if (fs2.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 function listPlans(dir) {
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  if (!fs2.existsSync(dir)) return [];
+  return fs2.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/cross-check.ts
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli3(main, { name: "cross-check" });
 
 // design-to-code/audit.ts
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
@@ -903,22 +1048,22 @@ function reportFindings(auditDoc) {
   const str = (v) => typeof v === "string" && v ? v : void 0;
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli4(main, { name: "audit" });
 
 // design-to-code/audit-gate.ts
 function locateAuditFile(cwd, screenFile, screenName) {
   const dir = path3.join(cwd, AUDIT_DIR);
-  if (!fs4.existsSync(dir)) return null;
+  if (!fs3.existsSync(dir)) return null;
   const base = screenFile ? path3.basename(screenFile, ".json") : null;
   const candidates = [];
   if (base) candidates.push(path3.join(dir, base + ".json"));
   let entries = [];
   try {
-    entries = fs4.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
+    entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes("."));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs4.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
+  for (const c of candidates) if (fs3.existsSync(c)) return path3.relative(cwd, c).split(path3.sep).join("/");
   const wantSlug = alnumKey(screenName);
   if (wantSlug) {
     const stem = (f) => f.replace(/\.json$/, "");
@@ -951,46 +1096,68 @@ import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/json-file.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto2 from "node:crypto";
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 import path4 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+var RENAME_RETRY_MS = 2e3;
+var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+function renameOver(from, to) {
+  const t0 = Date.now();
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      fs4.renameSync(from, to);
+      return;
+    } catch (e) {
+      const code = errCode(e);
+      if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
+      let dir = false;
+      try {
+        dir = fs4.statSync(to).isDirectory();
+      } catch {
+      }
+      if (dir) throw e;
+      Atomics.wait(sleeper, 0, 0, delay);
+    }
+  }
+}
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs5.openSync(dir, "r");
+    const fd = fs4.openSync(dir, "r");
     try {
-      fs5.fsyncSync(fd);
+      fs4.fsyncSync(fd);
     } finally {
-      fs5.closeSync(fd);
+      fs4.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
   const dir = path4.dirname(path4.resolve(file));
-  fs5.mkdirSync(dir, { recursive: true });
+  fs4.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs5.openSync(tmp, "wx", opts.mode);
+      const fd = fs4.openSync(tmp, "wx", opts.mode);
       try {
-        fs5.writeFileSync(fd, data);
-        fs5.fsyncSync(fd);
+        fs4.writeFileSync(fd, data);
+        fs4.fsyncSync(fd);
       } finally {
-        fs5.closeSync(fd);
+        fs4.closeSync(fd);
       }
     } else {
-      fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
-    fs5.renameSync(tmp, file);
+    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
+    renameOver(tmp, file);
   } catch (e) {
     try {
-      fs5.rmSync(tmp, { force: true });
+      fs4.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -1000,7 +1167,7 @@ function writeFileAtomic(file, data, opts = {}) {
 
 // bridge/src/file-lock.ts
 import crypto3 from "node:crypto";
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 import os from "node:os";
 import path5 from "node:path";
 var STALE_MS = 3e4;
@@ -1029,7 +1196,7 @@ var LockLost = class extends LockBusy {
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs6.readlinkSync("/proc/self/ns/pid");
+    return fs5.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -1061,7 +1228,7 @@ function processState(p) {
 }
 var read = (file) => {
   try {
-    return fs6.readFileSync(file, "utf8");
+    return fs5.readFileSync(file, "utf8");
   } catch {
     return null;
   }
@@ -1075,7 +1242,7 @@ function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs6.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs5.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -1086,16 +1253,16 @@ function isStale(file, text, staleMs) {
 }
 var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
-  const fd = fs6.openSync(file, "wx");
+  const fd = fs5.openSync(file, "wx");
   const mine = stampOf(token);
   try {
-    fs6.writeSync(fd, mine);
+    fs5.writeSync(fd, mine);
   } catch (e) {
-    fs6.closeSync(fd);
-    fs6.rmSync(file, { force: true });
+    fs5.closeSync(fd);
+    fs5.rmSync(file, { force: true });
     throw e;
   }
-  fs6.closeSync(fd);
+  fs5.closeSync(fd);
   return read(file) === mine ? mine : null;
 }
 function breakStale(lockFile, seen, staleMs = STALE_MS) {
@@ -1107,7 +1274,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (errCode(e) !== "EEXIST") throw e;
     const g = read(guard);
     if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
-      fs6.unlinkSync(guard);
+      fs5.unlinkSync(guard);
     } catch {
     }
     return false;
@@ -1117,7 +1284,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
     if (read(guard) !== mine) return false;
     try {
-      fs6.unlinkSync(lockFile);
+      fs5.unlinkSync(lockFile);
     } catch (e) {
       if (errCode(e) === "ENOENT") return false;
       throw e;
@@ -1125,20 +1292,20 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     return true;
   } finally {
     if (read(guard) === mine) try {
-      fs6.rmSync(guard, { force: true });
+      fs5.rmSync(guard, { force: true });
     } catch {
     }
   }
 }
 var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
-var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
 var sleepSync = (ms) => {
-  Atomics.wait(sleeper, 0, 0, ms);
+  Atomics.wait(sleeper2, 0, 0, ms);
 };
 function acquireFileLock(lockFile, opts = {}) {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
   const token = crypto3.randomBytes(8).toString("hex");
-  fs6.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  fs5.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
   let firstTransientAt = null;
   const transientYet = (e) => {
@@ -1174,7 +1341,7 @@ function acquireFileLock(lockFile, opts = {}) {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
           if (stillMine()) try {
-            fs6.rmSync(lockFile, { force: true });
+            fs5.rmSync(lockFile, { force: true });
           } catch {
           }
         },
@@ -1206,7 +1373,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs7.readFileSync(file, "utf8");
+    return fs6.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -1239,27 +1406,27 @@ function updateJsonLike(file, fn, opts = {}) {
 }
 
 // design-to-code/run-cache.ts
-import fs8 from "node:fs";
+import fs7 from "node:fs";
 import os2 from "node:os";
 import path6 from "node:path";
 var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs8.statSync(p).isDirectory();
+    return fs7.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs8.existsSync(p);
+var exists = (p) => fs7.existsSync(p);
 function realpath(p) {
-  if (typeof fs8.realpathSync.native === "function") {
+  if (typeof fs7.realpathSync.native === "function") {
     try {
-      return fs8.realpathSync.native(p);
+      return fs7.realpathSync.native(p);
     } catch {
     }
   }
-  return fs8.realpathSync(p);
+  return fs7.realpathSync(p);
 }
 function canonical(p) {
   const abs = path6.resolve(p);
@@ -1326,13 +1493,14 @@ function planLockRefused(planFile, e) {
   const { cache } = planLockOf(planFile);
   return cache !== null && code !== void 0 && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
 }
+var GONE_CODES = /* @__PURE__ */ new Set(["ENOENT", "ENOTDIR"]);
 var RunCacheUnwritable = class extends Error {
   cacheDir;
   root;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT / ENOTDIR are
+   *  not a permission: a directory on the way was removed while the run wrote there */
   constructor(cacheDir, root, code) {
-    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    super(GONE_CODES.has(code) ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
     this.name = "RunCacheUnwritable";
     this.cacheDir = cacheDir;
     this.root = root;
@@ -1349,12 +1517,12 @@ function parsePlanText(raw, file) {
 }
 
 // design-to-code/verify-sets.ts
-import fs10 from "node:fs";
+import fs9 from "node:fs";
 import path8 from "node:path";
 
 // design-to-code/verify-status.ts
 import path7 from "node:path";
-import fs9 from "node:fs";
+import fs8 from "node:fs";
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
@@ -1387,7 +1555,7 @@ function openRunSets(verifyDir) {
   const SUFFIX = ".status.json";
   let files;
   try {
-    files = fs9.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+    files = fs8.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
@@ -1419,7 +1587,7 @@ var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs10.readdirSync(verifyDir);
+    files = fs9.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -1833,7 +2001,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     const g = auditGateStatus(base, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs11.existsSync(path9.join(base, cross)) ? cross : null;
+      const crossCheckFile = cross !== g.auditFile && fs10.existsSync(path9.join(base, cross)) ? cross : null;
       auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
   } catch {
@@ -2006,7 +2174,7 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs11.existsSync(dsDir) && fs11.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs10.existsSync(dsDir) && fs10.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
@@ -2042,7 +2210,7 @@ function main(argv) {
   const indexRow = findIndexRow(screenFile, nodeId);
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow });
   const c = fresh.counts;
-  if (out && !fs11.existsSync(out)) {
+  if (out && !fs10.existsSync(out)) {
     const why = newPlanProblem(out, nodeId, indexRow?.name ?? exp?.screen ?? root?.name ?? "");
     if (why) {
       console.error(`plan-skeleton: ${why} \u2014 nothing written`);
@@ -2070,7 +2238,7 @@ function main(argv) {
       });
       if (!changed) {
         const now = /* @__PURE__ */ new Date();
-        fs11.utimesSync(out, now, now);
+        fs10.utimesSync(out, now, now);
       }
     } catch (e) {
       console.error(`plan-skeleton: ${out}: ${errMsg(e)} \u2014 not written`);
@@ -2083,12 +2251,13 @@ function main(argv) {
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded, ${fresh.anchorsSuggested.length} suggested anchor root(s) (anchorsSuggested)`);
   return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "plan-skeleton" });
 export {
   USAGE,
   bindingsOf,
   buildComponents,
   buildTokens,
+  main,
   merge,
   seed,
   skeleton,

@@ -4,9 +4,11 @@
 // of three, not a free number: binding 9999 gives a bridge that nothing can ever connect to. Keep this
 // array and the manifest's allowedDomains in sync — they are two halves of one contract.
 //
-// Its own module (no imports, no load-time effects) so doctor.ts — which must diagnose a bad
+// Its own module (no load-time effects; its one import, stdio.ts, has none either) so doctor.ts — which must diagnose a bad
 // FIGMA_BRIDGE_PORT rather than die of it — reads the same list and the same parse server-core.ts
 // binds from, instead of a restated copy the test suite had to assert equal.
+import { exitCli } from "./stdio.ts";
+
 export const ALLOWED_PORTS: readonly [number, ...number[]] = [8787, 8788, 8789];
 
 /** FIGMA_BRIDGE_PORT -> the port it selects, or `{ invalid }` (the raw value) when it names none of
@@ -18,7 +20,8 @@ export function parsePortEnv(raw: string | undefined): { port: number; invalid?:
   return ALLOWED_PORTS.includes(n) ? { port: n } : { invalid: raw };
 }
 
-/** The bridge's port from FIGMA_BRIDGE_PORT; on an invalid value, says why on stderr and exits 1. A
+/** The bridge's port from FIGMA_BRIDGE_PORT; on an invalid value, says why on stderr and exits 1 (exitCli: under a
+ *  CLI's runCli the exit code of that CLI, once the line is out; anywhere else at once). A
  *  process that would bind (server-core.ts) or name its daemon socket (daemon.ts) after a port no
  *  plugin can reach has nothing useful left to do. */
 export function bridgePortOrExit(raw: string | undefined): number {
@@ -28,5 +31,5 @@ export function bridgePortOrExit(raw: string | undefined): number {
     `[bridge] FIGMA_BRIDGE_PORT=${r.invalid} is not one of ${ALLOWED_PORTS.join(", ")}. The Figma plugin ` +
       "may only open sockets to ports named in its manifest, so a bridge here would never be reachable."
   );
-  process.exit(1);
+  exitCli(1);
 }

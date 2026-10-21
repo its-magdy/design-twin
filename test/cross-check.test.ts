@@ -4,17 +4,21 @@
 // a duplicated file that re-keys every collection, a catalog that covers 0% of the screen, two
 // libraries whose token names collide on different values, a text style that differs by one capital
 // letter, a radius of a billion, a Dark-only export of a two-mode system.
-// Run with:  node test/cross-check.test.ts
+// Run with:  bun test/cross-check.test.ts
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
 import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-check.ts";
 import { audit } from "../design-to-code/audit.ts";
 import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver, parseCssColor } from "../design-to-code/color.ts";
 import { formatHex as bridgeFormatHex } from "../bridge/src/hex-color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
+import { runSync } from "../design-to-code/proc.ts";
+import { cliRunner } from "./cli-runner.ts";
+import { main as crossCheckMain } from "../design-to-code/cross-check.ts";
+// the first runs are real children, the rest cross-check.ts's main in-process (test/cli-runner.ts)
+const crossCheckCli = cliRunner(path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), crossCheckMain);
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { catalog, codeMap, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
@@ -571,9 +575,9 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-drift-"));
   fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ version: 1, components: {} })); // a VALID empty map (drift-lint validates it)
-  const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), path.join(tmp, "map.json"),
+  const r = runSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), path.join(tmp, "map.json"),
     path.join(import.meta.dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
-    "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "Studio_Configurations__1359_21337.json")], { encoding: "utf8" });
+    "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "Studio_Configurations__1359_21337.json")], { expect: /SCREEN COVERAGE/ });
   ok("[drift-lint wording] the printed line names the hidden instances and says it measures reuse by key, not what the build contains",
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
@@ -622,10 +626,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
   const dsDir = path.join(FXL, "design-system");
-  const withoutFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"),
-    screen, "--design-system", dsDir, "--json"], { encoding: "utf8" });
-  const withFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"),
-    screen, "--design-system", dsDir, "--variables", path.join(FXL, "variables.json"), "--json"], { encoding: "utf8" });
+  const withoutFlag = crossCheckCli([screen, "--design-system", dsDir, "--json"]);
+  const withFlag = crossCheckCli([screen, "--design-system", dsDir, "--variables", path.join(FXL, "variables.json"), "--json"]);
   ok("[cli-autodiscover] no --variables prints which path it auto-discovered", withoutFlag.stderr.includes(path.join(FXL, "variables.json")));
   const resNoFlag = parseAs(withoutFlag.stdout, isCrossCheckReport, "cross-check --json");
   const resFlag = parseAs(withFlag.stdout, isCrossCheckReport, "cross-check --json (--variables)");
@@ -642,7 +644,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   // What the CLI's --json prints (a CrossCheckReport), or the empty stand-in when it printed nothing parseable.
   type CliReport = Pick<CrossCheckReport, "findings" | "componentProposals"> & { coverage: Partial<CrossCheckCoverage> | null };
   const run = (rel: string): CliReport => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+    const r = crossCheckCli([path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"]);
     return r.stdout ? parseAs(r.stdout, isCrossCheckReport, "cross-check --json") : { coverage: {}, findings: [] };
   };
   // What the build sees: the distinct component sets of VISIBLE instances, and the sets used only on
@@ -680,11 +682,10 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 
 // ---------- wrong-kind inputs are one line + exit 2 (doc-guards.ts), never a TypeError or a quiet "not checked" ----------
 {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cross-shape-"));
   const put = (name: string, doc: unknown): string => { const f = path.join(tmp, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
   const good = put("screen.json", { screen: "S", nodes: [{ type: "FRAME", id: "1:1", name: "S" }] });
-  const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args, "--json"], { encoding: "utf8", cwd: tmp });
+  const run = (args: string[]) => crossCheckCli([...args, "--json"], { cwd: tmp });
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
   ok("[shape] a screen argument that is an array of nodes (not an export) -> exit 2, one line", oneLine(run([put("arr.json", [{ id: "1:1", type: "FRAME" }])]), /screen export: '.*arr\.json' is not a screen export/));
   put("ds/components.local.json", { components: [{ key: "k" }] });
@@ -692,7 +693,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   put("ds2/styles.text.json", { styles: {} });
   ok("[shape] a --design-system styles.text.json whose styles is not an array -> exit 2", oneLine(run([good, "--design-system", path.join(tmp, "ds2")]), /text styles: '.*styles\.text\.json' is not a text-style sheet/));
   ok("[shape] a --variables file that is not JSON -> exit 2 with the parser's reason", (() => { fs.writeFileSync(path.join(tmp, "v.json"), "{"); return oneLine(run([good, "--variables", path.join(tmp, "v.json")]), /variables: '.*v\.json' is not valid JSON/); })());
-  ok("[args] `--out --json` is '--out needs a value', not a file named <cwd>/--json.json", (() => { const r = spawnSync(process.execPath, [CLI, good, "--out", "--json"], { encoding: "utf8", cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
+  ok("[args] `--out --json` is '--out needs a value', not a file named <cwd>/--json.json", (() => { const r = crossCheckCli([good, "--out", "--json"], { cwd: tmp }); return r.status === 2 && /cross-check: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json")); })());
 }
 
 // ---------- one name rule, finding ids, labelled proposals ----------
@@ -776,8 +777,7 @@ console.log("cross-check — name rule, finding ids, proposal labels:");
   put("design/export/design-system/components.local.json", CAT);
   const MAP = codeMap({ "s-sidebar": { figma: { name: "Sidebar", key: "cat-sidebar", id: "9:1" } } });
   put("design/codeconnect.local.json", MAP);
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts");
-  const r = spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { encoding: "utf8", cwd: tmp });
+  const r = crossCheckCli([fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { cwd: tmp });
   const res = tryParse(r.stdout, isCrossCheckReport);
   const props = (res && res.componentProposals) || [];
   const p = (n: string) => props.find((x) => x.name === n);
@@ -790,13 +790,13 @@ console.log("cross-check — name rule, finding ids, proposal labels:");
   ok("the catalog-rekeyed confirm count excludes the mapped one (2, not 3), and the severity is unchanged",
     !!rk && rk.severity === "warning" && /^2 component\(s\) match/.test(rk.confirm ?? "") && /3 proposals, 1 already mapped .* confirm only the other 2/.test(rk.message));
   ok("nothing is auto-confirmed", props.every((x) => x.confirmed === false));
-  const md = spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system")], { encoding: "utf8", cwd: tmp }).stdout;
+  const md = crossCheckCli([fileA, "--design-system", path.join(tmp, "design/export/design-system")], { cwd: tmp }).stdout;
   ok("the markdown splits 'shared — confirm once' / 'this screen only' / 'already mapped'",
     /### Shared with other exported screens — confirm once \(1\)[\s\S]*`Card`[\s\S]*### This screen only \(1\)[\s\S]*`Grid`[\s\S]*### Already in the component map — nothing to confirm \(1\)[\s\S]*`Sidebar`/.test(md));
   // --map names the map explicitly; with no map anywhere there is no alreadyMapped label at all.
-  const noMap = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
+  const noMap = tryParse(crossCheckCli([fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--json"], { cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
   ok("no map found → no alreadyMapped label, confirm count 3", !!noMap && (noMap.componentProposals || []).every((x) => x.alreadyMapped === undefined) && /^3 component/.test(noMap.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
-  const explicit = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", path.join(tmp, "design/codeconnect.local.json"), "--json"], { encoding: "utf8", cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
+  const explicit = tryParse(crossCheckCli([fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", path.join(tmp, "design/codeconnect.local.json"), "--json"], { cwd: path.join(tmp, "design/export") }).stdout, isCrossCheckReport);
   ok("--map <file> labels the same way from any cwd", !!explicit && (explicit.componentProposals || []).find((x) => x.name === "Sidebar")?.alreadyMapped === true);
   // the map-bootstrap scaffold writes a stub for every CATALOG component, keyed by the catalog key.
   // None of the re-keyed screen's instance keys are in it, so nothing resolves through it: no proposal is
@@ -806,7 +806,7 @@ console.log("cross-check — name rule, finding ids, proposal labels:");
     "cat-grid": { figma: { name: "Grid", key: "cat-grid", id: "9:2" } },
     "cat-card": { figma: { name: "Card", key: "cat-card", id: "9:3" } },
   }));
-  const stubbed = tryParse(spawnSync(process.execPath, [CLI, fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", stub, "--json"], { encoding: "utf8", cwd: tmp }).stdout, isCrossCheckReport);
+  const stubbed = tryParse(crossCheckCli([fileA, "--design-system", path.join(tmp, "design/export/design-system"), "--map", stub, "--json"], { cwd: tmp }).stdout, isCrossCheckReport);
   const stubProps = (stubbed && stubbed.componentProposals) || [];
   ok("a catalog-keyed stub map labels nothing alreadyMapped", stubProps.length === 3 && stubProps.every((x) => x.alreadyMapped === undefined));
   ok("…and the confirm count stays 3", /^3 component/.test(stubbed?.findings.find((f) => f.code === "catalog-rekeyed")?.confirm ?? ""));
@@ -1067,7 +1067,6 @@ console.log("cross-check — token pairs (unknown backdrops, the colour outside 
 
 // ---------- no --design-system: the project's own design-system dir is found, current or legacy layout ----------
 {
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts");
   const inst: NodeInput = { type: "INSTANCE", id: "1:2", name: "Card", props: {}, mainComponent: { name: "Card", key: "s-card" } };
   const doc = screenExport([{ type: "FRAME", id: "1:1", name: "A", children: [inst] }], { screen: "A", nodeId: "1:1" });
   const CAT = catalog([{ name: "Card", id: "9:3", key: "cat-card", type: "COMPONENT", props: {} }]);
@@ -1076,7 +1075,7 @@ console.log("cross-check — token pairs (unknown backdrops, the colour outside 
     const put = (rel: string, d: unknown) => { const f = path.join(tmp, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(d)); return f; };
     const screenFile = put(`${exportRel}/pages/P/A__1_1.json`, doc);
     put(`${exportRel}/design-system/components.local.json`, CAT);
-    const r = spawnSync(process.execPath, [CLI, screenFile, "--json"], { encoding: "utf8", cwd: tmp });
+    const r = crossCheckCli([screenFile, "--json"], { cwd: tmp });
     fs.rmSync(tmp, { recursive: true, force: true });
     return { res: tryParse(r.stdout, isCrossCheckReport) };
   };

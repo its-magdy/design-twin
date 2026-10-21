@@ -12,7 +12,12 @@
 //
 // Playwright is the PROJECT's: resolved with createRequire(<project>/package.json) — playwright, then
 // @playwright/test, then playwright-core — never bundled, never installed, and no browser is ever
-// downloaded by this script. Its types are `import type` only (erased from the bundle).
+// downloaded by this script. Its types are `import type` only (erased from the bundle). A package is only resolved once a
+// node_modules/<name>/package.json of the project or an ancestor is on disk (packageDirInProject): asked for a package the
+// project does not have, Bun's resolver installs it from npm into its global cache (auto-install) — a download, before any
+// check on the answer could refuse it. The hooks and skills run this script with `bun --no-install`; the look-before-resolve
+// holds even when a caller forgets the flag, and what does resolve must still be inside that node_modules/<name>
+// (installedInProject), or it is not loaded.
 //
 // The whole run is bounded (--max-time: a page whose script never yields would hang the verifier for good).
 // Every measurement belongs to a run, named in the measured file: --run <id>'s, else one the probe starts itself and
@@ -51,7 +56,6 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response } from "playwright";
-import { spawnSync } from "node:child_process";
 import { PROC_HOST, killChildTree, parentPid, taskkillCapped, type ProcHost } from "./kill-tree.ts";
 import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements, screenTags } from "./probe-page.ts";
 import type { Candidate, CollectOutput, ForeignRoot, MeasureInput, MeasureItem, Rect, ScreenTags } from "./probe-page.ts";
@@ -78,7 +82,7 @@ import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run
 import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts";
+import { exitFlushed, runCli, runSync } from "./proc.ts";
 import { expectationSetProblem, outBaseOf, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
@@ -117,13 +121,44 @@ export function projectRequire(dir: string): ReturnType<typeof createRequire> {
   return createRequire(path.join(path.resolve(dir), "package.json"));
 }
 
+/** The first <d>/node_modules/<name> holding a package.json, for the project dir and then each ancestor — the directories
+ *  the resolution walks (a workspace root's hoisted copy counts) — or null: the project does not have `name`. Asked BEFORE
+ *  the project's require resolves `name`, because resolving is what downloads: Bun answers a package that no node_modules
+ *  of the project has by installing it from npm into its global cache (auto-install) unless it runs with --no-install, so
+ *  a resolve that is only allowed once this finds the package can never fetch it. Only a look at the disk: nothing loaded. */
+export function packageDirInProject(dir: string, name: string): string | null {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    const pkg = path.join(d, "node_modules", ...name.split("/"));
+    if (fs.existsSync(path.join(pkg, "package.json"))) return pkg;
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/** Whether `file` (what the project's require resolved `name` to) is that package as the PROJECT has it installed: inside
+ *  <d>/node_modules/<name> for the project dir or one of its ancestors — compared as real paths, so a pnpm symlink into
+ *  node_modules/.pnpm/ counts too. The second line of defence, after packageDirInProject: the resolution may still
+ *  answer from elsewhere (NODE_PATH, a global folder, an exports map pointing out of the package), and that is not the
+ *  project's — refused BEFORE it is loaded (loading runs its code). */
+export function installedInProject(dir: string, name: string, file: string): boolean {
+  const real = (p: string): string | null => { try { return fs.realpathSync(p); } catch { return null; } };
+  const target = real(file) ?? path.resolve(file);
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    const pkg = real(path.join(d, "node_modules", ...name.split("/")));
+    if (pkg !== null && (target === pkg || target.startsWith(pkg + path.sep))) return true;
+    if (path.dirname(d) === d) return false;
+  }
+}
+const notInProject = (name: string, file: string): string => `${name}: resolved outside the project's node_modules (${file}) — not loaded`;
+
 export function resolvePlaywright(dir: string): Resolution {
   const abs = path.resolve(dir);
   const req = projectRequire(abs);
   const tried: string[] = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
+    if (packageDirInProject(abs, name) === null) { tried.push(`${name}: not installed`); continue; } // never resolved: no download
     let file: string;
     try { file = req.resolve(name); } catch { tried.push(`${name}: not installed`); continue; }
+    if (!installedInProject(abs, name, file)) { tried.push(notInProject(name, file)); continue; }
     let mod: unknown;
     try { mod = req(name); } catch (e) { tried.push(`${name}: failed to load (${firstLine(e)})`); continue; }
     if (!isPlaywrightModule(mod)) { tried.push(`${name}: has no chromium launcher`); continue; }
@@ -131,16 +166,23 @@ export function resolvePlaywright(dir: string): Resolution {
     try { const pj: unknown = req(`${name}/package.json`); if (isJsonObject(pj) && typeof pj.version === "string") version = pj.version; } catch { /* exports without ./package.json */ }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs.existsSync(path.join(abs, ".pnp.cjs")) ? " — this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> …`" : "";
+  // Bun does not read Yarn's .pnp.cjs (and `yarn node` would run Node, which is not supported): a PnP project has no
+  // node_modules to resolve Playwright from until it installs with the node-modules linker — the user's call, like any install
+  const pnp = fs.existsSync(path.join(abs, ".pnp.cjs"))
+    ? " — this project uses Yarn Plug'n'Play, which Bun cannot resolve packages through: ask the user to set `nodeLinker: node-modules` in .yarnrc.yml and run `yarn install`, then re-run the probe" : "";
   return { ok: false, reason: `no playwright package resolvable from ${path.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 
 /** the PROJECT's axe-core — never bundled, never installed; absent → the a11y.axe check is not-run. */
 export type AxeResolution = { ok: true; source: string; version: string; file: string } | { ok: false; why: string };
 export function resolveAxe(dir: string): AxeResolution {
+  // not on disk in the project → absent, without resolving it (a resolve is what would download it: packageDirInProject)
+  if (packageDirInProject(dir, "axe-core") === null) return { ok: false, why: "axe-core not installed in the project (optional)" };
   const req = projectRequire(dir);
   let file: string;
   try { file = req.resolve("axe-core"); } catch { return { ok: false, why: "axe-core not installed in the project (optional)" }; }
+  // a copy from anywhere else (NODE_PATH, a global folder) is not the project's: as absent, and never loaded
+  if (!installedInProject(dir, "axe-core", file)) return { ok: false, why: "axe-core not installed in the project (optional)" };
   let mod: unknown;
   try { mod = req("axe-core"); } catch (e) { return { ok: false, why: `axe-core failed to load (${firstLine(e)})` }; }
   if (typeof mod !== "object" || mod === null || !("source" in mod) || typeof mod.source !== "string") return { ok: false, why: "axe-core resolved, but it exports no source" };
@@ -245,8 +287,10 @@ function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | nu
   const head = gitHead(dir);
   if (!head) return { gitHead: null, gitDirty: null };
   try {
-    const r = spawnSync("git", ["status", "--porcelain", "--", ".", ":(exclude)design"], { cwd: dir, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    return { gitHead: head, gitDirty: r.status === 0 ? String(r.stdout || "").trim() !== "" : null };
+    // porcelain v2 --branch always prints its `# branch.oid` header, so an empty capture (Bun #46142: exit 0, no stdout)
+    // is never read as "clean": it is re-run once, then gitDirty is unknown (null). A change is any non-header line.
+    const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd: dir, timeoutMs: 5000, expect: /^# branch\.oid /m });
+    return { gitHead: head, gitDirty: r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null };
   } catch { return { gitHead: head, gitDirty: null }; }
 }
 
@@ -1965,16 +2009,8 @@ function exitWhenDone(code: number): void {
   process.exitCode = code;
   setTimeout(() => exitFlushed(code), EXIT_GRACE_MS).unref();
 }
-/** exit once stderr and stdout have flushed, or after FLUSH_CAP_MS when a reader never drains them — the grace timer
- *  above, and a stop signal (its listener replaces Node's default exit; Playwright's SIGTERM/SIGHUP listeners only close
- *  the browser, and its SIGINT one exits 130 only after a browser has launched) */
-const FLUSH_CAP_MS = 2_000;
-function exitFlushed(code: number): void {
-  const exit = (): never => process.exit(code);
-  setTimeout(exit, FLUSH_CAP_MS).unref(); // a pending write keeps the loop up, so this still fires
-  process.stderr.write("", () => process.stdout.write("", exit));
-}
+// exitFlushed (proc.ts) exits once stderr and stdout have flushed, or after 2 s when a reader never drains them — used by
+// the grace timer above, and a stop signal (its listener replaces the runtime's default exit; Playwright's SIGTERM/SIGHUP
+// listeners only close the browser, and its SIGINT one exits 130 only after a browser has launched).
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  main(process.argv.slice(2)).then(exitWhenDone, (e: unknown) => { console.error(`verify-probe: ${errMsg(e)}`); exitWhenDone(1); });
-}
+if (import.meta.main) runCli(main, { name: "verify-probe", errorLine: (e) => `verify-probe: ${errMsg(e)}`, done: exitWhenDone });

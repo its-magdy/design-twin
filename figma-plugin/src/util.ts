@@ -118,7 +118,7 @@ export function anyProp(node: unknown, key: string): unknown {
 // A Plugin API colour (channels and alpha 0–1) as the export's hex: bridge/src/hex-color.ts formatHex, the
 // formatter design-to-code uses too — "#rrggbb" when the alpha rounds to opaque, else "#rrggbbaa".
 export function rgbaToHex(c: { r: number; g: number; b: number; a?: number }): string {
-  return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a ?? 1 });
+  return formatHex({ r: c.r * 255, g: c.g * 255, b: c.b * 255, a: c.a == null ? 1 : c.a }); // absent (or null) -> opaque; NOT `||`, an alpha of 0 is real
 }
 
 // A visible SOLID paint -> hex (folding its opacity into the alpha channel). r/g/b are listed rather than

@@ -12,8 +12,10 @@ updates:
       actions:
         patterns: ["*"]
 
-  # the root lockfile covers the workspaces (bridge, figma-plugin)
-  - package-ecosystem: npm
+  # the root bun.lock covers the workspaces (bridge, figma-plugin). bunfig.toml's minimumReleaseAge holds a local
+  # `bun install` / `bun update` to the same 7 days. packageManager (bun@x) and the CI's Bun are not bumped by this: move
+  # them by hand.
+  - package-ecosystem: bun
     directory: "/"
     schedule:
       interval: monthly
@@ -21,6 +23,6 @@ updates:
       default-days: 7
       semver-major-days: 30
     groups:
-      npm-minor-patch:
+      bun-minor-patch:
         update-types: [minor, patch]
         patterns: ["*"]

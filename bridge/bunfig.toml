@@ -1,0 +1,12 @@
+# Bun settings for this workspace's own scripts. Bun reads the bunfig.toml of the directory it is started in, and
+# `bun run --filter '*' <script>` (the root's build / typecheck) starts each workspace's script IN that workspace — so
+# the root bunfig.toml does not reach them, and without this file a bridge/.env would be loaded into them and a missing
+# import fetched from the registry. The same three guarantees as the root (see its comments for each). Not published:
+# the package ships src/ only, and a user's invocations carry --no-install --no-env-file on the command line instead.
+env = false
+
+[install]
+auto = "disable"
+
+[run]
+bun = true

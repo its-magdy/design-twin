@@ -211,7 +211,7 @@ appears on a vector node whose SVG export failed. Render it inline as
 
 **Tokens** — the right-hand value in `tokens.json` is a CSS custom property (e.g. `var(--color-primary)`).
 Use it inside the module CSS (`color: var(--color-text)`), not inline literals.
-- Generated theme: `node "<scripts>/tokens.js" <variables file> <dir>` with **no** `--web` flag — `tokens.css` is the
+- Generated theme: `bun --no-install --no-env-file "<scripts>/tokens.js" <variables file> <dir>` with **no** `--web` flag — `tokens.css` is the
   file for this stack (`:root` plus a `[data-theme="…"]` block per non-default mode; when several collections share a mode name each is scoped
   `[data-theme-<collection>="<mode>"]` and `tokens.js` warns which attributes to set). Its names keep
   the Figma name's case and turn `/` and spaces into `-`: `Primary/Primary` → `--Primary-Primary`,

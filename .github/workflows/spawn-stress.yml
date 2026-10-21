@@ -1,0 +1,120 @@
+name: spawn-stress
+
+# Bun's child-process bugs, measured where they live: on macOS an `exit` that fires inside spawn() under `bun test`
+# (oven-sh/bun#45483) and children left unreaped (#45365), spawnSync returning an empty stdout under load (#46142), and
+# on every OS the pipe-drop family (piped output lost after a large write). design-to-code/proc.ts (runSync / runAsync)
+# is the repo's answer; test/spawn-stress/stress.ts hammers raw node:child_process + Bun.spawn next to it on a loaded
+# box. Only the helper is gated — it must lose nothing, on any OS. The raw modes are reported, not gated: they show
+# whether an upstream fix has landed (when every raw mode reads fail=0 on macOS for a while, the workarounds in proc.ts
+# can be revisited). Not a required check, and not part of `test`: on demand, and on a pull request that touches
+# the helper, the runner or this harness (no schedule).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - design-to-code/proc.ts
+      # proc.ts re-exports the queued console and exit helpers from here
+      - bridge/src/stdio.ts
+      - test/run-suites.ts
+      - test/pool.ts
+      - test/spawn-helper.ts
+      - test/assert.ts
+      - test/spawn-stress/**
+      - .github/workflows/spawn-stress.yml
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  stress:
+    name: spawn-stress (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # both macOS images (the bugs were reported on Apple silicon under load), and Linux/Windows for the pipe family
+        os: [macos-15, macos-14, ubuntu-24.04, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Bun as in `test` (package.json packageManager).
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # The macOS reports need a loaded machine: one busy loop per core for the rest of the job (bash's own SECONDS, so
+      # no `timeout` binary is needed — macOS has none). The runner reaps them when the job ends.
+      - name: CPU load
+        run: |
+          n=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 2)
+          for _ in $(seq "$n"); do
+            bash -c 'end=$((SECONDS + 1500)); while [ "$SECONDS" -lt "$end" ]; do :; done' > /dev/null 2>&1 &
+          done
+
+      # stress.ts <mode> <runs> <concurrency> prints one line per mode: `bun <version> <mode> N=… C=… fail=<k> …`, and exits
+      # 1 when a gated (helper-*, fake-*) mode failed. The measuring steps never stop on that — `shell: bash` runs with
+      # -e -o pipefail, so a bare failing run would end the loop and hide every mode after it: each run's exit status goes
+      # to exits.txt (`<mode> <status>`) and its line to out-*.txt (async: also to the log), and the last step gates on both.
+      - name: Async spawn, raw vs helper
+        run: |
+          for m in raw-async raw-async-late bun-spawn helper-async fake-early-exit fake-lost-exit; do
+            s=0; bun test/spawn-stress/stress.ts "$m" 2000 32 > "out-async-$m.txt" || s=$?
+            cat "out-async-$m.txt"; echo "$m $s" >> exits.txt
+          done
+
+      # #46142's shape: 32 processes each doing synchronous captures at once. Each process's own line stays in its
+      # out-sync-<mode>-<i>.txt (for the gate); the log gets one summed line per mode.
+      - name: Sync capture under 32 parallel processes
+        run: |
+          for m in raw-sync-cat raw-sync-pipe helper-sync helper-big-stderr; do
+            for i in $(seq 32); do
+              ( s=0; bun test/spawn-stress/stress.ts "$m" 300 1 > "out-sync-$m-$i.txt" || s=$?; echo "$m $s" >> exits.txt ) &
+            done
+            wait
+            cat out-sync-"$m"-*.txt | awk -v m="$m" '{ for (i = 1; i <= NF; i++) if ($i ~ /^fail=/) { split($i, a, "="); s += a[2] } } END { print m, "fail=" s + 0 }'
+          done
+
+      # #45483 under the real `bun test` runner. The raw test documents the bug (reported, its exit ignored); the helper
+      # test must pass every one of its 300 runs (recorded here, gated below). Not on Windows: the bug was reported on
+      # macOS and the measurement that matters is there and on Linux; the test's child is this bun, so it would run.
+      - name: bun test early exit (raw, reported)
+        if: runner.os != 'Windows'
+        run: |
+          bun test --rerun-each=300 -t '^raw' test/spawn-stress/early-exit.test.ts || echo "raw early-exit failed (expected while #45483 is open)"
+      - name: bun test early exit (helper, recorded)
+        if: runner.os != 'Windows'
+        run: |
+          s=0; bun test --rerun-each=300 -t '^helper' test/spawn-stress/early-exit.test.ts || s=$?
+          echo "bun-test-helper-early-exit $s" >> exits.txt
+
+      # Every gated result at once: a failing mode no longer hides the ones after it.
+      - name: Gate — the helper modes lose nothing
+        run: |
+          bad=0
+          if grep -hE '^bun .*(helper|fake)-[a-z-]+ .*fail=[1-9]' out-*.txt; then
+            echo "::error::a helper mode lost a child's status or output (lines above)"; bad=1
+          fi
+          if grep -E '^(helper-[a-z-]+|fake-[a-z-]+|bun-test-helper-early-exit) [1-9]' exits.txt; then
+            echo "::error::a gated run exited non-zero (lines above: <mode> <exit status>)"; bad=1
+          fi
+          for m in helper-async fake-early-exit fake-lost-exit helper-sync helper-big-stderr; do
+            want=1; case $m in helper-sync | helper-big-stderr) want=32 ;; esac
+            got=$(cat out-*-"$m"*.txt 2>/dev/null | grep -cE "^bun .* $m " || true)
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::$m printed $got result line(s), expected $want — a run died before reporting, or stress.ts changed its output"; bad=1
+            fi
+          done
+          exit "$bad"

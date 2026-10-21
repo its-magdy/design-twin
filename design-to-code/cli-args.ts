@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { ParseArgsOptionsConfig } from "node:util";
 import { errCode, errMsg } from "../bridge/src/errmsg.ts";
+import { exitCli } from "./proc.ts";
 
 /**
  * The command a usage line or a printed hint gives for another script: its REAL path, so the model can copy
@@ -24,17 +25,22 @@ import { errCode, errMsg } from "../bridge/src/errmsg.ts";
  * not an environment variable in the Bash tool, so a usage line quoting it would hand the model a command with an
  * empty path. In a bundle this module is inlined, so import.meta.url is the bundle
  * itself (claude-plugin/scripts/<entry>.js) and its folder holds every sibling script; run from a clone, it is
- * design-to-code/cli-args.ts and the siblings are the .ts sources Node runs directly. Printed output only —
+ * design-to-code/cli-args.ts and the siblings are the .ts sources Bun runs directly. Printed output only —
  * never put it in a file the tools write (an absolute, per-install path would change the file's hash).
+ * `--no-install --no-env-file`: the command runs in the USER's project, where a bare `bun` would auto-install a
+ * missing package from npm (verify-probe resolves the project's own Playwright) and load the project's .env into
+ * the tool's environment (FIGMA_BRIDGE_PORT and friends) — the same flags the hooks and skills run the scripts with.
  */
 const SELF = fileURLToPath(import.meta.url);
 // Double quotes keep spaces; a path that also holds a character the shell expands inside them (" $ ` \, and
 // zsh's history !) is single-quoted instead, with any ' closed, escaped and reopened.
 const shellQuote = (p: string): string => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+/** How every printed command starts (see scriptCmd). */
+export const SCRIPT_RUNNER = "bun --no-install --no-env-file";
 /** One argument of a printed command as one shell word: bare when it holds only characters no shell treats
  *  specially (a path like design/verify/Plots.json), else quoted as above — a project path may hold a space. */
 export const shellArg = (a: string): string => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-export const scriptCmd = (name: string): string => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+export const scriptCmd = (name: string): string => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 /** `--flag -3` → `--flag=-3` for every value-taking `--flag` in `options`; everything after `--` is left alone. */
 function joinNegativeValues(argv: string[], options: ParseArgsOptionsConfig): string[] {
@@ -51,9 +57,9 @@ function joinNegativeValues(argv: string[], options: ParseArgsOptionsConfig): st
 }
 
 /**
- * The single-dash words in `args` that are not a run of this tool's short flags: Node splits `-Button` into
- * -B -u -t -t -o -n (and reads `-h-thing` as -h, then `--`, then positionals), so a value that merely starts
- * with "-" would be reported as five unknown flags, or slip through as a help flag. A word right after a
+ * The single-dash words in `args` that are not a run of this tool's short flags: parseArgs splits `-Button` into
+ * -B -u -t -t -o -n (and `-h-thing` into -h, an option named "-" spelled `--`, -t, -h, …), so a value that merely
+ * starts with "-" would be reported as five unknown flags, or slip through as a help flag. A word right after a
  * value-taking flag is that flag's value (parseArgs rules on it), and everything after `--` is left alone.
  */
 function badShortWords(args: string[], options: ParseArgsOptionsConfig): string[] {
@@ -79,15 +85,17 @@ function badShortWords(args: string[], options: ParseArgsOptionsConfig): string[
 
 /**
  * Run `parse` (a strict parseArgs call over the normalised `args` with `options`); on a parse error print
- * the tool's message + usage to stderr and exit with `exitCode`.
+ * the tool's message + usage to stderr and exit with `exitCode` (exitCli).
  */
 export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOptionsConfig, usage: string, exitCode: number, parse: (args: string[]) => R): R {
   const args = joinNegativeValues(argv, options);
   // Every unknown flag, named as typed: long ones from a loose re-read (it knows which words are values), plus
-  // the single-dash words above, once each (never the letters Node expands them into), in the order typed.
+  // the single-dash words above, once each (never the letters parseArgs expands them into), in the order typed.
+  // A long one is a token whose WORD starts with "--": Bun's parseArgs expands the `-` inside `-h-thing` into an
+  // option named "-" with the rawName `--`, which is a letter of that single-dash word, not a flag of its own.
   const unknownFlags = (): string => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => (t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []));
+    const long = tokens.flatMap((t) => (t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []));
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -95,8 +103,9 @@ export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOpti
   };
   let failure: string;
   try {
-    // Node rules first, so its own error (a flag missing its value, a boolean given one) is the one reported;
-    // the single-dash check runs only on argv Node accepted (it reads `-h-thing` as -h, `--`, positionals).
+    // parseArgs rules first, so its own error (a flag missing its value, a boolean given one) is the one reported;
+    // the single-dash check runs only on argv it accepted (Node read `-h-thing` as -h, `--`, positionals; Bun
+    // refuses it as the unknown option "-" — either way the word is named whole below).
     const parsed = parse(args);
     if (!badShortWords(args, options).length) return parsed;
     failure = unknownFlags();
@@ -115,7 +124,7 @@ export function cliParse<R>(tool: string, argv: string[], options: ParseArgsOpti
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode); // inside runCli: unwinds to it, so the message above is not dropped at exit (proc.ts)
 }
 
 /**

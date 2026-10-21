@@ -2,7 +2,7 @@
 //   1. bridge/src/server-core.ts  — verifyClient, the bridge's only real access control (token + Origin
 //      + loopback Host). Reachable otherwise only through a live WebSocket handshake.
 //   2. bridge/src/seed-components.ts — a CLI, so it's driven as a subprocess in a temp dir.
-// Run with:  node test/bridge.test.ts
+// Run with:  bun test/bridge.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,9 +13,9 @@ import { getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
-// "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
-import WebSocket from "ws";
-import type { ClientOptions, RawData } from "ws";
+// The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
+import { WsClient } from "./ws-client.ts";
+import type { ClientOptions, HandshakeRefusal, RawData } from "./ws-client.ts";
 import { ok, report } from "./assert.ts";
 import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
 import { screenPaths } from "../bridge/src/pages-layout.ts";
@@ -276,7 +276,7 @@ let nextPort = 8797;
 async function connectedBridge() {
   const port = nextPort++;
   const bridge = core.createBridge(port, { settleMs: 0 });
-  const client = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+  const client = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
   await new Promise((res, rej) => { client.on("open", res); client.on("error", rej); });
   return { bridge, client };
 }
@@ -372,6 +372,63 @@ void (async () => {
     !!pErr && /Open Console/i.test(pErr.message));
   ok("[disconnect-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
 
+  // ------------------------------------------------- server-core: frames past 16 MiB (the frame cap is ours)
+  // Under Bun, the `ws` package is Bun's shim, which ignored maxPayload and cut every frame at a hard
+  // 16 MiB — a real asset-heavy export reply (60–120 MB) died as a bare close 1006. The bridge is now
+  // Bun.serve with maxPayloadLength = FIGMA_BRIDGE_MAX_PAYLOAD_MB (default 128). Both directions, well
+  // past 16 MiB: a 20 MiB command frame out (the args ride along, unread by the bridge), a 40 MiB reply back.
+  {
+    const { bridge: b, client: c } = await connectedBridge();
+    const MiB = 1024 * 1024;
+    let argsLen = -1;
+    c.on("message", (raw: RawData) => {
+      const m = JSON.parse(raw.toString()) as CommandFrame;
+      argsLen = typeof m.args?.pad === "string" ? m.args.pad.length : -1;
+      c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "P", file: "F", pad: "y".repeat(40 * MiB) } }));
+    });
+    // `ping` takes no args (NoArgs is {}, so any object passes); the pad is a payload the plugin side of this test
+    // reads back, not a real argument.
+    const big = await b.request("ping", { pad: "x".repeat(20 * MiB) }, 30000).then((r) => r, (e: unknown) => asErr(e));
+    console.log("\nserver-core — frames past 16 MiB:");
+    ok("[payload] a 20 MiB command frame reaches the plugin whole", argsLen === 20 * MiB);
+    ok("[payload] a 40 MiB reply is received whole (no 16 MiB cap)",
+      !(big instanceof Error) && "pad" in big && typeof big.pad === "string" && big.pad.length === 40 * MiB);
+    c.close();
+    b.close();
+  }
+  // FIGMA_BRIDGE_MAX_PAYLOAD_MB as the bridge reads it — anything but a finite number above 0 is the default 128 MB with a
+  // warning (`ws` read <=0 as "unlimited"; Bun.serve has none, and its 0 would refuse every frame); past 4 GiB it is
+  // clamped, and `mb` — what the too-big diagnosis quotes — is the clamped cap, not the number typed.
+  {
+    const mp = core.maxPayloadFromEnv;
+    ok("[payload] unset, empty or blank: the default 128 MB, no warning", [undefined, "", "  "].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && r.warning === undefined; }));
+    ok("[payload] 0, a negative, NaN, Infinity, a word or blanks: the default 128 MB, with a warning naming the value",
+      ["0", "-5", "NaN", "Infinity", "-Infinity", "lots", "1e999"].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && !!r.warning && r.warning.includes(JSON.stringify(v)) && /default 128 MB/.test(r.warning); }));
+    ok("[payload] a real value is taken as is (1, 0.5, 512)", mp("1").bytes === 1024 * 1024 && mp("1").mb === 1 && mp("0.5").bytes === 512 * 1024 && mp(" 512 ").mb === 512 && mp("1").warning === undefined);
+    ok("[payload] past Bun's 32-bit maxPayloadLength it is clamped, and mb is the clamped cap (4096), not 99999", mp("99999").bytes === 0xffffffff && mp("99999").mb === 4096);
+  }
+  // …and FIGMA_BRIDGE_MAX_PAYLOAD_MB is the real cap: a reply over a 1 MB limit closes the socket, and the
+  // request fails with the diagnosis that names the knob (Bun reports it as 1006 "Received too big message").
+  {
+    const before = process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB;
+    process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB = "1";
+    const { bridge: b, client: c } = await connectedBridge();
+    if (before === undefined) delete process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB;
+    else process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB = before;
+    c.on("message", (raw: RawData) => {
+      const m = JSON.parse(raw.toString()) as CommandFrame;
+      c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, pad: "z".repeat(2 * 1024 * 1024) } }));
+    });
+    c.on("error", () => {});
+    let capErr: Error | undefined;
+    try { await b.request("ping", {}, 10000); } catch (e) { capErr = asErr(e); }
+    ok("[payload] a reply over FIGMA_BRIDGE_MAX_PAYLOAD_MB fails its request at once, not at the timeout", !!capErr && /disconnected before replying/.test(capErr.message));
+    ok("[payload] and the diagnosis names the 1 MB limit and the knob that raises it",
+      !!capErr && /exceeded the 1 MB frame limit/.test(capErr.message) && /FIGMA_BRIDGE_MAX_PAYLOAD_MB/.test(capErr.message));
+    ok("[payload] the over-limit client is gone from the registry", await until(() => !b.isConnected()));
+    b.close();
+  }
+
   // ------------------------------------------------- server-core: a bad token the PLUGIN can diagnose
   // A browser socket cannot read an HTTP 401 (it sees an opaque 1006, same as "nothing listening"), so
   // the plugin's iframe (Origin "null") is admitted and closed with 4401 instead. The properties that
@@ -379,34 +436,36 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { settleMs: 0 });
-    const closed = (url: string, opts: ClientOptions) => new Promise<{ opened: boolean; http?: number; code?: number; clients?: number }>((res) => {
-      const c = new WebSocket(url, opts);
+    // The plugin case dials with Bun's WebSocket, as the iframe would; the two refused ones with the raw
+    // client (ws-client.ts), the only one that can read the refusal's HTTP status.
+    const closed = (url: string, opts: ClientOptions) => new Promise<{ opened: boolean; http?: number; body?: string; code?: number; clients?: number }>((res) => {
+      const c = new WsClient(url, opts);
       let opened = false;
       c.on("open", () => { opened = true; c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
-      c.on("unexpected-response", (_req, r) => res({ opened, ...ifDefined("http", r.statusCode) }));
-      c.on("close", (code) => res({ opened, code, clients: bridge.listClients().length }));
+      c.on("unexpected-response", (r: HandshakeRefusal) => res({ opened, http: r.statusCode, body: r.body }));
+      c.on("close", (code: number) => res({ opened, code, clients: bridge.listClients().length }));
       c.on("error", () => {});
     });
     const plugin = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "null" });
     ok("[bad-token] the plugin iframe (Origin null) gets close code 4401 it can read, not an opaque refusal",
       plugin.opened === true && plugin.code === core.CLOSE_BAD_TOKEN && core.CLOSE_BAD_TOKEN === 4401);
     ok("[bad-token] and was never registered as a client, even though it sent a hello", plugin.clients === 0 && !bridge.isConnected());
-    const node = await closed(`ws://127.0.0.1:${port}/?token=wrong`, {});
+    const node = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { raw: true });
     ok("[bad-token] a non-browser client (no Origin) is still refused at the HTTP layer with 401", node.opened === false && node.http === 401);
-    const site = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "https://evil.example" });
-    ok("[bad-token] a real website Origin is refused 403 — never admitted for diagnosis", site.opened === false && site.http === 403);
-    const good = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+    ok("[bad-token] and the refusal's body says why, as ws's did", node.body === "bad or missing token");
+    const site = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "https://evil.example", raw: true });
+    ok("[bad-token] a real website Origin is refused 403 — never admitted for diagnosis", site.opened === false && site.http === 403 && site.body === "forbidden origin");
+    const good = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
     await new Promise((res, rej) => { good.on("open", res); good.on("error", rej); });
     ok("[bad-token] the right token still connects normally afterwards", bridge.listClients().length === 1);
     good.close();
     bridge.close();
   }
 
-  // ------------------------------------------------- server-core: our own HTTP server (ws noServer mode)
-  // The handshake check moved from ws's verifyClient hook into the HTTP server's 'upgrade' listener
-  // (ws docs: "Use of verifyClient is discouraged"). A plain HTTP request must still get the 426 ws's
-  // internal server answered — `dtwin doctor` identifies a bridge on a port by exactly that — and a
-  // bad Host is still a 403 at the HTTP layer.
+  // ------------------------------------------------- server-core: the HTTP side of Bun.serve
+  // The handshake check runs in Bun.serve's fetch(), before the upgrade. A plain HTTP request must still
+  // get the 426 ws's internal server answered — `dtwin doctor` identifies a bridge on a port by exactly
+  // that — and a bad Host is still a 403 at the HTTP layer.
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { settleMs: 0 });
@@ -417,27 +476,49 @@ void (async () => {
     console.log("\nserver-core — HTTP server + upgrade admission:");
     ok("[upgrade] a plain HTTP request is answered 426 Upgrade Required, as ws's own server did", plain === 426);
     const hostRefused = await new Promise<number | undefined>((res) => {
-      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", headers: { host: "evil.example" } });
-      c.on("unexpected-response", (_req, r) => res(r.statusCode));
+      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", headers: { host: "evil.example" }, raw: true });
+      c.on("unexpected-response", (r: HandshakeRefusal) => res(r.statusCode));
       c.on("open", () => { c.close(); res(undefined); });
       c.on("error", () => {});
     });
     ok("[upgrade] a non-loopback Host is refused 403 in the upgrade listener, even with the right token", hostRefused === 403);
+
+    // A held port is EADDRINUSE — never a second listener on it. In this process (onListenError gets the
+    // port-in-use text, a turn after createBridge returned, and the failed bridge closes harmlessly), and from
+    // ANOTHER process even under NODE_ENV=production: Bun turns SO_REUSEPORT on by default with development
+    // off, and two bridges then both "bound" 8787 (server-core states reusePort:false for that).
+    let listenErr: Error | null = null;
+    let returnedFirst = false;
+    const second = core.createBridge(port, { settleMs: 0, onListenError: (e) => { listenErr = e; } });
+    returnedFirst = listenErr === null;
+    await until(() => listenErr !== null, 2000);
+    ok("[bind] a second bridge on a held port reports it through onListenError (after createBridge returned), with the port-in-use text",
+      returnedFirst && !!listenErr && (listenErr as Error).message.startsWith(`[bridge] port ${port} is already in use`) && second.boundPort() === null);
+    second.close();
+    const child = spawnSync(process.execPath, ["-e",
+      `const c = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)}); c.createBridge(${port});`],
+    { encoding: "utf8", timeout: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
+    ok("[bind] …and another process (NODE_ENV=production) exits 1 with it instead of sharing the port",
+      child.status === 1 && child.stderr.includes(`[bridge] port ${port} is already in use`));
+    ok("[bind] the first bridge still answers on the port", bridge.boundPort() === port && await new Promise<number | undefined>((res) => {
+      http.get({ host: "127.0.0.1", port, path: "/" }, (r) => { r.resume(); res(r.statusCode); }).on("error", () => res(undefined));
+    }) === 426);
     bridge.close();
   }
 
   // ------------------------------------------------- server-core: heartbeat (ws README ping/pong)
   // A peer that silently stopped answering (lid closed, cable pulled) must not sit in the registry as a
   // live client forever (every command routed to it would wait out its whole timeout). The bridge
-  // pings on an interval and terminates a client that missed the previous pong. `autoPong: false` is a
-  // client whose network stack never answers. The rounds are stepped by hand (`heartbeatMs: 0` +
+  // pings on an interval and terminates a client that missed the previous pong. The raw client
+  // (ws-client.ts) is one whose network stack never answers; the alive one is Bun's WebSocket, which
+  // pongs on its own like a browser. The rounds are stepped by hand (`heartbeatMs: 0` +
   // heartbeatTick()): with a real short interval, one loop stall after a ping fired the next tick
   // before the alive client's pong was read, and terminated it.
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { heartbeatMs: 0, settleMs: 0 });
-    const open = (autoPong: boolean) => new Promise<WebSocket>((res, rej) => {
-      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong });
+    const open = (autoPong: boolean) => new Promise<WsClient>((res, rej) => {
+      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", raw: !autoPong });
       c.on("open", () => res(c));
       c.on("error", rej);
     });
@@ -481,7 +562,7 @@ void (async () => {
       if ((await until(() => alivePings === want)) && (await fence())) rounds++;
     }
     ok("[heartbeat] a client that answers pings survives many rounds (pinged each one, still open and routed to)",
-      second && rounds === 3 && alivePings === 5 && alive.readyState === WebSocket.OPEN && bridge.isConnected());
+      second && rounds === 3 && alivePings === 5 && alive.readyState === WsClient.OPEN && bridge.isConnected());
     alive.close();
     bridge.close();
   }
@@ -490,7 +571,7 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { heartbeatMs: 50, settleMs: 0 });
-    const dead = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong: false });
+    const dead = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", raw: true });
     let deadClosed = false;
     dead.on("close", () => { deadClosed = true; });
     dead.on("error", () => {});
@@ -533,14 +614,14 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { settleMs: 0 });
-    const open = () => new Promise<WebSocket>((res, rej) => {
-      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+    const open = () => new Promise<WsClient>((res, rej) => {
+      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
       c.on("open", () => res(c));
       c.on("error", rej);
     });
     // A client that identifies itself the way the plugin UI does, then answers whatever it is asked.
-    const identify = (c: WebSocket, hello: Record<string, unknown>) => c.send(JSON.stringify({ type: "hello", ...hello }));
-    const autoReply = (c: WebSocket, result: Record<string, unknown>) => c.on("message", (b: RawData) => {
+    const identify = (c: WsClient, hello: Record<string, unknown>) => c.send(JSON.stringify({ type: "hello", ...hello }));
+    const autoReply = (c: WsClient, result: Record<string, unknown>) => c.on("message", (b: RawData) => {
       const m = JSON.parse(b.toString()) as CommandFrame;
       if (m && m.id) c.send(JSON.stringify({ id: m.id, ok: true, result: { ...result, cmd: m.cmd } }));
     });
@@ -591,7 +672,7 @@ void (async () => {
     ok("[multi] …and the request afterwards still gets the unchanged 'no connected Figma file matches' text",
       !!stillErr && stillErr.message.startsWith("no connected Figma file matches 'nobody-has-this-name'. Connected:\n  c1  \"App — Base\"  fileKey KEYBASE"));
     const waited = bridge.awaitClient("Docs", 3000);
-    let lateWs: WebSocket | undefined;
+    let lateWs: WsClient | undefined;
     setTimeout(() => { void open().then((c) => { lateWs = c; identify(c, { instanceId: "fig-docs", file: "Docs File", fileKey: "KEYDOCS", page: "P" }); autoReply(c, { pong: true, page: "P", file: "docs" }); }); }, 200);
     const tl0 = Date.now();
     await waited;
@@ -603,7 +684,7 @@ void (async () => {
       await Promise.race([bridge.awaitClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     // The same wait through a request's `waitMs`: a late named window is waited for, then routed to.
     const viaWait = bridge.request("ping", {}, 5000, "Late Named", undefined, undefined, undefined, { waitMs: 3000 });
-    let lateNamed: WebSocket | undefined;
+    let lateNamed: WsClient | undefined;
     setTimeout(() => { void open().then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); autoReply(c, { pong: true, page: "P", file: "late-named" }); }); }, 200);
     ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).file === "late-named");
     lateNamed?.close();
@@ -788,12 +869,93 @@ void (async () => {
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
       return m.figma?.url === "https://mcp.figma.com/mcp" && m.designtwin?.args?.[0] === "/abs/figma-mcp.mjs";
     })());
+    // An entry of ours that WILL start: this bun, with the shebang's flags, at the real figma-mcp.ts.
+    const realMcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
+    const healthy = { command: process.execPath, args: ["--no-install", "--no-env-file", realMcp] };
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
-      const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
+      const before = JSON.stringify({ mcpServers: { figma: healthy } });
       const d = mk({ ".mcp.json": before });
       const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
       init.apply(d, plan, () => {});
-      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma"/.test(a.note));
+      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma" — left as is$/.test(a.note));
+    })());
+    // …but one of ours that can no longer start is REPAIRED in place: same key, its other fields kept, still one copy.
+    ok("[init] --mcp repairs a Node-era entry of ours in place (same key, other fields kept, no second copy) and says what was wrong", (() => {
+      const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { other: { command: "x" }, figma: { command: "node", args: ["/old/clone/bridge/dist/figma-mcp.js"], env: { KEEP: "1" } } } }) });
+      const plan = init.plan(d, { mcp: true, mcpEntry: healthy, token: tok });
+      init.apply(d, plan, () => {});
+      const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> }).mcpServers;
+      const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+      return Object.keys(m).join() === "other,figma" && m.figma?.command === healthy.command && JSON.stringify(m.figma.args) === JSON.stringify(healthy.args) && m.figma.env?.KEEP === "1"
+        && /REPAIRED the "figma" MCP server entry/.test(note) && /runs on Node/.test(note) && /old Node build/.test(note);
+    })());
+    ok("[init] --mcp repairs a dangling entry (its bun and figma-mcp.ts gone) and one whose bun lacks the two flags", (() => {
+      const gone = { command: "/nowhere/bun", args: ["--no-install", "--no-env-file", "/nowhere/bridge/src/figma-mcp.ts"] };
+      const bare = { command: process.execPath, args: [realMcp] };
+      const cases: Array<{ e: object; why: RegExp[] }> = [
+        { e: gone, why: [/`\/nowhere\/bun` does not exist/, /figma-mcp\.ts does not exist/] },
+        { e: bare, why: [/bun runs it without --no-install and --no-env-file/] },
+      ];
+      return cases.every(({ e, why }) => {
+        const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: e } }) });
+        const plan = init.plan(d, { mcp: true, mcpEntry: healthy, token: tok });
+        init.apply(d, plan, () => {});
+        const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+        return JSON.stringify((JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin) === JSON.stringify(healthy)
+          && why.every((r) => r.test(note));
+      });
+    })());
+    ok("[init] mcpEntryProblems: a healthy entry has none; each broken shape is named", (() => {
+      const P = (e: unknown) => init.mcpEntryProblems(e, { which: (c) => (c === "bunx" ? "/x/bunx" : null) });
+      return P(healthy).length === 0
+        && /runs on Node/.test(P({ command: "npx", args: ["designtwin", "mcp"] }).join())
+        && /is not on PATH/.test(P({ command: "bun", args: ["--no-install", "--no-env-file", realMcp] }).join())
+        && /does not run the server with bun/.test(P({ command: process.execPath.replace(/bun(\.exe)?$/, "deno"), args: [realMcp] }).join())
+        && /no `command`/.test(P({ args: [realMcp] }).join()) && /no `command`/.test(P(null).join());
+    })());
+    // The package-runner forms name a package, not an install: bunx fetches it (or runs its own cache's copy) at every
+    // start — the ephemeral registration init refuses to write. Their commands exist (the which seam), so the only problem
+    // is the form itself; init --mcp repairs it to this install keeping the entry's other fields, and doctor fails it.
+    const doctorMod = await import("../bridge/src/doctor.ts");
+    ok("[init] `bunx designtwin mcp` and `bun x designtwin mcp` are problems init --mcp repairs (other fields kept) and doctor fails", (() => {
+      const forms = [{ command: "bunx", args: ["designtwin", "mcp"] }, { command: "bun", args: ["x", "designtwin", "mcp"] }, { command: "bunx", args: ["--no-install", "designtwin", "mcp"] }];
+      const which = (c: string) => (c === "bunx" || c === "bun" ? `/x/${c}` : null);
+      return forms.every((form) => {
+        const problems = init.mcpEntryProblems(form, { which });
+        const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: { ...form, env: { KEEP: "1" } } } }) });
+        const plan = init.plan(d, { mcp: true, mcpEntry: healthy, probe: { which }, token: tok });
+        init.apply(d, plan, () => {});
+        const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+        const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+        const d2 = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: form } }) });
+        const check = doctorMod.checkProject(d2).find((c) => c.id === "mcp");
+        return problems.length === 1 && /by package name/.test(problems[0] ?? "")
+          && JSON.stringify(e) === JSON.stringify({ ...healthy, env: { KEEP: "1" } }) && /REPAIRED.*by package name/.test(note)
+          && check?.status === "fail" && /by package name/.test(check.detail) && /dtwin init --mcp/.test(check.next ?? "");
+      });
+    })());
+    ok("[init] a figma-mcp.ts inside a bunx cache is a problem, and an install run from one refuses to register (or repair) anything", (() => {
+      const cached = path.join(os.tmpdir(), ".bunx-1000", "designtwin@0.1.0", "node_modules", "designtwin", "src");
+      const legacyWin = path.join(os.tmpdir(), "bunx-S-1-5-21-designtwin@0.1.0", "node_modules", "designtwin", "src");
+      const cachedProblems = init.mcpEntryProblems({ command: process.execPath, args: ["--no-install", "--no-env-file", path.join(cached, "figma-mcp.ts")] }, { exists: () => true });
+      const refuse = "REFUSED-FOR-TEST";
+      const fresh = mk({}), repair = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/dist/figma-mcp.js"] } } }) });
+      const p1 = init.plan(fresh, { mcp: true, mcpEntry: healthy, refuseMcp: refuse, token: tok });
+      const p2 = init.plan(repair, { mcp: true, mcpEntry: healthy, refuseMcp: refuse, token: tok });
+      return init.bunxCacheOf(cached) === path.join(os.tmpdir(), ".bunx-1000") && init.bunxCacheOf(legacyWin) === path.join(os.tmpdir(), "bunx-S-1-5-21-designtwin@0.1.0")
+        && init.bunxCacheOf(path.resolve(import.meta.dirname, "..", "bridge", "src")) === null
+        && /in a bunx cache/.test(cachedProblems.join())
+        && !p1.some((a) => a.kind === "write" && a.path === ".mcp.json") && p1.some((a) => a.kind === "skip" && a.note === `not registered: ${refuse}`)
+        && !p2.some((a) => a.kind === "write" && a.path === ".mcp.json") && p2.some((a) => a.kind === "skip" && /needs repair \(.*\), but REFUSED-FOR-TEST/.test(a.note));
+    })());
+    ok("[init] stableBunPath: the bun on PATH when it resolves to the running one (a symlink that survives upgrades), else the running bun", (() => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-bunpath-"));
+      const link = path.join(dir, "bun");
+      try { fs.symlinkSync(process.execPath, link); } catch { return true; } // no symlinks here (Windows without the privilege): nothing to resolve
+      const other = path.join(dir, "other-bun");
+      fs.writeFileSync(other, "");
+      return init.stableBunPath(process.execPath, link) === link && init.stableBunPath(process.execPath, other) === process.execPath
+        && init.stableBunPath(process.execPath, null) === process.execPath && init.stableBunPath(process.execPath, path.join(dir, "gone")) === process.execPath;
     })());
     ok("[init] --mcp leaves a foreign designtwin entry, and an invalid .mcp.json, untouched", (() => {
       const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
@@ -897,6 +1059,28 @@ void (async () => {
       const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const r = run(["--dry-run", "--mcp"]);
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
+    })());
+    // The entry a real `dtwin init --mcp` writes: the ABSOLUTE bun that ran init (Claude Code's PATH may not
+    // have ~/.bun/bin) and the absolute figma-mcp.ts beside it, behind the shebang's two flags — no
+    // auto-install from the network, no project .env in the server's environment.
+    ok("[init] CLI: --mcp registers {command: <this bun>, args: [--no-install, --no-env-file, <abs figma-mcp.ts>]}", (() => {
+      const d = mk({});
+      const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--mcp"], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command: string; args: string[] }> }).mcpServers.designtwin;
+      const mcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
+      return r.status === 0 && !!e && e.command === init.stableBunPath() && path.isAbsolute(e.command) && fs.realpathSync(e.command) === fs.realpathSync(process.execPath)
+        && JSON.stringify(e.args) === JSON.stringify(["--no-install", "--no-env-file", mcp]) && fs.existsSync(mcp) && init.isOurMcpEntry(e) && init.mcpEntryProblems(e).length === 0;
+    })());
+    // The repair through the real CLI: --dry-run says it and writes nothing; the run rewrites the entry and says so.
+    ok("[init] CLI: --mcp on a Node-era entry of ours: --dry-run prints the repair and leaves the file; the run repairs it", (() => {
+      const before = JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/gone/bridge/dist/figma-mcp.js"] } } });
+      const d = mk({ ".mcp.json": before });
+      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const dry = run(["--mcp", "--dry-run"]);
+      const dryOk = dry.status === 0 && /would write \.mcp\.json — REPAIRED the "designtwin" MCP server entry — it runs on Node/.test(dry.stderr) && fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before;
+      const real = run(["--mcp"]);
+      const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+      return dryOk && real.status === 0 && /wrote\s+\.mcp\.json — REPAIRED/.test(real.stderr) && init.mcpEntryProblems(e).length === 0;
     })());
 
     // `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
@@ -1240,8 +1424,8 @@ void (async () => {
     return rows.length === 3 && new Set(nameAt).size === 1 && (nameAt[0] ?? -1) > 0;
   })());
 
-  // The MCP twin. Checked against the server's own source, src/figma-mcp.ts — the file Node runs from a
-  // checkout and tsc emits to dist/ — because the source compiling is not evidence the tool is
+  // The MCP twin. Checked against the server's own source, src/figma-mcp.ts — the file Bun runs, from a
+  // checkout and from the npm package alike — because the source compiling is not evidence the tool is
   // registered, and Zod silently strips anything undeclared.
   // Read here rather than reusing the `mcpSrc` below: this section runs first, and a const declared
   // further down is in its temporal dead zone.
@@ -2401,31 +2585,6 @@ void (async () => {
     }
   }
 
-  // ---------------------------------------------------------------- is-main.ts: the import.meta.main fallback
-  // isMainFallback is what every CLI guard falls back to on a Node without import.meta.main (< 24.2):
-  // "was THIS file the process entry?", realpath-resolved on both sides so an npm `bin` symlink still
-  // counts. Driven as subprocesses because argv[1] and import.meta.url are process facts.
-  {
-    console.log("\nis-main.ts — isMainFallback:");
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-ismain-"));
-    const isMainUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/is-main.ts")).href;
-    const real = path.join(dir, "real.mjs");
-    fs.writeFileSync(real, `import { isMainFallback } from ${JSON.stringify(isMainUrl)};\nconsole.log(String(isMainFallback(import.meta.url)));\n`);
-    const other = path.join(dir, "other.mjs");
-    fs.writeFileSync(other, "export const x = 1;\n");
-    const mismatch = path.join(dir, "mismatch.mjs");
-    fs.writeFileSync(mismatch, `import { isMainFallback } from ${JSON.stringify(isMainUrl)};\nimport { pathToFileURL } from "node:url";\nconsole.log(String(isMainFallback(pathToFileURL(${JSON.stringify(other)}).href)));\n`);
-    const link = path.join(dir, "link.mjs");
-    fs.symlinkSync(real, link);
-    const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: "utf8" });
-    ok("[is-main] the file that IS the process entry answers true", run([real]).stdout.trim() === "true");
-    ok("[is-main] run through a symlink (an npm bin shim), the target still answers true", run([link]).stdout.trim() === "true");
-    ok("[is-main] a module asking about a DIFFERENT file's URL answers false", run([mismatch]).stdout.trim() === "false");
-    const noArgv = run(["--input-type=module", "-e", `import { isMainFallback } from ${JSON.stringify(isMainUrl)}; console.log(String(isMainFallback(import.meta.url)));`]);
-    ok("[is-main] with no argv[1] (node -e) it answers false rather than throwing", noArgv.status === 0 && noArgv.stdout.trim() === "false");
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
   // ---------------------------------------------------------------- daemon.ts: installCrashHandlers
   // The long-lived processes (`dtwin serve`, the MCP server) log a stray rejection and carry on, and
   // log an uncaught exception, run their synchronous cleanup and exit 1 (Node docs: resuming after
@@ -2446,6 +2605,76 @@ void (async () => {
       exc.status === 1 && exc.stderr.includes("[t] uncaught exception — exiting: kaboom") && !exc.stdout.includes("still alive"));
     ok("[crash] its synchronous cleanup runs before the exit", exc.stdout.includes("cleanup ran"));
     ok("[crash] installed once per process — a second install adds no second handler", !rej.stderr.includes("[second]") && !exc.stderr.includes("[second]"));
+    const two = spawnSync(process.execPath, ["-e",
+      `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
+      `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("first cleanup"));\n` +
+      `const forget = installCrashHandlers(() => {}, () => console.log("dropped cleanup"));\n` +
+      `installCrashHandlers(() => {}, () => { throw new Error("a failing cleanup"); });\n` +
+      `installCrashHandlers(() => {}, () => console.log("last cleanup"));\n` +
+      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`], { encoding: "utf8" });
+    ok("[crash] every install's cleanup runs (the MCP server's and a daemon's), in order, past a failing one — and a forgotten one does not",
+      two.status === 1 && /first cleanup\nlast cleanup/.test(two.stdout) && !two.stdout.includes("dropped cleanup"));
+  }
+
+  // The exits that wait for stderr to drain are capped short, so a reader that stopped reading cannot keep a crashed or
+  // stopped process (and the port it held) around: a crash waits at most ~200 ms; the daemon's first SIGINT/SIGTERM ~300 ms,
+  // a second one not at all. Driven with ~300 KB queued on a stderr that nobody reads (a pipe into `sleep`); each process
+  // stamps Date.now() when it exits ('exit' event), against the moment it threw / was signalled.
+  if (process.platform === "win32") console.log("  (skipped: the capped-exit timings — a signal from child.kill ends a Windows process outright, and the stderr is a POSIX sh pipe)");
+  else {
+    console.log("\ndaemon.ts — capped exits (crash, signals):");
+    // Short, under /tmp: each daemon's socket is <dir>/designtwin-<uid>/designtwin-<port>.sock, and under macOS's
+    // ~48-byte os.tmpdir() (/var/folders/…/T) that is ~104 bytes — past the 103 macOS allows a socket path
+    // (daemon.ts MAX_SOCK_PATH_BYTES), so serve() would rightly refuse it and no daemon would start.
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join("/tmp", "dtwin-capped-")));
+    const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
+    const stdioUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/stdio.ts")).href;
+    const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+    const readNum = (f: string): number | null => { try { const n = Number(fs.readFileSync(f, "utf8")); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; } };
+    // Start `script` with its stderr (and stdout) into a pipe nobody reads; resolves once it wrote `ready`.
+    const start = async (name: string, script: string): Promise<{ stamp: string; ready: string; kill: () => void }> => {
+      const file = path.join(dir, name + ".ts"), stamp = path.join(dir, name + ".exit"), ready = path.join(dir, name + ".ready");
+      // installQueuedConsole: as in every entry point (runCli / the MCP server), so the exit knows what is still queued
+      fs.writeFileSync(file, `import fs from "node:fs";\nimport { installQueuedConsole } from ${JSON.stringify(stdioUrl)};\ninstallQueuedConsole();\n` +
+        `process.on("exit", () => fs.writeFileSync(${JSON.stringify(stamp)}, String(Date.now())));\n` +
+        `process.stderr.write("e".repeat(300_000) + "\\n");\n${script}`);
+      const sh = spawn("sh", ["-c", `${q(process.execPath)} ${q(file)} 2>&1 | sleep 5`], { stdio: "ignore", env: { ...process.env, TMPDIR: dir, XDG_RUNTIME_DIR: "" } });
+      await until(() => fs.existsSync(ready), 10_000);
+      return { stamp, ready, kill: () => { try { sh.kill("SIGKILL"); } catch { /* gone */ } } };
+    };
+    {
+      const c = await start("crash", `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
+        `installCrashHandlers((m) => console.error(m), () => {});\nfs.writeFileSync(${JSON.stringify(path.join(dir, "crash.ready"))}, "1");\n` +
+        `setTimeout(() => { fs.writeFileSync(${JSON.stringify(path.join(dir, "crash.threw"))}, String(Date.now())); throw new Error("kaboom"); }, 20);`);
+      await until(() => readNum(c.stamp) !== null, 5_000);
+      const threw = readNum(path.join(dir, "crash.threw")), exited = readNum(c.stamp);
+      ok(`[crash] with stderr stuck, the crash exit waits ~200 ms, not 1 s (exited ${threw && exited ? exited - threw : "?"} ms after the throw)`, threw !== null && exited !== null && exited - threw >= 100 && exited - threw < 700);
+      c.kill();
+    }
+    const serveScript = (name: string, port: number): string =>
+      `import * as daemon from ${JSON.stringify(daemonUrl)};\n` +
+      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({}), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
+      `fs.writeFileSync(${JSON.stringify(path.join(dir, name + ".ready"))}, String(process.pid));`;
+    for (const [name, port, twice] of [["sig-once", 8796, false], ["sig-twice", 8797, true]] as const) {
+      const s = await start(name, serveScript(name, port));
+      const pid = readNum(s.ready);
+      const sock = path.join(dir, `designtwin-${process.getuid?.() ?? ""}`, `designtwin-${port}.sock`);
+      const hadSock = fs.existsSync(sock);
+      let sent = 0;
+      const signal = (sig: NodeJS.Signals): void => { try { if (pid !== null) process.kill(pid, sig); } catch { /* already gone: the timing check below fails */ } sent = Date.now(); };
+      if (pid !== null) {
+        signal("SIGINT");
+        if (twice) { await sleep(40); signal("SIGTERM"); }
+      }
+      await until(() => readNum(s.stamp) !== null, 5_000);
+      const exited = readNum(s.stamp);
+      const took = exited !== null && sent ? exited - sent : null;
+      if (twice) ok(`[signals] a second SIGINT/SIGTERM exits at once, waiting on nothing (${took ?? "?"} ms after it)`, took !== null && took < 150);
+      else ok(`[signals] the daemon's first SIGINT exits within its ~300 ms cap with stderr stuck (${took ?? "?"} ms)`, took !== null && took >= 150 && took < 900);
+      ok(`[signals] …and its socket file is gone (${name})`, hadSock && !fs.existsSync(sock));
+      s.kill();
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   // ---------------------------------------------------------------- write-out.ts: atomic writeJson
@@ -2919,11 +3148,11 @@ void (async () => {
     child.stderr.on("data", (b: Buffer) => { stderr += b.toString(); });
     const exited = new Promise<number | null>((res) => child.on("exit", (code) => res(code)));
     // Dial until the CLI's bridge is up (it binds after module load), then answer every command.
-    let plugin: WebSocket | null = null;
+    let plugin: WsClient | null = null;
     for (let i = 0; i < 50 && !plugin; i++) {
       await sleep(100);
-      plugin = await new Promise<WebSocket | null>((res) => {
-        const c = new WebSocket("ws://127.0.0.1:8789/?token=" + TOKEN, { origin: "null" });
+      plugin = await new Promise<WsClient | null>((res) => {
+        const c = new WsClient("ws://127.0.0.1:8789/?token=" + TOKEN, { origin: "null" });
         c.on("open", () => res(c));
         c.on("error", () => res(null));
       });
@@ -2950,9 +3179,13 @@ void (async () => {
   // ---------------------------------------------------------------- doctor
   console.log("\ndoctor — pure checks:");
   const doctor = await import("../bridge/src/doctor.ts");
-  ok("[doctor] node: new enough is ok, too old is a failure, unreadable range is only a note",
-    doctor.checkNode("v22.1.0", ">=18").status === "ok" && doctor.checkNode("v16.20.0", ">=18").status === "fail"
-    && doctor.checkNode("v22.1.0", null).status === "warn");
+  ok("[doctor] bun: new enough is ok, too old is a failure, unreadable range is only a note",
+    doctor.checkBun("1.4.2", ">=1.4.2").status === "ok" && doctor.checkBun("1.3.9", ">=1.4.2").status === "fail"
+    && doctor.checkBun("1.4.2", null).status === "warn" && doctor.checkBun("1.4.2", "not a range!").status === "warn");
+  ok("[doctor] bun: the range is real semver (a patch below a >=x.y.z floor fails; ^ and a leading v are understood)",
+    doctor.checkBun("1.4.1", ">=1.4.2").status === "fail" && doctor.checkBun("v1.5.0", "^1.4.2").status === "ok" && doctor.checkBun("2.0.0", "^1.4.2").status === "fail");
+  ok("[doctor] bun: the running Bun satisfies this package's own engines.bun (the check run() makes)",
+    doctor.checkBun(Bun.version, (JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../bridge/package.json"), "utf8")) as { engines: { bun: string } }).engines.bun).status === "ok");
   const tokS: TokenStatus = { path: "/x/bridge-token", stored: true, envSet: false, activeSource: "file", fingerprint: "abcd1234", loosePerms: false, shadowed: false };
   ok("[doctor] token: saved is ok and shows the fingerprint, never a token", doctor.checkToken(tokS).status === "ok" && doctor.checkToken(tokS).detail.includes("abcd1234"));
   ok("[doctor] token: none saved is a note pointing at init", doctor.checkToken({ ...tokS, stored: false, activeSource: "ephemeral", fingerprint: null }).status === "warn");
@@ -3015,16 +3248,39 @@ void (async () => {
   fs.writeFileSync(path.join(projDir, "design", "target.json"), "{}");
   const exportedAt = Date.parse("2026-01-01T00:00:00Z");
   fs.writeFileSync(path.join(projDir, "design", "design-system.json"), JSON.stringify({ exportedAt: new Date(exportedAt).toISOString(), file: "My File" }));
-  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: { command: "node", args: ["/x/bridge/figma-mcp.mjs"] } } }));
+  // An entry of ours that starts (this bun, its flags, the real figma-mcp.ts) — under the legacy `figma` key.
+  const startable = { command: process.execPath, args: ["--no-install", "--no-env-file", path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")] };
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: startable } }));
   const fresh = doctor.checkProject(projDir, exportedAt + 3600000);
   ok("[doctor] project: design/ + target.json is ok; a 1h-old export is ok and names its source file",
     byId(fresh, "project").status === "ok" && byId(fresh, "export").status === "ok" && byId(fresh, "export").detail.includes("My File"));
   ok("[doctor] project: an export past 24h is flagged stale", byId(doctor.checkProject(projDir, exportedAt + 3 * 86400000), "export").status === "warn");
   ok("[doctor] project: no codeconnect.local.json is a note", byId(fresh, "map").status === "warn");
-  ok("[doctor] project: a legacy `figma` MCP key pointing at figma-mcp.mjs still works, and is told about `designtwin`",
+  ok("[doctor] project: a legacy `figma` MCP key pointing at a startable figma-mcp.ts still works, and is told about `designtwin`",
     byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next ?? ""));
-  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: startable, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
+  // Ours, but Claude Code cannot start it as written: a ✗ that names `dtwin init --mcp` (which repairs it), under any key.
+  {
+    const broken = (e: object, key = "designtwin"): Check => { fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { [key]: e } })); return byId(doctor.checkProject(projDir), "mcp"); };
+    const failsWith = (c: Check, why: RegExp): boolean => c.status === "fail" && why.test(c.detail) && /dtwin init --mcp/.test(c.next ?? "");
+    const script = startable.args[2] ?? "";
+    ok("[doctor] mcp: a Node-era entry (`node …/bridge/dist/figma-mcp.js`, or the legacy key's figma-mcp.mjs) is a failure naming `dtwin init --mcp`",
+      failsWith(broken({ command: "node", args: ["/x/bridge/dist/figma-mcp.js"] }), /runs on Node/) && failsWith(broken({ command: "node", args: ["/x/bridge/figma-mcp.mjs"] }, "figma"), /old Node build/));
+    ok("[doctor] mcp: a missing command, and a missing figma-mcp.ts, are failures naming `dtwin init --mcp`",
+      failsWith(broken({ ...startable, command: "/nowhere/bun" }), /`\/nowhere\/bun` does not exist/)
+      && failsWith(broken({ ...startable, args: ["--no-install", "--no-env-file", "/nowhere/src/figma-mcp.ts"] }), /figma-mcp\.ts does not exist/));
+    ok("[doctor] mcp: bun without --no-install/--no-env-file before the script is a failure naming them",
+      failsWith(broken({ command: process.execPath, args: [script, "--no-install", "--no-env-file"] }), /without --no-install and --no-env-file/)
+      && failsWith(broken({ command: process.execPath, args: ["--no-install", script] }), /without --no-env-file \(/));
+    fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: startable } }));
+  }
+  ok("[doctor] DT_TEST_EPHEMERAL_PORT: unset or empty is no note; \"1\" warns the plugin can never reach the port; any other value is a test variable to unset",
+    doctor.ephemeralPortWarning({}) === null && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "" }) === null
+    && /test-only seam.*can never reach/.test(doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.detail ?? "")
+    && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.status === "warn"
+    && /acts on it only at "1"/.test(doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "yes" })?.detail ?? "")
+    && doctor.ephemeralPortWarning({ DT_TEST_EPHEMERAL_PORT: "1" })?.next === "unset DT_TEST_EPHEMERAL_PORT");
 
   // A stray `dtwin pull design ...` writes a SECOND export tree directly under
   // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside the
@@ -3155,7 +3411,7 @@ void (async () => {
   nextPort++;
 
   // probePlugin against the REAL handshake: a plugin-shaped client (Origin "null") with each token.
-  const pluginLike = (port: number, tok: string) => setTimeout(() => { const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${tok}`, { origin: "null" }); c.on("error", () => {}); }, 150);
+  const pluginLike = (port: number, tok: string) => setTimeout(() => { const c = new WsClient(`ws://127.0.0.1:${port}/?token=${tok}`, { origin: "null" }); c.on("error", () => {}); }, 150);
   pluginLike(nextPort, "not-the-token");
   const refusedProbe = await doctor.probePlugin(nextPort++, 3000);
   ok("[doctor] probePlugin: a wrong-token plugin is reported by fingerprint, not as 'nothing running'",!!(
@@ -3198,7 +3454,7 @@ void (async () => {
     docReport.ok === false && /not checked/.test(byId(docReport.checks, "plugin").detail));
   ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
   const docHuman = runDoctor([]);
-  ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Node\.js:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
+  ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Bun:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
   const badPort = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "9999" });
   ok("[doctor-cli] a bad FIGMA_BRIDGE_PORT is a reported ✗ (exit 1), not a crash inside server-core",
     badPort.status === 1 && byId((JSON.parse(badPort.stdout) as Report).checks, "port").status === "fail" && !badPort.stderr.includes("[bridge]"));
@@ -3270,7 +3526,7 @@ void (async () => {
     const b = core.createBridge(port, { settleMs: 700 });
     const dial = async (file: string, afterMs: number) => {
       await sleep(afterMs);
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+      const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
       await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
       ws.send(JSON.stringify({ type: "hello", instanceId: "i-" + file, file }));
       return ws;
@@ -3448,7 +3704,7 @@ void (async () => {
   console.log("\nserver-core / daemon — cancel frames to the plugin when a request is abandoned:");
   {
     type Seen = { id?: string; cmd?: string; type?: string };
-    const record = (ws: WebSocket, into: Array<Seen | "socket-closed">) => {
+    const record = (ws: WsClient, into: Array<Seen | "socket-closed">) => {
       ws.on("message", (d: RawData) => {
         const v = JSON.parse(d.toString()) as unknown;
         if (v !== null && typeof v === "object") into.push(v); // any object is a Seen: every field is optional and read defensively
@@ -3583,9 +3839,9 @@ void (async () => {
       fs.writeFileSync(script, [
         'process.env.FIGMA_BRIDGE_TOKEN = "t";',
         `const { createBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)});`,
-        `const { default: WebSocket } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../node_modules/ws/wrapper.mjs")).href)});`,
+        `const { WsClient } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "ws-client.ts")).href)});`,
         `const bridge = createBridge(${port}, { settleMs: 0 });`,
-        `const ws = new WebSocket("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
+        `const ws = new WsClient("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
         'await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });',
         "const ac = new AbortController();",
         'const p = bridge.request("exportFull", {}, 60000, undefined, undefined, undefined, ac.signal).catch((e) => console.log("REJECTED:" + e.message));',
@@ -3713,7 +3969,7 @@ void (async () => {
   {
     const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
     /** Every command frame a fake plugin socket receives. */
-    const commandsOf = (ws: WebSocket): CommandFrame[] => {
+    const commandsOf = (ws: WsClient): CommandFrame[] => {
       const into: CommandFrame[] = [];
       ws.on("message", (d: RawData) => {
         const v = JSON.parse(d.toString()) as unknown;
@@ -3755,7 +4011,7 @@ void (async () => {
     // Pre-change it settled from c2.
     {
       const { bridge: b, client: c1 } = await connectedBridge();
-      const c2 = new WebSocket(`ws://127.0.0.1:${b.port}/?token=${TOKEN}`, { origin: "null" });
+      const c2 = new WsClient(`ws://127.0.0.1:${b.port}/?token=${TOKEN}`, { origin: "null" });
       await new Promise((res, rej) => { c2.on("open", res); c2.on("error", rej); });
       const seen1 = commandsOf(c1);
       await sleep(30);

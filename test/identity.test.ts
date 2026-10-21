@@ -6,13 +6,18 @@
 // export is keyed on the Figma KEY. Names are not unique: that export holds two `Spacing / Space 4` (24 and 16) and two
 // `Spacing / Space 2`, and its screens' component keys were all re-minted by a file duplication.
 //
-// Run with:  node test/identity.test.ts
+// Run with:  bun test/identity.test.ts
 // P1_SRC=<dir holding design-to-code/ and bridge/> runs the same checks against another checkout
 // (that is how the "fails before" half of each check was demonstrated).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import { cliRunner } from "./cli-runner.ts";
+import type { CliOpts, CliResult } from "./cli-runner.ts";
+import { main as tokensMain } from "../design-to-code/tokens.ts";
+import { main as crossCheckMain } from "../design-to-code/cross-check.ts";
+import { main as mapBootstrapMain } from "../design-to-code/map-bootstrap.ts";
+import { main as mapValidateMain } from "../design-to-code/map-validate.ts";
 import { pathToFileURL } from "node:url";
 import { ok, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
@@ -39,7 +44,17 @@ const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
 const read = <T>(p: string): T => JSON.parse(fs.readFileSync(path.join(FX, p), "utf8")) as T;
 const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "dt-identity-"));
-const node = (script: string, args: string[], opts?: SpawnSyncOptions) => spawnSync(process.execPath, [path.join(D2C, script), ...args], Object.assign({ encoding: "utf8" as const }, opts || {}));
+// the first runs of each CLI are real children, the rest its main in-process (test/cli-runner.ts)
+const RUNNERS: Readonly<Record<string, (args: string[], o?: CliOpts) => CliResult>> = {
+  "tokens.ts": cliRunner(path.join(D2C, "tokens.ts"), tokensMain), "cross-check.ts": cliRunner(path.join(D2C, "cross-check.ts"), crossCheckMain),
+  "map-bootstrap.ts": cliRunner(path.join(D2C, "map-bootstrap.ts"), mapBootstrapMain), "map-validate.ts": cliRunner(path.join(D2C, "map-validate.ts"), mapValidateMain),
+  "drift-lint.ts": cliRunner(path.join(D2C, "drift-lint.ts"), null), // an async main: always a child
+};
+const node = (script: string, args: string[], opts: CliOpts = {}): CliResult => {
+  const run = RUNNERS[script];
+  if (run === undefined) throw new Error(`identity: no runner for ${script}`);
+  return run(args, opts);
+};
 const tryImport = async <T>(p: string): Promise<T | null> => { try { return (await import(pathToFileURL(p).href)) as T; } catch { return null; } };
 
 const POS = "pages/__Optimization_management_/positions___7314_87192";
