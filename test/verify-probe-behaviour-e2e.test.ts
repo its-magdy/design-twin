@@ -14,7 +14,7 @@
 // (/seed-sw.js) that write when asked, and answers every load after the first of a ?mode=later-empty URL as an empty state.
 //
 // needs the repo's devDependencies playwright (+ chromium) and axe-core. Locally an unavailable renderer prints SKIPPED;
-// in CI (CI=true) that is a failure.  Run with:  node test/verify-probe-behaviour-e2e.test.ts
+// in CI (CI=true) that is a failure.  Run with:  bun test/verify-probe-behaviour-e2e.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

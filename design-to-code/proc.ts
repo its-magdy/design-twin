@@ -20,6 +20,10 @@ export interface ProcResult {
   error?: Error; timedOut: boolean; attempts: number;
   /** Set when the result was recovered without the runtime's own exit report — say why (a test should fail on it). */
   lost?: string;
+  /** runSync: the child's pid (it has exited — e.g. a pid known to be dead). */
+  pid?: number;
+  /** runSync with `binary`: stdout's exact bytes (`stdout` is then their UTF-8 reading). */
+  stdoutBytes?: Buffer;
 }
 interface Common { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
 export interface SyncOpts extends Common {
@@ -28,6 +32,8 @@ export interface SyncOpts extends Common {
   expect?: RegExp | "stdout" | ((r: ProcResult) => boolean);
   /** "pipe" keeps the runtime's own capture (for a test of exactly that); default "file". */
   capture?: "file" | "pipe";
+  /** Also return stdout as bytes (`stdoutBytes`): a blob from `git show`, not text. */
+  binary?: boolean;
 }
 export interface AsyncOpts extends Common {
   stdin?: "pipe" | "ignore"; detached?: boolean;
@@ -41,26 +47,32 @@ export interface AsyncOpts extends Common {
   spawnImpl?: typeof spawn;
 }
 
-let seq = 0;
-const tmpBase = (): string => path.join(os.tmpdir(), `dt-spawn-${process.pid}-${Date.now().toString(36)}-${seq++}`);
-const readGone = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } finally { try { fs.rmSync(f, { force: true }); } catch { /* */ } } };
+// The capture files live in a fresh private directory per run (mkdtemp: mode 0700, a name nobody could guess and plant a
+// symlink at in a shared /tmp), removed with them once read.
+const readBytes = (f: string): Buffer => { try { return fs.readFileSync(f); } catch { return Buffer.alloc(0); } };
 
 function syncOnce(cmd: string, args: readonly string[], o: SyncOpts, attempt: number): ProcResult {
   const t0 = Date.now();
   const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL" as const, maxBuffer: 256 * 1024 * 1024 };
   const stdin = o.input !== undefined ? "pipe" : "ignore";
   const done = (s: ReturnType<typeof spawnSync>, stdout: string, stderr: string): ProcResult => ({
-    status: s.status, signal: s.signal, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}),
-    timedOut: (s.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT", attempts: attempt });
-  if (o.capture === "pipe") {
-    const s = spawnSync(cmd, args, { ...opts, encoding: "utf8", stdio: [stdin, "pipe", "pipe"] });
-    return done(s, String(s.stdout ?? ""), String(s.stderr ?? ""));
+    status: s.status, signal: s.signal, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}), ...(s.pid ? { pid: s.pid } : {}),
+    timedOut: (s.error !== undefined && "code" in s.error && s.error.code === "ETIMEDOUT"), attempts: attempt });
+  let dir: string | null = null;
+  if (o.capture !== "pipe") try { dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-")); } catch { /* no writable temp dir: the pipes, below */ }
+  if (dir === null) {
+    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
+    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
+    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...(o.binary ? { stdoutBytes: bytes } : {}) };
   }
-  const base = tmpBase(), outF = base + ".out", errF = base + ".err";
-  const out = fs.openSync(outF, "w+"), err = fs.openSync(errF, "w+");
-  let s: ReturnType<typeof spawnSync>;
-  try { s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] }); } finally { fs.closeSync(out); fs.closeSync(err); }
-  return done(s, readGone(outF), readGone(errF));
+  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
+  try {
+    const out = fs.openSync(outF, "wx+"), err = fs.openSync(errF, "wx+");
+    let s: ReturnType<typeof spawnSync>;
+    try { s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] }); } finally { fs.closeSync(out); fs.closeSync(err); }
+    const bytes = readBytes(outF);
+    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...(o.binary ? { stdoutBytes: bytes } : {}) };
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* the OS temp dir is cleaned anyway */ } }
 }
 
 /** spawnSync with file-backed capture and an optional validity check, re-run once when an exit-0 run fails it. Never throws. */
@@ -107,23 +119,23 @@ export function runAsync(cmd: string, args: readonly string[], o: AsyncOpts = {}
     const finish = (extra: Partial<ProcResult> = {}): void => {
       if (settled) return; settled = true;
       for (const t of timers) clearTimeout(t), clearInterval(t);
-      resolve({ status: exit?.code ?? child.exitCode, signal: exit?.signal ?? (child.signalCode as NodeJS.Signals | null), stdout, stderr, ms: Date.now() - t0, timedOut, attempts: 1, ...extra });
+      resolve({ status: exit?.code ?? child.exitCode, signal: exit?.signal ?? child.signalCode, stdout, stderr, ms: Date.now() - t0, timedOut, attempts: 1, ...extra });
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exit) return; exit = { code, signal };
       if (outEnded && errEnded) return finish();
       timers.push(setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); finish(); }, o.drainMs ?? 2_000));
     };
-    child.stdout!.on("data", (d: Buffer) => { stdout += d.toString(); });
-    child.stderr!.on("data", (d: Buffer) => { stderr += d.toString(); });
+    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
     const ended = (): void => { if (exit && outEnded && errEnded) finish(); };
-    child.stdout!.on("end", () => { outEnded = true; ended(); });
-    child.stderr!.on("end", () => { errEnded = true; ended(); });
+    child.stdout?.on("end", () => { outEnded = true; ended(); });
+    child.stderr?.on("end", () => { errEnded = true; ended(); });
     child.on("error", (e) => { if (child.pid === undefined || exit) finish({ error: e }); });
     child.on("exit", onExit);
     child.on("close", (code, signal) => { onExit(code, signal); finish(); });
     // #45483: the exit may already have been emitted inside spawn() — the ChildProcess still recorded it.
-    if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode as NodeJS.Signals | null);
+    if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode);
     // #45365 / any lost event: a pid that is gone (or a zombie) with no exit event settles anyway, flagged.
     const pollMs = o.pollMs ?? 250;
     if (pollMs > 0 && child.pid !== undefined) {
@@ -159,12 +171,91 @@ export function writeAll(fd: number, data: string | Uint8Array): void {
   }
 }
 /** console.* through process.stdout/stderr.write: Bun's console writes straight to the fd and DROPS what meets a full
- *  non-blocking pipe, while stream.write() queues it in order. Exit with process.exitCode (or after flushStdio()), never a
- *  bare process.exit(), so the queue drains. */
+ *  non-blocking pipe, while stream.write() queues it in order. End with process.exitCode (the process then exits once the
+ *  queue has drained), or after flushStdio() — never a bare exit, which drops the queue. Also counts the streams' writes
+ *  in flight, which flushStdio waits on. Idempotent. */
 export function installQueuedConsole(): void {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
   const line = (s: NodeJS.WriteStream) => (...a: unknown[]): void => { s.write(format(...a) + "\n"); };
   console.log = console.info = console.debug = line(process.stdout);
   console.warn = console.error = line(process.stderr);
 }
-/** Resolves once everything queued on stdout and stderr has been handed to the OS. */
-export const flushStdio = (): Promise<void> => Promise.all([process.stdout, process.stderr].map((s) => new Promise<void>((r) => { s.write("", () => r()); }))).then(() => undefined);
+// How many non-empty writes each stream has not yet handed to the OS, and who waits for that to reach 0. Bun (1.4.2) keeps
+// no usable writableLength (0 while 400 KB are queued) and calls back an EMPTY write at once, before what was queued ahead of
+// it is out; a non-empty write's callback does come once its bytes are written, in order. So every write is counted (the
+// stream's write wrapped once) and the count says when the queue is empty.
+const inFlight = new Map<NodeJS.WriteStream, { n: number; idle: Array<() => void> }>();
+function trackWrites(s: NodeJS.WriteStream): void {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] as Array<() => void> };
+  inFlight.set(s, st);
+  const write = s.write.bind(s) as (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (err?: Error | null) => void) => boolean;
+  const settle = (): void => { if (--st.n === 0) for (const r of st.idle.splice(0)) r(); };
+  s.write = (chunk: string | Uint8Array, encoding?: BufferEncoding | ((err?: Error | null) => void), cb?: (err?: Error | null) => void): boolean => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? undefined : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err?: Error | null) => { if (!called) { called = true; settle(); } done?.(err); });
+  };
+}
+/** Resolves once every write made through installQueuedConsole's streams has been handed to the OS (at once when there is
+ *  none in flight, or the streams are not tracked). */
+export const flushStdio = (): Promise<void> => Promise.all([process.stdout, process.stderr].map((s) => new Promise<void>((r) => {
+  const st = inFlight.get(s);
+  if (!st || st.n === 0) r(); else st.idle.push(r);
+}))).then(() => undefined);
+
+// ---- ending a CLI without losing its output
+// Every design-to-code entry point runs its main() through runCli: console goes through the queued streams, and the exit
+// code is process.exitCode — the process ends once the queue has drained, never with a bare exit call that drops it
+// (Bun loses what is still queued on a pipe at exit(): a 300 KB report into a slow reader arrived as its first 64 KB).
+// The few library helpers that must end the CLI mid-call (cli-args.ts cliParse, catalog-input.ts's fail-loud readers)
+// call exitCli(): inside runCli it throws CliExit, which unwinds to runCli and becomes the exit code; anywhere else (a
+// suite calling main() in-process, the MCP server importing a module) it exits the process at once, as before.
+/** What exitCli throws inside runCli. Not an error: runCli turns it into the exit code, silently. */
+export class CliExit extends Error {
+  readonly code: number;
+  constructor(code: number) { super(`exit ${code}`); this.name = "CliExit"; this.code = code; }
+}
+let cliDepth = 0;
+/** End the CLI with `code` after what it already printed (see above). Never returns. */
+export function exitCli(code: number): never {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+export interface RunCliOpts {
+  /** The prefix of an uncaught error's line on stderr (`<name>: <stack>`). */
+  name: string;
+  /** An uncaught error's line on stderr instead (e.g. its message without the stack). */
+  errorLine?: (e: unknown) => string;
+  /** An uncaught error's exit code, after its line (default 1; verifier-guard fails open: 0). */
+  errorCode?: number;
+  /** What to do with the exit code (default: process.exitCode = code). */
+  done?: (code: number) => void;
+}
+/** Run a CLI's main(argv) as the process entry: queued console, exitCli honoured, an uncaught error one line + exit 1. */
+export function runCli(main: (argv: string[]) => number | Promise<number>, o: RunCliOpts, argv: string[] = process.argv.slice(2)): void {
+  installQueuedConsole();
+  const done = o.done ?? ((code: number): void => { process.exitCode = code; });
+  const fail = (e: unknown): void => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${(e instanceof Error && e.stack) || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main(argv);
+    if (typeof r === "number") done(r); else r.then(done, fail);
+  } catch (e) { fail(e); }
+}
+/** Exit with `code` once everything written to stdout and stderr is out (flushStdio) — or after `capMs` when a reader never
+ *  drains them. For a process that has to end while something still holds the loop (a hung step's watchdog, a browser that
+ *  will not go). Needs installQueuedConsole (runCli calls it) to know what is in flight. */
+export function exitFlushed(code: number, capMs = 2_000): void {
+  const exit = (): never => process.exit(code);
+  setTimeout(exit, capMs).unref(); // a pending write keeps the loop up, so this still fires
+  void flushStdio().then(exit);
+}

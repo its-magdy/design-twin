@@ -2,12 +2,13 @@
 // plan.verification.recorded, the tool-owned block, whole) and the verify-build side of it: planHash does not cover
 // `verification` (the legacy formula is still accepted), the recorded-report sha warning, the block on a hand-edited
 // record and the warning on the record's keys left at the top level.
-//   node test/plan-record.test.ts
+//   bun test/plan-record.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import { recordPlan, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
 import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
@@ -77,7 +78,7 @@ function project(): string {
   put(REL, JSON.stringify(plan, null, 2) + "\n");
   return root;
 }
-const runHook = (root: string) => spawnSync(process.execPath, [HOOK, REL], { cwd: root, encoding: "utf8" });
+const runHook = (root: string) => runSync(process.execPath, [HOOK, REL], { cwd: root });
 const reindent = (root: string, n: number): void => { const f = path.join(root, REL); fs.writeFileSync(f, JSON.stringify(readFixture(f, isPlan), null, n) + "\n"); };
 const planOf = (root: string): Plan => readFixture(path.join(root, REL), isPlan);
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL) });
@@ -127,9 +128,9 @@ console.log("recordPlan:");
   const st = statusOf(root);
   check(`verify-build --status after the record: NOT "the plan changed after the hook's last check", the plan stays closed (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
     !st.reasons.some((x) => /plan changed after the hook/.test(x)) && !openOf(root));
-  const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
+  const cli = runSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root });
   check("…and the CLI agrees (--status --json: failed by the report, no pending reason)", cli.status === 0 && /"status": "failed"/.test(cli.stdout) && !/plan changed after the hook/.test(cli.stdout));
-  const quiet = spawnSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const quiet = runSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }) });
   check("…and the Stop hook's fast path stays silent on it (closed)", quiet.status === 0 && quiet.stderr === "");
   const again = recordPlan(REL, rep, REPORT, { cwd: root, now: "2026-10-08T00:00:00.000Z" });
   check("recording the same report again: written false, the bytes (and recorded.at) unchanged", !again.written && fs.readFileSync(path.join(root, REL), "utf8") === text);
@@ -372,7 +373,7 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
   const sameFormat = (t: string): boolean => t.startsWith("\ufeff{\r\n    \"status\"") && t.endsWith("}\r\n") && !/[^\r]\n/.test(t);
   const root = project();
   crlf4(root);
-  const a = spawnSync(process.execPath, [VS, "--accept", REPORT, "--node", "80:2", "--field", "background", "--reason", "brand red agreed", "--by", "Sam Doe", "--plan", REL], { cwd: root, encoding: "utf8" });
+  const a = runSync(process.execPath, [VS, "--accept", REPORT, "--node", "80:2", "--field", "background", "--reason", "brand red agreed", "--by", "Sam Doe", "--plan", REL], { cwd: root });
   const text = fs.readFileSync(path.join(root, REL), "utf8");
   check(`--accept on a BOM + CRLF + 4-space plan: the waiver is written and the file keeps its format (exit ${a.status}; starts ${JSON.stringify(text.slice(0, 16))})`,
     a.status === 0 && sameFormat(text) && (planOf(root).waivers ?? []).some((w) => isJsonObject(w) && w.nodeId === "80:2" && w.reason === "brand red agreed")
@@ -431,7 +432,7 @@ console.log("recording a plan the old hook closed, project-relative paths only:"
   check("…the hook's planHash is now the current formula's, the rest of the hook record is untouched, and a note says so",
     after.verification?.hook?.planHash === planHash(after) && after.verification.hook.result === "pass"
     && JSON.stringify(after.verification.hook.files) === JSON.stringify(hook.files) && r.notes.some((n) => /an older plan hash that also covered verification/.test(n) && /re-stamped/.test(n)));
-  const quiet = spawnSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const quiet = runSync(process.execPath, [HOOK], { cwd: root, input: JSON.stringify({ cwd: root }) });
   check("…and the Stop hook's fast path stays silent on it", quiet.status === 0 && quiet.stderr === "");
   // a hash that matches NEITHER formula (the plan changed after the hook) is never re-stamped: the plan stays pending
   const q = planOf(root);
@@ -577,7 +578,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
 
 console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
 {
-  const usage = spawnSync(process.execPath, [VS, "--help"], { encoding: "utf8" });
+  const usage = runSync(process.execPath, [VS, "--help"]);
   if (!/--record-plan/.test(usage.stdout + usage.stderr)) {
     console.log("  - SKIPPED: verify-screen has no --record-plan flag yet — the CLI cases (no plan → exit 2, no report written) are not run");
   } else {
@@ -588,12 +589,12 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
     fs.writeFileSync(path.join(root, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
     fs.writeFileSync(path.join(root, `${SET}.measured.json`), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes }));
     fs.rmSync(path.join(root, CLI_REPORT), { force: true });
-    const r = spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--record-plan"], { cwd: root, encoding: "utf8" });
+    const r = runSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--record-plan"], { cwd: root });
     check(`--record-plan with no plan → exit 2 before comparing, no report written (got exit ${r.status})`, r.status === 2 && !fs.existsSync(path.join(root, CLI_REPORT)));
     const root2 = project();
     fs.writeFileSync(path.join(root2, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
     fs.writeFileSync(path.join(root2, `${SET}.measured.json`), JSON.stringify({ measuredAt: measured.measuredAt, renderer: measured.renderer, nodes, behaviour }));
-    const r2 = spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root2, encoding: "utf8" });
+    const r2 = runSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root2 });
     const written = readFixture(path.join(root2, CLI_REPORT), isVerifyReport);
     const rec = planOf(root2).verification?.recorded;
     check(`--compare --record-plan --plan <plan>: the report is written and the plan records its sha256 (exit ${r2.status}, verdict ${String(written.verdict)})`,
@@ -611,7 +612,7 @@ console.log("the CLI (verify-screen --compare --record-plan, flag-gated):");
       const root3 = project();
       fs.writeFileSync(path.join(root3, `${SET}.expected.json`), JSON.stringify(exp, null, 2));
       fs.writeFileSync(path.join(root3, `${SET}.measured.json`), JSON.stringify(file));
-      const run = () => spawnSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root3, encoding: "utf8" });
+      const run = () => runSync(process.execPath, [VS, "--compare", `${SET}.expected.json`, `${SET}.measured.json`, "--plan", REL, "--record-plan"], { cwd: root3 });
       const c1 = run();
       const rec3: unknown = planOf(root3).verification?.recorded;
       const blocks1 = checkPlan({ plan: planOf(root3), file: path.join(root3, REL) }, root3).blocking.filter((b) => /verification\.recorded/.test(b));

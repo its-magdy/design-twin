@@ -1,15 +1,18 @@
 // test/tokens-cli.test.ts — the tokens.js CLI's provenance line + --check and --lookup <#hex>.
-// Fixture: invented catalogs (Acme Kit); every run is a real subprocess so the exit codes are the ones a user sees.
+// Fixture: invented catalogs (Acme Kit). The first runs are real subprocesses, so the exit codes are the ones a user
+// sees; the rest call tokens.ts's main in-process (test/cli-runner.ts; DT_SPAWN=1 spawns every run).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { main as tokensMain } from "../design-to-code/tokens.ts";
 import { check as ok, report } from "./assert.ts";
+import { cliRunner } from "./cli-runner.ts";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "design-to-code", "tokens.ts");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokens-cli-"));
+const tokens = cliRunner(SCRIPT, tokensMain);
 const run = (cwd: string, ...args: string[]): { status: number | null; out: string; err: string } => {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8", cwd });
+  const r = tokens(args, { cwd });
   return { status: r.status, out: r.stdout, err: r.stderr };
 };
 const readOr = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch (e) { return `<unreadable: ${e instanceof Error ? e.message : String(e)}>`; } };

@@ -1,11 +1,13 @@
 // Offline tests for design-to-code/design-diff.ts (the sync-design skill's change list).
-//   node test/design-diff.test.ts
+//   bun test/design-diff.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
+import { cliRunner } from "./cli-runner.ts";
+import { main as designDiffMain } from "../design-to-code/design-diff.ts";
 import { malformed, manifest, must, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
@@ -20,6 +22,8 @@ import type {
 } from "../design-to-code/types.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "design-to-code", "design-diff.ts");
+// the first runs are real children, the rest design-diff.ts's main in-process (test/cli-runner.ts)
+const dd = cliRunner(CLI, designDiffMain);
 const clone = <T,>(o: T): T => structuredClone(o);
 // The hand-built screen, as the checks below index into it: a page-walk layer file ({tree}) whose every
 // node has a full box and whose root has children (the checks mutate them in place). Two test-local
@@ -206,7 +210,7 @@ check("snapshot → overwrite → diff finds the change; no snapshot and no git 
   const rel = path.join("design", "pages", "home", "login.json");
   fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
   fs.writeFileSync(path.join(root, rel), JSON.stringify(screen()));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const run = (...a: string[]) => dd([...a], { cwd: root });
   const none = run(rel);
   const snap = run("--snapshot", rel);
   const b = screen(); must(b.tree.children[0], "b.tree.children[0]").text = "Welcome back";
@@ -225,7 +229,7 @@ check("a second --snapshot of DIFFERENT content is refused without --force, and 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-force-"));
   const rel = path.join("design", "export", "design-system", "tokens.json");
   fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const run = (...a: string[]) => dd([...a], { cwd: root });
   fs.writeFileSync(path.join(root, rel), JSON.stringify({ variables: [{ name: "a", values: { M: 1 } }] }));
   const first = run("--snapshot", rel);
   const snapFile = must(snapshotPath(rel, root), "snapshotPath");
@@ -249,7 +253,7 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
   const rel = path.join("design", "export", "design-system", "tokens.json");
   fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
   fs.writeFileSync(path.join(root, rel), JSON.stringify({ variables: [] }));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const run = (...a: string[]) => dd([...a], { cwd: root });
   const first = run("--snapshot", rel);
   const second = run("--snapshot", rel); // same bytes, no --force needed
   return first.status === 0 && second.status === 0 && /unchanged/.test(second.stdout);
@@ -273,7 +277,7 @@ check("snapshotting ONE design-system file also snapshots its 9 siblings", (() =
     fs.writeFileSync(at, JSON.stringify({ file: n }));
   }
   const rel = path.join("design", "export", "design-system", "tokens.json");
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const run = (...a: string[]) => dd([...a], { cwd: root });
   const r = run("--snapshot", rel);
   const syncDir = path.join(root, "design", ".sync");
   const gotAll = names.every((n) => {
@@ -292,7 +296,7 @@ check("snapshotting a screen file also snapshots its .vars.json/.assets.json and
   fs.writeFileSync(path.join(pageDir, stem + ".assets.json"), JSON.stringify({ files: [] }));
   fs.writeFileSync(path.join(root, "design", "export", "pages", "index.json"), JSON.stringify({ pageDirs: [] }));
   const rel = path.join("design", "export", "pages", "home", stem + ".json");
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const run = (...a: string[]) => dd([...a], { cwd: root });
   const r = run("--snapshot", rel);
   const syncDir = path.join(root, "design", ".sync");
   return r.status === 0
@@ -365,12 +369,12 @@ check("[shape] a corrupt snapshot is ONE line naming it (exit 2), not a SyntaxEr
   fs.mkdirSync(path.join(root, "design", ".sync"), { recursive: true });
   fs.writeFileSync(path.join(root, "design", "login.json"), JSON.stringify(screen()));
   fs.writeFileSync(path.join(root, "design", ".sync", "login.json"), "{ truncated");
-  const r = spawnSync(process.execPath, [CLI, "design/login.json"], { cwd: root, encoding: "utf8" });
+  const r = dd(["design/login.json"], { cwd: root });
   return r.status === 2 && r.stderr.includes(`the snapshot ${path.join("design", ".sync", "login.json")} is not valid JSON`) && !/\n {4}at /.test(r.stderr);
 })());
 check("[args] `--out --json` is '--out needs a value', not a diff written to a file named --json", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-args-"));
-  const r = spawnSync(process.execPath, [CLI, "x.json", "--out", "--json"], { cwd: root, encoding: "utf8" });
+  const r = dd(["x.json", "--out", "--json"], { cwd: root });
   return r.status === 2 && /design-diff: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(root, "--json"));
 })());
 const git = (root: string, ...a: string[]) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: root, encoding: "utf8" });
@@ -378,7 +382,7 @@ const project = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwi
 const put = (root: string, text: string, at: string, extra?: Partial<IrNode>) => { const s = screen(); s.exportedAt = at; must(s.tree.children[0], "s.tree.children[0]").text = text; Object.assign(must(s.tree.children[2], "s.tree.children[2]"), extra || {}); fs.writeFileSync(path.join(root, "design", "login.json"), JSON.stringify(s)); };
 type ScreenResult = Extract<DiffResult, { kind: "screen" }>;
 const isScreenResult = (x: unknown): x is ScreenResult => isDiffResult(x) && x.kind === "screen";
-const cli = (root: string, ...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+const cli = (root: string, ...a: string[]) => dd([...a], { cwd: root });
 check("a snapshot taken AFTER the re-pull is recognised as the same export; git HEAD is used instead", (() => {
   const root = project(); git(root, "init", "-q"); put(root, "v1", "2026-01-01T00:00:00Z"); git(root, "add", "-A"); git(root, "commit", "-qm", "v1");
   put(root, "v2", "2026-02-01T00:00:00Z"); cli(root, "--snapshot", "design/login.json");

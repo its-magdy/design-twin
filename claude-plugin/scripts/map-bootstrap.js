@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/types.ts
@@ -57,6 +57,75 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
 // design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
@@ -68,7 +137,7 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
     );
-    process.exit(2);
+    exitCli(2);
   }
 }
 function readJsonFile(file, what, hint) {
@@ -80,14 +149,14 @@ function readDocFile(file, what, guard, hint) {
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-  process.exit(2);
+  exitCli(2);
 }
 function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   const doc = readJsonFile(file, what, hint);
   assertNotManifest(doc, file, payloadKey, wantFile);
   if (guard(doc)) return doc;
   console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  process.exit(2);
+  exitCli(2);
 }
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
@@ -344,7 +413,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -398,7 +468,7 @@ function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
   const unknownFlags = () => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -426,7 +496,7 @@ ${usage}`;
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode);
 }
 function cliArity(tool, positionals, min, max, usage) {
   if (positionals.length < min) {
@@ -479,19 +549,6 @@ function parseVariant(s) {
     out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
   }
   return Object.keys(out).length ? out : null;
-}
-
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
 }
 
 // design-to-code/map-validate.ts
@@ -629,10 +686,10 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/design-system-dir.ts
-import fs3 from "node:fs";
+import fs2 from "node:fs";
 import path2 from "node:path";
 
 // bridge/src/design-system-layout.ts
@@ -679,7 +736,7 @@ function exportRootOf(screenFile, dsDir) {
     const parent = path2.dirname(path2.normalize(dsDir));
     roots.push(path2.basename(parent) === ROOT ? path2.dirname(parent) : parent);
   }
-  return roots.find((r) => fs3.existsSync(path2.join(r, ROOT, INDEX))) ?? null;
+  return roots.find((r) => fs2.existsSync(path2.join(r, ROOT, INDEX))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
@@ -696,7 +753,7 @@ function discoverCatalogs(namedFile, screenFile) {
   const out = [];
   const seen = /* @__PURE__ */ new Set([path2.resolve(namedFile)]);
   const add = (file, role, catalog) => {
-    if (seen.has(path2.resolve(file)) || !fs3.existsSync(file)) return;
+    if (seen.has(path2.resolve(file)) || !fs2.existsSync(file)) return;
     seen.add(path2.resolve(file));
     out.push({ file, role, catalog });
   };
@@ -737,46 +794,46 @@ function unionCatalog(sources) {
 var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
 // bridge/src/json-file.ts
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto from "node:crypto";
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 import path3 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs4.openSync(dir, "r");
+    const fd = fs3.openSync(dir, "r");
     try {
-      fs4.fsyncSync(fd);
+      fs3.fsyncSync(fd);
     } finally {
-      fs4.closeSync(fd);
+      fs3.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
   const dir = path3.dirname(path3.resolve(file));
-  fs4.mkdirSync(dir, { recursive: true });
+  fs3.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs4.openSync(tmp, "wx", opts.mode);
+      const fd = fs3.openSync(tmp, "wx", opts.mode);
       try {
-        fs4.writeFileSync(fd, data);
-        fs4.fsyncSync(fd);
+        fs3.writeFileSync(fd, data);
+        fs3.fsyncSync(fd);
       } finally {
-        fs4.closeSync(fd);
+        fs3.closeSync(fd);
       }
     } else {
-      fs4.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs3.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs4.chmodSync(tmp, opts.mode);
-    fs4.renameSync(tmp, file);
+    if (opts.mode !== void 0) fs3.chmodSync(tmp, opts.mode);
+    fs3.renameSync(tmp, file);
   } catch (e) {
     try {
-      fs4.rmSync(tmp, { force: true });
+      fs3.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -785,12 +842,12 @@ function writeFileAtomic(file, data, opts = {}) {
 }
 
 // bridge/src/file-lock.ts
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 var LIVE_STALE_MS = 2 * 6e4;
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs5.readlinkSync("/proc/self/ns/pid");
+    return fs4.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -809,7 +866,7 @@ function formatJsonLike(value, raw) {
 function writeJsonLike(file, value, raw) {
   let was = raw ?? null;
   if (raw === void 0) try {
-    was = fs6.readFileSync(file, "utf8");
+    was = fs5.readFileSync(file, "utf8");
   } catch {
     was = null;
   }
@@ -1022,7 +1079,7 @@ ${usage}`);
   const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
   if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs7.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs6.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
@@ -1046,7 +1103,7 @@ ${usage}`);
       return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs7.writeFileSync(outFile, out);
+    if (outFile) fs6.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
@@ -1079,9 +1136,10 @@ ${usage}`);
   }
   return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "map-bootstrap" });
 export {
   bootstrap,
   bootstrapFromProposals,
+  main,
   proposalsIn
 };

@@ -1,10 +1,11 @@
 // Doc-guards for the build-screen skill, its web profiles and the screen-builder agent.
-//   node test/build-screen-docs.test.ts
+//   bun test/build-screen-docs.test.ts
 // Each check asserts one rule is STATED in the text a builder reads; the map-status list is also
 // compared with the validator's own source so the doc and the code cannot drift apart.
 import fs from "node:fs";
 import path from "node:path";
 import { check, report } from "./assert.ts";
+import { RUNNER_RE } from "./plugin-invocation.ts";
 import { PASSING_VERDICTS } from "../design-to-code/plan-waivers.ts";
 import * as PM from "../design-to-code/probe-match.ts";
 import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
@@ -64,7 +65,7 @@ const verifySkill = flat([read("claude-plugin/skills/verify/SKILL.md"), ...verif
 const verifyRef = flat([read("claude-plugin/skills/build-screen/references/verify.md"), ...verifyRefs("run-protocol")].join("\n"));
 // The visual-verifier's write scope, pattern kills, installs and sandbox bypass are refused by its PreToolUse hook
 // (design-to-code/verifier-guard.ts, test/verifier-guard.test.ts), so its doc says so in one line instead of prose "never"s.
-const verifierGuarded = /\*\*Enforced by the plugin's hook\*\* \(`scripts\/verifier-guard\.js`, PreToolUse\), each refusal a real block with its reason: a write outside `design\/verify\/` and the run cache \(or to a tool-owned file there\), a pattern kill \(`pkill`, `killall`, …\), a dependency or Playwright browser install \(`npm install`\/`ci`, `npx playwright install`\), `verify-screen --migrate` \(renaming verify sets is the caller's call\) and `dangerouslyDisableSandbox`\./.test(verifier);
+const verifierGuarded = /\*\*Enforced by the plugin's hook\*\* \(`scripts\/verifier-guard\.js`, PreToolUse\), each refusal a real block with its reason: a write outside `design\/verify\/` and the run cache \(or to a tool-owned file there\), a pattern kill \(`pkill`, `killall`, …\), a dependency or Playwright browser install \(`npm install`\/`ci`, `bun install`\/`add`, `npx`\/`bunx playwright install`\), `verify-screen --migrate` \(renaming verify sets is the caller's call\) and `dangerouslyDisableSandbox`\./.test(verifier);
 check("the visual-verifier names its hook-enforced limits in one line (verifier-guard.js: writes, pattern kills, installs, --migrate, dangerouslyDisableSandbox)", verifierGuarded);
 check("troubleshooting and the hooks.json description name the verifier guard's --migrate refusal",
   /`verify-screen --migrate` \(it renames verify sets and rewrites plans — the caller's call\)/.test(flat(read("claude-plugin/skills/help/references/troubleshooting.md")))
@@ -122,9 +123,9 @@ console.log("verify docs (pass-with-deviations and waivers):");
   // The hook does not check the stop that follows its own block (stop_hook_active): after a block the builder and the
   // main session re-run verify-build by hand until it passes; no text still promises a re-check on every stop.
   check("the screen-builder and build-screen: after a block, re-run verify-build by hand until it passes — no 're-runs on every stop'; the orchestrator runs --status after its builders",
-    /If the hook blocks, fix what it listed and re-run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>` yourself until it passes, then hand back — the hook does not check the stop that follows its own block\./.test(builder)
-    && /If the hook blocks, fix what it listed and re-run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>` yourself until it passes, then end the turn — the hook does not check the stop that follows its own block\./.test(skill)
-    && /When the builders have returned, run `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" --status` and report each plan's computed status/.test(skill)
+    new RegExp(String.raw`If the hook blocks, fix what it listed and re-run \x60${RUNNER_RE} "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>\x60 yourself until it passes, then hand back — the hook does not check the stop that follows its own block\.`).test(builder)
+    && new RegExp(String.raw`If the hook blocks, fix what it listed and re-run \x60${RUNNER_RE} "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" <plan\.json>\x60 yourself until it passes, then end the turn — the hook does not check the stop that follows its own block\.`).test(skill)
+    && new RegExp(String.raw`When the builders have returned, run \x60${RUNNER_RE} "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/verify-build\.js" --status\x60 and report each plan's computed status`).test(skill)
     && ![builder, skill].some((t) => /re-runs on (each|every) stop/.test(t)));
   check("sync-design: its patch is made with Write/Edit, not sed/cp/a redirect, which the Stop hook does not read",
     /Write\/Edit, not `sed`\/`cp`\/a redirect, which it does not read/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
@@ -257,7 +258,7 @@ console.log("verify docs (run integrity + agent safety):");
   check("--wait exit 5 is 'timeout or no progress' everywhere (never 'no timeout/progress')",
     [verifier, verifySkill, verifyRef].every((t) => /5 timeout or no progress/.test(t) && !/no timeout\/progress/.test(t)));
   check("never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files); the verifier's hook refuses it",
-    [verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)) && verifierGuarded);
+    [verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`, `bun install`, …\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)) && verifierGuarded);
   check("--status/--wait resolve --dir (default design/verify) against the current directory; from elsewhere pass --dir (absolute works)",
     [verifier, verifySkill, verifyRef].every((t) => /`--status` and `--wait` resolve `--dir` \(default `design\/verify`\) against the current directory/.test(t) && /an absolute path works/.test(t)));
   // integrity failures outrank the grades
@@ -759,7 +760,7 @@ console.log("build-screen docs (quick keys + export docs):");
   // that" / "intended order is listLibraries →"), and its per-collection reads are one call each, not "one at a time".
   const arch = rd("ARCHITECTURE.md"), testing = rd("TESTING.md");
   const libFirst = ([["README", readme], ["ARCHITECTURE", arch], ["TESTING", testing], ["extract", ext], ["help", help]] as const)
-    .filter(([, d]) => /is the step \*before\* that|intended order is `listLibraries`|dtwin list libraries\s+# 1\.|then scope by library|Before any pull, run `node bridge\/src\/figma-pull\.ts --list-libraries`|\(do this first\)/.test(d)).map(([n]) => n);
+    .filter(([, d]) => /is the step \*before\* that|intended order is `listLibraries`|dtwin list libraries\s+# 1\.|then scope by library|Before any pull, run `(?:node|bun) bridge\/src\/figma-pull\.ts --list-libraries`|\(do this first\)/.test(d)).map(([n]) => n);
   check("README, ARCHITECTURE, TESTING, extract, help: list libraries is never the default first step" + (libFirst.length ? " (" + libFirst.join(", ") + ")" : ""),
     libFirst.length === 0 && /`figma_list_libraries` \(optional `client`, like every Figma tool\) is a side step/.test(readme) && /`listLibraries` is a side step, never the default first one/.test(arch) && /Not a default first step/.test(testing));
   const oneAtATime = ([["README", readme], ["extract", ext], ["help", help]] as const).filter(([, d]) => /variable collections one at a time|collections one at a time/.test(d)).map(([n]) => n);
@@ -955,9 +956,9 @@ console.log("build-screen docs:");
   check("verify skill: --steps takes the screen's plan; one with no `navigate` list runs no steps (never exit 2), and no doc tells the agent to check for it first",
     /pass the screen's plan to `--steps`/.test(verifySkill) && /a plan with no `navigate` list runs no\s+steps/.test(verifySkill) && !/holds no `navigate` list/.test(verifySkill)
     && !/only when (the plan|it) has a `navigate` list/.test(verifySkill) && !/whenever it has one/.test(verifySkill));
-  check("verify skill: allow rules for the verifier's own scratch scripts (Edit on the run cache — never a dead Write(path) rule — Bash node on scratch), written with the Write tool not a heredoc",
+  check("verify skill: allow rules for the verifier's own scratch scripts (Edit on the run cache — never a dead Write(path) rule — Bash bun --no-install --no-env-file on scratch), written with the Write tool not a heredoc",
     !/`Write\(node_modules/.test(verifySkill) && /Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/.test(verifySkill)
-    && /Bash\(node node_modules\/\.cache\/designtwin-verify\/scratch\/\*\)/.test(verifySkill) && /Write tool, never a shell heredoc/.test(verifySkill));
+    && /Bash\(bun --no-install --no-env-file node_modules\/\.cache\/designtwin-verify\/scratch\/\*\)/.test(verifySkill) && /Write tool, never a shell heredoc/.test(verifySkill));
   check("verifier: scratch scripts are written with the Write tool, not a heredoc; the Edit rule (which covers the Write tool) is named in the denial hand-back, never a Write(path) rule",
     /Write tool.{0,40}never a shell heredoc/.test(verifier) && (verifier.match(/Edit\(node_modules\/\.cache\/designtwin-verify\/\*\*\)/g) ?? []).length >= 2 && !/`Write\(node_modules/.test(verifier));
   check("verify skill: a `blocked` hand-back is reported with its detail and never overwritten with `done`; a retry is a new run (--new-run)",

@@ -2,7 +2,7 @@
 
 
 // design-to-code/audit.ts
-import fs8 from "node:fs";
+import fs7 from "node:fs";
 import path6 from "node:path";
 
 // design-to-code/hidden.ts
@@ -102,7 +102,7 @@ function screenExportOf(doc) {
 }
 
 // design-to-code/cross-check.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 import path5 from "node:path";
 
 // bridge/src/json-util.ts
@@ -355,10 +355,80 @@ import { parseArgs } from "node:util";
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -412,7 +482,7 @@ function cliParse(tool, argv, options, usage, exitCode, parse) {
   const args = joinNegativeValues(argv, options);
   const unknownFlags = () => {
     const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
     const short = badShortWords(args, options);
     const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
     const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
@@ -440,7 +510,7 @@ ${usage}`;
     }
   }
   console.error(failure);
-  process.exit(exitCode);
+  exitCli(exitCode);
 }
 
 // design-to-code/catalog-input.ts
@@ -494,7 +564,7 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
     );
-    process.exit(2);
+    exitCli(2);
   }
 }
 function readJsonFile(file, what, hint) {
@@ -506,7 +576,7 @@ function readDocFile(file, what, guard, hint) {
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-  process.exit(2);
+  exitCli(2);
 }
 function readOptionalDoc(file, what, guard) {
   return fs2.existsSync(file) ? readDocFile(file, what, guard) : null;
@@ -516,20 +586,7 @@ function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   assertNotManifest(doc, file, payloadKey, wantFile);
   if (guard(doc)) return doc;
   console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  process.exit(2);
-}
-
-// bridge/src/is-main.ts
-import fs3 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
+  exitCli(2);
 }
 
 // design-to-code/map-validate.ts
@@ -667,7 +724,7 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -922,7 +979,7 @@ function isDisabledLayer(layer) {
 }
 
 // design-to-code/design-system-dir.ts
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 import path2 from "node:path";
 
 // bridge/src/pages-layout.ts
@@ -971,7 +1028,7 @@ var COMPONENTS = "components.json";
 var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 function readDesignSystemDir(dir) {
   const local = path2.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs4.existsSync(local) && fs4.existsSync(path2.join(dir, COMPONENTS));
+  const isLibrary = !fs3.existsSync(local) && fs3.existsSync(path2.join(dir, COMPONENTS));
   return {
     tokens: readOptionalDoc(path2.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
     components: readOptionalDoc(isLibrary ? path2.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
@@ -991,7 +1048,7 @@ function exportRootOf(screenFile, dsDir) {
     const parent = path2.dirname(path2.normalize(dsDir));
     roots.push(path2.basename(parent) === ROOT ? path2.dirname(parent) : parent);
   }
-  return roots.find((r) => fs4.existsSync(path2.join(r, ROOT, INDEX))) ?? null;
+  return roots.find((r) => fs3.existsSync(path2.join(r, ROOT, INDEX))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
@@ -1035,7 +1092,7 @@ function findExportNeighbours(screenFile) {
   const shots = /* @__PURE__ */ new Set();
   let files = [];
   try {
-    files = fs4.readdirSync(path2.join(root, "assets"));
+    files = fs3.readdirSync(path2.join(root, "assets"));
   } catch {
     files = [];
   }
@@ -1053,11 +1110,11 @@ function findExportNeighbours(screenFile) {
 }
 
 // design-to-code/slice-sources.ts
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 import path4 from "node:path";
 
 // bridge/src/project-layout.ts
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 import path3 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
@@ -1076,9 +1133,9 @@ var slashed = (p) => p.split(path3.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function findMapFile(cwd) {
   const modern = path3.join(cwd, MAP_FILE);
-  if (fs5.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  if (fs4.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
   const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
-  if (fs5.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  if (fs4.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
@@ -1129,15 +1186,15 @@ function variablesContext(screenFiles, varsFile, opts) {
     const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
     const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
     const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs6.existsSync(sibling)) variablesPath = sibling;
+    if (fs5.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs5.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
     const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
+    if (fs5.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
@@ -1810,7 +1867,7 @@ function exportSiblings(files) {
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
     const pages = path5.dirname(path5.dirname(f));
-    if (path5.basename(pages) === "pages" && fs7.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
+    if (path5.basename(pages) === "pages" && fs6.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
   }
   if (!roots.size) return null;
   return () => {
@@ -2151,7 +2208,7 @@ function contrastRendered(screens, variables, tokens, push) {
     { tokenPairs: list }
   );
 }
-if (false) process.exitCode = main(process.argv.slice(2));
+if (false) runCli3(main, { name: "cross-check" });
 
 // design-to-code/audit.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -3275,10 +3332,10 @@ function toMarkdown(res) {
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs9 = res.findings.filter((f) => f.severity === sev);
-    if (!fs9.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs9.length})`, "");
-    for (const f of fs9) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    const fs8 = res.findings.filter((f) => f.severity === sev);
+    if (!fs8.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
+    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -3301,8 +3358,8 @@ function reportFindings(auditDoc) {
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 function findExistingAuditFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs8.existsSync(dir)) return null;
-  for (const f of fs8.readdirSync(dir)) {
+  if (!nodeId || !fs7.existsSync(dir)) return null;
+  for (const f of fs7.readdirSync(dir)) {
     if (!f.endsWith(".json") || f.slice(0, -5).includes(".")) continue;
     if (path6.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
     const full = path6.join(dir, f);
@@ -3383,7 +3440,7 @@ function main(argv) {
   const ownOverrides = outBase + ".overrides.json";
   const stem = path6.basename(outBase), dot = stem.indexOf(".");
   const parentOverrides = dot > 0 ? path6.join(path6.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs8.existsSync(ownOverrides) && parentOverrides && fs8.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const overridesFile = flags.overrides || (!fs7.existsSync(ownOverrides) && parentOverrides && fs7.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   const mapAt = findMapFile(process.cwd());
   const mapFound = mapAt.missing ? void 0 : mapAt.rel;
@@ -3416,9 +3473,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs8.mkdirSync(path6.dirname(outBase), { recursive: true });
-    fs8.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs8.writeFileSync(outBase + ".md", md);
+    fs7.mkdirSync(path6.dirname(outBase), { recursive: true });
+    fs7.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs7.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
@@ -3430,7 +3487,7 @@ function main(argv) {
   for (const n of res.crossFile && res.crossFile.notChecked || []) console.error(`note  not checked: ${n}`);
   return gate && res.summary.blockers > 0 ? 1 : 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "audit" });
 export {
   BLOCKER_CODES,
   TOUCH_MIN,
@@ -3440,6 +3497,7 @@ export {
   controlKind,
   deltaE,
   findExistingAuditFor,
+  main,
   parseHex,
   reportFindings,
   toMarkdown

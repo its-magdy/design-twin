@@ -43,7 +43,7 @@ import type { Words } from "./shell-words.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { JsonObject } from "./types.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 
 /** The agent this guard applies to: the plugin-scoped name, or the bare one (the same agent copied into a project's .claude/agents/). */
 export const VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
@@ -141,13 +141,21 @@ const NPM_DEPS = new Set(["install", "i", "in", "ins", "inst", "insta", "instal"
   "init", "create", "innit"]);
 const PNPM_DEPS = new Set(["install", "i", "add", "update", "up", "upgrade", "remove", "rm", "un", "uninstall", "prune", "dedupe", "install-test", "it", "ci", "fetch", "import", "create"]);
 const YARN_DEPS = new Set(["install", "add", "remove", "up", "upgrade", "upgrade-interactive", "dedupe", "create"]);
-const BUN_DEPS = new Set(["install", "i", "add", "a", "remove", "rm", "update", "create"]);
+// Bun's own: `ci` (a frozen install), `r`/`uninstall`, `up`, `init` (installs @types/bun), `c` (create), `link`/`unlink`
+// (a linked package into node_modules), `patch`/`patch-commit` (edits an installed package, then package.json).
+const BUN_DEPS = new Set(["install", "i", "ci", "add", "a", "remove", "rm", "r", "uninstall", "update", "up", "create", "c", "init",
+  "link", "unlink", "patch", "patch-commit"]);
 // Each package manager's global options that take a value (so the value is not read as the subcommand). Per manager:
 // pnpm's `-w` is the boolean --workspace-root, npm's is --workspace <name>.
 const NPM_VALUED = new Set(["--prefix", "-C", "--workspace", "-w", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--registry", "--tag", "--omit", "--include", "--before", "--otp", "--scope"]);
 const PNPM_VALUED = new Set(["-C", "--dir", "--filter", "-F", "--loglevel", "--reporter", "--registry", "--store-dir"]);
 const YARN_VALUED = new Set(["--cwd", "--cache-folder", "--modules-folder", "--global-folder", "--registry", "--network-timeout"]);
-const BUN_VALUED = new Set(["--cwd", "--config", "-c"]);
+// `bun`'s options that take a value as the next word. Bun itself does not know that when it picks the subcommand: it
+// takes the first word not starting with "-" (`bun --cwd install x` IS `bun install x`, run in ./install; `bun --cwd .
+// install` runs the script or bin named install) — so the guard reads the subcommand both ways (bunSubcommands).
+const BUN_VALUED = new Set(["--cwd", "--config", "-c", "-e", "--eval", "-p", "--print", "--env-file", "--preload", "-r", "--require", "--import", "--tsconfig-override",
+  "--install", "--conditions", "--main-fields", "--define", "-d", "--loader", "-l", "--port", "--console-depth", "--title",
+  "--elide-lines", "--filter", "-F", "--shell", "--user-agent", "--dns-result-order", "--unhandled-rejections"]);
 const NPX_VALUED = new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
 const PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
@@ -322,25 +330,47 @@ function commandVerdict(cmd: Words, line: string, depth: number, ps: boolean): s
     return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
   }
   if (p === "bun") {
-    const s = firstArg(words, 1, BUN_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "x") return npxVerdict(words, s + 1);
+    // `bun --no-install --no-env-file <script> …` is how the plugin runs its own scripts (the migrate check above reads it);
+    // what is refused here is a subcommand that installs, a package's bin run by name (`bun playwright install`, `bun run
+    // playwright install`), a Playwright CLI run by path, and `bun exec <shell script>` (its body is judged like bash -c).
+    for (const s of bunSubcommands(words)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "pm" && (words[firstArg(words, s + 1)] ?? "").toLowerCase() === "trust") return REASON.install; // runs install scripts, edits package.json
+      if (sub === "x") { const v = npxVerdict(words, s + 1); if (v) return v; continue; }
+      if (sub === "exec") { if (depth < 4) { const v = bashVerdict(words.slice(firstArg(words, s + 1)).join(" "), depth + 1); if (v) return v; } continue; }
+      const t = sub === "run" ? firstArg(words, s + 1, BUN_VALUED) : s;
+      if (runsPlaywrightCli(words, t)) return REASON.playwright;
+    }
     return null;
   }
   if (PLAYWRIGHT_PKG.test(p) && playwrightInstall(words, 1)) return REASON.playwright;
-  if (p === "node") {
-    const s = firstArg(words, 1);
-    if (PLAYWRIGHT_CLI.test(words[s] ?? "") && playwrightInstall(words, s + 1)) return REASON.playwright;
-  }
+  if (p === "node" && runsPlaywrightCli(words, firstArg(words, 1))) return REASON.playwright;
   return null;
 }
 
-// `<pm> init|create playwright…` (or create-playwright): Playwright's installer, refused with its own reason.
+// `<pm> init|create playwright…` (or create-playwright; bun's `c` is create): Playwright's installer, refused with its own reason.
 const createsPlaywright = (words: Words, s: number): boolean => {
   const sub = (words[s] ?? "").toLowerCase();
-  return (sub === "init" || sub === "innit" || sub === "create") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
+  return (sub === "init" || sub === "innit" || sub === "create" || sub === "c") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
 };
+
+// The words a `bun …` command line may take as its subcommand: the first word after bun's options with their values
+// skipped (BUN_VALUED), and the first word not starting with "-" — the one bun itself dispatches on. Both are judged.
+function bunSubcommands(words: Words): number[] {
+  const byValue = firstArg(words, 1, BUN_VALUED);
+  let bare = 1;
+  while (bare < words.length && (words[bare] ?? "").startsWith("-") && words[bare] !== "--") bare++;
+  if (words[bare] === "--") bare++;
+  return byValue === bare ? [byValue] : [byValue, bare];
+}
+
+// Does words[s…] run the Playwright CLI's install: a Playwright package's bin by name (`playwright`, as `bun playwright`
+// or `bun run playwright` resolve it from node_modules/.bin) or by path (node_modules/.bin/playwright), or its cli.js?
+function runsPlaywrightCli(words: Words, s: number): boolean {
+  const w = words[s] ?? "";
+  return (PLAYWRIGHT_PKG.test(w.toLowerCase()) || PLAYWRIGHT_PKG.test(prog(w)) || PLAYWRIGHT_CLI.test(w)) && playwrightInstall(words, s + 1);
+}
 
 // npx / npm exec / pnpm dlx / yarn dlx / bunx: what runs is the package named first.
 function npxVerdict(words: Words, from: number): string | null {
@@ -448,9 +478,5 @@ async function main(argv: readonly string[]): Promise<number> {
 
 export { USAGE, main };
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => {
-    console.error(`verifier-guard: ${(e instanceof Error && e.stack) || String(e)} — allowing the call`);
-    process.exitCode = 0;
-  });
-}
+// an error of its own is logged and answered with nothing (allow), exit 0 — fail open, like an unreadable payload
+if (import.meta.main) runCli(main, { name: "verifier-guard", errorCode: 0, errorLine: (e) => `verifier-guard: ${(e instanceof Error && e.stack) || String(e)} — allowing the call` });

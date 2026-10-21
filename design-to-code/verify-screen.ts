@@ -55,7 +55,7 @@ import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import type { ArtifactCheck, CodeInputs, IndexRow, InteractionEvidence, JsonValue, MeasuredComponent, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
@@ -193,7 +193,7 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
 export { selectForAccept };
 
 // ---------------------------------------------------------------- CLI
-function main(argv: string[]): number | Promise<number> {
+export function main(argv: string[]): number | Promise<number> {
   const USAGE =
     "usage:\n" +
     `  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]\n` +
@@ -721,8 +721,4 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const code = main(process.argv.slice(2));
-  if (typeof code === "number") process.exitCode = code;
-  else code.then((c) => { process.exitCode = c; }, (e: unknown) => { console.error(`verify-screen: ${errMsg(e)}`); process.exitCode = 1; });
-}
+if (import.meta.main) runCli(main, { name: "verify-screen", errorLine: (e) => `verify-screen: ${errMsg(e)}` }); // exitCode, never exit() (proc.ts)

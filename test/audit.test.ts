@@ -1,16 +1,19 @@
 // Offline tests for design-to-code/audit.ts — the pre-implementation design audit.
-//   node test/audit.test.ts
+//   bun test/audit.test.ts
 // The fixture is a deliberately flawed login screen: every seeded flaw has one assertion that the
 // audit reports it, and the clean parts have assertions that it does NOT (no false positives).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync, execFileSync } from "node:child_process";
 import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES, blockerIds } from "../design-to-code/audit.ts";
 import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
+import { cliRunner, stdoutOf } from "./cli-runner.ts";
+import { main as auditMain } from "../design-to-code/audit.ts";
+import { main as crossCheckMain } from "../design-to-code/cross-check.ts";
+import { RUNNER_RE } from "./plugin-invocation.ts";
 import { catalog as catalog1, codeMap, malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
 import type { ExportNeighbours } from "../design-to-code/design-system-dir.ts";
@@ -126,10 +129,13 @@ check("markdown lists blockers before warnings", md.indexOf("## Blockers") < md.
 
 console.log("CLI:");
 const cli = path.join(import.meta.dirname, "..", "design-to-code", "audit.ts");
-const out = execFileSync(process.execPath, [cli, path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), "--platform", "android", "--catalog", path.join(import.meta.dirname, "fixtures/audit/components.local.json"), "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+// the first runs are real children, the rest audit.ts / cross-check.ts's main in-process (test/cli-runner.ts)
+const auditCli = cliRunner(cli, auditMain);
+const crossCheckCli = cliRunner(path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), crossCheckMain);
+const out = stdoutOf(auditCli([path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), "--platform", "android", "--catalog", path.join(import.meta.dirname, "fixtures/audit/components.local.json"), "--json"]));
 const parsed = parseAs(out, isAuditReport, "audit --json");
 check("CLI --json emits the audit for the chosen platform", parsed.platform === "android" && parsed.summary.blockers === 1);
-const badExit = spawnSync(process.execPath, [cli, "x.json", "--platform", "tvos"], { stdio: "ignore" }).status;
+const badExit = auditCli(["x.json", "--platform", "tvos"]).status;
 check("CLI rejects an unknown --platform with exit 2", badExit === 2);
 {
   // Wrong-kind inputs are one line + exit 2 (doc-guards.ts), never a silent audit of nothing
@@ -137,7 +143,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "audit-shape-"));
   const put = (name: string, doc: unknown): string => { const f = path.join(tmp, name); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
   const login = path.join(import.meta.dirname, "fixtures/audit/flawed-login.json");
-  const run = (args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: tmp });
+  const run = (args: string[]) => auditCli([...args], { cwd: tmp });
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
   check("[shape] a screen argument that is not a screen export -> exit 2, one line, not an empty audit",
     oneLine(run([put("not-a-screen.json", { hello: "world" }), "--json"]), /screen export: '.*not-a-screen\.json' is not a screen export/));
@@ -214,24 +220,23 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     nodes: [{ type: "FRAME", name: "positions ", id: "7314:87192", box: { w: 100, h: 100 }, children: [] }],
     manifest: { nodes: 1, truncated: 0, assetsFailed: 0, warnings: [] },
   }));
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "audit.ts");
-  const r = spawnSync(process.execPath, [scriptPath, screenFile], { encoding: "utf8", cwd });
+  const r = auditCli([screenFile], { cwd });
   check("[cli-out] with no --out, a report pair is written under design/audit/<the input file's own basename>",
     r.status === 0 &&
     fs.existsSync(path.join(cwd, "design", "audit", "positions___7314_87192.md")) &&
     fs.existsSync(path.join(cwd, "design", "audit", "positions___7314_87192.json")));
   // Re-run: same input file -> same default -> same report pair, not a second name.
-  spawnSync(process.execPath, [scriptPath, screenFile], { encoding: "utf8", cwd });
+  auditCli([screenFile], { cwd });
   const dir = fs.readdirSync(path.join(cwd, "design", "audit"));
   check("[cli-out] re-auditing the SAME screen never produces a second name for it",
     dir.filter((f) => f.startsWith("positions")).length === 2); // .md + .json, no duplicate under another name
   check("[cli-out] an explicit --out under a NEW name for the SAME already-audited node is refused (a sibling of the existing refusal), naming the existing file", (() => {
-    const r2 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name")], { encoding: "utf8", cwd });
+    const r2 = auditCli([screenFile, "--out", path.join(cwd, "design", "audit", "custom-name")], { cwd });
     return r2.status === 1 && /already has an audit report/.test(r2.stderr) && /positions___7314_87192/.test(r2.stderr) &&
       !fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
   })());
   check("[cli-out] --force overrides the refusal and writes the second name anyway", (() => {
-    const r3 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name"), "--force"], { encoding: "utf8", cwd });
+    const r3 = auditCli([screenFile, "--out", path.join(cwd, "design", "audit", "custom-name"), "--force"], { cwd });
     return r3.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
   })());
 })();
@@ -346,19 +351,18 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 // .vars.json carries only the design system's 24 — 5 blockers where cross-check says 3. Real export: test/fixtures/livetest3/.
 {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
-  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const POS = path.join(FX, "pages/__Optimization_management_/positions___7314_87192.json");
   const CAT = path.join(FX, "pages/In_progress/Create_Assembly_Type__18411_84111.json");
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "audit-311-"));
   interface AuditOut { findings: AuditFinding[]; crossFile: { findings?: CrossCheckFinding[] } }
   const runAudit = (f: string, tag: string) => {
-    const r = spawnSync(process.execPath, [path.join(D2C, "audit.ts"), f, "--platform", "web", "--design-system", path.join(FX, "design-system"), "--out", path.join(out, tag), "--gate", "--grid", "4"], { encoding: "utf8" });
+    const r = auditCli([f, "--platform", "web", "--design-system", path.join(FX, "design-system"), "--out", path.join(out, tag), "--gate", "--grid", "4"]);
     let json: AuditOut = { findings: [], crossFile: { findings: [] } };
     if (fs.existsSync(path.join(out, tag + ".json"))) { const rep = readFixture(path.join(out, tag + ".json"), isAuditReport); json = { findings: rep.findings, crossFile: { findings: rep.crossFile ? rep.crossFile.findings : [] } }; }
     return { r, json, md: fs.existsSync(path.join(out, tag + ".md")) ? fs.readFileSync(path.join(out, tag + ".md"), "utf8") : "" };
   };
   const runCross = (f: string): { findings: CrossCheckFinding[] } => {
-    const r = spawnSync(process.execPath, [path.join(D2C, "cross-check.ts"), f, "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+    const r = crossCheckCli([f, "--design-system", path.join(FX, "design-system"), "--json"]);
     return r.stdout ? parseAs(r.stdout, isCrossCheckOut, "cross-check --json") : { findings: [] };
   };
   const blockerSet = (findings: AuditFinding[]) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${String(f.token || "")}|${String(f.key || "")}`).sort();
@@ -622,13 +626,13 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   put(`${libDir}/components.json`, { components: [{ name: "Button", id: "1:10", type: "COMPONENT_SET", key: "k-lib", props: { Status: { key: "Status", type: "VARIANT", options: ["Default", "Hover", "Disabled"] } } }] });
   const screenFile = put("design/export/pages/Main/Items__1_1.json", screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Button", mainComponent: { name: "Status=Default", setName: "Button", key: "v-1", setKey: "k-copy", remote: true }, box: { w: 120, h: 40 } }] }], { screen: "Items" }));
   put("design/export/pages/Main/Items__1_1.vars.json", { collections: [{ name: "Spacing", modes: ["Mode 1"], key: "c-1" }, { name: "Local", modes: ["Mode 1"], key: "c-local" }], variables: [] });
-  const runAudit = (ds: string) => parseAs(execFileSync(process.execPath, [cli, path.relative(root, screenFile), "--platform", "web", "--design-system", ds, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  const runAudit = (ds: string) => parseAs(stdoutOf(auditCli([path.relative(root, screenFile), "--platform", "web", "--design-system", ds, "--json"], { cwd: root })), isAuditReport, "audit --json");
   const viaDs = runAudit("design/export/design-system");
   check("[CLI] with design-system/, the library beside it still defines the Button's states", viaDs.components.some((c) => c.name === "Button" && c.known && c.catalog === libDir));
   check("[CLI] …and the report names it, with its by-key share of the screen's collections", viaDs.crossFile?.notChecked.some((n) => n.includes(`--design-system ${libDir}`) && /binds 1 of its 2 variable collection/.test(n)) === true);
   const viaLib = runAudit(libDir);
   check("[CLI] --design-system <library dir> reads its components.json (not silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
-  const cc = parseAs(execFileSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.relative(root, screenFile), "--design-system", libDir, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isCrossCheckOut, "cross-check --json");
+  const cc = parseAs(stdoutOf(crossCheckCli([path.relative(root, screenFile), "--design-system", libDir, "--json"], { cwd: root })), isCrossCheckOut, "cross-check --json");
   check("[CLI] cross-check reads a library dir's components.json too", !cc.findings.some((f) => /no components\.local\.json/.test(f.message)) && (cc as { inputs?: { components?: boolean } }).inputs?.components === true);
 }
 
@@ -741,7 +745,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   fs.copyFileSync(path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), screenFile);
   const ovFile = path.join(cwd, "design", "audit", "Login__1_1.overrides.json");
   fs.mkdirSync(path.dirname(ovFile), { recursive: true });
-  const run = (args: string[] = []) => spawnSync(process.execPath, [cli, path.relative(cwd, screenFile), "--platform", "ios", ...args], { encoding: "utf8", cwd });
+  const run = (args: string[] = []) => auditCli([path.relative(cwd, screenFile), "--platform", "ios", ...args], { cwd });
   const before = run();
   const beforeGate = auditGateStatus(cwd, screenFile, "Login");
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [
@@ -794,7 +798,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   put("design/export/assets/5_1_ref.png", "png"); put("design/export/assets/7_1_ref.png", "png"); put("design/export/assets/7_2_shot@0.25x.png", "png");
   // a screenshot of a layer inside an instance (an I… id) is a part of a component, not a frame left unexported
   put("design/export/assets/I7_3_40_1_ref.png", "png");
-  const out = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Items__5_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  const out = parseAs(stdoutOf(auditCli(["design/export/pages/Main/Items__5_1.json", "--platform", "web", "--json"], { cwd: root })), isAuditReport, "audit --json");
   check("[CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan, nor is an instance sublayer's)",
     out.findings.some((f) => f.code === "state-in-sibling" && f.candidates?.[0]?.id === "5:2") && JSON.stringify(out.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:1", "7:2"]));
 }
@@ -871,7 +875,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const screenFile = path.join(cwd, "design", "export", "pages", "Main", "Login__1_1.json");
   fs.mkdirSync(path.dirname(screenFile), { recursive: true });
   fs.copyFileSync(path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), screenFile);
-  const run = (args: string[]) => spawnSync(process.execPath, [cli, path.relative(cwd, screenFile), "--platform", "ios", ...args], { encoding: "utf8", cwd });
+  const run = (args: string[]) => auditCli([path.relative(cwd, screenFile), "--platform", "ios", ...args], { cwd });
   const first = run([]);
   const lib = run(["--out", "design/audit/Login__1_1.library"]);
   check("`--out design/audit/<screen>.library` beside the main report is not refused as a duplicate", first.status === 0 && lib.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "Login__1_1.library.json")));
@@ -913,13 +917,13 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   put("design/export/assets/7_3_ref-a1b2c3.png", "png"); put("design/export/assets/7_4_ref-Zq9x_1.png", "png");
   const nodeId = audit({ doc: readFixture(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), isScreenExport), label: "Login" }, { platform: "ios" }).nodeIds?.[0] ?? "";
   put("design/audit/Other__9_9.library.json", { nodeIds: [nodeId], findings: [], summary: {} });
-  const r = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios"], { encoding: "utf8", cwd: root });
+  const r = auditCli([screenRel, "--platform", "ios"], { cwd: root });
   const repFile = path.join(root, "design/audit/Login__1_1.json");
   const rep = fs.existsSync(repFile) ? parseAs(fs.readFileSync(repFile, "utf8"), isAuditReport, "report") : { findings: [] as AuditFinding[] };
   check("another report's sidecar that covers the node does not refuse the write", r.status === 0);
   check("hashed reference names (_ref-<hash>.png, _ref-<hash>_N.png) are screenshots too", JSON.stringify(rep.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:3", "7:4"]));
   put("design/audit/Login__1_1.overrides.json", { overrides: [{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "licensed", decidedBy: "user" }] });
-  const lib = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { encoding: "utf8", cwd: root });
+  const lib = auditCli([screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { cwd: root });
   const libRep = parseAs(fs.readFileSync(path.join(root, "design/audit/Login__1_1.library.json"), "utf8"), isAuditReport, "library report");
   // the CLI prints the path as the OS spells it (path.join), so the expectation is built the same way
   const overridesShown = path.join("design", "audit", "Login__1_1.overrides.json");
@@ -964,7 +968,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
     { name: "Tile", id: "9:4", key: "cat-tile", type: "COMPONENT", props: { Title: { type: "TEXT" } } },
   ]));
   put("design/codeconnect.local.json", codeMap({ "s-sidebar": { figma: { name: "Sidebar", key: "cat-sidebar", id: "9:1" } } }));
-  const r = spawnSync(process.execPath, [cli, path.relative(tmp, fileA), "--platform", "web", "--design-system", "design/export/design-system", "--json"], { encoding: "utf8", cwd: tmp });
+  const r = auditCli([path.relative(tmp, fileA), "--platform", "web", "--design-system", "design/export/design-system", "--json"], { cwd: tmp });
   let props: Array<{ name: string; alreadyMapped?: true; sharedWith?: number }> = [];
   try { props = parseAs(r.stdout, isAuditReport, "audit --json").crossFile?.componentProposals || []; } catch { props = []; }
   const p = (n: string) => props.find((x) => x.name === n);
@@ -1026,7 +1030,7 @@ console.log("audit design-data checks:");
   put("design/export/pages/Main/Reports__40_1.json", screenExport([{ id: "40:1", type: "FRAME", name: "Reports", children: [opener("9:9", "overlay"), opener("9:8", "overlay", { id: "40:3", name: "Share button" })] }], { screen: "Reports" }));
   const nb = findExportNeighbours(path.join(root, "design/export/pages/Main/Reports__40_1.json"));
   check("findExportNeighbours: exportedIds = the root index's rows ∪ every page index's; layers stay the root's", !!nb?.exportedIds?.has("9:9") && nb.layers.length === 1);
-  const cliOut = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Reports__40_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  const cliOut = parseAs(stdoutOf(auditCli(["design/export/pages/Main/Reports__40_1.json", "--platform", "web", "--json"], { cwd: root })), isAuditReport, "audit --json");
   const cw = codes(cliOut, "prototype-target-not-exported");
   check("[CLI] a target only the page index lists is exported; the other is the one warned about", cw.length === 1 && JSON.stringify(cw[0]?.ids) === JSON.stringify(["9:8"]));
 }
@@ -1203,7 +1207,7 @@ console.log("input fields: border on an inner frame:");
   const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md"), cl = readRepo("claude-plugin/skills/audit-design/references/checklist.md");
   check("audit-design: the loop skips page indexes, and the cross-check run is a runnable command over the screen files only",
     /case "\$f" in \*\.vars\.json\|\*\.assets\.json\|\*\/index\.json\) continue;; esac/.test(skill)
-    && /find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"/.test(skill) && !/<every screen json>/.test(skill));
+    && new RegExp(String.raw`find design\/export\/pages -name '\*\.json' ! -name '\*\.vars\.json' ! -name '\*\.assets\.json' ! -name index\.json -print0 \| \\\n\s+xargs -0 ${RUNNER_RE} "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/cross-check\.js"`).test(skill) && !/<every screen json>/.test(skill));
   check("checklist: the TEXT-property sentence is an instruction (the audit does not judge it); dividers are LINE layers",
     /The audit does not judge a text\s+driven by a TEXT property/.test(cl) && !/is judged by its `props` value/.test(cl) && /Dividers \(LINE layers\)/.test(cl));
   check("audit-design + checklist: a SECTION-nested target has no index row — search design/export/pages first",

@@ -1,12 +1,14 @@
 // one verification run on disk: status v2 written by the tools, atomic
 // writes, --publish from a staging directory, and --wait on a run. Runs design-to-code/verify-run.ts in-process
 // and `verify-screen --status / --wait` as the CLI, in temp projects (invented names).
-// Run with:  node test/verify-run.test.ts
+// Run with:  bun test/verify-run.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
+import type { ProcResult } from "../design-to-code/proc.ts";
 import * as VR from "../design-to-code/verify-run.ts";
 import { scriptCmd, shellArg } from "../design-to-code/cli-args.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -132,12 +134,12 @@ function treeState(root: string): string {
   walk(root);
   return out.sort().join("\n");
 }
-type Cli = (...a: string[]) => ReturnType<typeof spawnSync> & { stdout: string; stderr: string };
+type Cli = (...a: string[]) => ProcResult;
 function project(): { cwd: string; dir: string; base: string; live: string; cli: Cli } {
   const cwd = proj();
   const dir = path.join(cwd, "design", "verify");
   fs.writeFileSync(path.join(dir, "Plots__1_1.expected.json"), JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "1:1", name: "Plots" }, nodes: [] }, null, 2) + "\n");
-  const cli: Cli = (...a: string[]) => spawnSync(process.execPath, [VS_TS, ...a], { cwd, encoding: "utf8" });
+  const cli: Cli = (...a: string[]) => runSync(process.execPath, [VS_TS, ...a], { cwd });
   const base = path.join(dir, "Plots__1_1");
   return { cwd, dir, base, live: VR.liveStatusFile(base), cli };
 }
@@ -340,7 +342,7 @@ await block("a run cache that disappeared:", async () => {
   fs.mkdirSync(path.join(cwd, "design", "verify"), { recursive: true });
   // node_modules mid-reinstall: a link to a directory that is gone — every write under it is ENOENT
   fs.symlinkSync(path.join(cwd, "gone-node-modules"), path.join(cwd, "node_modules"));
-  const r = spawnSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "queued", "--new-run"], { cwd, encoding: "utf8" });
+  const r = runSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "queued", "--new-run"], { cwd });
   safe("--status into a run cache that no longer exists → exit 6, 'run cache <dir> disappeared — was node_modules reinstalled during the run?', not 'not writable'", () =>
     r.status === 6 && /run cache \S+ disappeared — was node_modules reinstalled during the run\?/.test(r.stderr) && !/not writable/.test(r.stderr) && !/\n\s+at /.test(r.stderr));
   safe("the class says the same for ENOENT; a permission refusal keeps 'not writable (sandbox write scope?)'", () =>
@@ -361,7 +363,7 @@ await block(".git file / --wait with no cache:", async () => {
   tmps.push(path.dirname(subLive));
   const { cwd, live } = project();
   const t0 = Date.now();
-  const w = spawnSync(process.execPath, [VS_TS, "--wait", "Plots__1_1", "--run", "run-none", "--timeout", "0.5", "--interval", "0.1"], { cwd, encoding: "utf8" });
+  const w = runSync(process.execPath, [VS_TS, "--wait", "Plots__1_1", "--run", "run-none", "--timeout", "0.5", "--interval", "0.1"], { cwd });
   safe("--wait before any run cache exists → keeps waiting and ends on --timeout (exit 5), not 'not readable' (6)", () =>
     !fs.existsSync(path.dirname(live)) && w.status === 5 && /timed out after 0.5s/.test(w.stderr) && Date.now() - t0 >= 400);
 });
@@ -377,7 +379,7 @@ await block("printed commands quote paths:", async () => {
   const dir = path.join(cwd, "design", "verify");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "Plots__1_1.expected.json"), JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "1:1", name: "Plots" }, nodes: [] }, null, 2) + "\n");
-  const cli = (...a: string[]) => spawnSync(process.execPath, [VS_TS, ...a], { cwd: os.tmpdir(), encoding: "utf8" });
+  const cli = (...a: string[]) => runSync(process.execPath, [VS_TS, ...a], { cwd: os.tmpdir() });
   const s = cli("--status", "Plots__1_1", "--phase", "driving", "--run", "run-q", "--dir", dir);
   const stageLine = /^stage {2}(.+)$/m.exec(s.stderr)?.[1] ?? "";
   const echoed = spawnSync(sh, ["-c", `printf %s ${stageLine}`], { encoding: "utf8" }).stdout;
@@ -437,7 +439,7 @@ console.log("verify-screen --status — never over another open run (without --n
 await block("verify-screen --status vs another open run:", async () => {
   const { dir, base, live, cli } = project();
   const absDir = path.resolve(dir); // passed as --dir: the printed commands name it as given
-  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999; // an exited child's pid (no output read)
   const own = (pid: number): VR.OwnRunStamp => ({ pid, host: os.hostname(), ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z", deadline: "2999-01-01T00:00:00.000Z" });
   // a probe printed the recovery for run-a; another probe took run-a over and run-b measures now
   VR.writeStatus(base, { runId: "run-b", phase: "measuring", by: "verify-probe", ownRun: own(process.pid) }, { alone: true });
@@ -572,9 +574,9 @@ await block("writeStatus locked:", async () => {
     () => lost instanceof LockLost && lost instanceof LockBusy && fs.readFileSync(live, "utf8") === beforeLost && fs.readFileSync(VR.lockFileOfStatus(base), "utf8") === other);
   fs.rmSync(VR.lockFileOfStatus(base));
   // a lock left by a writer that was killed mid-write (its pid is gone) does not wedge the run
-  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999; // an exited child's pid (no output read)
   fs.writeFileSync(VR.lockFileOfStatus(base), JSON.stringify({ pid: deadPid, host: os.hostname(), at: Date.now(), token: "0123456789abcdef", ns: PID_NS }));
-  const s = spawnSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "starting", "--new-run"], { cwd: path.dirname(path.dirname(dir)), encoding: "utf8" });
+  const s = runSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "starting", "--new-run"], { cwd: path.dirname(path.dirname(dir)) });
   safe("a lock left by a killed writer (dead pid) → the next --status breaks it and writes (exit 0), no lock left", () => s.status === 0 && readStatusFile(live)?.phase === "starting" && !fs.existsSync(VR.lockFileOfStatus(base)));
 });
 
@@ -967,7 +969,7 @@ await block("verify-probe --run exit 3:", async () => {
   cli("--status", "Plots__1_1", "--phase", "renderer-ready", "--run", "run-x");
   const noPw = mk("dt-run-nopw-");
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
-  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  const p = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"]);
   const st = VR.readStatus(base);
   safe("probe exit 3 with --run → the first failed attempt: rev bumped, phase measuring, probeFailures 1, detail names the attempt, the user's fix and the one re-run",
     () => p.status === 3 && st !== null && st !== "v1" && st.runId === "run-x" && st.rev === 2 && st.phase === "measuring" && st.probeFailures === 1
@@ -978,7 +980,7 @@ await block("verify-probe --run exit 3:", async () => {
   VR.writeStatus(base, { runId: "run-x", phase: "renderer-ready", by: "agent", detail: "re-running the probe" });
   const kept = VR.readStatus(base);
   safe("…a later write of the same run carries probeFailures forward", () => kept !== null && kept !== "v1" && kept.probeFailures === 1 && kept.phase === "renderer-ready");
-  const p2 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  const p2 = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"]);
   const st2 = VR.readStatus(base);
   safe("the second failed attempt (exit 3 again) → the probe ends the run itself: phase failed, probeFailures 2, rev 4, by verify-probe, exit 3",
     () => p2.status === 3 && st2 !== null && st2 !== "v1" && st2.runId === "run-x" && st2.phase === "failed" && st2.probeFailures === 2 && st2.rev === 4 && st2.by === "verify-probe"
@@ -986,7 +988,7 @@ await block("verify-probe --run exit 3:", async () => {
   safe("…stderr: 'status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)'",
     () => p2.stderr.includes("status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)"));
   const before3 = JSON.stringify(VR.readStatus(base));
-  const p3 = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"], { encoding: "utf8" });
+  const p3 = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-x"]);
   safe("a third probe in that run → refused before anything starts (exit 2, 'already ended at failed'); the ended run is never reopened",
     () => p3.status === 2 && p3.stderr.includes("run run-x already ended at failed (probe exit 3 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed))") && JSON.stringify(VR.readStatus(base)) === before3);
 });
@@ -1037,7 +1039,7 @@ await block("verify-probe --run ended:", async () => {
   const before = JSON.stringify(VR.readStatus(base));
   const noPw = mk("dt-run-nopw-");
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
-  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-pb"], { encoding: "utf8" });
+  const p = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-pb"]);
   safe("probe --run on a blocked run → exit 2 'already ended at blocked (…) — start a new run', the status untouched", () => p.status === 2
     && p.stderr.includes("run run-pb already ended at blocked (blocked on a login wall) — start a new run with --new-run") && JSON.stringify(VR.readStatus(base)) === before);
 });
@@ -1057,9 +1059,8 @@ await block("verify-probe --run current:", async () => {
   // write); =launch: when chromium launches (after `measuring`, before the exit-3 attempt write). Launch always fails: exit 3
   fs.writeFileSync(path.join(pw, "index.js"), "const fs = require('fs'); const put = (at) => { if (process.env.DT_TEST_ON === at) fs.writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); };\n" +
     "put('load'); module.exports = { chromium: { launch() { put('launch'); throw new Error('fake'); } } };\n");
-  const probe = (run: string, env: Record<string, string> = {}): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } =>
-    spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d, "--run", run],
-      { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, ...env } });
+  const probe = (run: string, env: Record<string, string> = {}): ProcResult =>
+    runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d, "--run", run], { env: { ...process.env, DT_TEST_LIVE: live, ...env } });
   const noFiles = (): boolean => !fs.existsSync(path.join(dir, "Plots__1_1.measured.json")) && !fs.existsSync(path.join(dir, "Plots__1_1.png")) && !fs.existsSync(path.join(dir, "Plots__1_1.status.json"));
   const queuedDoc = (runId: string): string => JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots__1_1", runId, rev: 1, phase: "queued", detail: "", at: new Date().toISOString(), by: "orchestrator" }, null, 2) + "\n";
 
@@ -1181,8 +1182,8 @@ await block("verify-probe own run:", async () => {
   fs.writeFileSync(path.join(pwDir, "index.js"), "module.exports = { chromium: { launch() { throw new Error('fake'); } } };\n");
   const noPw = mk("dt-run-nopw-own-");
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
-  const probe = (project: string): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } =>
-    spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", project], { encoding: "utf8" });
+  const probe = (project: string): ProcResult =>
+    runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", project]);
   const ownLine = (stderr: string): string => /^run {4}(\S+) — this probe's own \(no --run\)/m.exec(stderr)?.[1] ?? "";
 
   // a verifier's run is open (driving): refused before anything starts — its status untouched, no files
@@ -1217,7 +1218,7 @@ await block("verify-probe own run:", async () => {
   const p4 = probe(noPw);
   safe("no Playwright resolvable → exit 3 before the run's first write: no `run` line, the status byte-identical", () => p4.status === 3 && ownLine(p4.stderr) === "" && fs.readFileSync(live, "utf8") === beforeNone);
   safe("its own run records who started it: ownRun {pid of that probe, this host, startedAt} — carried to its `failed` write", () =>
-    st3 !== null && st3 !== "v1" && st3.ownRun?.pid === p3.pid && st3.ownRun.host === os.hostname() && !Number.isNaN(Date.parse(st3.ownRun.startedAt)));
+    st3 !== null && st3 !== "v1" && st3.ownRun?.pid === (p3.pid ?? -1) && st3.ownRun.host === os.hostname() && !Number.isNaN(Date.parse(st3.ownRun.startedAt)));
 });
 
 // how a probe's own run ends: a throw, a stop signal, and (SIGKILL) the next probe that finds its pid gone
@@ -1243,7 +1244,7 @@ await block("verify-probe own run left open:", async () => {
   // a throw after `measuring` (a browser whose context cannot be opened for a reason that is not the browser being gone): exit 1, run failed
   const boom = fakeProject("async () => ({ version: () => '1.0', close: async () => {}, newBrowserCDPSession: async () => { throw new Error('no cdp'); }, " +
     "newContext: async () => { throw new Error('fake disk full'); } })");
-  const t1 = spawnSync(process.execPath, args(boom), { encoding: "utf8" });
+  const t1 = runSync(process.execPath, args(boom));
   const s1 = st();
   safe("an uncaught error after its `measuring` write → exit 1 (the error printed), and its own run ended `failed` 'probe error: fake disk full — nothing written'", () =>
     t1.status === 1 && /verify-probe: fake disk full/.test(t1.stderr) && s1 !== null && s1.runId === ownLine(t1.stderr) && s1.phase === "failed" && s1.rev === 2
@@ -1298,7 +1299,7 @@ await block("verify-probe own run left open:", async () => {
   const sK = st();
   safe("SIGKILL while measuring → the run stays at `measuring`, its ownRun naming the killed probe's pid on this host", () =>
     (kill.signal === "SIGKILL" || process.platform === "win32") && kill.id !== "" && sK !== null && sK.runId === kill.id && sK.phase === "measuring" && sK.ownRun?.pid === kill.pid && sK.ownRun.host === os.hostname());
-  const next = spawnSync(process.execPath, args(throws), { encoding: "utf8" });
+  const next = runSync(process.execPath, args(throws));
   const sN = st();
   const nextId = ownLine(next.stderr);
   safe("…the next probe without --run finds that pid gone: says it ends the abandoned run `failed`, starts its own (a new id) and goes on (its fake launch: exit 3, failed)", () =>
@@ -1312,7 +1313,7 @@ console.log("writeStatus alone — another probe's own run:");
 await block("writeStatus alone own run:", async () => {
   const { dir, base, live } = project();
   const absDir = path.resolve(dir);
-  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999;
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 999_999; // an exited child's pid (no output read)
   const own = (pid: number, host = os.hostname(), deadline = "2999-01-01T00:00:00.000Z"): VR.OwnRunStamp =>
     ({ pid, host, ...(PID_NS ? { ns: PID_NS } : {}), startedAt: "2026-10-15T08:00:00.000Z", deadline });
   VR.writeStatus(base, { runId: "run-dead", phase: "measuring", by: "verify-probe", ownRun: own(deadPid) });
@@ -1440,8 +1441,7 @@ await block("verify-probe own run alone:", async () => {
   // launch (after the probe's `measuring` write) puts a verifier's queued run in the live status, then fails: exit 3
   fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { require('fs').writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); throw new Error('fake'); } } };\n");
   const queued = JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots__1_1", runId: "run-q", rev: 1, phase: "queued", detail: "", at: new Date().toISOString(), by: "orchestrator" }, null, 2) + "\n";
-  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
-    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: queued } });
+  const p = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d], { env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: queued } });
   safe("a run queued while the probe's own run measures → its `failed` write is refused (RunOpen): exit 2, not 3, and the queued run's status byte-identical",
     () => p.status === 2 && fs.readFileSync(live, "utf8") === queued && p.stderr.includes("verify-probe: another run opened while this probe ran; nothing is written — run run-q of Plots__1_1 is open (phase queued, rev 1, by orchestrator, "));
   if (p.status !== 2) console.log(p.stderr);
@@ -1450,8 +1450,7 @@ await block("verify-probe own run alone:", async () => {
   VR.writeStatus(path.join(dir, "Plots__1_1"), { runId: "run-q", phase: "failed", by: "orchestrator" });
   fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { const fs = require('fs'); const f = process.env.DT_TEST_LIVE; const d = require(f); " +
     "d.ownRun.deadline = '2026-01-01T00:00:00.000Z'; fs.writeFileSync(f, JSON.stringify(d)); throw new Error('fake'); } } };\n");
-  const late = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
-    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live } });
+  const late = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d], { env: { ...process.env, DT_TEST_LIVE: live } });
   const lateSt = readStatusFile(live);
   safe("its own run past its deadline while it runs, nobody took it over → its `failed` write goes through: exit 3, the run ended failed (not left at measuring)",
     () => late.status === 3 && lateSt?.phase === "failed" && lateSt.ownRun?.deadline === "2026-01-01T00:00:00.000Z" && lateSt.detail === "probe exit 3 — nothing written");
@@ -1460,8 +1459,7 @@ await block("verify-probe own run alone:", async () => {
   // `failed` write is refused — never a record over the run that replaced it
   const replacement = JSON.stringify({ schema: VR.STATUS_SCHEMA, screen: "Plots__1_1", runId: "run-b", rev: 2, phase: "done", detail: "", at: new Date().toISOString(), by: "verify-probe" }, null, 2) + "\n";
   fs.writeFileSync(path.join(pw, "index.js"), "module.exports = { chromium: { launch() { require('fs').writeFileSync(process.env.DT_TEST_LIVE, process.env.DT_TEST_DOC); throw new Error('fake'); } } };\n");
-  const taken = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d],
-    { encoding: "utf8", env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: replacement } });
+  const taken = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", d], { env: { ...process.env, DT_TEST_LIVE: live, DT_TEST_DOC: replacement } });
   safe("its run replaced by one that has ended (done) while it runs → its `failed` write is refused (RunReplaced): exit 2, the replacement's status byte-identical",
     () => taken.status === 2 && fs.readFileSync(live, "utf8") === replacement && /was replaced by run run-b \(done\) while this probe ran — nothing more is written in it/.test(taken.stderr));
   if (taken.status !== 2) console.log(taken.stderr);
@@ -1553,7 +1551,7 @@ await block("an unwritable run cache (M-a):", async () => {
   const noPw = mk("dt-run-nopw2-");
   fs.writeFileSync(path.join(noPw, "package.json"), "{}");
   fs.chmodSync(cache, 0o555);
-  const p = spawnSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-w"], { encoding: "utf8" });
+  const p = runSync(process.execPath, [PROBE_TS, "--expected", path.join(dir, "Plots__1_1.expected.json"), "--url", "http://127.0.0.1:9/", "--project", noPw, "--run", "run-w"]);
   fs.chmodSync(cache, 0o755);
   safe("verify-probe --run with a read-only run cache → still exit 3 (no renderer), a 'warning  run cache … is not writable' line, no stack", () =>
     p.status === 3 && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(p.stderr) && !/\n\s+at /.test(p.stderr));

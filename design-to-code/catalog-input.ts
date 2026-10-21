@@ -15,6 +15,8 @@ import type { DesignSystemManifest } from "./types.ts";
 import { isJsonObject } from "./types.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import type { DocGuard } from "./doc-guards.ts";
+// exitCli, not process.exit: under runCli the one-line error is never dropped at exit (proc.ts)
+import { exitCli } from "./proc.ts";
 
 function isManifest(doc: unknown, payloadKey: string): doc is DesignSystemManifest {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
@@ -28,7 +30,7 @@ function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, 
       `       Pass the split file instead — e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile}` +
       ` (relative to the export dir that holds ${givenPath}).`
     );
-    process.exit(2);
+    exitCli(2);
   }
 }
 
@@ -52,7 +54,7 @@ function readDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: s
   // A read failure ends in a period (and may carry the caller's hint); a parse/shape failure is a phrase.
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `\n       ${hint}` : ""));
-  process.exit(2);
+  exitCli(2);
 }
 
 // An OPTIONAL input (a design-system split file a single-screen pull does not have): absent is null,
@@ -69,7 +71,7 @@ function readSplitFile<T>(file: string, what: string, guard: DocGuard<T>, payloa
   assertNotManifest(doc, file, payloadKey, wantFile);
   if (guard(doc)) return doc;
   console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  process.exit(2);
+  exitCli(2);
 }
 
 // The one reason design/design-system/ is usually missing, stated once: a --node/single-screen pull

@@ -2,12 +2,12 @@
 // `<Layer>__<id>` (a variant to `<Layer>__<id>.<slug>`), the plan's recorded paths rewritten together, a legacy set
 // beside its node's canonical set retired, and every refusal (hand-edited record, open run, a taken name) leaving the
 // disk as it was. Invented screens, temp projects only.
-//   node test/verify-migrate.test.ts
+//   bun test/verify-migrate.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import { check, report } from "./assert.ts";
 import { must, readFixture, screenExport } from "./fixtures.ts";
 import { migrate, noHardLinks } from "../design-to-code/verify-migrate.ts";
@@ -78,7 +78,7 @@ const run = (p: Project, apply: boolean, extra: Partial<MigrateOpts> = {}): { r:
   const r = migrate({ cwd: p.root, verifyDir: "design/verify", apply, out: (l) => out.push(l), err: (l) => err.push(l), ...extra });
   return { r, out, err };
 };
-const cli = (p: Project, ...args: string[]) => spawnSync(process.execPath, [VS, ...args], { cwd: p.root, encoding: "utf8" });
+const cli = (p: Project, ...args: string[]) => runSync(process.execPath, [VS, ...args], { cwd: p.root });
 const recOf = (plan: Plan) => must(isVerificationRecord(plan.verification?.recorded) ? plan.verification?.recorded : undefined, "recorded@2");
 const SET_FILES = ["expected.json", "measured.json", "report.json", "report.md", "png", "status.json"];
 /** --migrate's way on for a plan whose record blocks the legacy set: record the node's <Layer>__<id> set, then --migrate. */

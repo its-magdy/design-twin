@@ -1,4 +1,4 @@
-// Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.ts
+// Offline tests for the design-to-code/ layer. No Figma, no dependencies:  bun test/design-to-code.test.ts
 // Assertions pin VALUES (not just presence) and every confirmed bug has a regression test.
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName } from "../design-to-code/tokens.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
@@ -33,8 +33,33 @@ import { PAINT_TYPES, idSuffix, normText } from "../design-to-code/probe-match.t
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { cliRunner } from "./cli-runner.ts";
+import type { CliOpts, CliResult } from "./cli-runner.ts";
+import { main as tokensMain } from "../design-to-code/tokens.ts";
+import { main as mapBootstrapMain } from "../design-to-code/map-bootstrap.ts";
+import { main as mapValidateMain } from "../design-to-code/map-validate.ts";
+import { main as getComponentMain } from "../design-to-code/get-component.ts";
+import { main as resolveScreenMain } from "../design-to-code/resolve-screen.ts";
+import { main as auditMain } from "../design-to-code/audit.ts";
+import { main as crossCheckMain } from "../design-to-code/cross-check.ts";
+import { main as planSkeletonMain } from "../design-to-code/plan-skeleton.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+
+// A design-to-code CLI by its source name: the first runs real children, the rest its main in-process (test/cli-runner.ts).
+// drift-lint and verify-build have async mains: always children.
+const MAINS: Readonly<Record<string, (argv: string[]) => number>> = {
+  "tokens.ts": tokensMain, "map-bootstrap.ts": mapBootstrapMain, "map-validate.ts": mapValidateMain, "get-component.ts": getComponentMain,
+  "resolve-screen.ts": resolveScreenMain, "audit.ts": auditMain, "cross-check.ts": crossCheckMain, "plan-skeleton.ts": planSkeletonMain,
+};
+const d2cRunners = new Map<string, ReturnType<typeof cliRunner>>();
+const d2c = (script: string, args: string[], o: CliOpts = {}): CliResult => {
+  let r = d2cRunners.get(script);
+  if (r === undefined) { r = cliRunner(path.join(import.meta.dirname, "..", "design-to-code", script), MAINS[script] ?? null); d2cRunners.set(script, r); }
+  return r(args, o);
+};
 
 // A printed command quotes the script's path in double quotes, or in single quotes when it holds a character a
 // shell expands inside them: a backslash (cli-args.ts shellQuote), which every Windows path does.
@@ -868,7 +893,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   const input = path.join(dir, "variables.json");
   fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "69f809ce00000000000000000000000000000000" }],
     variables: [{ name: "(Space 3)", type: "FLOAT", collection: "Spacing", tier: "primitive", values: { "Mode 1": 12 }, scopes: ["GAP"], key: "k1" }] }));
-  const run = (out: string, extra: string[]) => spawnSync(process.execPath, [TOK, input, path.join(dir, out), ...extra], { encoding: "utf8" });
+  const run = (out: string, extra: string[]) => runSync(process.execPath, [TOK, input, path.join(dir, out), ...extra]);
   const illegal = (stderr: string) => stderr.split("\n").find((l) => /illegal in a CSS custom property/.test(l)) ?? "";
   const tw = run("tw", ["--web", "tailwind"]), gen = run("gen", []), both = run("both", ["--web", "tailwind", "--also-generic"]);
   check("--web tailwind: the illegal-character warning names theme.css (what was written), not tokens.css",
@@ -888,7 +913,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     fs.copyFileSync(input, oddInput);
     const outs = ["css", "swift"].map((k) => {
       const out = path.join(dir, "odd-" + k);
-      const r = spawnSync(process.execPath, k === "css" ? [TOK, oddInput, out] : [TOK, oddInput, out, "--native", "swiftui"], { encoding: "utf8" });
+      const r = runSync(process.execPath, k === "css" ? [TOK, oddInput, out] : [TOK, oddInput, out, "--native", "swiftui"]);
       return r.status === 0 ? fs.readFileSync(path.join(out, k === "css" ? "tokens.css" : fs.readdirSync(out).find((f) => f.endsWith(".swift")) ?? "none"), "utf8") : "";
     });
     check("the provenance comment of tokens.css and a native file cannot be closed or ended by the input's directory name",
@@ -917,9 +942,8 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
 // raw stack whose top frame is a line number inside this repo reads like the tool broke. These run
 // as real subprocesses because the behaviour under test IS the process exit + what lands on stderr.
 (() => {
-  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-enoent-"));
-  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd });
+  const run = (script: string, args: string[]) => d2c(script, args, { cwd });
   const GONE = "design/design-system/components.local.json";
   const cases: [string, string[], RegExp][] = [
     ["map-bootstrap.ts", [GONE, "--out", "codeconnect.local.json"], /component catalog/],
@@ -973,7 +997,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-shape-"));
   const put = (name: string, doc: unknown): string => { fs.writeFileSync(path.join(cwd, name), JSON.stringify(doc)); return name; };
-  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd });
+  const run = (script: string, args: string[]) => d2c(script, args, { cwd });
   const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr) && !/TypeError/.test(r.stderr);
   put("map.json", { version: 1, components: {} });
   const badCat = put("bad-catalog.json", { components: "Button" });
@@ -1014,9 +1038,11 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   })());
   // the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
   // names the script by the real path it is running from (here, the source; installed, the bundle).
-  check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
-    run("drift-lint.ts", []).stderr.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "drift-lint.ts")}${PATH_QUOTE}`)
-    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node ${PATH_QUOTE}${path.join(D2C, "tokens.ts")}${PATH_QUOTE}`));
+  // `bun --no-install --no-env-file`: copied into Bash it runs in the user's project, where a bare `bun` would
+  // auto-install a missing package and load the project's .env.
+  check("[usage] the usage line names the script by its real path (bun --no-install --no-env-file \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
+    run("drift-lint.ts", []).stderr.includes(`usage: bun --no-install --no-env-file ${PATH_QUOTE}${path.join(D2C, "drift-lint.ts")}${PATH_QUOTE}`)
+    && run("tokens.ts", ["--help"]).stdout.includes(`usage: bun --no-install --no-env-file ${PATH_QUOTE}${path.join(D2C, "tokens.ts")}${PATH_QUOTE}`));
 })();
 
 // ---------- tokens: the export's colour profile (the plugin writes Figma's DISPLAY_P3 lowercased: "display_p3") ----------
@@ -1230,9 +1256,8 @@ console.log("map — SLOT props:");
 // {"components":{"X":null}} reach driftLint and die with a TypeError stack, and map-bootstrap would merge whatever
 // it read and rewrite it (an array `components` coming back as {"0": …}).
 (() => {
-  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-badmap-"));
-  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd });
+  const run = (script: string, args: string[]) => d2c(script, args, { cwd });
   fs.writeFileSync(path.join(cwd, "catalog.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [] }));
   fs.writeFileSync(path.join(cwd, "null-entry.json"), JSON.stringify({ version: 1, components: { X: null } }));
   const dl = run("drift-lint.ts", ["null-entry.json", "catalog.json"]);
@@ -1464,7 +1489,7 @@ console.log("map — SLOT props:");
     path.join(FXL, "verify", "Studio_Configurations__1359_21337.json"),
   ];
   for (const screen of screens) {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), emptyMapFile, catalogFile, "--screen", screen], { encoding: "utf8" });
+    const r = d2c("drift-lint.ts", [emptyMapFile, catalogFile, "--screen", screen]);
     check(`drift-lint --screen at 0% coverage: exit 0, a warn line with a Confirm question, no ERROR (${path.basename(screen)})`,
       r.status === 0 && /^warn\s+\[(screen-coverage|catalog-rekeyed)\] NONE/m.test(r.stderr) && /Confirm: .*\?/.test(r.stderr) && !/^ERROR/m.test(r.stderr));
   }
@@ -1476,7 +1501,7 @@ console.log("map — SLOT props:");
 // --screen never stubbed a library component. Real layout: design/export/{design-system,libraries}/.
 (() => {
   const SCRIPTS = path.join(import.meta.dirname, "..", "claude-plugin", "scripts");
-  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(SCRIPTS, script), ...args], { encoding: "utf8" });
+  const run = (script: string, args: string[]) => runSync(process.execPath, [path.join(SCRIPTS, script), ...args]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dt26-"));
   const exp = path.join(root, "design", "export"), dsDir = path.join(exp, "design-system"), libDir = path.join(exp, "libraries", "acme-ui");
   fs.mkdirSync(dsDir, { recursive: true }); fs.mkdirSync(libDir, { recursive: true }); fs.mkdirSync(path.join(root, "other"));
@@ -1607,13 +1632,12 @@ console.log("map — SLOT props:");
 // a real file) regardless of the screen about to be built — a confirm list nobody can evaluate.
 // --screen filters that down to the keys/ids the screen's own VISIBLE instances reference.
 (() => {
-  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const catalog = path.join(FXL, "design-system", "components.local.json");
   const screen = path.join(FXL, "pages", "__Optimization_management_", "positions___7314_87192.json");
   const asMap = (stdout: string): CodeConnectMap => { const m: unknown = JSON.parse(stdout); return must(isCodeConnectMap(m) ? m : null, "map-bootstrap to print a valid map"); };
-  const full = asMap(spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog], { encoding: "utf8" }).stdout);
-  const scopedRun = spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.ts"), catalog, "--screen", screen], { encoding: "utf8" });
+  const full = asMap(d2c("map-bootstrap.ts", [catalog]).stdout);
+  const scopedRun = d2c("map-bootstrap.ts", [catalog, "--screen", screen]);
   const scoped = asMap(scopedRun.stdout);
   const fullCount = Object.keys(full.components).length;
   const scopedCount = Object.keys(scoped.components).length;
@@ -1735,14 +1759,14 @@ console.log("map — SLOT props:");
   // The shipped bundles print THEIR OWN folder: run from an unrelated cwd, the usage path and a sibling
   // script named in a hint both exist.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
-  const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
-  const usagePath = new RegExp(`usage: node ${PATH_QUOTE}([^${PATH_QUOTE}]+)${PATH_QUOTE}`).exec(help.stdout)?.[1];
-  check("the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
+  const help = runSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, expect: /usage:/ });
+  const usagePath = new RegExp(`usage: bun --no-install --no-env-file ${PATH_QUOTE}([^${PATH_QUOTE}]+)${PATH_QUOTE}`).exec(help.stdout)?.[1];
+  check("the shipped tokens.js --help prints its own real path (bun --no-install --no-env-file \"…/scripts/tokens.js\"), from any cwd",
     help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
   fs.writeFileSync(path.join(tmp, "map.json"), "{}");
   fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
-  const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
-  const hintPath = new RegExp(`node ${PATH_QUOTE}([^${PATH_QUOTE}]+map-validate\\.js)${PATH_QUOTE}`).exec(lint.stderr)?.[1];
+  const lint = runSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp });
+  const hintPath = new RegExp(`bun --no-install --no-env-file ${PATH_QUOTE}([^${PATH_QUOTE}]+map-validate\\.js)${PATH_QUOTE}`).exec(lint.stderr)?.[1];
   check("a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
     hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -1851,10 +1875,9 @@ console.log("map — SLOT props:");
 // ---------- the four hand-parsed CLIs share cliParse: --flag=value, every unknown flag, no stray words ---------
 // map-bootstrap, get-component, resolve-screen and verify-build take argv through cliParse, not by hand (indexOf + splice, or
 // array destructuring), so `--out=x` is a known form, a single-dash typo is not a positional, every
-// unknown flag is named, and a surplus positional is not ignored. Real subprocesses: the behaviour is the exit code
-// and what lands on stderr. None binds a port.
+// unknown flag is named, and a surplus positional is not ignored. The behaviour is the exit code and what lands on stderr:
+// every exit code here comes from a real subprocess at least once (test/cli-runner.ts). None binds a port.
 (() => {
-  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-cliargs-"));
   fs.writeFileSync(path.join(cwd, "c.json"), JSON.stringify(catalog([{ name: "Sample Button", id: "6:0", type: "COMPONENT_SET", key: "KEY_SAMPLE_BUTTON" },
     { name: "-Divider", id: "6:1", type: "COMPONENT", key: "KEY_DIVIDER" }, { name: "--- Section ---", id: "6:2", type: "COMPONENT", key: "KEY_SECTION" }])));
@@ -1864,7 +1887,7 @@ console.log("map — SLOT props:");
     { name: "- Draft", id: "1:3", type: "FRAME", page: "P", file: "pages/P/Draft__1_3.json" },
     { name: "---", id: "1:4", type: "FRAME", page: "P", file: "pages/P/Rule__1_4.json" },
   ] }));
-  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd, input: "" });
+  const run = (script: string, args: string[]) => d2c(script, args, script === "verify-build.ts" ? { cwd, input: "" } : { cwd });
   const rejects = (script: string, args: string[], code: number, msg: RegExp): boolean => {
     const r = run(script, args);
     return r.status === code && msg.test(r.stderr) && /^usage: /m.test(r.stderr) && r.stdout === "";
@@ -1919,6 +1942,51 @@ console.log("map — SLOT props:");
     && rejects(vb, ["--help=1"], 2, /^verify-build: --help takes no value$/m)
     && rejects(vb, ["--status=1"], 2, /^verify-build: --status takes no value$/m));
   fs.rmSync(cwd, { recursive: true, force: true });
+})();
+
+// ---------- proc.ts: a CLI's output survives its exit, into a reader slower than the process ----------
+// Bun drops what is still queued on a pipe at exit, calls an EMPTY write's callback at once, and reports writableLength 0
+// with 400 KB queued — so runCli ends on process.exitCode (natural exit) and exitFlushed waits on the counted writes.
+// Each child prints ~400 KB (console.log lines, then a raw write, then a line to stderr) while the parent does not read
+// its stdout for 400 ms: every byte must arrive, in order, and the exit code must be the one set.
+await (async () => {
+  console.log("proc.ts — output into a slow reader survives the exit:");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-flush-"));
+  const PROC = JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "..", "design-to-code", "proc.ts")).href);
+  const BODY = 'for (let i = 0; i < 4000; i++) console.log(String(i).padStart(6, "0") + "y".repeat(93)); process.stdout.write("z".repeat(50_000) + "\\n"); console.error("to stderr"); console.log("END");';
+  const scripts: Record<string, string> = {
+    // runCli: main returns, the exit code is process.exitCode, the process ends when the queue has drained
+    runCli: `import { runCli } from ${PROC};\nrunCli(() => { ${BODY} return 4; }, { name: "t" });\n`,
+    // exitFlushed: an explicit exit (a watchdog's) once the counted writes are out
+    exitFlushed: `import { exitFlushed, installQueuedConsole } from ${PROC};\ninstallQueuedConsole();\n${BODY}\nexitFlushed(3, 20_000);\n`,
+    // exitCli under runCli: unwinds to runCli (exit code 2), the output before it still drains
+    exitCli: `import { exitCli, runCli } from ${PROC};\nrunCli(() => { ${BODY} exitCli(2); }, { name: "t" });\n`,
+  };
+  const slowRead = (file: string, holdMs: number): Promise<{ code: number | null; out: string; err: string; ms: number }> => new Promise((resolve) => {
+    const t0 = Date.now();
+    const c = spawn(process.execPath, [file], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    c.stdout.pause();
+    const hold = setTimeout(() => c.stdout.resume(), holdMs);
+    c.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    c.stderr.on("data", (d: Buffer) => { err += d.toString(); });
+    c.on("close", (code) => { clearTimeout(hold); resolve({ code, out, err, ms: Date.now() - t0 }); });
+  });
+  const want = Array.from({ length: 4000 }, (_, i) => String(i).padStart(6, "0") + "y".repeat(93)).join("\n") + "\n" + "z".repeat(50_000) + "\nEND\n";
+  const cases = [["runCli", 4], ["exitFlushed", 3], ["exitCli", 2]] as const;
+  for (const [name] of cases) fs.writeFileSync(path.join(dir, name + ".ts"), scripts[name] ?? "");
+  // a reader that never drains: exitFlushed still ends the process at its cap (a few hundred ms here), not never
+  const never = path.join(dir, "never.ts");
+  fs.writeFileSync(never, `import { exitFlushed, installQueuedConsole } from ${PROC};\ninstallQueuedConsole();\nprocess.stdout.write("x".repeat(400_000));\nexitFlushed(5, 300);\n`);
+  // all at once (each its own child and pipe)
+  const [runs, nr] = await Promise.all([Promise.all(cases.map(([name]) => slowRead(path.join(dir, name + ".ts"), 400))), slowRead(never, 60_000 * 10)]);
+  cases.forEach(([name, code], i) => {
+    const r = runs[i];
+    check(`[proc] ${name}: exit ${code} and every byte of ~450 KB to a reader 400 ms late, in order (got exit ${r?.code}, ${r?.out.length}/${want.length} B)`,
+      r !== undefined && r.code === code && r.out === want && r.err === "to stderr\n");
+  });
+  check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (${nr.ms} ms < 5000)`, nr.code === 5 && nr.ms < 5_000);
+  fs.rmSync(dir, { recursive: true, force: true });
 })();
 
 report();

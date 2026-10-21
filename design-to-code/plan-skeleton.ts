@@ -60,7 +60,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
 import { parsePlanText, updatePlan } from "./plan-record.ts";
-import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { runCli } from "./proc.ts";
 import { VERIFY_DIR, findMapFile, listPlans } from "../bridge/src/project-layout.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { nodeStem } from "./verify-sets.ts";
@@ -687,7 +687,7 @@ function newPlanProblem(out: string, nodeId: string | undefined, layerName: stri
 // One line for a file that is there but cannot be used; `what` names it the way the messages always have.
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
@@ -779,4 +779,4 @@ function main(argv: string[]): number {
 export { skeleton, merge, seed, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "plan-skeleton" }); // exitCode, never exit(): every printed line drains first (proc.ts)

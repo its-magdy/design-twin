@@ -2,7 +2,7 @@
 
 
 // design-to-code/resolve-screen.ts
-import fs8 from "node:fs";
+import fs7 from "node:fs";
 import path6 from "node:path";
 
 // design-to-code/types.ts
@@ -338,10 +338,78 @@ function getOrInit(m, k, init) {
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
+// design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function cliArity(tool, positionals, min, max, usage) {
   if (positionals.length < min) {
     console.error(usage);
@@ -356,21 +424,8 @@ ${usage}`);
 }
 var bareArgs = (argv) => argv[0] === "--" ? argv.slice(1) : argv;
 
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
-  }
-}
-
 // bridge/src/project-layout.ts
-import fs3 from "node:fs";
+import fs2 from "node:fs";
 import path2 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
@@ -386,20 +441,20 @@ var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, re
 var slashed = (p) => p.split(path2.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function listPlans(dir) {
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  if (!fs2.existsSync(dir)) return [];
+  return fs2.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/verify-sets.ts
-import fs7 from "node:fs";
+import fs6 from "node:fs";
 import path5 from "node:path";
 
 // design-to-code/verify-status.ts
 import path4 from "node:path";
-import fs6 from "node:fs";
+import fs5 from "node:fs";
 
 // design-to-code/run-cache.ts
-import fs5 from "node:fs";
+import fs4 from "node:fs";
 import os from "node:os";
 import path3 from "node:path";
 
@@ -408,12 +463,12 @@ import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/file-lock.ts
-import fs4 from "node:fs";
+import fs3 from "node:fs";
 var LIVE_STALE_MS = 2 * 6e4;
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs4.readlinkSync("/proc/self/ns/pid");
+    return fs3.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -425,20 +480,20 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs5.statSync(p).isDirectory();
+    return fs4.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs5.existsSync(p);
+var exists = (p) => fs4.existsSync(p);
 function realpath(p) {
-  if (typeof fs5.realpathSync.native === "function") {
+  if (typeof fs4.realpathSync.native === "function") {
     try {
-      return fs5.realpathSync.native(p);
+      return fs4.realpathSync.native(p);
     } catch {
     }
   }
-  return fs5.realpathSync(p);
+  return fs4.realpathSync(p);
 }
 function canonical(p) {
   const abs = path3.resolve(p);
@@ -524,7 +579,7 @@ function openRunSets(verifyDir) {
   const SUFFIX = ".status.json";
   let files;
   try {
-    files = fs6.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+    files = fs5.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
@@ -556,7 +611,7 @@ var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs7.readdirSync(verifyDir);
+    files = fs6.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -622,7 +677,7 @@ function queryIds(q) {
   return out;
 }
 function findExportRoot(dir) {
-  const has = (d) => fs8.existsSync(path6.join(d, "pages", "index.json"));
+  const has = (d) => fs7.existsSync(path6.join(d, "pages", "index.json"));
   const abs = path6.resolve(dir);
   for (let d = path6.dirname(abs); ; d = path6.dirname(d)) {
     if (has(d)) return d;
@@ -688,7 +743,7 @@ function resolveScreen(exportDir, query, opts) {
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
-  if (!fs8.existsSync(path6.join(exportDir, "pages", "index.json"))) {
+  if (!fs7.existsSync(path6.join(exportDir, "pages", "index.json"))) {
     return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
   const byId = (id) => {
@@ -808,10 +863,11 @@ function main(argv) {
   if (res.noTitles) console.error(NOTITLES_NOTE);
   return 1;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) runCli(main, { name: "resolve-screen" });
 export {
   allRows,
   describe,
+  main,
   planRows,
   resolveScreen
 };

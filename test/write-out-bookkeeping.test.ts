@@ -3,7 +3,7 @@
 // and the per-file memo of other screens' reuse keys that a screen pull's cross-screen hidden reuse reads
 // through (stale entries must never change which twin is found).
 // Pure functions and temp dirs only — binds no port.
-// Run with:  node test/write-out-bookkeeping.test.ts
+// Run with:  bun test/write-out-bookkeeping.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

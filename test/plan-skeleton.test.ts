@@ -1,11 +1,13 @@
 // Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export.
 // Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
 // by its build.ts (visibility, bindings and instances are the export's own — see the counts below).
-//   node test/plan-skeleton.test.ts
+//   bun test/plan-skeleton.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
+import { cliRunner } from "./cli-runner.ts";
+import { main as planSkeletonMain } from "../design-to-code/plan-skeleton.ts";
 import { visibility, buildTokens } from "../design-to-code/plan-skeleton.ts";
 import { check, report } from "./assert.ts";
 import { malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
@@ -28,7 +30,9 @@ const read = <T,>(f: string, guard: DocGuard<T>): T => readFixture(f, guard);
 // A plan as plan-skeleton writes it: every skeleton-owned field present.
 const isSkeletonPlan = (x: unknown): x is SkeletonPlan => isPlan(x) && Array.isArray(x.tokens) && Array.isArray(x.components) && x.anchors !== undefined && Array.isArray(x.hidden) && x.counts !== undefined
   && x.tokens.every((t) => typeof t.figmaName === "string" && isJsonObject(t.sites));
-const run = (args: string[], opts?: { cwd?: string }) => spawnSync(process.execPath, [SKEL, ...args], { encoding: "utf8", cwd: FX, ...opts });
+// the first runs are real children, the rest plan-skeleton.ts's main in-process (test/cli-runner.ts)
+const skel = cliRunner(SKEL, planSkeletonMain);
+const run = (args: string[], opts?: { cwd?: string }) => skel(args, { cwd: opts?.cwd ?? FX });
 /** The skeleton's stdout / --out file. */
 const planOf = (stdout: string): SkeletonPlan => parseAs(stdout, isSkeletonPlan, "plan-skeleton stdout");
 const screen = (s: string) => path.join(PAGE, s + ".json");
@@ -197,7 +201,7 @@ console.log("CLI:");
 const help = run(["--help"]);
 // The script's path is double-quoted in the usage line, or single-quoted when it holds a backslash (cli-args.ts shellQuote): every Windows path.
 const Q = process.platform === "win32" ? "'" : '"';
-check("--help prints usage and exits 0", help.status === 0 && new RegExp(`usage: node ${Q}[^${Q}]*plan-skeleton\\.(ts|js)${Q} <screen\\.json> <screen\\.vars\\.json> <design-system dir>`).test(help.stdout));
+check("--help prints usage and exits 0", help.status === 0 && new RegExp(`usage: bun --no-install --no-env-file ${Q}[^${Q}]*plan-skeleton\\.(ts|js)${Q} <screen\\.json> <screen\\.vars\\.json> <design-system dir>`).test(help.stdout));
 check("an unknown flag is refused (exit 2), not swallowed", run([screen(JR), vars(JR), DS, "--output", "x"]).status === 2);
 {
   // Every input is checked as it is read (doc-guards.ts); each failure is one line naming the file, exit 1.
@@ -231,7 +235,7 @@ check("wrong arity is refused (exit 2)", run([screen(JR)]).status === 2);
 check("the shipped bundle runs from outside the repo", (() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
   fs.copyFileSync(BUNDLE, path.join(dir, "plan-skeleton.js"));
-  const b = spawnSync(process.execPath, [path.join(dir, "plan-skeleton.js"), screen(JR), vars(JR), DS], { encoding: "utf8", cwd: FX });
+  const b = runSync(process.execPath, [path.join(dir, "plan-skeleton.js"), screen(JR), vars(JR), DS], { cwd: FX });
   return b.status === 0 && b.stdout === r.stdout;
 })());
 
@@ -388,7 +392,7 @@ console.log("[canonical] a new plan is <stem>.json, one per node; an existing pl
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-open-"));
   fs.writeFileSync(path.join(dir, "package.json"), "{}");
   const put = (name: string, doc: unknown): string => { const f = path.join(dir, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
-  const q = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__7_7", "--phase", "queued", "--new-run"], { encoding: "utf8", cwd: dir });
+  const q = runSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts"), "--status", "Old__7_7", "--phase", "queued", "--new-run"], { cwd: dir });
   const sf = put("export/New__7_7.json", { screen: "New", nodes: [{ id: "7:7", type: "FRAME", name: "New", children: [] }] });
   const vf = put("export/New__7_7.vars.json", { collections: [], variables: [] });
   const planDir = path.join(dir, "design", "plan");

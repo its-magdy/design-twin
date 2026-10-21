@@ -1,20 +1,23 @@
 // Offline tests for design-to-code/verifier-guard.ts — the visual-verifier's PreToolUse guard — and its
 // registration in claude-plugin/hooks/hooks.json. Table-driven allow/deny cases over decide(), then the
 // shipped bundle run as the hook runs it (payload on stdin, answer on stdout, exit 0). Binds no port.
-//   node test/verifier-guard.test.ts
+//   bun test/verifier-guard.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { runAsync, runSync } from "../design-to-code/proc.ts";
 import { VERIFIER_AGENT, bashVerdict, decide, tempRoots, writeVerdict } from "../design-to-code/verifier-guard.ts";
 import { simpleCommands } from "../design-to-code/shell-words.ts";
 import type { GuardCtx } from "../design-to-code/verifier-guard.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
+import { hookRunsScript } from "./plugin-invocation.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const BUNDLE = path.join(ROOT, "claude-plugin", "scripts", "verifier-guard.js");
+// how hooks.json runs it: bun with the flags every user-facing invocation carries (no auto-install, no project .env)
+const HOOK_ARGV = ["--no-install", "--no-env-file", BUNDLE];
 const CTX: GuardCtx = { cwd: "/proj", tmpRoots: ["/tmp", "/var/folders/xy/abc/T", "C:\\Users\\me\\AppData\\Local\\Temp"] };
 const AGENT = "designtwin:visual-verifier";
 const bash = (command: string, extra: Record<string, unknown> = {}, agent: string | null = AGENT): unknown =>
@@ -111,6 +114,16 @@ const BASH_OK: readonly string[] = [
   "pkill -P 4242", "pkill -TERM -P 4242", "pkill -P4242", "pkill --parent=4242", "pkill --signal KILL -P 4242,4243",
   "kill $(pgrep -P 4242)", "kill -TERM \"$(pgrep -P 4242)\"", "pgrep -P 4242 | xargs kill", "kill -- -4242", "kill -TERM -- -4242", "kill -1 4242",
   "npm --loglevel silent run dev", "npm -w web run dev", "yarn workspace web dev", "yarn --cwd web dev",
+  // the plugin's own scripts as the skills run them under Bun, and everyday bun commands
+  "bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-probe.js\" --check",
+  "bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-screen.js\" --status Home__1_2 --phase blocked --run r1 --detail 'denied: bun install, bunx playwright install'",
+  "bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-screen.js\" --status Home__1_2 --phase done --run r1 --publish node_modules/.cache/designtwin-verify/stage/r1",
+  "bun node_modules/.cache/designtwin-verify/scratch/drive.ts", "bun --cwd apps/web run dev", "bun run --filter web dev", "bun x playwright --version",
+  "bun playwright --version", "bun pm ls", "bun --version", "bun exec 'kill 4242'", "node node_modules/.bin/playwright --version",
+  // the skills' own shapes
+  "find design/export/pages -name '*.json' ! -name '*.vars.json' -print0 | xargs -0 bun --no-install --no-env-file \"/plugins/designtwin/scripts/cross-check.js\"",
+  "bun --no-install --no-env-file -e 'console.log(require(\"node:fs\").existsSync(\"design/verify\"))'", "bun --no-install --no-env-file --print 'process.version'",
+  "bun --no-install --no-env-file node_modules/.cache/designtwin-verify/scratch/drive.cjs",
 ];
 for (const c of BASH_OK) check(c, allowed(bash(c)));
 
@@ -127,6 +140,8 @@ const KILLS: readonly string[] = [
   "taskkill //F //IM node.exe", "taskkill -im node.exe", "taskkill /f /im node.exe",
   "kill -1", "kill -- -1", "kill -9 -1", "kill 0", "kill -s TERM 0", "kill -TERM -- 0",
   "doas pkill node", "setsid pkill node", "bash -c -- 'pkill node'", "fish -c 'killall node'",
+  // `bun exec` runs its argument as a shell script (Bun's shell)
+  "bun exec 'pkill node'", "bun exec \"killall node\"", "bun --cwd web exec 'pkill -f vite'",
 ];
 for (const c of KILLS) check(c, denied(bash(c)));
 
@@ -137,6 +152,11 @@ const INSTALLS: readonly string[] = [
   "pnpm install", "pnpm i", "pnpm add -D playwright", "pnpm -C apps/web install", "pnpm remove vite",
   "yarn", "yarn install", "yarn --frozen-lockfile", "yarn add playwright", "yarn remove vite", "yarn up",
   "bun install", "bun add axe-core", "bun i",
+  "bun add -d playwright", "bun add -D axe-core", "bun ci", "bun uninstall vite", "bun r vite", "bun up", "bun update --latest", "bun link", "bun link vite", "bun unlink", "bun patch vite",
+  "bun patch-commit node_modules/vite", "bun pm trust esbuild", "bun init -y", "bun i -g playwright",
+  // flags before the subcommand: with the flags the plugin's invocations carry, and a valued flag either way bun reads it
+  // (bun dispatches on the first word not starting with "-": `bun --cwd install x` is `bun install x`, run in ./install)
+  "bun --no-install --no-env-file install", "bun --cwd apps/web install", "bun --cwd install x", "bun --env-file .env add vite", "bun -c bunfig.toml ci",
   "NODE_ENV=development npm ci", "cd apps/web && npm install", "sh -c 'npm ci'", "npm exec -c 'npm install'",
   "npm --loglevel silent install", "npm --cache /tmp/npm-cache ci", "npm -w web install", "npm --prefix=web i",
   "yarn workspace web add vite", "yarn workspace web remove vite", "yarn --cwd web add axe-core", "pnpm --filter web add axe-core",
@@ -150,6 +170,11 @@ const PW: readonly string[] = [
   "npx -p @playwright/test playwright install", "npx @playwright/test install", "npm exec -- playwright install", "npm x playwright install chromium",
   "pnpm exec playwright install chromium", "pnpm dlx playwright install", "yarn playwright install", "yarn dlx playwright install",
   "bunx playwright install", "bun x playwright install", "node_modules/.bin/playwright install chromium",
+  // a package's bin run by name through bun (`bun <bin>` and `bun run <bin>` resolve node_modules/.bin), or by path
+  "bun playwright install", "bun playwright install chromium", "bun run playwright install --with-deps chromium", "bun --no-install run playwright install",
+  "bun run --bun playwright install", "bun --cwd web run playwright install", "bun node_modules/playwright/cli.js install", "bun ./node_modules/.bin/playwright install chromium",
+  "bun --no-install --no-env-file node_modules/@playwright/test/cli.js install", "bunx --bun playwright install", "bun x --bun playwright install-deps",
+  "node node_modules/.bin/playwright install", "bun c playwright", "bun exec 'npx playwright install'",
   "node node_modules/playwright/cli.js install", "npx playwright install-deps", "./node_modules/.bin/playwright.cmd install",
   "node node_modules/@playwright/test/cli.js install", "node node_modules/playwright-core/cli.js install chromium", "node \"C:\\app\\node_modules\\playwright\\cli.js\" install",
   // Playwright's own installer
@@ -176,6 +201,8 @@ const MIGRATE: readonly string[] = [
   "node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate", "node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate --apply",
   "node /plugins/designtwin/scripts/verify-screen.js --dir design/verify --migrate --apply", "./verify-screen.js --migrate", "npx tsx design-to-code/verify-screen.ts --migrate",
   "yarn node \"/plugins/designtwin/scripts/verify-screen.js\" --migrate", "sh -c 'node /p/verify-screen.js --migrate --apply'", "node \"C:\\p\\scripts\\verify-screen.js\" --migrate=1",
+  "bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-screen.js\" --migrate", "bun --no-install --no-env-file /p/verify-screen.js --dir design/verify --migrate --apply",
+  "bun run /p/verify-screen.js --migrate", "bun design-to-code/verify-screen.ts --migrate=1", "bun exec 'bun /p/verify-screen.js --migrate'",
 ];
 for (const c of MIGRATE) check(c, denied(bash(c)));
 {
@@ -185,6 +212,7 @@ for (const c of MIGRATE) check(c, denied(bash(c)));
     tool_input: { command: "node \"C:\\plugins\\designtwin\\scripts\\verify-screen.js\" --migrate --apply" } }));
   check("not refused: another verify-screen mode, a mention of --migrate, another agent",
     allowed(bash("node \"/plugins/designtwin/scripts/verify-screen.js\" --status Home__1_2 --phase done --run r1")) && allowed(bash("echo node verify-screen.js --migrate"))
+    && allowed(bash("bun --no-install --no-env-file \"/plugins/designtwin/scripts/verify-screen.js\" --status Home__1_2 --phase done --run r1")) && allowed(bash("echo bun verify-screen.js --migrate"))
     && allowed(bash("grep -rn -- --migrate design/")) && allowed(bash("node /p/verify-screen.js --migrate", {}, "general-purpose")));
 }
 
@@ -270,7 +298,7 @@ check("tempRoots() includes os.tmpdir()", tempRoots().includes(os.tmpdir()));
 console.log("\nclaude-plugin/scripts/verifier-guard.js (stdin → stdout, exit 0):");
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-guard-"));
 const run = (input: string): { code: number | null; stdout: string; stderr: string } => {
-  const r = spawnSync(process.execPath, [BUNDLE], { input, cwd, encoding: "utf8", timeout: 15000 });
+  const r = runSync(process.execPath, HOOK_ARGV, { input, cwd, timeoutMs: 15000 });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 const outOf = (s: string): unknown => { try { const v: unknown = JSON.parse(s); return v; } catch { return null; } };
@@ -302,36 +330,34 @@ for (const [what, input] of [["unparsable JSON", "{\"agent_type\": "], ["empty s
   check(`${what}: allowed (exit 0, empty stdout) and logged to stderr`, r.code === 0 && r.stdout === "" && /verifier-guard: .*allowing the call/.test(r.stderr));
 }
 {
-  const r = spawnSync(process.execPath, [BUNDLE, "--help"], { encoding: "utf8" });
-  check("--help prints the usage, exit 0", r.status === 0 && /usage: node .*verifier-guard\.js/.test(r.stdout));
-  const stray = spawnSync(process.execPath, [BUNDLE, "--stray"], { input: JSON.stringify(bash("pkill -f vite")), encoding: "utf8" });
+  const r = runSync(process.execPath, [...HOOK_ARGV, "--help"], { expect: /usage:/ });
+  check("--help prints the usage, exit 0", r.status === 0 && /usage: bun --no-install --no-env-file .*verifier-guard\.js/.test(r.stdout));
+  const stray = runSync(process.execPath, [...HOOK_ARGV, "--stray"], { input: JSON.stringify(bash("pkill -f vite")) });
   check("a stray argument fails open: exit 0 (never 2, which blocks a PreToolUse call), nothing on stdout, logged to stderr",
     stray.status === 0 && stray.stdout === "" && /unexpected argument --stray .*allowing the call/.test(stray.stderr));
 }
-await new Promise<void>((resolve) => {
-  const t0 = Date.now();
-  const c = spawn(process.execPath, [BUNDLE], { cwd, stdio: ["pipe", "pipe", "pipe"] }); // a pipe that never writes and never closes
-  let out = "";
-  c.stdout.on("data", (d: Buffer) => { out += d.toString(); });
-  const kill = setTimeout(() => c.kill("SIGKILL"), 10000);
-  c.on("exit", (code) => {
-    clearTimeout(kill);
-    const ms = Date.now() - t0;
-    check(`a silent stdin pipe does not hang the hook: exit ${code} in ${ms} ms (< 4000), nothing on stdout`, code === 0 && ms < 4000 && out === "");
-    resolve();
-  });
-});
+{
+  // a stdin pipe that never writes and never closes (the child's stdin stays open until it exits)
+  const { done } = runAsync(process.execPath, HOOK_ARGV, { cwd, stdin: "pipe", timeoutMs: 10000 });
+  const r = await done;
+  check(`a silent stdin pipe does not hang the hook: exit ${r.status} in ${r.ms} ms (< 4000), nothing on stdout` + (r.lost ? ` — ${r.lost}` : ""),
+    r.status === 0 && !r.timedOut && !r.lost && r.ms < 4000 && r.stdout === "");
+}
 
 // ---------------------------------------------------------------- registration
 console.log("\nregistration (hooks.json, the agent's name and tools):");
 {
   const hooksDoc: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "claude-plugin", "hooks", "hooks.json"), "utf8"));
   const pre = isJsonObject(hooksDoc) && isJsonObject(hooksDoc.hooks) && Array.isArray(hooksDoc.hooks.PreToolUse) ? hooksDoc.hooks.PreToolUse : [];
-  const entry = pre.find((e) => isJsonObject(e) && Array.isArray(e.hooks) && e.hooks.some((h) => isJsonObject(h) && typeof h.command === "string" && /scripts\/verifier-guard\.js"?$/.test(h.command)));
+  const entry = pre.find((e) => isJsonObject(e) && Array.isArray(e.hooks) && e.hooks.some((h) => hookRunsScript(h, "verifier-guard").ok));
   const matcher = isJsonObject(entry) && typeof entry.matcher === "string" ? entry.matcher : "";
-  const handler = isJsonObject(entry) && Array.isArray(entry.hooks) ? entry.hooks.find((h) => isJsonObject(h) && typeof h.command === "string" && h.command.includes("verifier-guard")) : undefined;
-  check("hooks.json runs the bundled verifier-guard.js on PreToolUse, with a timeout above its own 5 s stdin cut-off",
+  const handler: unknown = isJsonObject(entry) && Array.isArray(entry.hooks) ? entry.hooks.find((h) => hookRunsScript(h, "verifier-guard").ok) : undefined;
+  check("hooks.json runs the bundled verifier-guard.js on PreToolUse (bun --no-install --no-env-file), with a timeout above its own 5 s stdin cut-off",
     entry !== undefined && isJsonObject(handler) && handler.type === "command" && typeof handler.timeout === "number" && handler.timeout > 5);
+  // a missing `bun` (or a guard that cannot start) is a NON-blocking hook error in Claude Code: the guard must fail closed
+  // on that, not silently let every verifier call through. Exec form ({command: "bun", args}) runs with no shell.
+  check("…in exec form ({command: \"bun\", args: [--no-install, --no-env-file, …]}), and a guard that cannot start blocks the call (onFailure: \"block\")",
+    hookRunsScript(handler, "verifier-guard").form === "exec" && isJsonObject(handler) && handler.onFailure === "block");
   // Claude Code's matcher rule: only letters, digits, _, -, spaces, `,` and `|` → a list of exact names; anything else → an unanchored regex.
   const matches = (tool: string): boolean => /^[A-Za-z0-9_\- ,|]*$/.test(matcher)
     ? matcher === "" || matcher === "*" || matcher.split(/[|,]/).map((s) => s.trim()).includes(tool)

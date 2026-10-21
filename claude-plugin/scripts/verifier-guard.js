@@ -2,7 +2,7 @@
 
 
 // design-to-code/verifier-guard.ts
-import fs3 from "node:fs";
+import fs2 from "node:fs";
 import os from "node:os";
 
 // design-to-code/hook-input.ts
@@ -171,22 +171,77 @@ function simpleCommands(src, opts = {}) {
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
-// bridge/src/is-main.ts
-import fs2 from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function isMainFallback(metaUrl) {
+// design-to-code/proc.ts
+import { format } from "node:util";
+var pause = new Int32Array(new SharedArrayBuffer(4));
+function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
   try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
-  } catch {
-    return false;
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
   }
 }
+
+// design-to-code/cli-args.ts
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/verifier-guard.ts
 var VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
@@ -297,11 +352,61 @@ var NPM_DEPS = /* @__PURE__ */ new Set([
 ]);
 var PNPM_DEPS = /* @__PURE__ */ new Set(["install", "i", "add", "update", "up", "upgrade", "remove", "rm", "un", "uninstall", "prune", "dedupe", "install-test", "it", "ci", "fetch", "import", "create"]);
 var YARN_DEPS = /* @__PURE__ */ new Set(["install", "add", "remove", "up", "upgrade", "upgrade-interactive", "dedupe", "create"]);
-var BUN_DEPS = /* @__PURE__ */ new Set(["install", "i", "add", "a", "remove", "rm", "update", "create"]);
+var BUN_DEPS = /* @__PURE__ */ new Set([
+  "install",
+  "i",
+  "ci",
+  "add",
+  "a",
+  "remove",
+  "rm",
+  "r",
+  "uninstall",
+  "update",
+  "up",
+  "create",
+  "c",
+  "init",
+  "link",
+  "unlink",
+  "patch",
+  "patch-commit"
+]);
 var NPM_VALUED = /* @__PURE__ */ new Set(["--prefix", "-C", "--workspace", "-w", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--registry", "--tag", "--omit", "--include", "--before", "--otp", "--scope"]);
 var PNPM_VALUED = /* @__PURE__ */ new Set(["-C", "--dir", "--filter", "-F", "--loglevel", "--reporter", "--registry", "--store-dir"]);
 var YARN_VALUED = /* @__PURE__ */ new Set(["--cwd", "--cache-folder", "--modules-folder", "--global-folder", "--registry", "--network-timeout"]);
-var BUN_VALUED = /* @__PURE__ */ new Set(["--cwd", "--config", "-c"]);
+var BUN_VALUED = /* @__PURE__ */ new Set([
+  "--cwd",
+  "--config",
+  "-c",
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "--env-file",
+  "--preload",
+  "-r",
+  "--require",
+  "--import",
+  "--tsconfig-override",
+  "--install",
+  "--conditions",
+  "--main-fields",
+  "--define",
+  "-d",
+  "--loader",
+  "-l",
+  "--port",
+  "--console-depth",
+  "--title",
+  "--elide-lines",
+  "--filter",
+  "-F",
+  "--shell",
+  "--user-agent",
+  "--dns-result-order",
+  "--unhandled-rejections"
+]);
 var NPX_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "--call", "-c", "--cache", "--registry", "--userconfig"]);
 var PLAYWRIGHT_PKG = /^(@playwright\/test|playwright|playwright-core|playwright-chromium)(@.*)?$/;
 var PID_LOOKUPS = /* @__PURE__ */ new Set(["pgrep", "pidof", "lsof", "ps", "fuser"]);
@@ -468,23 +573,46 @@ function commandVerdict(cmd, line, depth, ps) {
     return PLAYWRIGHT_PKG.test(sub) && playwrightInstall(words, s + 1) ? REASON.playwright : null;
   }
   if (p === "bun") {
-    const s = firstArg(words, 1, BUN_VALUED);
-    const sub = (words[s] ?? "").toLowerCase();
-    if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
-    if (sub === "x") return npxVerdict(words, s + 1);
+    for (const s of bunSubcommands(words)) {
+      const sub = (words[s] ?? "").toLowerCase();
+      if (BUN_DEPS.has(sub)) return createsPlaywright(words, s) ? REASON.playwright : REASON.install;
+      if (sub === "pm" && (words[firstArg(words, s + 1)] ?? "").toLowerCase() === "trust") return REASON.install;
+      if (sub === "x") {
+        const v = npxVerdict(words, s + 1);
+        if (v) return v;
+        continue;
+      }
+      if (sub === "exec") {
+        if (depth < 4) {
+          const v = bashVerdict(words.slice(firstArg(words, s + 1)).join(" "), depth + 1);
+          if (v) return v;
+        }
+        continue;
+      }
+      const t = sub === "run" ? firstArg(words, s + 1, BUN_VALUED) : s;
+      if (runsPlaywrightCli(words, t)) return REASON.playwright;
+    }
     return null;
   }
   if (PLAYWRIGHT_PKG.test(p) && playwrightInstall(words, 1)) return REASON.playwright;
-  if (p === "node") {
-    const s = firstArg(words, 1);
-    if (PLAYWRIGHT_CLI.test(words[s] ?? "") && playwrightInstall(words, s + 1)) return REASON.playwright;
-  }
+  if (p === "node" && runsPlaywrightCli(words, firstArg(words, 1))) return REASON.playwright;
   return null;
 }
 var createsPlaywright = (words, s) => {
   const sub = (words[s] ?? "").toLowerCase();
-  return (sub === "init" || sub === "innit" || sub === "create") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
+  return (sub === "init" || sub === "innit" || sub === "create" || sub === "c") && /^(create-)?playwright(@.*)?$/i.test(words[firstArg(words, s + 1)] ?? "");
 };
+function bunSubcommands(words) {
+  const byValue = firstArg(words, 1, BUN_VALUED);
+  let bare = 1;
+  while (bare < words.length && (words[bare] ?? "").startsWith("-") && words[bare] !== "--") bare++;
+  if (words[bare] === "--") bare++;
+  return byValue === bare ? [byValue] : [byValue, bare];
+}
+function runsPlaywrightCli(words, s) {
+  const w = words[s] ?? "";
+  return (PLAYWRIGHT_PKG.test(w.toLowerCase()) || PLAYWRIGHT_PKG.test(prog(w)) || PLAYWRIGHT_CLI.test(w)) && playwrightInstall(words, s + 1);
+}
 function npxVerdict(words, from) {
   const c = words.findIndex((w, k) => k >= from && (w === "-c" || w === "--call"));
   if (c >= 0 && words[c + 1] !== void 0) return bashVerdict(words[c + 1] ?? "", 1);
@@ -540,7 +668,7 @@ function decide(payload, ctx) {
 function tempRoots(env = process.env) {
   const roots = [os.tmpdir(), env.TMPDIR, env.TEMP, env.TMP];
   try {
-    roots.push(fs3.realpathSync(os.tmpdir()));
+    roots.push(fs2.realpathSync(os.tmpdir()));
   } catch {
   }
   if (process.platform !== "win32") roots.push("/tmp", "/private/tmp", "/var/folders", "/private/var/folders");
@@ -584,14 +712,7 @@ ${USAGE}`);
   else if (d) console.log(JSON.stringify(denyOutput(d.deny)));
   return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }, (e) => {
-    console.error(`verifier-guard: ${e instanceof Error && e.stack || String(e)} \u2014 allowing the call`);
-    process.exitCode = 0;
-  });
-}
+if (import.meta.main) runCli(main, { name: "verifier-guard", errorCode: 0, errorLine: (e) => `verifier-guard: ${e instanceof Error && e.stack || String(e)} \u2014 allowing the call` });
 export {
   USAGE,
   VERIFIER_AGENT,

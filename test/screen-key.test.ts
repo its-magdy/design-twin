@@ -1,7 +1,7 @@
 // design-to-code/screen-key.ts: the set-name grammar (`<stem>` / `<stem>.<slug>`), the verify dir's sets (existing,
 // legacy, retired) and screenKey — a query to (node id, stem) through resolve-screen's exact stages only.
 // Invented screens, temp dirs only.
-//   node test/screen-key.test.ts
+//   bun test/screen-key.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
