@@ -195,12 +195,43 @@ import { parseArgs } from "node:util";
 import { format } from "node:util";
 var pause = new Int32Array(new SharedArrayBuffer(4));
 function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
   const line = (s) => (...a) => {
     s.write(format(...a) + "\n");
   };
   console.log = console.info = console.debug = line(process.stdout);
   console.warn = console.error = line(process.stderr);
 }
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var flushStdio = () => Promise.all([process.stdout, process.stderr].map((s) => new Promise((r) => {
+  const st = inFlight.get(s);
+  if (!st || st.n === 0) r();
+  else st.idle.push(r);
+}))).then(() => void 0);
 var CliExit = class extends Error {
   code;
   constructor(code) {
@@ -236,7 +267,7 @@ function runCli(main2, o, argv = process.argv.slice(2)) {
 function exitFlushed(code, capMs = 2e3) {
   const exit = () => process.exit(code);
   setTimeout(exit, capMs).unref();
-  process.stderr.write("", () => process.stdout.write("", exit));
+  void flushStdio().then(exit);
 }
 
 // design-to-code/cli-args.ts

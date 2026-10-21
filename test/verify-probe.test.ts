@@ -6,8 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
-import type { SpawnSyncReturns } from "node:child_process";
+import { spawn } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
+import type { ProcResult } from "../design-to-code/proc.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import * as VSH from "../design-to-code/verify-shared.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
@@ -245,7 +246,7 @@ block("measured ids the expectation does not know", () => {
 // ---- components from the --interactions object; coverage baseline — through the CLI
 block("components from the --interactions object; coverage baseline — through the CLI", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-probe-contract-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => runSync(process.execPath, [CLI, ...a], { cwd });
   const put = (name: string, doc: unknown): string => { fs.writeFileSync(path.join(cwd, name), JSON.stringify(doc)); return name; };
   put("orders.json", screen(185));
   const ex = run("--expect", "orders.json", "--out", "design/verify");
@@ -301,7 +302,7 @@ block("components from the --interactions object; coverage baseline — through 
 // ---- a hand-written file's own `probe` / `notMeasured` is ignored with a note, never a refusal
 block("malformed extras", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-probe-extras-"));
-  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const run = (...a: string[]) => runSync(process.execPath, [CLI, ...a], { cwd });
   fs.writeFileSync(path.join(cwd, "orders.json"), JSON.stringify(screen()));
   run("--expect", "orders.json", "--out", "design/verify");
   fs.writeFileSync(path.join(cwd, "hand.json"), JSON.stringify({ measuredAt: "2026-09-30T01:00:00Z", renderer: "hand", probe: "handmade", notMeasured: {}, nodes: [{ nodeId: "2:1", styles: { text: "Order 1" } }] }));
@@ -430,11 +431,11 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
     () => !rp.ok && /Yarn Plug'n'Play, which Bun cannot resolve packages through/.test(rp.reason) && /`nodeLinker: node-modules` in \.yarnrc\.yml/.test(rp.reason) && !/yarn node/.test(rp.reason));
 
   const PROBE_CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-probe.ts");
-  const run = spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", none], { encoding: "utf8" });
+  const run = runSync(process.execPath, [PROBE_CLI, "--check", "--project", none]);
   t("--check with nothing resolvable → exit 3, prints the install command for the USER, never installs", () =>
     run.status === 3 && /renderer unavailable/.test(run.stderr) && /npm i -D playwright && npx playwright install chromium/.test(run.stderr)
     && !fs.existsSync(path.join(none, "node_modules")) && !fs.existsSync(path.join(none, "package-lock.json")));
-  const launchFails = spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", onlyTest], { encoding: "utf8" });
+  const launchFails = runSync(process.execPath, [PROBE_CLI, "--check", "--project", onlyTest]);
   t("a launch failure → exit 3 with the browser install command", () => launchFails.status === 3 && /chromium did not launch: fake/.test(launchFails.stderr) && /npx playwright install chromium/.test(launchFails.stderr));
   // a browser that is gone before measuring (its context cannot be opened) → exit 4 with the closed-or-crashed line, not
   // exit 1 with a stack; the URL is never contacted
@@ -443,7 +444,7 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   fs.mkdirSync(path.join(goneProj, "design", "verify"), { recursive: true });
   const goneExp = path.join(goneProj, "design", "verify", "Orders__1_1.expected.json");
   fs.writeFileSync(goneExp, JSON.stringify(exp()));
-  const goneRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj], { encoding: "utf8" });
+  const goneRun = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj]);
   t("a browser gone before measuring → exit 4, the page-or-browser line with --check advice, no stack, nothing written", () =>
     goneRun.status === 4
     && goneRun.stderr.includes("verify-probe: the page or browser closed or crashed (browser.newContext: Target page, context or browser has been closed) — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.")
@@ -453,9 +454,9 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   t("…run without --run, that exit 4 ends the probe's own run: `failed` rev 2 'probe exit 4 — nothing written', the run the stderr named; no durable status published", () =>
     goneId !== "" && goneSt !== null && goneSt !== "v1" && goneSt.runId === goneId && goneSt.phase === "failed" && goneSt.rev === 2 && goneSt.detail === "probe exit 4 — nothing written"
     && !fs.existsSync(path.join(goneProj, "design", "verify", "Orders__1_1.status.json")));
-  const usage = spawnSync(process.execPath, [PROBE_CLI, "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
+  const usage = runSync(process.execPath, [PROBE_CLI, "--url", "http://127.0.0.1:1/"]);
   t("[CLI] --url without --expected → exit 2 (usage)", () => usage.status === 2);
-  const badVp = spawnSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"], { encoding: "utf8" });
+  const badVp = runSync(process.execPath, [PROBE_CLI, "--expected", path.join(tmp, "missing.expected.json"), "--url", "http://127.0.0.1:1/"]);
   t("[CLI] an unreadable --expected → exit 2 before any browser work", () => badVp.status === 2 && /does not exist/.test(badVp.stderr));
 
   // --out is a directory and the set is the expectation's name: a refusal is exit 2 before any status write or launch
@@ -465,9 +466,9 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   fs.mkdirSync(outVerify, { recursive: true });
   const outExp = path.join(outVerify, "Orders__1_1.expected.json");
   fs.writeFileSync(outExp, JSON.stringify(exp()));
-  const probeOut = (expected: string, ...more: string[]): SpawnSyncReturns<string> =>
-    spawnSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/", "--project", outProj, ...more], { encoding: "utf8" });
-  const untouched = (r: SpawnSyncReturns<string>, base: string): boolean => r.status === 2 && !/^run {4}/m.test(r.stderr) && readStatus(base) === null;
+  const probeOut = (expected: string, ...more: string[]): ProcResult =>
+    runSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/", "--project", outProj, ...more]);
+  const untouched = (r: ProcResult, base: string): boolean => r.status === 2 && !/^run {4}/m.test(r.stderr) && readStatus(base) === null;
   const nick = probeOut(outExp, "--out", path.join(outVerify, "Orders"));
   t("[out] --out <dir>/<a nickname> → exit 2 '--out takes the verify directory; this set is Orders__1_1', no run started, no status", () =>
     untouched(nick, path.join(outVerify, "Orders__1_1")) && nick.stderr.includes("--out takes the verify directory; this set is Orders__1_1"));
@@ -494,10 +495,10 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   // printed what it waits for
   const DEFAULT_READY = "ready  [data-dt-node=\"1:1\"] (the frame's tag, the default; --ready <selector> or --ready none to change it)";
   t("[ready] without --ready the probe waits for the frame's tag — 'ready  [data-dt-node=\"1:1\"] (the frame's tag, the default; …)' on stderr", () => goneRun.stderr.includes(DEFAULT_READY));
-  const readyNone = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", "none"], { encoding: "utf8" });
+  const readyNone = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", "none"]);
   t("[ready] --ready none → 'ready  none (--ready none): the page is measured once it is quiet', no default line; it goes on (exit 4 from the stub)", () =>
     readyNone.status === 4 && readyNone.stderr.includes("ready  none (--ready none): the page is measured once it is quiet") && !readyNone.stderr.includes("the frame's tag, the default"));
-  const readyEmpty = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", " "], { encoding: "utf8" });
+  const readyEmpty = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--ready", " "]);
   t("[ready] --ready ' ' → exit 2 \"--ready must be a selector or none, got ' '\"", () => readyEmpty.status === 2 && readyEmpty.stderr.startsWith("verify-probe: --ready must be a selector or none, got ' '"));
   t("[ready] readyOf: the default is the frame's tag (quoted for CSS); an explicit selector is kept; none waits for nothing; no frame id → no default, said so", () => {
     const d = VP.readyOf(undefined, "1:2"), q = VP.readyOf(undefined, "a\"b"), x = VP.readyOf("#app", "1:2"), n = VP.readyOf("none", "1:2"), u = VP.readyOf(undefined, undefined);
@@ -596,7 +597,7 @@ const project = (name: string, pkgs: Array<[string, string, string]>, files: Rec
   // a plan that opts out of tagging, passed as --steps: no default --ready (the stubbed project ends at exit 4 after the note)
   const planOff = path.join(goneProj, "plan-tagging-off.json");
   fs.writeFileSync(planOff, JSON.stringify({ screen: "Orders", tagging: { off: true, reason: "the markup comes from a third-party renderer" } }));
-  const offRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planOff], { encoding: "utf8" });
+  const offRun = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planOff]);
   t("[ready] --steps <plan with tagging.off> → the 'no --ready default' note, no frame-tag default line", () =>
     offRun.status === 4 && offRun.stderr.includes("note  the --steps plan opts out of tagging (tagging.off), so there is no --ready default") && !offRun.stderr.includes(DEFAULT_READY));
   t("[ready] settleMiss: a --ready wait that ran out on a document that stayed is 'unreachable' — after a navigation too (a redirect), never 'kept navigating'", () =>
@@ -681,9 +682,8 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   fs.mkdirSync(path.join(readyProj, "design", "verify"), { recursive: true });
   const readyExp = path.join(readyProj, "design", "verify", "Orders__1_1.expected.json");
   fs.writeFileSync(readyExp, JSON.stringify(exp()));
-  const stubRun = (scenario: string, expected = readyExp): SpawnSyncReturns<string> =>
-    spawnSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off"],
-      { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: scenario } });
+  const stubRun = (scenario: string, expected = readyExp): ProcResult =>
+    runSync(process.execPath, [PROBE_CLI, "--expected", expected, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off"], { env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: scenario } });
   const measuredFile = path.join(readyProj, "design", "verify", "Orders__1_1.measured.json");
   const redirect = stubRun("redirect");
   t("[ready] a redirect after load (location.replace to a login page) with the default --ready → exit 4 'never became visible (the page shows 0 of the expectation's N own tags — fewer than half)' + the default-ready hint — never 'kept navigating' or the dev-server watch advice; nothing written", () =>
@@ -723,13 +723,11 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     selectorError.status === 4 && selectorError.stderr.includes("verify-probe: --ready '[data-dt-node=\"1:1\"]' never became visible: locator.waitFor: Unexpected token")
     && !fs.existsSync(measuredFile));
   const hungStart = Date.now();
-  const hungRun = spawnSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"],
-    { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "hung" } });
+  const hungRun = runSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"], { env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "hung" } });
   const hungMs = Date.now() - hungStart;
   t(`[ready] a page that stops answering when the frame's wait runs out → exit 4 'did not answer within 2s when its tags were counted' within seconds (the document token and the look are both bounded), never held to --max-time (took ${hungMs} ms)`, () =>
     hungRun.status === 4 && hungRun.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)") && hungMs < 15_000 && !fs.existsSync(measuredFile));
-  const redirectHung = spawnSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"],
-    { encoding: "utf8", env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "redirect-hung" } });
+  const redirectHung = runSync(process.execPath, [PROBE_CLI, "--expected", readyExp, "--url", "http://127.0.0.1:1/screen", "--project", readyProj, "--timeout", "600", "--behaviour", "off", "--max-time", "20000"], { env: { ...process.env, [VP.BEHAVIOUR_OFF_ENV]: "1", DT_STUB_SCENARIO: "redirect-hung" } });
   t("[ready] a redirect during settle, then a page that stops answering when the frame's wait runs out → exit 4 'did not answer within 2s' (an unanswered token read is no sign of another document) — never 'kept navigating'; nothing written", () =>
     redirectHung.status === 4 && redirectHung.stderr.includes("never became visible (the page did not answer within 2s when its tags were counted)")
     && !/kept navigating|watch tree/.test(redirectHung.stderr) && !fs.existsSync(measuredFile));
@@ -840,24 +838,24 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   // --steps with a plan that has no navigate list: no steps, a note — never exit 2
   const planNoNav = path.join(goneProj, "plan-no-nav.json");
   fs.writeFileSync(planNoNav, JSON.stringify({ screen: "Orders", route: "/orders" }));
-  const noNav = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNoNav], { encoding: "utf8" });
+  const noNav = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNoNav]);
   t("[steps] --steps <plan with no navigate> → not exit 2: the note \"--steps '<plan>' is a plan with no `navigate` list — no steps run: the screen is measured where --url lands\", the probe goes on (exit 4 from the stub)", () =>
     noNav.status === 4 && noNav.stderr.includes(`note  --steps '${planNoNav}' is a plan with no \`navigate\` list — no steps run: the screen is measured where --url lands`) && !/holds no/.test(noNav.stderr));
   const planNullNav = path.join(goneProj, "plan-null-nav.json");
   fs.writeFileSync(planNullNav, JSON.stringify({ screen: "Orders", navigate: null }));
-  const nullNav = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNullNav], { encoding: "utf8" });
+  const nullNav = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--steps", planNullNav]);
   t("[steps] a plan whose navigate is not a list → still exit 2 'holds a `navigate` that is not a list'", () =>
     nullNav.status === 2 && nullNav.stderr.includes(`verify-probe: --steps '${planNullNav}' holds a \`navigate\` that is not a list`));
 
   // --behaviour off only with the test-only env var
   const { [VP.BEHAVIOUR_OFF_ENV]: _off, ...envNoOff } = process.env;
-  const offRefused = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: envNoOff });
+  const offRefused = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { env: envNoOff });
   t("[behaviour] --behaviour off without the test-only env var → exit 2 before any run or browser: \"--behaviour off is for the probe's own tests only — …\" (the env var is never named)", () =>
     offRefused.status === 2 && offRefused.stderr.startsWith("verify-probe: --behaviour off is for the probe's own tests only — a run without the behaviour checks is not a verification\n")
     && !/^run {4}/m.test(offRefused.stderr) && !offRefused.stderr.includes(VP.BEHAVIOUR_OFF_ENV));
-  const offOk = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { encoding: "utf8", env: { ...envNoOff, [VP.BEHAVIOUR_OFF_ENV]: "1" } });
+  const offOk = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--behaviour", "off"], { env: { ...envNoOff, [VP.BEHAVIOUR_OFF_ENV]: "1" } });
   t("[behaviour] …with DESIGNTWIN_TEST_BEHAVIOUR_OFF=1 it is accepted (the probe goes on: exit 4 from the stub)", () => offOk.status === 4 && !/--behaviour off is for/.test(offOk.stderr));
-  const helpText = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
+  const helpText = runSync(process.execPath, [PROBE_CLI, "--help"]);
   t("[help] --help names --ready <selector> | none and its default, the plan with no navigate, the counted --run failures, and that --behaviour off is refused outside the probe's tests (the env var unnamed)", () =>
     helpText.status === 0 && helpText.stdout.includes("[--ready <selector> | none]") && helpText.stdout.includes("by default the frame's tag [data-dt-node=\"<frame id>\"]")
     && helpText.stdout.includes("a plan with none is no steps") && helpText.stdout.includes("the second ends the run `failed` — the probe writes it")
@@ -887,13 +885,13 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
   fs.writeFileSync(notExec, "#!/bin/sh\n", { mode: 0o644 });
   const app = path.join(tmp, "Invented Browser.app");
   fs.mkdirSync(app, { recursive: true });
-  const bp = (p: string) => spawnSync(process.execPath, [PROBE_CLI, "--check", "--project", none, "--browser-path", p], { encoding: "utf8" });
+  const bp = (p: string) => runSync(process.execPath, [PROBE_CLI, "--check", "--project", none, "--browser-path", p]);
   const oneLine = (r: { status: number | null; stderr: string }, p: string): boolean => r.status === 3 && r.stderr.trim().split("\n").length === 1 && !/\n\s+at /.test(r.stderr)
     && r.stderr.trim() === `verify-probe: renderer unavailable — --browser-path ${p} is not an executable file (on macOS pass the binary inside the .app: …/Contents/MacOS/…) — nothing was measured or written.`;
   const missing = path.join(tmp, "nonexistent", "chrome");
   t("--browser-path <missing> → exit 3 before resolving Playwright: one line naming the path and the macOS inner-binary hint, no stack", () => oneLine(bp(missing), missing));
   t("--browser-path <an .app directory> / <a file without the execute bit> → the same exit 3", () => oneLine(bp(app), app) && (process.platform === "win32" || oneLine(bp(notExec), notExec)));
-  const help = spawnSync(process.execPath, [PROBE_CLI, "--help"], { encoding: "utf8" });
+  const help = runSync(process.execPath, [PROBE_CLI, "--help"]);
   t("--help: --browser-path, only guaranteed with the bundled Chromium, the inner binary on macOS, executable \"custom\"", () =>
     /\[--browser-path <executable>\]/.test(help.stdout) && /only\s+guaranteed with the bundled Chromium/.test(help.stdout) && /Contents\/MacOS/.test(help.stdout) && /executable says "custom"/.test(help.stdout));
   t("--help: every measurement names its run; without --run the probe starts a run of its own and ends it (done / failed), refused beside another open run (exit 2)", () =>
@@ -911,8 +909,8 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     && /\(--run\) the run already ended \/ ended while the probe ran \/ the status names another run\s+that has not ended \/ another run replaced it while the probe ran/.test(help.stdout)
     && /over another run that has ENDED its\s+first write is taken, with a `note {2}run <id> replaced run <other> …` line and replaced in the status/.test(help.stdout));
   // --max-time beyond setTimeout's 32-bit bound (it would fire at once, and the own run's deadline would not be a date)
-  const hugeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"], { encoding: "utf8" });
-  const edgeMax = spawnSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"], { encoding: "utf8" });
+  const hugeMax = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "1e16"]);
+  const edgeMax = runSync(process.execPath, [PROBE_CLI, "--expected", goneExp, "--url", "http://127.0.0.1:1/", "--project", goneProj, "--max-time", "2147483648"]);
   t("--max-time above 2147483647 (1e16, 2^31) → exit 2 with the usage line, before any status write or browser; no RangeError", () =>
     [hugeMax, edgeMax].every((r) => r.status === 2 && r.stderr.startsWith("verify-probe: --max-time must be a positive number of milliseconds, at most 2147483647\n") && !/RangeError|\n\s+at /.test(r.stderr) && !/^run {4}/m.test(r.stderr)));
   t("browserPathError: null for an executable file (this node binary)", () => {

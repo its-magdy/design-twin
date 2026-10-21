@@ -20,6 +20,8 @@ export interface ProcResult {
   error?: Error; timedOut: boolean; attempts: number;
   /** Set when the result was recovered without the runtime's own exit report — say why (a test should fail on it). */
   lost?: string;
+  /** runSync: the child's pid (it has exited — e.g. a pid known to be dead). */
+  pid?: number;
   /** runSync with `binary`: stdout's exact bytes (`stdout` is then their UTF-8 reading). */
   stdoutBytes?: Buffer;
 }
@@ -54,7 +56,7 @@ function syncOnce(cmd: string, args: readonly string[], o: SyncOpts, attempt: nu
   const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL" as const, maxBuffer: 256 * 1024 * 1024 };
   const stdin = o.input !== undefined ? "pipe" : "ignore";
   const done = (s: ReturnType<typeof spawnSync>, stdout: string, stderr: string): ProcResult => ({
-    status: s.status, signal: s.signal, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}),
+    status: s.status, signal: s.signal, stdout, stderr, ms: Date.now() - t0, ...(s.error ? { error: s.error } : {}), ...(s.pid ? { pid: s.pid } : {}),
     timedOut: (s.error !== undefined && "code" in s.error && s.error.code === "ETIMEDOUT"), attempts: attempt });
   let dir: string | null = null;
   if (o.capture !== "pipe") try { dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-")); } catch { /* no writable temp dir: the pipes, below */ }
@@ -169,23 +171,50 @@ export function writeAll(fd: number, data: string | Uint8Array): void {
   }
 }
 /** console.* through process.stdout/stderr.write: Bun's console writes straight to the fd and DROPS what meets a full
- *  non-blocking pipe, while stream.write() queues it in order. Exit with process.exitCode (or after flushStdio()), never a
- *  bare process.exit(), so the queue drains. */
+ *  non-blocking pipe, while stream.write() queues it in order. End with process.exitCode (the process then exits once the
+ *  queue has drained), or after flushStdio() — never a bare exit, which drops the queue. Also counts the streams' writes
+ *  in flight, which flushStdio waits on. Idempotent. */
 export function installQueuedConsole(): void {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
   const line = (s: NodeJS.WriteStream) => (...a: unknown[]): void => { s.write(format(...a) + "\n"); };
   console.log = console.info = console.debug = line(process.stdout);
   console.warn = console.error = line(process.stderr);
 }
-/** Resolves once everything queued on stdout and stderr has been handed to the OS. */
-export const flushStdio = (): Promise<void> => Promise.all([process.stdout, process.stderr].map((s) => new Promise<void>((r) => { s.write("", () => r()); }))).then(() => undefined);
+// How many non-empty writes each stream has not yet handed to the OS, and who waits for that to reach 0. Bun (1.4.2) keeps
+// no usable writableLength (0 while 400 KB are queued) and calls back an EMPTY write at once, before what was queued ahead of
+// it is out; a non-empty write's callback does come once its bytes are written, in order. So every write is counted (the
+// stream's write wrapped once) and the count says when the queue is empty.
+const inFlight = new Map<NodeJS.WriteStream, { n: number; idle: Array<() => void> }>();
+function trackWrites(s: NodeJS.WriteStream): void {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] as Array<() => void> };
+  inFlight.set(s, st);
+  const write = s.write.bind(s) as (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (err?: Error | null) => void) => boolean;
+  const settle = (): void => { if (--st.n === 0) for (const r of st.idle.splice(0)) r(); };
+  s.write = (chunk: string | Uint8Array, encoding?: BufferEncoding | ((err?: Error | null) => void), cb?: (err?: Error | null) => void): boolean => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? undefined : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err?: Error | null) => { if (!called) { called = true; settle(); } done?.(err); });
+  };
+}
+/** Resolves once every write made through installQueuedConsole's streams has been handed to the OS (at once when there is
+ *  none in flight, or the streams are not tracked). */
+export const flushStdio = (): Promise<void> => Promise.all([process.stdout, process.stderr].map((s) => new Promise<void>((r) => {
+  const st = inFlight.get(s);
+  if (!st || st.n === 0) r(); else st.idle.push(r);
+}))).then(() => undefined);
 
 // ---- ending a CLI without losing its output
 // Every design-to-code entry point runs its main() through runCli: console goes through the queued streams, and the exit
-// code is process.exitCode — the process ends once the queue has drained, never with a bare process.exit() that drops it
+// code is process.exitCode — the process ends once the queue has drained, never with a bare exit call that drops it
 // (Bun loses what is still queued on a pipe at exit(): a 300 KB report into a slow reader arrived as its first 64 KB).
 // The few library helpers that must end the CLI mid-call (cli-args.ts cliParse, catalog-input.ts's fail-loud readers)
 // call exitCli(): inside runCli it throws CliExit, which unwinds to runCli and becomes the exit code; anywhere else (a
-// suite calling main() in-process, the MCP server importing a module) it is process.exit, as before.
+// suite calling main() in-process, the MCP server importing a module) it exits the process at once, as before.
 /** What exitCli throws inside runCli. Not an error: runCli turns it into the exit code, silently. */
 export class CliExit extends Error {
   readonly code: number;
@@ -222,10 +251,11 @@ export function runCli(main: (argv: string[]) => number | Promise<number>, o: Ru
     if (typeof r === "number") done(r); else r.then(done, fail);
   } catch (e) { fail(e); }
 }
-/** process.exit(code) once stderr and stdout have flushed — or after `capMs` when a reader never drains them. For a process
- *  that has to end while something still holds the loop (a hung step's watchdog, a browser that will not go). */
+/** Exit with `code` once everything written to stdout and stderr is out (flushStdio) — or after `capMs` when a reader never
+ *  drains them. For a process that has to end while something still holds the loop (a hung step's watchdog, a browser that
+ *  will not go). Needs installQueuedConsole (runCli calls it) to know what is in flight. */
 export function exitFlushed(code: number, capMs = 2_000): void {
   const exit = (): never => process.exit(code);
   setTimeout(exit, capMs).unref(); // a pending write keeps the loop up, so this still fires
-  process.stderr.write("", () => process.stdout.write("", exit));
+  void flushStdio().then(exit);
 }

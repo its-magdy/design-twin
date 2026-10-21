@@ -1582,7 +1582,7 @@ export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WR
 //        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] ` +
     "[--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]";

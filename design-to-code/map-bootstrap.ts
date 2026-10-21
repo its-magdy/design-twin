@@ -225,7 +225,7 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   // --catalog is repeatable: each names one more catalog (beyond the ones found beside the named one)

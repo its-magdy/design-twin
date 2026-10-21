@@ -687,7 +687,7 @@ function newPlanProblem(out: string, nodeId: string | undefined, layerName: stri
 // One line for a file that is there but cannot be used; `what` names it the way the messages always have.
 const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, "seed-from": { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }

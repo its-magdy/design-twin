@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -396,7 +396,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
 {
   const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-waivers-"));
-  const cli = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const cli = (...a: string[]) => runSync(process.execPath, [CLI, ...a], { cwd });
   const put = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof v === "string" ? v : JSON.stringify(v, null, 2)); return rel; };
   const readPlan = (): Plan | null => readJsonOrNull(path.join(cwd, "design/plan/Orders__1_1.json"), isPlan);
   const readReport = () => readJsonOrNull(path.join(cwd, "design/verify/Orders__1_1.report.json"), isVerifyReport);
@@ -415,7 +415,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   putW("design/export/pages/index.json", { pageDirs: [{ page: "Main", dir: "Main", index: "pages/Main/index.json" }], sourceFile: "Sample Kit", layers: (INDEX.index?.layers ?? []).filter((l) => l.id !== "9:9") });
   putW("design/export/pages/Dialogs/index.json", { page: "Dialogs", layers: [{ id: "9:9", name: "Export Dialog", file: "pages/Dialogs/Export_Dialog__9_9.json", sourceFile: "Sample Kit" }] });
   const wScreen = putW("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
-  const we = spawnSync(process.execPath, [CLI, "--expect", wScreen, "--out", "design/verify"], { encoding: "utf8", cwd: walked });
+  const we = runSync(process.execPath, [CLI, "--expect", wScreen, "--out", "design/verify"], { cwd: walked });
   const wDoc = readJsonOrNull(path.join(walked, "design/verify/Orders__1_1.expected.json"), isVerifyExpectation);
   safe("9:9 listed only in pages/Dialogs/index.json (an earlier walk) → not marked undesigned", () =>
     we.status === 0 && !!wDoc && (wDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === undefined));
@@ -433,7 +433,7 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
     { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" },
   ] });
   const mScreen = putM("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
-  const me = spawnSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify"], { encoding: "utf8", cwd: m2 });
+  const me = runSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify"], { cwd: m2 });
   const mDoc = readJsonOrNull(path.join(m2, "design/verify/Orders__1_1.expected.json"), isVerifyExpectation);
   safe("CLI: 1:50 in an older unnamed page-index row, root index top-level names another file → 1:50 not marked; 9:9 marked", () =>
     me.status === 0 && !!mDoc && (mDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined) && (mDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false));

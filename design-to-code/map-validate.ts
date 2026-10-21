@@ -155,7 +155,7 @@ isCodeConnectMap.expected = "a valid component map (the map-validate script list
 export { validateMap, isCodeConnectMap };
 
 // CLI: bun design-to-code/map-validate.ts <codeconnect.local.json>
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const file = argv[0];
   const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
   if (file === "--help" || file === "-h") { console.log(USAGE); return 0; }

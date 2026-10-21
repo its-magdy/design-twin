@@ -308,7 +308,7 @@ export type { ResolveStageKind };
 
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
 // (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   // --help is the only flag, so every other word is an argument — a screen named "--- Draft ---" is looked up, not parsed

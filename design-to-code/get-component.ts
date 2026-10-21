@@ -83,7 +83,7 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
 export { getComponent, findComponent, resolveVariantsFile };
 
 // CLI: bun design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`;
   if (argv.includes("--help") || argv.includes("-h")) { console.log(usage); return 0; }
   // --help is the only flag, so every other word is an argument — a component named "-Divider" is looked up, not parsed

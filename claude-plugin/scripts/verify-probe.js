@@ -44,6 +44,7 @@ function syncOnce(cmd, args, o, attempt) {
     stderr,
     ms: Date.now() - t0,
     ...s.error ? { error: s.error } : {},
+    ...s.pid ? { pid: s.pid } : {},
     timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
     attempts: attempt
   });
@@ -89,12 +90,43 @@ function runSync(cmd, args, o = {}) {
 }
 var pause = new Int32Array(new SharedArrayBuffer(4));
 function installQueuedConsole() {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
   const line = (s) => (...a) => {
     s.write(format(...a) + "\n");
   };
   console.log = console.info = console.debug = line(process.stdout);
   console.warn = console.error = line(process.stderr);
 }
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle2 = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk2, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk2.length === 0) return write(chunk2, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk2, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle2();
+      }
+      done?.(err);
+    });
+  };
+}
+var flushStdio = () => Promise.all([process.stdout, process.stderr].map((s) => new Promise((r) => {
+  const st = inFlight.get(s);
+  if (!st || st.n === 0) r();
+  else st.idle.push(r);
+}))).then(() => void 0);
 var CliExit = class extends Error {
   code;
   constructor(code) {
@@ -130,7 +162,7 @@ function runCli(main2, o, argv = process.argv.slice(2)) {
 function exitFlushed(code, capMs = 2e3) {
   const exit = () => process.exit(code);
   setTimeout(exit, capMs).unref();
-  process.stderr.write("", () => process.stdout.write("", exit));
+  void flushStdio().then(exit);
 }
 
 // design-to-code/kill-tree.ts

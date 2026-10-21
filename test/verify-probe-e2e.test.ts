@@ -11,6 +11,7 @@ import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -135,7 +136,7 @@ const finish = (): void => {
 // ---- the expectation, from the real --expect
 // (--out is the verify directory: the set is named by the frame's node, Staff_Directory__50_1)
 const SET = "Staff_Directory__50_1";
-const exp = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--expect", path.join(FIX, "staff-directory.json"), "--out", tmp], { encoding: "utf8" });
+const exp = runSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--expect", path.join(FIX, "staff-directory.json"), "--out", tmp]);
 const expected = path.join(tmp, SET + ".expected.json");
 if (exp.status !== 0 || !fs.existsSync(expected)) { check("verify-screen --expect wrote the expectation", false); finish(); report(); }
 
@@ -174,7 +175,7 @@ const sha1 = fs.existsSync(base + ".measured.json") ? crypto.createHash("sha256"
 check("no --run → a run of its own: `run <id>` on stderr, measured.runId = that id; its live status `done` rev 2 by verify-probe, measuredSha256 = the measured file's; the same doc, without its ownRun (pid, host), published as <Screen>.status.json beside the expectation",
   /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(own1) && m1?.runId === own1 && st1?.runId === own1 && st1.phase === "done" && st1.rev === 2 && st1.by === "verify-probe" && st1.measuredSha256 === sha1
   && isJsonObject(st1.ownRun) && st1.ownRun.pid !== process.pid && pub1 !== null && !("ownRun" in pub1) && JSON.stringify({ ...pub1, ownRun: st1.ownRun }) === JSON.stringify(st1));
-const cmp1 = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--compare", expected, base + ".measured.json", "--out", path.dirname(base)], { encoding: "utf8" });
+const cmp1 = runSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--compare", expected, base + ".measured.json", "--out", path.dirname(base)]);
 const rep1 = readJsonOrNull(path.join(path.dirname(base), SET + ".report.json"), isJsonObject);
 const inputs1 = rep1 !== null && isJsonObject(rep1.inputs) ? rep1.inputs : null;
 check("…--compare finds that run by the expectation's dir: no integrity reason, report.inputs.runId = the run",

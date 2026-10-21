@@ -791,7 +791,7 @@ function diffDirectory(dir: string, json: boolean, out: string | undefined): num
 
 const isDirectory = (p: string): boolean => fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json | export dir>... [--force]\n       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]\n       ${scriptCmd("design-diff")} <export dir> [--json] [--out <file>]   (${MERGED_VARIABLES_FILE} + every design-system file present, one report)`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); return argv.length ? 0 : 2; }
   const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;

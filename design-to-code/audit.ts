@@ -1537,7 +1537,7 @@ export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_
 // --gate: exit 1 if any blocker was found (default is always exit 0 — findings are advice unless --gate is set).
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document its flag names is a one-line error and exit 2, never an audit of nothing.
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]\n` +
     "       [--design-system design/export/design-system] [--variables design/export/variables.json]\n" +

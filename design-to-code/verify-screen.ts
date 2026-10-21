@@ -193,7 +193,7 @@ function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; fi
 export { selectForAccept };
 
 // ---------------------------------------------------------------- CLI
-function main(argv: string[]): number | Promise<number> {
+export function main(argv: string[]): number | Promise<number> {
   const USAGE =
     "usage:\n" +
     `  ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]\n` +

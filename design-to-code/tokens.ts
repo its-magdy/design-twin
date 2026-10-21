@@ -1398,7 +1398,7 @@ function checkGenerated(ds: TokensDoc, input: string, generated: string, cmd: st
 // from every screen (see tokens-native.ts for why and for the shape of each file).
 // The input is the SPLIT token file — design-system.json is a slim pointer manifest
 // with no `variables` array (see bridge/src/design-system-layout.ts).
-function main(args: string[]): number {
+export function main(args: string[]): number {
   const USAGE = `usage: ${scriptCmd("tokens")} <design/export/design-system/tokens.json | design/export/variables.json> [outDir]\n` +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +

@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { runSync } from "../design-to-code/proc.ts";
 import { reportToMarkdown, probeLine, mdText } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -246,14 +246,14 @@ console.log("[expect-cli] --expect CLI: main reads design/export/<pointer> and d
   put("design/export/pages/index.json", JSON.stringify({ pageDirs: [{ page: "Studio", pageId: "1:2", dir: "Studio", index: "pages/Studio/index.json", layers: 1 }], layers: [indexRow()], sourceFile: KILN }));
   put("design/export/" + REF, REF_PNG);
   put("design/export/design-system.json", JSON.stringify({ exportedAt: "2026-10-06T00:00:00Z", file: KILN, colorProfile: "display_p3", files: {} }));
-  const r = spawnSync(process.execPath, [CLI, "--expect", scr], { encoding: "utf8", cwd });
+  const r = runSync(process.execPath, [CLI, "--expect", scr], { cwd });
   const e = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
   const ri = e ? e.referenceImage : undefined;
   safe("[expect-cli] the CLI's expectation carries referenceImage from:index with the PNG's sha256, and the P3 stamp", () =>
     r.status === 0 && !!ri && ri.usable === true && ri.from === "index" && ri.sha256 === sha(REF_PNG) && ri.colorProfile === "display_p3");
   safe("[expect-cli] …stderr names the reference and its scale", () => /reference design\/export\/assets\/90_1_ref-7c1e0a\.png 2082×1058 at 1\.4222x \(index\), offset -12,-12/.test(r.stderr));
   fs.writeFileSync(path.join(cwd, "design/export/" + REF), png(360, 309));
-  const r2 = spawnSync(process.execPath, [CLI, "--expect", scr], { encoding: "utf8", cwd });
+  const r2 = runSync(process.execPath, [CLI, "--expect", scr], { cwd });
   const e2 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
   safe("[expect-cli] the CLI on a thumbnail: usable:false and a 'no visual diff' note", () =>
     r2.status === 0 && e2?.referenceImage?.usable === false && /note {2}no visual diff for this screen: the reference is a 360 px image/.test(r2.stderr));
@@ -383,7 +383,7 @@ console.log("[visual-cli] --compare CLI — the VISUAL line after the behaviour 
   // the probe ran in a stage dir that is gone; the diff was published beside the measured file
   const m = put("design/verify/Firings__90_1.measured.json", base({ visual: ranVisual({ diff: ".stage/run-1/Firings__90_1.diff.png" }) }));
   put("design/verify/Firings__90_1.diff.png", png(8, 8));
-  const r = spawnSync(process.execPath, [CLI, "--compare", e, m], { encoding: "utf8", cwd });
+  const r = runSync(process.execPath, [CLI, "--compare", e, m], { cwd });
   const rep = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.report.json"), isVerifyReport);
   const err = r.stderr.split("\n");
   const bl = rep && rep.behaviour ? err.indexOf(rep.behaviour.headline) : -1;
@@ -393,7 +393,7 @@ console.log("[visual-cli] --compare CLI — the VISUAL line after the behaviour 
     rep?.visual?.diff?.path === "design/verify/Firings__90_1.diff.png" && rep.visual.diff.exists === true && !/\(missing\)/.test(rep.visual.headline));
   safe("[visual-cli] …report.md carries the section", () => /## Visual diff — informational, not part of the verdict/.test(fs.readFileSync(path.join(cwd, "design/verify/Firings__90_1.report.md"), "utf8")));
   const m2 = put("design/verify/Old__90_1.measured.json", { ...base(), visual: { ran: "yes" } });
-  const r2 = spawnSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/old/"], { encoding: "utf8", cwd });
+  const r2 = runSync(process.execPath, [CLI, "--compare", e, m2, "--out", "design/verify/old/"], { cwd });
   const rep2 = readJsonOrNull(path.join(cwd, "design/verify/old/Firings__90_1.report.json"), isVerifyReport);
   safe("[visual-cli] a malformed visual block through the CLI: a note, exit 0/1 (never 2), report.visual ran:false 'malformed'", () =>
     (r2.status === 0 || r2.status === 1) && /note .*measured\.visual is not a visual block/.test(r2.stderr) && rep2?.visual?.ran === false && /visual block is malformed/.test(rep2.visual.why ?? ""));
@@ -404,12 +404,12 @@ console.log("[visual-cli] --compare CLI — the VISUAL line after the behaviour 
   const publish = (runId: string): void => { put("design/verify/Firings__90_1.status.json", { schema: "designtwin/verify-status@2", screen: "Firings", runId, rev: 4, phase: "done", detail: "",
     at: "2026-10-06T01:00:00Z", by: "verify-probe", measuredSha256: sha(fs.readFileSync(path.join(cwd, mm))) }); };
   publish("run-v");
-  spawnSync(process.execPath, [CLI, "--compare", e, mm], { encoding: "utf8", cwd });
+  runSync(process.execPath, [CLI, "--compare", e, mm], { cwd });
   const rep3 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.report.json"), isVerifyReport);
   safe(`[migrated] the recorded diff under the set's old name → read as design/verify/Firings__90_1.diff.png (got ${JSON.stringify(rep3?.visual?.diff)})`, () =>
     rep3?.visual?.diff?.path === "design/verify/Firings__90_1.diff.png" && rep3.visual.diff.exists === true);
   publish("run-other");
-  spawnSync(process.execPath, [CLI, "--compare", e, mm], { encoding: "utf8", cwd });
+  runSync(process.execPath, [CLI, "--compare", e, mm], { cwd });
   const rep4 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.report.json"), isVerifyReport);
   safe("[migrated] …another run's status → no fallback: the recorded path, missing", () => rep4?.visual?.diff?.path === "design/verify/Firings.diff.png" && rep4.visual.diff.exists === false);
   fs.rmSync(cwd, { recursive: true, force: true });
