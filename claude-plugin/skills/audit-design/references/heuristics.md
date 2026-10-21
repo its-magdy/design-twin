@@ -1,6 +1,6 @@
 # Automated checks — what `audit.js` computes, how to read it, how to do it by hand
 
-`node "<scripts>/audit.js" <screen.json>... --platform <p> [--design-system design/export/design-system | design/export/libraries/<dir>] [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
+`bun --no-install --no-env-file "<scripts>/audit.js" <screen.json>... --platform <p> [--design-system design/export/design-system | design/export/libraries/<dir>] [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
 
 Output: `summary {blockers, warnings, info}`, `tokenBinding {color, typography, spacing, radius, effects}`
 (`bound/total/pct`), `components[]` (state coverage, each row naming its `catalog` and `matchedBy`),

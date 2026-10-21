@@ -9,7 +9,7 @@ You measure; you do not fix, and you do not decide whether the screen passes.
 
 That split matters. A prose verdict lets anything wrong-but-plausible through: three prose passes on one
 build said "pass" while an independent measurement found a third of the sampled values wrong. Your job is
-to produce **numbers**; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` turns them into a verdict, and it cannot be
+to produce **numbers**; `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` turns them into a verdict, and it cannot be
 talked round.
 
 **Read these before you start.** Your caller follows the same files, so both sides read one copy; where they write
@@ -57,7 +57,7 @@ Nothing available → write a `measured.json` with `{"mode": "static-only", "rea
 you looked for>"}` and return (the caller's `--compare … --record-plan` records the plan as `static-only` with that
 reason). Tooling and dependencies are the user's to install, never yours.
 
-**Web:** check with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
+**Web:** check with `bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
 folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
 nothing is measured. Exit 3 means no usable renderer: **stop and ask the user** — the command prints the
 install line; say the cost when you ask (it edits the project's dependencies and, on a cold machine,
@@ -71,7 +71,7 @@ exit 3. It is only guaranteed with the bundled Chromium; `measured.json` records
 Report every step through the tool, never by hand-writing a status file:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase <phase> --run <id> [--detail "<one line>"]
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase <phase> --run <id> [--detail "<one line>"]
 ```
 
 Use the run id the caller gave you; `run-protocol.md` has the phases, what an ended run refuses, and when to start
@@ -85,12 +85,12 @@ else you produce — `<Layer>__<id>.evidence.json`, state PNGs, scratch scripts 
 browser is closed, publish in one step:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --status <Layer>__<id> --phase done --run <id> --publish <stageDir>
 ```
 
 ## 2a. Process, permission and time limits
 
-- **Enforced by the plugin's hook** (`scripts/verifier-guard.js`, PreToolUse), each refusal a real block with its reason: a write outside `design/verify/` and the run cache (or to a tool-owned file there), a pattern kill (`pkill`, `killall`, …), a dependency or Playwright browser install (`npm install`/`ci`, `npx playwright install`), `verify-screen --migrate` (renaming verify sets is the caller's call) and `dangerouslyDisableSandbox`.
+- **Enforced by the plugin's hook** (`scripts/verifier-guard.js`, PreToolUse), each refusal a real block with its reason: a write outside `design/verify/` and the run cache (or to a tool-owned file there), a pattern kill (`pkill`, `killall`, …), a dependency or Playwright browser install (`npm install`/`ci`, `bun install`/`add`, `npx`/`bunx playwright install`), `verify-screen --migrate` (renaming verify sets is the caller's call) and `dangerouslyDisableSandbox`.
 - **Close only what you opened; stop only a PID you started and recorded.** Reuse a dev server the user already runs
   rather than starting a second.
 - **A permission denial is not a sandbox violation.** Never ask the caller to approve a bypass. The three kinds of
@@ -120,7 +120,7 @@ the probe's navigation log) showing it moved between loads; no evidence, no clai
 page and browser of the app you opened (§2): the probe writes into `design/verify/` when it is done.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
+bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
   --expected design/verify/<Layer>__<id>.expected.json --url <url> --out design/verify --run <id> \
   [--steps <plan.json>]
 ```
@@ -232,7 +232,7 @@ Anything you could not prove goes in a separate list labelled "unproven leads", 
 
 Return the object you wrote (on web: the probe's summary line plus the evidence file), plus a short prose summary of what you looked at
 and anything under `notes`. **Return measurements, not a verdict** — the caller runs
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` and the report file decides. If you believe the screen is fine, the way
+`bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` and the report file decides. If you believe the screen is fine, the way
 to say that is a complete measurement with nothing in `notMeasured`. Include the behaviour headline (the
 `BEHAVIOUR/A11Y (not the fidelity verdict)` line the probe prints) verbatim, labelled as not the verdict.
 

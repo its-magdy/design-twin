@@ -65,7 +65,7 @@ string, alpha included) or `{"file": "…", "reason": "…"}` for a generated to
 
 ## Run it by hand
 
-Run it the same way the Stop hook does: `node "<scripts>/verify-build.js" <plan.json>` (the plan
+Run it the same way the Stop hook does: `bun --no-install --no-env-file "<scripts>/verify-build.js" <plan.json>` (the plan
 path is a positional argument; a plan keeps the name it was written under, and a NEW one is `design/plan/<Layer>__<id>.json`). It reads the hook's JSON from stdin only when fd 0 is not a TTY; a piped payload
 that delivers nothing within 1 s is treated as "no payload"; the whole read is capped at 60 s naming what it was
 still waiting on. A manual run from a terminal never blocks on stdin at all.
@@ -75,7 +75,7 @@ still waiting on. A manual run from a terminal never blocks on stdin at all.
 The hook records its result and a hash of every file in `files[]` — and of every module the plan's
 anchors/components map (`mapModule`: a project-relative file; one with no extension resolves like an import,
 `.tsx`/`.ts`/`.jsx`/`.js` then `/index.*`; an `@/`/`~/` alias or a package is not hashed — `--status` and the
-verify report name it once) — under `verification.hook`; `node "<scripts>/verify-build.js" --status
+verify report name it once) — under `verification.hook`; `bun --no-install --no-env-file "<scripts>/verify-build.js" --status
 <plan.json>` derives the status:
 
 - `verified` only when the hook passed, no listed file changed since, **and** every report of the screen's node —

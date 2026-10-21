@@ -15,7 +15,7 @@ Loaded from the `help` skill. Find the symptom, give the fix — don't debug fro
 ## Run `dtwin doctor` first
 
 **Connection-shaped problem (hangs, timeouts, `EADDRINUSE`, token rejected, "nothing connected")? Run
-`dtwin doctor` first.** It checks Node, the token (incl. an env var shadowing the saved one), the
+`dtwin doctor` first.** It checks Bun (≥ 1.4.2), the token (incl. an env var shadowing the saved one), the
 daemon, the port and who holds it, whether the plugin connects — and if a plugin is running with the
 *wrong* token it says so with both fingerprints — then the project (`design/`, export age, maps,
 `.mcp.json`). Each check is ✓ / ! / ✗ with the next step; it changes nothing (mints no token, writes no
@@ -30,12 +30,12 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
   `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
   through it and nothing needs stopping, so this means something *else* holds the port: a one-shot
-  `dtwin pull` still running, a stale `node`, or an MCP server from an older install (current ones
+  `dtwin pull` still running, a stale `bun` process, or an MCP server from an older install (current ones
   share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process. If the
   error names a socket from an earlier dtwin version, `dtwin --stop` stops that daemon.
 - **Windows: "port … is already in use — another MCP session or dtwin command holds the bridge"**, or
-  `dtwin serve` says it is not supported → there is no daemon on Windows yet (Node cannot make its socket
-  private to you), so nothing shares the bridge: one MCP session or `dtwin` command at a time. Close the
+  `dtwin serve` says it is not supported → there is no daemon on Windows yet (its socket cannot be made
+  private to you there), so nothing shares the bridge: one MCP session or `dtwin` command at a time. Close the
   other Claude Code session (or wait for the other command) and retry; the plugin reconnects on its own.
 - **"refusing to use … for the dtwin daemon socket"**, or `dtwin status` says no daemon while one is
   running → the daemon socket lives in `$XDG_RUNTIME_DIR`, else `$TMPDIR/designtwin-<uid>/`, so two
@@ -119,8 +119,8 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 
 - **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
-  `.mcp.json` there pointing at an absolute path to `bridge/dist/figma-mcp.js` (built and linked) or
-  `bridge/src/figma-mcp.ts` (repo checkout) — no token needed in it,
+  `.mcp.json` there whose `command` is the absolute path of `bun` and whose `args` are
+  `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` (`dtwin init --mcp` writes exactly that) — no token needed in it,
   since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
   and restart.
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
@@ -140,14 +140,21 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (Loading/Skeleton/Empty/Error/Offline…) in the exported layers only. Export the page that holds it, or
   rename the frame. Library components' states show as "sampled" — pull the library with
   `--as-library` for their full variants.
-- **A script "not found" / `Cannot find module '/scripts/…'`** → the command ran with an empty plugin
+- **`bun: command not found`, a hook error naming `bun`, or the SessionStart notice "Design Twin needs Bun ≥ 1.4.2"**
+  → every plugin script and hook, `dtwin` and the MCP server run on Bun (Node is not supported). Install it from
+  https://bun.sh/install (`curl -fsSL https://bun.sh/install | bash`; Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`)
+  or upgrade with `bun upgrade`, then restart Claude Code. Installed but still not found → it is not on the PATH Claude
+  Code was started with (the installer adds `~/.bun/bin` to your shell profile; an app launched from the dock or Start
+  menu may not read it): start Claude Code from a new terminal, or put `~/.bun/bin` on the system PATH. Until then the
+  visual-verifier's guard blocks that agent's Bash/Write calls (a guard that cannot run never lets a call through).
+- **A script "not found" / `Module not found "/scripts/…"`** → the command ran with an empty plugin
   path. The scripts ship at `<plugin>/scripts/<name>.js`. Claude Code writes the real plugin path into a
   skill's or agent's own text when it loads it, but `CLAUDE_PLUGIN_ROOT` is NOT an environment variable in
-  the Bash tool, so `node "$CLAUDE_PLUGIN_ROOT/scripts/…"` typed into a shell always fails. Copy the path
+  the Bash tool, so `bun --no-install --no-env-file "$CLAUDE_PLUGIN_ROOT/scripts/…"` typed into a shell always fails. Copy the path
   exactly as the skill shows it; a script's own usage/hint lines also print their real path. If the skill
   text itself still shows the literal `${…}` form (it was preloaded into an agent), the agent's prompt
   names the folder. The folder is missing → re-run `/plugin install designtwin`. Working from a clone of
-  the Design Twin repo instead? The same scripts are `node design-to-code/<name>.ts`.
+  the Design Twin repo instead? The same scripts are `bun design-to-code/<name>.ts`.
 - **`verify-probe` exits 3: "chromium did not launch" / no usable browser** → Playwright's Chromium is not
   installed (or not the revision this Playwright expects). The install line the probe prints downloads a browser —
   the user's call. A Chromium already on the machine works instead: `verify-probe.js --browser-path <executable>`
@@ -166,7 +173,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   project has verify sets from before sets were named by node (a nickname, `<Screen>@320`, `<Screen>-r1`). Every set
   is now `<Layer>__<id>` (a variant `<Layer>__<id>.<slug>`); `--compare` and the probe refuse a legacy-named
   expectation, and `--status` a node that has only legacy-named sets. From the project root run
-  `node "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
+  `bun --no-install --no-env-file "<plugin>/scripts/verify-screen.js" --migrate` — a dry run that lists each rename and each set it skips, with why —
   then `--migrate --apply`, which renames every file of each set (the live status too) and rewrites the paths a
   plan's `verification` records. Only a legacy base set beside an existing `<Layer>__<id>` base set is retired (its
   expectation gets `.retired`); a legacy variant becomes `<Layer>__<id>.<slug>`. A set it skips, the dry run says why,
