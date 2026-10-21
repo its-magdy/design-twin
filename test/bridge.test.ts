@@ -905,13 +905,34 @@ void (async () => {
           && why.every((r) => r.test(note));
       });
     })());
-    ok("[init] mcpEntryProblems: a healthy entry, and the `bunx designtwin mcp` form, have none; each broken shape is named", (() => {
+    ok("[init] mcpEntryProblems: a healthy entry has none; each broken shape is named", (() => {
       const P = (e: unknown) => init.mcpEntryProblems(e, { which: (c) => (c === "bunx" ? "/x/bunx" : null) });
-      return P(healthy).length === 0 && P({ command: "bunx", args: ["designtwin", "mcp"] }).length === 0
+      return P(healthy).length === 0
         && /runs on Node/.test(P({ command: "npx", args: ["designtwin", "mcp"] }).join())
         && /is not on PATH/.test(P({ command: "bun", args: ["--no-install", "--no-env-file", realMcp] }).join())
         && /does not run the server with bun/.test(P({ command: process.execPath.replace(/bun(\.exe)?$/, "deno"), args: [realMcp] }).join())
         && /no `command`/.test(P({ args: [realMcp] }).join()) && /no `command`/.test(P(null).join());
+    })());
+    // The package-runner forms name a package, not an install: bunx fetches it (or runs its own cache's copy) at every
+    // start — the ephemeral registration init refuses to write. Their commands exist (the which seam), so the only problem
+    // is the form itself; init --mcp repairs it to this install keeping the entry's other fields, and doctor fails it.
+    const doctorMod = await import("../bridge/src/doctor.ts");
+    ok("[init] `bunx designtwin mcp` and `bun x designtwin mcp` are problems init --mcp repairs (other fields kept) and doctor fails", (() => {
+      const forms = [{ command: "bunx", args: ["designtwin", "mcp"] }, { command: "bun", args: ["x", "designtwin", "mcp"] }, { command: "bunx", args: ["--no-install", "designtwin", "mcp"] }];
+      const which = (c: string) => (c === "bunx" || c === "bun" ? `/x/${c}` : null);
+      return forms.every((form) => {
+        const problems = init.mcpEntryProblems(form, { which });
+        const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: { ...form, env: { KEEP: "1" } } } }) });
+        const plan = init.plan(d, { mcp: true, mcpEntry: healthy, probe: { which }, token: tok });
+        init.apply(d, plan, () => {});
+        const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+        const note = plan.find((a) => a.kind === "write" && a.path === ".mcp.json")?.note ?? "";
+        const d2 = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: form } }) });
+        const check = doctorMod.checkProject(d2).find((c) => c.id === "mcp");
+        return problems.length === 1 && /by package name/.test(problems[0] ?? "")
+          && JSON.stringify(e) === JSON.stringify({ ...healthy, env: { KEEP: "1" } }) && /REPAIRED.*by package name/.test(note)
+          && check?.status === "fail" && /by package name/.test(check.detail) && /dtwin init --mcp/.test(check.next ?? "");
+      });
     })());
     ok("[init] a figma-mcp.ts inside a bunx cache is a problem, and an install run from one refuses to register (or repair) anything", (() => {
       const cached = path.join(os.tmpdir(), ".bunx-1000", "designtwin@0.1.0", "node_modules", "designtwin", "src");

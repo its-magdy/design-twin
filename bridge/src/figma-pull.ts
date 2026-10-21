@@ -8,8 +8,8 @@
 //
 // ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor`,
 // `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before server-core loads.
-// `dtwin mcp` routes to the MCP server (figma-mcp.ts). This is the officially-supported registration
-// shape (`bunx designtwin mcp`), and it must not disturb any existing invocation: the branch is taken
+// `dtwin mcp` routes to the MCP server (figma-mcp.ts). The .mcp.json entry `dtwin init --mcp` writes names
+// figma-mcp.ts itself (an absolute bun and path); this route must not disturb any existing invocation: the branch is taken
 // ONLY when this file is the process entry AND the first argument is exactly "mcp", so `dtwin …` and
 // importing this module from the test suites are untouched, and `bun bridge/src/figma-mcp.ts` still
 // works when invoked directly. Everything that reads argv lives inside the async `cli()`, where a

@@ -439,7 +439,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
       // tools, with nothing here to say why. A ✗, not a note — and init --mcp is the repair (it rewrites that entry).
       const broken = mine === undefined ? [] : mcpEntryProblems(found[mine], { cwd });
       if (!mine) out.push(ok("mcp", "MCP registration", "not registered in .mcp.json (optional — `dtwin init --mcp` adds it)"));
-      else if (broken.length) out.push(fail("mcp", "MCP registration", `registered as "${mine}" in .mcp.json, but Claude Code cannot start it as written: ${broken.join("; ")}`, "run `dtwin init --mcp` from the install you use — it rewrites that entry to this bun and its figma-mcp.ts — then restart Claude Code"));
+      else if (broken.length) out.push(fail("mcp", "MCP registration", `registered as "${mine}" in .mcp.json, but Claude Code cannot reliably start it as written: ${broken.join("; ")}`, "run `dtwin init --mcp` from the install you use — it rewrites that entry to this bun and its figma-mcp.ts — then restart Claude Code"));
       else if (mine === "designtwin") out.push(ok("mcp", "MCP registration", 'registered as "designtwin" in .mcp.json'));
       else out.push(warn("mcp", "MCP registration", `registered under the legacy key "${mine}" — it still works, but new setups use "designtwin" ("figma" collides with Figma's own MCP server)`, `rename the "${mine}" key in .mcp.json to "designtwin", then restart Claude Code`));
     }

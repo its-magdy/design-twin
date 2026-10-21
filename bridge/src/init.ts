@@ -10,7 +10,8 @@
 //   - Never overwrites. Every file it would write is skipped, and said so, if it already exists;
 //     .mcp.json is MERGED (an existing "figma" entry is left exactly as it is). The one exception is
 //     an entry of OURS that can no longer start (mcpEntryProblems: a bun or figma-mcp.ts that is gone,
-//     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags): --mcp re-points that entry, under
+//     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags, a `bunx designtwin mcp` that fetches the
+//     package at start-up): --mcp re-points that entry, under
 //     its own key and keeping its other fields, at this install — and says so (--dry-run only says so).
 //   - Needs no bridge, no plugin, no port: it only touches the project directory and the per-user
 //     token file, so it works while a daemon or the MCP server holds 8787.
@@ -86,7 +87,7 @@ const MCP_KEY = "designtwin";
 
 // Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.{ts,js} (what
 // init writes: bridge/src/figma-mcp.ts — or the bridge/dist/figma-mcp.js / .mjs / .mts an older init
-// wrote), or runs `designtwin mcp` (the npx/bunx form). One rule for init (don't double-register)
+// wrote), or runs `designtwin mcp` (the npx/bunx form — ours, but one init repairs). One rule for init (don't double-register)
 // and doctor (report it).
 const isOurMcpEntry = (e: unknown): boolean => {
   // Untyped JSON from the user's .mcp.json: only an object can carry `args` (JSON has no other shape that does).
@@ -128,8 +129,8 @@ export interface EntryProbe {
 }
 
 /** What is wrong with an .mcp.json entry of OURS (isOurMcpEntry), one phrase each — empty when it will start: its command
- *  exists, it runs on Bun (not Node, not the old bridge/dist build), its server script exists outside a bunx cache, and
- *  bun gets the two flags before that script. The ONE rule for init (repair it) and doctor (report it). */
+ *  exists, it runs on Bun (not Node, not the old bridge/dist build), it names a server script (not a package bunx would
+ *  fetch), that script exists outside a bunx cache, and bun gets the two flags before that script. The ONE rule for init (repair it) and doctor (report it). */
 function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => Bun.which(c), cwd = process.cwd() }: EntryProbe = {}): string[] {
   if (!isRecord(e) || typeof e.command !== "string" || e.command === "") return ["it has no `command`"];
   const command = e.command;
@@ -142,7 +143,14 @@ function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => B
   if (!found) out.push(`its command \`${command}\` ${/[\\/]/.test(command) ? "does not exist" : "is not on PATH"}`);
   const i = args.findIndex((a) => FIGMA_MCP_SCRIPT.test(a));
   const script = args[i];
-  if (script === undefined) return out; // the `bunx designtwin mcp` form: nothing more to check than its command
+  // No server script: the package-runner form (`bunx designtwin mcp`, `bun x designtwin mcp`, an older `npx designtwin
+  // mcp`). It names a package, not this install: bunx fetches it from the registry at start-up (network, unpinned, outside
+  // any lockfile) and, with or without --no-install, may run whatever copy sits in its own cache — the one Bun replaces or
+  // deletes on its own. That is the ephemeral registration init refuses to write, so it is one to repair, not to keep.
+  if (script === undefined) {
+    out.push(`it runs the server by package name (\`${[command, ...args].join(" ")}\`) — bunx fetches that from the registry, or a bunx cache Bun replaces or deletes on its own, at every start`);
+    return out;
+  }
   const abs = path.resolve(cwd, script);
   // figma-mcp.js / .mjs (bridge/dist, or the older bridge/figma-mcp.mjs) is the Node-era build: the package ships .ts now
   if (/\.m?js$/.test(script)) out.push(`it points at the old Node build (${script})`);
@@ -286,7 +294,8 @@ function plan(cwd: string, { mcp = false, mcpEntry, refuseMcp, probe, token }: P
       // and the two would fight over port 8787.
       const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
       // Ours, but it cannot start: a bun or a figma-mcp.ts that has since moved (a deleted clone, a Homebrew upgrade, a
-      // bunx cache Bun cleaned), or a Node-era entry (`node …/bridge/dist/figma-mcp.js`). Left as is, Claude Code would
+      // bunx cache Bun cleaned), a Node-era entry (`node …/bridge/dist/figma-mcp.js`), or one that starts only as long
+      // as bunx can fetch the package (`bunx designtwin mcp`). Left as is, Claude Code would
       // show a failed server and no tools; the one write that fixes it is re-pointing THAT entry, under its own key, at
       // this install. Every other field the user put on it (env, …) is kept.
       const broken = mine === undefined ? [] : mcpEntryProblems(servers[mine], { cwd, ...probe });

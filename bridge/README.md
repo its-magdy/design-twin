@@ -136,7 +136,8 @@ It needs no bridge, plugin or free port. It never overwrites: an existing `targe
 unparseable `.mcp.json` are all left alone and reported. The one exception is an entry of **ours** that
 can no longer start — its `bun` or `figma-mcp.ts` is gone (a deleted clone, a `brew upgrade` that removed
 the versioned bun it named), or it is a Node-era entry (`node …/bridge/dist/figma-mcp.js`), or bun runs it
-without `--no-install --no-env-file`: `--mcp` re-points that entry, under its own key and keeping its other
+without `--no-install --no-env-file`, or it runs the package by name (`bunx designtwin mcp`, which fetches it
+from the registry or Bun's cache at every start): `--mcp` re-points that entry, under its own key and keeping its other
 fields, at this install, and prints `REPAIRED …` with what was wrong (`--dry-run` only prints it). The entry
 names the bun on your PATH when that is the bun running init (`~/.bun/bin/bun`, Homebrew's
 `/opt/homebrew/bin/bun` — paths that survive an upgrade), else the running bun's own path. Run from a
@@ -233,7 +234,8 @@ open file is seen), then each file's `hello` (so it is named).
    (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
    registration (a legacy `figma` key still works; new setups use `designtwin`). A registered entry that
    cannot start — its command or `figma-mcp.ts` missing, Node-shaped (`node`, a `bridge/dist` script), bun
-   without `--no-install --no-env-file`, or a script in a `bunx` cache — is a ✗ naming `dtwin init --mcp`,
+   without `--no-install --no-env-file`, a script in a `bunx` cache, or the package run by name
+   (`bunx designtwin mcp`) — is a ✗ naming `dtwin init --mcp`,
    which repairs it. `DT_TEST_EPHEMERAL_PORT` (a test-only seam) set in the environment is a note too.
 
    The "which Figma files" line exists because the freshness line describes exactly one file — the
