@@ -1,7 +1,7 @@
 // The shared atomic write (bridge/src/atomic-write.ts): content, a unique tmp name beside the target, no tmp left
 // after a failure, the old file intact, the 0600 mode for a secret — plus its callers that have no other
 // port-free coverage (the token file). Temp dirs only; binds no port.
-// Run with:  node test/atomic-write.test.ts
+// Run with:  bun test/atomic-write.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

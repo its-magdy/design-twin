@@ -76,9 +76,9 @@ const PROFILES = ["web-tailwind", "web-css-modules", "react-native", "swiftui", 
 // (bridge/src/figma-mcp.ts), so its tools surface as mcp__designtwin__figma_status etc.
 const MCP_KEY = "designtwin";
 
-// Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.{ts,js} (a
-// checkout's bridge/src/figma-mcp.ts, an install's bridge/dist/figma-mcp.js — or the .mjs/.mts an
-// older init wrote), or runs `designtwin mcp` (the npx form). One rule for init (don't double-register)
+// Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.{ts,js} (what
+// init writes: bridge/src/figma-mcp.ts — or the bridge/dist/figma-mcp.js / .mjs / .mts an older init
+// wrote), or runs `designtwin mcp` (the npx/bunx form). One rule for init (don't double-register)
 // and doctor (report it).
 const isOurMcpEntry = (e: unknown): boolean => {
   // Untyped JSON from the user's .mcp.json: only an object can carry `args` (JSON has no other shape that does).
@@ -262,16 +262,19 @@ function main(argv: string[]): void {
   const log = (m: string) => console.error("[dtwin init] " + (dry ? "(dry run) " : "") + m);
 
   const token = tokenStore.resolve({ persist: !dry });
-  // Absolute path to THIS install's server: works for a repo clone and a global npm install alike,
-  // and needs no network at Claude Code start-up (unlike `npx -y designtwin mcp`). The entry is the MCP
-  // server that sits beside THIS file, in the same form: bridge/src/figma-mcp.ts when init runs from a
-  // checkout's source, bridge/dist/figma-mcp.js when it runs from the built (npm-installed) package.
-  const mcpEntry: McpEntry = { command: "node", args: [path.join(import.meta.dirname, "figma-mcp" + path.extname(import.meta.filename))] };
+  // Absolute paths to THIS install's server and to the bun running it now: works for a repo clone and a
+  // global install alike, and needs no network at Claude Code start-up (unlike `bunx designtwin mcp`).
+  // The server is the figma-mcp.ts that sits beside THIS file (a checkout and an install both carry the
+  // source; there is no build). The command is process.execPath, not "bun": Claude Code starts the server
+  // with ITS environment, whose PATH may not have the ~/.bun/bin a shell profile adds — and the bun that
+  // ran init is one this package is known to work with. The flags are the shebang's (figma-pull.ts):
+  // no auto-install from the network, and the project's .env stays out of the server's environment.
+  const mcpEntry: McpEntry = { command: process.execPath, args: ["--no-install", "--no-env-file", path.join(import.meta.dirname, "figma-mcp.ts")] };
   const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, token });
   if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
-  // The plugin manifest of a repo checkout: bridge/src/ (or bridge/dist/) -> ../../figma-plugin/. An npm
+  // The plugin manifest of a repo checkout: bridge/src/ -> ../../figma-plugin/. A package
   // install has no figma-plugin/ beside it, so the step below falls back to naming the repo instead.
   const manifest = path.join(import.meta.dirname, "..", "..", "figma-plugin", "manifest.json");
   // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —

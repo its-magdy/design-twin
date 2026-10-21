@@ -229,9 +229,15 @@ export const DAEMON_UNSUPPORTED = "`dtwin serve` and sharing one bridge between 
 // Windows (no process.getuid) keeps os.tmpdir() unchanged: a per-user directory there, and POSIX
 // mode bits do not apply. (No daemon listens there anyway: see daemonSupported.)
 //
-// Length: a Unix socket path is limited by sockaddr_un.sun_path (Node: "107 bytes on Linux and 103
-// bytes on macOS"; longer throws). A macOS tmpdir is ~48 bytes, so
-// `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock` is ~84 bytes there; /run/user/<uid>/designtwin-<port>.sock ~36.
+// Length: the kernel limits a Unix socket address to sockaddr_un.sun_path — 108 bytes on Linux, 104 on
+// macOS, each with its terminating NUL. Bun does not hand a longer path to the kernel as it is: on Linux
+// it binds and connects through /proc/self/fd/<dir fd>/<name> (bun-usockets bsd.c), so any length works
+// there. On macOS, only a recent Bun has the equivalent (fchdir into the directory, then the bare name);
+// an older one fails with ENAMETOOLONG — and Node, before it, silently TRUNCATED the path and bound a
+// different file. So on macOS a path over 103 bytes is refused here, by sockPath, with the fix named
+// (MAX_SOCK_PATH_BYTES), rather than left to whichever of those the running Bun does. It takes a long
+// TMPDIR to get there: a default macOS tmpdir is ~48 bytes, so `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock`
+// is ~84 bytes; /run/user/<uid>/designtwin-<port>.sock (Linux, XDG_RUNTIME_DIR) ~36.
 
 /** Why `dir` is not safe to hold this user's socket, or null when it is. */
 export function privateDirProblem(dir: string, uid: number): string | null {
@@ -315,10 +321,25 @@ export function sockPath(port?: number, place: SockPlace = {}): string {
   return path.join(dir, checkedSockName(port, place, dir));
 }
 
+/** The longest socket path (bytes, without the NUL) `platform` is held to — see "Length" above. Only
+ *  macOS has one: on Linux Bun reaches any length through /proc/self/fd. */
+export const MAX_SOCK_PATH_BYTES: Partial<Record<NodeJS.Platform, number>> = { darwin: 103 };
+
+/** Why `sock` is too long to be a socket path on `platform`, or null. */
+export function sockLengthProblem(sock: string, platform: NodeJS.Platform = process.platform): string | null {
+  const max = MAX_SOCK_PATH_BYTES[platform];
+  const bytes = Buffer.byteLength(sock);
+  if (max === undefined || bytes <= max) return null;
+  return `refusing to use ${sock} as the dtwin daemon socket: it is ${bytes} bytes, and a Unix socket path on ${platform === "darwin" ? "macOS" : platform} is limited to ${max}. ` +
+    "Point XDG_RUNTIME_DIR or TMPDIR at a shorter directory only you can access.";
+}
+
 function checkedSockName(port: number | undefined, place: SockPlace, dir: string): string {
   const name = sockName(port, place);
   const uid = placeUid(place);
   const sock = path.join(dir, name);
+  const tooLong = sockLengthProblem(sock, place.platform);
+  if (tooLong) throw new Error(tooLong);
   const bad = uid === undefined ? null : sockFileProblem(sock, uid);
   if (bad) throw new Error(`refusing to use ${sock} as the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
   return name;

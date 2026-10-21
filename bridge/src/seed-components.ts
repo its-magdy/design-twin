@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-install --no-env-file
 // seed-components — pre-populate design/components.json from Code Connect files in the codebase.
 //
 // Code Connect files ARE the Figma-component -> code-component mapping you'd otherwise hand-author,
@@ -13,7 +13,7 @@
 //
 // Usage:
 //   dtwin seed [codeRoot=.] [outDir=design] [--dry-run]              (routed by figma-pull.ts)
-//   node bridge/src/seed-components.ts [codeRoot=.] [outDir=design] [--dry-run]   (the same, run directly)
+//   bun bridge/src/seed-components.ts [codeRoot=.] [outDir=design] [--dry-run]    (the same, run directly)
 //
 // Merges into design/components.json fill-missing-only (never clobbers hand-authored fields) and, for
 // forms that carry only a node-id, resolves it to the Figma component NAME via design/design-system.json.
@@ -23,7 +23,6 @@ import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
 import { ifDefined, nullProto } from "./json-util.ts";
 import { writeJsonLike } from "./json-file.ts";
-import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "out", "vendor", "Pods", ".build"]);
@@ -236,4 +235,4 @@ function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
 
 // Only when RUN directly (it is a CLI, driven by the tests as a subprocess). `dtwin seed` imports this
 // module and calls main() itself, so the guard is what keeps that import from also scanning the tree.
-if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
+if (import.meta.main) main(process.argv.slice(2));

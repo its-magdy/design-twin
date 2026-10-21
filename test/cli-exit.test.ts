@@ -1,5 +1,5 @@
 // Tests that the design-to-code CLIs never lose the tail of a long stdout.
-//   node test/cli-exit.test.ts
+//   bun test/cli-exit.test.ts
 // A CLI that writes to process.stdout and then calls process.exit() is cut off when stdout is a pipe:
 // pipe writes are asynchronous on POSIX, so whatever the consumer has not yet read (past the 64 KiB pipe
 // buffer) is dropped (https://nodejs.org/api/process.html#a-note-on-process-io). The fix is `main()` returning

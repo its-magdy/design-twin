@@ -5,7 +5,7 @@
 // cannot be broken or read, breakers taking turns (a guard judged like a lock), a lock or guard changing between the
 // steps of a take or a break, Windows' transient create refusals, and real node processes contending for one counter and racing to
 // break dead holders' locks. Temp dirs only; binds no port.
-// Run with:  node test/file-lock.test.ts
+// Run with:  bun test/file-lock.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

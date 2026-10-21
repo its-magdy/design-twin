@@ -1,6 +1,6 @@
 // Behavioural smoke test for the MCP server: boot the REAL bridge/src/figma-mcp.ts over stdio with the
 // SDK's own client, list its tools, and call the ones that need no Figma connection.
-//   node test/mcp-smoke.test.ts
+//   bun test/mcp-smoke.test.ts
 // bridge.test.ts checks src/figma-mcp.ts by reading its SOURCE text; nothing there would catch a tool whose
 // schema fails at registration time, or a server that writes a log line to stdout and corrupts the
 // protocol stream. This does.
@@ -13,11 +13,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.js";
-// "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
-import WebSocket from "ws";
-import type { RawData } from "ws";
+// The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
+import { WsClient } from "./ws-client.ts";
+import type { RawData } from "./ws-client.ts";
 import type { Cmd, ScreenReply } from "../bridge/src/commands.ts";
-// Type-only: erased before Node runs this file, so the server module is NOT imported here (it is
+// Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
 import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
 import type * as GetComponentMod from "../design-to-code/get-component.ts";
@@ -27,7 +27,7 @@ import { daemonSupported } from "../bridge/src/daemon.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
-// lazily (it cannot reference them: rootDir is bridge/src). Nothing else ties those local interfaces to
+// lazily (it cannot reference them: the bridge package ships bridge/src alone). Nothing else ties those local interfaces to
 // the real modules, so drift between them would only show at runtime, inside a tool call. The test
 // program sees both trees, so it checks here that the real modules still satisfy the server's view.
 type Assert<T extends true> = T;
@@ -71,6 +71,9 @@ void (async () => {
   try {
     await client.connect(transport);
     ok("server boots and completes the MCP handshake over stdio", true);
+    const bridgePkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "package.json"), "utf8")) as { version: string };
+    ok("the server reports its name and the package's own version (not a literal that drifts)",
+      client.getServerVersion()?.name === "designtwin" && client.getServerVersion()?.version === bridgePkg.version);
 
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
@@ -211,7 +214,7 @@ void (async () => {
     }
 
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
-    const plugin = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+    const plugin = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });
     let kids = 3;
     let ticks = 0; // progress frames to send before the reply, as ui.html relays a bridge-triggered run's
@@ -328,7 +331,7 @@ void (async () => {
     // <name>` in the CLI and the daemon): the fake plugin above never identified, so "Late File"
     // matches nothing when the call starts; a second window that says hello 400 ms later must be
     // routed to, not refused. A bare connId never waits: an unknown `c9` fails at once.
-    const late = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+    const late = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     const pinged: string[] = [];
     late.on("message", (raw: RawData) => {
       const m = JSON.parse(String(raw)) as CommandFrame;
@@ -363,7 +366,7 @@ void (async () => {
     // tool gives, not `connected:false`).
     const t2 = Date.now();
     const pending0 = client.callTool({ name: "figma_status", arguments: { client: "Late File 2" } });
-    const late2 = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+    const late2 = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     late2.on("message", (raw: RawData) => {
       const m = JSON.parse(String(raw)) as CommandFrame;
       if (m.cmd === "ping") late2.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "Cover", file: "Late File 2" } }));
@@ -395,8 +398,8 @@ void (async () => {
       const png = Buffer.alloc(33);
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
       png.writeUInt32BE(13, 8); png.write("IHDR", 12, "ascii"); png.writeUInt32BE(4, 16); png.writeUInt32BE(3, 20); png[24] = 8; png[25] = 6;
-      const fake = async (file: string, instanceId: string): Promise<WebSocket> => {
-        const ws = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+      const fake = async (file: string, instanceId: string): Promise<WsClient> => {
+        const ws = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
         ws.on("message", (raw: RawData) => {
           const m = rec(JSON.parse(String(raw)) as unknown);
           frames.push({ who: file, m });
@@ -587,6 +590,44 @@ void (async () => {
     ok("MCP smoke run completed without throwing — " + (e instanceof Error ? e.message : e), false);
   } finally {
     await client.close().catch(() => {});
+  }
+
+  // The published-package shape: bridge/ on its own, with no design-to-code/ beside it. The two design_* tools
+  // say they need the repo checkout — decided by whether the layer FILE exists (figma-mcp.ts loadLayer), not by
+  // the import's error fields — and the server stays up for every other tool. Its bridge binds an ephemeral port
+  // (DT_TEST_EPHEMERAL_PORT) and its daemon socket lives under a TMPDIR of its own.
+  {
+    const inst = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-inst-"));
+    const repo = path.join(import.meta.dirname, "..");
+    fs.cpSync(path.join(repo, "bridge", "src"), path.join(inst, "bridge", "src"), { recursive: true });
+    fs.copyFileSync(path.join(repo, "bridge", "package.json"), path.join(inst, "bridge", "package.json"));
+    fs.symlinkSync(path.join(repo, "node_modules"), path.join(inst, "node_modules"), "junction");
+    const cwd = path.join(inst, "project");
+    fs.mkdirSync(path.join(cwd, "design", "export", "design-system"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, "design", "export", "design-system.json"), JSON.stringify({ files: { componentsLocal: "design-system/components.local.json" } }));
+    fs.writeFileSync(path.join(cwd, "design", "export", "design-system", "components.local.json"), JSON.stringify({ components: [] }));
+    const tmp = path.join(inst, "t");
+    fs.mkdirSync(tmp);
+    const instClient = new Client({ name: "mcp-smoke-install", version: "0.0.0" });
+    try {
+      await instClient.connect(new StdioClientTransport({
+        command: process.execPath,
+        args: [path.join(inst, "bridge", "src", "figma-mcp.ts")],
+        env: { ...process.env, FIGMA_BRIDGE_PORT: "8788", FIGMA_BRIDGE_TOKEN: "smoke-test-token", MAX_MCP_OUTPUT_TOKENS: "", DT_TEST_EPHEMERAL_PORT: "1", TMPDIR: tmp, XDG_RUNTIME_DIR: "" },
+        cwd,
+        stderr: "ignore",
+      }));
+      const r = await instClient.callTool({ name: "design_get_component", arguments: { handle: "Btn" } });
+      ok("an install without design-to-code/: design_get_component is a tool error saying it needs the repo checkout",
+        r.isError === true && /needs the design-to-code layer, which is not present in this install/.test(firstText(r)) && /bun bridge\/src\/figma-mcp\.ts/.test(firstText(r)));
+      const dry = await instClient.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }] } });
+      ok("…and the rest of the server works on (a figma_write dryRun answers)", !dry.isError && (JSON.parse(firstText(dry)) as WritePreview).dryRun === true);
+    } catch (e) {
+      ok("the install-shaped server ran without throwing — " + (e instanceof Error ? e.message : e), false);
+    } finally {
+      await instClient.close().catch(() => {});
+      fs.rmSync(inst, { recursive: true, force: true });
+    }
   }
   report();
 })();

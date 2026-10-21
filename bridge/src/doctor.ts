@@ -12,7 +12,7 @@
 //   - It never opens a WebSocket to a port someone else holds: the bridge registers every WS client as
 //     a PLUGIN client, so a probe would disturb routing for whoever owns that bridge (and a
 //     wrong-token probe spams its log). A held port is identified with a plain HTTP GET instead — a
-//     `ws` server answers 426 Upgrade Required.
+//     bridge answers 426 Upgrade Required.
 //   - server-core is imported LAZILY (probePlugin's `await import()`) and only once the port is known to
 //     be valid and free: it exits the process on a bad FIGMA_BRIDGE_PORT (at module load) and on
 //     EADDRINUSE (in createBridge). Those are findings for doctor to report, not ways for it to die.
@@ -43,13 +43,16 @@ import { daemonRowStalenessNote } from "./staleness.ts";
 // server-core (which exits the process on a bad FIGMA_BRIDGE_PORT — the very case this exists to diagnose).
 import { ALLOWED_PORTS, parsePortEnv } from "./ports.ts";
 import { dtwinPortWarning } from "./verbs.ts";
+// The package's own package.json, imported rather than read by a path at run time (so it resolves in a
+// compiled binary too): engines.bun is the Bun version this install needs.
+import pkg from "../package.json" with { type: "json" };
 import type { ClientRow, Bridge } from "./server-core.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 /** Every check this report can carry, by id — what `--json` consumers key on. */
-export type CheckId = "node" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
+export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
 
 /** One line of the report. `next` is the single next step (absent, or undefined, when there is none). */
 export interface Check {
@@ -92,14 +95,20 @@ const fail = (id: CheckId, title: string, detail: string, next?: string): Check 
 
 // ---------------------------------------------------------------- pure checks
 
-// `range` is package.json's engines.node. Only the ">=N" shape this package uses is understood;
-// anything else is reported as unknown rather than guessed at.
-function checkNode(version: string, range: string | null | undefined): Check {
-  const m = /^>=\s*(\d+)/.exec(range || "");
-  const major = Number(String(version).replace(/^v/, "").split(".")[0]);
-  if (!m) return warn("node", "Node.js", `${version} (could not read the required version from package.json)`);
-  if (major >= Number(m[1])) return ok("node", "Node.js", `${version} (needs ${range})`);
-  return fail("node", "Node.js", `${version} is too old — this package needs ${range}`, "install a newer Node.js (nodejs.org, or your version manager)");
+// `version` is the running Bun (Bun.version — NOT process.version, which under Bun reports the Node.js
+// release Bun is compatible with, e.g. v26.3.0, and says nothing about Bun itself). `range` is
+// package.json's engines.bun, matched with Bun's own semver (Bun.semver.satisfies), so any range
+// syntax the field can hold is understood. An absent or unreadable range is reported as unknown
+// rather than guessed at — and "unreadable" is decided here, because Bun.semver.satisfies is lenient
+// to a fault: a range with no version in it at all ("", "x", "not a range!") satisfies everything.
+function checkBun(version: string, range: string | null | undefined): Check {
+  const v = String(version).replace(/^v/, "");
+  const unread = (): Check => warn("bun", "Bun", `${v} (could not read the required version from package.json)`);
+  if (!range || !/\d+\.\d+/.test(range)) return unread();
+  let satisfied: boolean;
+  try { satisfied = Bun.semver.satisfies(v, range); } catch { return unread(); }
+  if (satisfied) return ok("bun", "Bun", `${v} (needs ${range})`);
+  return fail("bun", "Bun", `${v} is too old — this package needs ${range}`, "`bun upgrade` (or reinstall from https://bun.sh/install)");
 }
 
 // `s` is tokenStore.status(). `pluginCheck` is the ALREADY-COMPUTED plugin check
@@ -480,7 +489,7 @@ async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
 
 // `onCheck` sees each result the moment it is known, and `onWait` fires before the one slow step (the
 // plugin wait). Printing only at the end meant a caller with a short timeout — an agent shelling out —
-// got NOTHING, not even the instant Node/token answers, if the plugin wait outlived it.
+// got NOTHING, not even the instant Bun/token answers, if the plugin wait outlived it.
 export interface RunOptions {
   cwd?: string;
   waitSec?: number;
@@ -491,18 +500,13 @@ export interface RunOptions {
 async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOptions = {}): Promise<Report> {
   const checks: Check[] = [];
   const add = (...cs: Check[]) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
-  // A package.json without `engines.node` reads as null — checkNode then reports the range as unreadable.
-  const engines = (() => {
-    try {
-      return (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string; engines?: { node?: string } }).engines?.node ?? null;
-    } catch { return null; }
-  })();
-  add(checkNode(process.version, engines));
+  // A package.json without `engines.bun` reads as null — checkBun then reports the range as unreadable.
+  add(checkBun(Bun.version, (pkg as { engines?: { bun?: string } }).engines?.bun ?? null));
 
   const tok = tokenStore.status();
   // A shadowed token's real answer depends on the plugin check below — emit it
   // once that is known, rather than a static "make sure" note before anything has actually been
-  // checked. Every other case is unaffected and keeps its original position, right after Node.js.
+  // checked. Every other case is unaffected and keeps its original position, right after Bun.
   if (!tok.shadowed) add(checkToken(tok));
 
   // DTWIN_PORT is not read anywhere; a person who set it believes the bridge moved.
@@ -587,7 +591,7 @@ async function main(argv: string[]): Promise<void> {
     if (a === undefined) continue; // cannot happen: i < argv.length
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
-      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Node version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
+      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Bun version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
       process.exit(0);
     } else if (a === "--wait" || a.startsWith("--wait=")) {
       const v = a === "--wait" ? argv[++i] : a.slice("--wait=".length);
@@ -606,4 +610,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
