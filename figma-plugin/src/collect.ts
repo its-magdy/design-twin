@@ -378,7 +378,8 @@ function resolvePages(wanted: ReadonlyArray<string>, all: ReadonlyArray<PageNode
     if (matches.length > 1) {
       throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) — use its id. Available pages:\n  ${avail()}`);
     }
-    return matches[0] ?? null; // exactly one match -> it; none -> null
+    const only = matches[0];
+    return only === undefined ? null : only; // exactly one match -> it; none -> null
   };
   const resolveOne = (sel: string): PageNode => {
     const byId = all.find((p) => p.id === sel);
@@ -893,7 +894,8 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
     // whatever the user happens to be looking at).
     scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-    ...ifDefined("page", allPages || pages.length !== 1 ? undefined : pages[0]?.name),
+    // `pages.map(...)[0]` rather than `pages[0]?.name`: the plugin bundle is ES2019, which has no `?.`.
+    ...ifDefined("page", allPages || pages.length !== 1 ? undefined : pages.map((p) => p.name)[0]),
     ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : undefined),
     ...ifDefined("flows", flows.length ? flows : undefined),
     ...ifDefined("pageSettings", pageSettings.length ? pageSettings : undefined),
