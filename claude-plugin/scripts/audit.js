@@ -2,8 +2,8 @@
 
 
 // design-to-code/audit.ts
-import fs7 from "node:fs";
-import path6 from "node:path";
+import fs12 from "node:fs";
+import path10 from "node:path";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -516,6 +516,7 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
@@ -707,7 +708,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path7, message) => errors.push({ path: path7, message });
+  const err = (path11, message) => errors.push({ path: path11, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -985,6 +986,9 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function parsePlan(x) {
+  return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
+}
 var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
 var recIsStr = (v) => typeof v === "string";
 var recNeed = (ok) => ({ need: true, ok });
@@ -1078,6 +1082,14 @@ var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
 function nodeIdFromSafe(safeId) {
   if (!SAFE_NODE_ID_RE.test(safeId)) return null;
   return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
 }
 
 // bridge/src/design-system-layout.ts
@@ -1225,6 +1237,10 @@ function findMapFile(cwd) {
   const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
   if (fs4.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+function listPlans(dir) {
+  if (!fs4.existsSync(dir)) return [];
+  return fs4.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/slice-sources.ts
@@ -2307,6 +2323,374 @@ function isRasterShell(rasters, paths) {
   return (rasters ?? 0) > 0 && (paths ?? 0) < RASTER_SHELL_MAX_PATHS;
 }
 
+// design-to-code/node-artefacts.ts
+import fs11 from "node:fs";
+import path9 from "node:path";
+
+// design-to-code/verify-sets.ts
+import fs10 from "node:fs";
+import path8 from "node:path";
+
+// design-to-code/verify-status.ts
+import path7 from "node:path";
+import fs9 from "node:fs";
+
+// design-to-code/run-cache.ts
+import fs8 from "node:fs";
+import os from "node:os";
+import path6 from "node:path";
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+// bridge/src/file-lock.ts
+import fs7 from "node:fs";
+var LIVE_STALE_MS = 2 * 6e4;
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs7.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/run-cache.ts
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs8.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs8.existsSync(p);
+function realpath(p) {
+  if (typeof fs8.realpathSync.native === "function") {
+    try {
+      return fs8.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs8.realpathSync(p);
+}
+function canonical(p) {
+  const abs = path6.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path6.dirname(abs);
+    return parent === abs ? abs : path6.join(canonical(parent), path6.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path6.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path6.dirname(d)) {
+    if (exists(path6.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+  }
+  if (isDir(path6.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path6.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path6.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path6.relative(root, v).split(path6.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path6.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+
+// design-to-code/verify-status.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), path7.basename(base) + ".status.json");
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path7.basename(base)), id = shellArg(open.runId), dir = shellArg(path7.resolve(path7.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function openRunSets(verifyDir) {
+  const SUFFIX = ".status.json";
+  let files;
+  try {
+    files = fs9.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path7.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
+}
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
+var RETIRED = ".expected.json.retired";
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs10.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
+    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path8.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(path8.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+}
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path8.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path8.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
+
+// design-to-code/node-artefacts.ts
+function planNode(plan, file) {
+  return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path9.basename(file).replace(/\.json$/i, "")) : null);
+}
+function readPlan(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return { file, error: r.error };
+  const p = parsePlan(r.doc);
+  return "plan" in p ? { file, plan: p.plan } : { file, error: p.error };
+}
+var isPlanFile = (p) => "plan" in p;
+var article = (kind) => kind === "audit report" ? "an" : "a";
+var several = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} has ${holders.length} ${kind}s (${shown}) \u2014 one node, one ${kind}: keep one`, holders, reason: "several" });
+var already = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} already has ${article(kind)} ${kind} (${shown}) \u2014 one node, one ${kind}`, holders, reason: "held" });
+var slash = (p) => p.split(path9.sep).join("/");
+function nodeArtefacts(root, dirs = {}) {
+  const planDir = dirs.planDir ?? PLAN_DIR;
+  const verifyDir = dirs.verifyDir ?? VERIFY_DIR;
+  const auditDir = dirs.auditDir ?? AUDIT_DIR;
+  const abs = (p) => path9.resolve(root, p);
+  const spell = (dir, name) => path9.isAbsolute(dir) ? path9.join(dir, name) : slash(path9.join(dir, name));
+  const verifyAbs = abs(verifyDir);
+  const open = () => dirs.openSets ?? openRunSets(verifyAbs);
+  function plans() {
+    const out = [], bad = [];
+    for (const f of listPlans(abs(planDir))) {
+      const file = spell(planDir, f);
+      const r = readPlan(abs(file));
+      if (isPlanFile(r)) out.push({ file, plan: r.plan, nodeId: planNode(r.plan, f) });
+      else bad.push({ file, error: r.error });
+    }
+    return { plans: out, bad };
+  }
+  const plansOf = (nodeId) => plans().plans.filter((p) => p.nodeId === nodeId);
+  function setIds(name) {
+    const f = setFacts(verifyAbs, name);
+    return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
+  }
+  function setNode(name) {
+    const ids = setIds(name);
+    return ids.length === 1 ? ids[0] ?? null : null;
+  }
+  function setHolders(nodeId, runs) {
+    const stems = /* @__PURE__ */ new Set(), conflicted = [], legacy2 = [];
+    for (const name of [.../* @__PURE__ */ new Set([...verifySets(verifyAbs), ...runs])].sort()) {
+      const ids = setIds(name);
+      if (!ids.includes(nodeId)) continue;
+      const p = parseSetName(name);
+      if (p === null) {
+        legacy2.push(name);
+        continue;
+      }
+      stems.add(p.stem);
+      if (ids.length > 1) conflicted.push({ name, ids });
+    }
+    return { stems: [...stems].sort(), conflicted, legacy: legacy2 };
+  }
+  function auditReports() {
+    let files;
+    try {
+      files = fs11.readdirSync(abs(auditDir)).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")).sort();
+    } catch {
+      return [];
+    }
+    return files.map((f) => {
+      const doc = readJsonOrNull(path9.join(abs(auditDir), f), isJsonObject);
+      const ids = doc && Array.isArray(doc.nodeIds) ? doc.nodeIds.filter((x) => typeof x === "string") : [];
+      return { f, stem: f.slice(0, -5), nodeIds: ids.length ? ids : null };
+    });
+  }
+  const auditNodeIs = (r, nodeId) => r.nodeIds ? r.nodeIds.includes(nodeId) : nodeIdFromStem(r.stem) === nodeId;
+  const auditNamesNode = (r) => r.nodeIds !== null || nodeIdFromStem(r.stem) !== null;
+  const auditsOf = (nodeId) => auditReports().filter((r) => auditNodeIs(r, nodeId)).map((r) => spell(auditDir, r.f));
+  function auditFor(nodeId, hints = {}) {
+    if (!fs11.existsSync(abs(auditDir))) return null;
+    if (hints.screenFile) {
+      const own = path9.basename(hints.screenFile, ".json") + ".json";
+      if (fs11.existsSync(path9.join(abs(auditDir), own))) return spell(auditDir, own);
+    }
+    if (nodeId) {
+      const held = auditsOf(nodeId)[0];
+      if (held !== void 0) return held;
+    }
+    const want = alnumKey(hints.screenName);
+    if (!want) return null;
+    const pool = auditReports().filter((r) => !nodeId || !auditNamesNode(r));
+    const nameOf = (s) => {
+      const i = s.lastIndexOf("__");
+      return i > 0 ? s.slice(0, i) : null;
+    };
+    const hit = pool.find((r) => alnumKey(r.stem) === want) ?? pool.find((r) => {
+      const n = nameOf(r.stem);
+      return n !== null && alnumKey(n) === want;
+    });
+    return hit ? spell(auditDir, hit.f) : null;
+  }
+  function claimSet(nodeId, o) {
+    const runs = open();
+    const { stems, conflicted, legacy: legacy2 } = setHolders(nodeId, runs);
+    const shown = (names) => stemHolders(verifyAbs, names, runs);
+    const mixed = conflicted[0];
+    if (mixed !== void 0) {
+      return {
+        ok: false,
+        why: `node ${nodeId}'s verify set ${mixed.name} also carries node ${mixed.ids.filter((x) => x !== nodeId).join(", ")} (its name, expectation and report disagree) \u2014 one node, one verify set: keep one node's files`,
+        holders: conflicted.map((c) => c.name),
+        reason: "held"
+      };
+    }
+    if (o.target !== void 0) {
+      const others = stems.filter((s) => s !== o.target);
+      if (others.length) return already("verify set", nodeId, others, shown(others));
+      return { ok: true, name: o.target, existing: stems.includes(o.target), legacy: legacy2 };
+    }
+    if (stems.length > 1) return several("verify set", nodeId, stems, shown(stems));
+    const have = stems[0];
+    return { ok: true, name: have ?? screenStem(o.layerName ?? "", nodeId), existing: have !== void 0, legacy: legacy2 };
+  }
+  function claimPlan(nodeId, o) {
+    const held = plansOf(nodeId).map((p) => p.file);
+    if (held.length > 1) return several("plan", nodeId, held);
+    const target = o.target !== void 0 ? abs(o.target) : void 0;
+    const have = held[0];
+    if (have !== void 0) return target === void 0 || abs(have) === target ? { ok: true, name: have, existing: true, legacy: [] } : already("plan", nodeId, held);
+    const s = claimSet(nodeId, { layerName: o.layerName });
+    if (!s.ok) return s;
+    const name = spell(planDir, s.name + ".json");
+    if (target !== void 0 && path9.basename(target) !== path9.basename(name)) return { ok: false, why: `a new plan of node ${nodeId} is named by its node: ${name}, not ${path9.basename(target)}`, holders: [], reason: "misnamed" };
+    return { ok: true, name, existing: false, legacy: [] };
+  }
+  function claimAudit(nodeId, target) {
+    const t = abs(target);
+    const own = path9.basename(t, ".json");
+    const held = auditsOf(nodeId).filter((f) => abs(f) !== t && !own.startsWith(path9.basename(f, ".json") + "."));
+    return held.length ? already("audit report", nodeId, held) : { ok: true, name: target, existing: false, legacy: [] };
+  }
+  function claim(kind, nodeId, o = {}) {
+    if (kind === "plan") return claimPlan(nodeId, o);
+    if (kind === "verify set") return claimSet(nodeId, o);
+    if (o.target === void 0) throw new Error("claim('audit report') takes the target it is about to write");
+    return claimAudit(nodeId, o.target);
+  }
+  return {
+    root,
+    planDir,
+    verifyDir,
+    auditDir,
+    plans,
+    plansOf,
+    idlessPlans: () => plans().plans.filter((p) => p.nodeId === null).map((p) => p.file),
+    setIds,
+    setNode,
+    setsOf: (nodeId) => {
+      const h = setHolders(nodeId, open());
+      return { stems: h.stems, legacy: h.legacy };
+    },
+    auditsOf,
+    auditFor,
+    claim
+  };
+}
+
 // bridge/src/instance-overrides.ts
 var OVERRIDE_CAP = 100;
 
@@ -2588,8 +2972,8 @@ function walkRoots(ac) {
 function walk2(ac, node, ancestors, ctx) {
   const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
   if (!node || typeof node !== "object") return;
-  const path7 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-  const here = { label: ctx.label, path: path7 };
+  const path11 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+  const here = { label: ctx.label, path: path11 };
   const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
   if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
   if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
@@ -2995,7 +3379,7 @@ var valuesOf = (c) => {
   return values;
 };
 var isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
-var sameDir = (a, b) => b !== void 0 && path6.resolve(a) === path6.resolve(b);
+var sameDir = (a, b) => b !== void 0 && path10.resolve(a) === path10.resolve(b);
 function stateLookup(ac) {
   const { opts, docs, catalog } = ac;
   const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
@@ -3420,10 +3804,10 @@ function toMarkdown(res) {
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs8 = res.findings.filter((f) => f.severity === sev);
-    if (!fs8.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
-    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    const fs13 = res.findings.filter((f) => f.severity === sev);
+    if (!fs13.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs13.length})`, "");
+    for (const f of fs13) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -3444,18 +3828,6 @@ function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
   const str = (v) => typeof v === "string" && v ? v : void 0;
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
-}
-function findExistingAuditFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs7.existsSync(dir)) return null;
-  for (const f of fs7.readdirSync(dir)) {
-    if (!f.endsWith(".json") || f.slice(0, -5).includes(".")) continue;
-    if (path6.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
-    const full = path6.join(dir, f);
-    if (path6.resolve(full) === path6.resolve(ownTarget)) continue;
-    const doc = readJsonOrNull(full, isJsonObject);
-    if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
-  }
-  return null;
 }
 var OVERRIDE_KEYS = ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen"];
 var BLOCKER_CODES = ["export-truncated", "assets-failed", "missing-font", "token-name-collision"];
@@ -3512,7 +3884,7 @@ function main(argv) {
   if (ctx.invalid.length) return 2;
   const inputs = files.map((f, i) => ({
     doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path6.basename(f, ".json"),
+    label: path10.basename(f, ".json"),
     ...ifDefined("vars", ctx.own[i]),
     // own[i] is set: own is files.map(...)
     assets: readJsonOrNull(f.replace(/\.json$/, ".assets.json"), isScreenAssetsDoc)
@@ -3524,11 +3896,11 @@ function main(argv) {
   const neighbours = findExportNeighbours(firstFile);
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const outBase = out || path6.join(AUDIT_DIR, path6.basename(firstFile, ".json"));
+  const outBase = out || path10.join(AUDIT_DIR, path10.basename(firstFile, ".json"));
   const ownOverrides = outBase + ".overrides.json";
-  const stem = path6.basename(outBase), dot = stem.indexOf(".");
-  const parentOverrides = dot > 0 ? path6.join(path6.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs7.existsSync(ownOverrides) && parentOverrides && fs7.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const stem = path10.basename(outBase), dot = stem.indexOf(".");
+  const parentOverrides = dot > 0 ? path10.join(path10.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
+  const overridesFile = flags.overrides || (!fs12.existsSync(ownOverrides) && parentOverrides && fs12.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   const mapAt = findMapFile(process.cwd());
   const mapFound = mapAt.missing ? void 0 : mapAt.rel;
@@ -3550,20 +3922,18 @@ function main(argv) {
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path6.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
-    if (dup && !force) {
-      console.error(
-        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
-      );
+    const c = nodeArtefacts(process.cwd(), { auditDir: path10.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
+    if (!c.ok && !force) {
+      console.error(`error  ${c.why}: refusing to also write ${outBase}.json/.md. Use that existing name, or pass --force to write this one anyway.`);
       return 1;
     }
   }
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs7.mkdirSync(path6.dirname(outBase), { recursive: true });
-    fs7.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs7.writeFileSync(outBase + ".md", md);
+    fs12.mkdirSync(path10.dirname(outBase), { recursive: true });
+    fs12.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs12.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
@@ -3584,7 +3954,6 @@ export {
   contrastRatio,
   controlKind,
   deltaE,
-  findExistingAuditFor,
   main,
   parseHex,
   reportFindings,

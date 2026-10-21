@@ -3,7 +3,7 @@
 // Identity is the Figma node id. A screen's files share one stem, `<Layer>__<id>` (bridge/src/pages-layout.ts
 // screenStem: safe(name) + "__" + safe(id)), and nodeIdFromStem reads the id back. The stem is FIXED once a verify set
 // exists: a set already in the verify dir for the node — or a run of it open in the run cache (opts.openSets) — keeps its
-// name (existingStem), so a frame renamed in Figma never forks a second set — and its run cache key and status lock stay the same files.
+// name (node-artefacts.ts claim), so a frame renamed in Figma never forks a second set — and its run cache key and status lock stay the same files.
 //
 // A verify set is the files that share one name in the verify dir: its name is the stem, or `<stem>.<slug>` for a
 // variant; any other name is legacy. That grammar and the verify dir's sets are verify-sets.ts (re-exported here).
@@ -13,19 +13,29 @@
 // text-search (5) hit never names a set: a writer that took one could write a screen's evidence under another screen.
 import fs from "node:fs";
 import path from "node:path";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { isNodeId } from "../bridge/src/node-id.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { STEM_RE, canonicalStemsFor, legacySetsFor, nodeStem, parseSetName, stemHolders, verifySets } from "./verify-sets.ts";
+import { STEM_RE, parseSetName, verifySets } from "./verify-sets.ts";
+import { nodeArtefacts } from "./node-artefacts.ts";
+import type { Claim, ClaimOpts } from "./node-artefacts.ts";
 import type { ScreenCandidate } from "./types.ts";
 
 export {
-  EXPECTED_SUFFIX, MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, existingStem, expectationSetProblem, formatSetName, isVariantSlug, legacySetsFor,
-  nodeIdFromSetName, nodeStem, outBaseOf, parseSetName, setFacts, setNameOfFile, setNodeId, statusBaseOf, variantOverlap, variantProblem, variantSlug, variantsOf, verifySets,
+  EXPECTED_SUFFIX, MAX_SLUG, RESERVED_SLUGS, allSets, expectationSetProblem, formatSetName, isVariantSlug,
+  nodeIdFromSetName, outBaseOf, parseSetName, setFacts, setNameOfFile, statusBaseOf, variantOverlap, variantProblem, variantSlug, variantsOf, verifySets,
 } from "./verify-sets.ts";
 export type { OutBase, SetFacts, SetName } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- query → key
+
+/** The stem claim of opts' verify dir (node-artefacts.ts claim "verify set"); with no verify dir a node has no sets. */
+function claimSet(opts: ScreenKeyOpts): (nodeId: string, o: ClaimOpts) => Claim {
+  const verifyDir = opts.verifyDir ?? null;
+  if (verifyDir === null) return (nodeId, o) => ({ ok: true, name: o.target ?? screenStem(o.layerName ?? "", nodeId), existing: false, legacy: [] });
+  const art = nodeArtefacts(process.cwd(), { verifyDir, openSets: opts.openSets ?? [] });
+  return (nodeId, o) => art.claim("verify set", nodeId, o);
+}
 
 export interface ScreenKeyOpts {
   /** the export root (holds pages/index.json); without an index only a canonical stem (or a node id with a set) is taken */
@@ -63,12 +73,7 @@ const FILE_TAIL_RE = /\.(?:expected\.prev|expected|report|measured|status|eviden
  */
 export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
   const q = String(query ?? "").trim();
-  const verifyDir = opts.verifyDir ?? null;
-  const open = opts.openSets ?? [];
-  const stemsOf = (id: string): string[] => (verifyDir ? canonicalStemsFor(verifyDir, id, open) : []);
-  const legacyOf = (id: string): string[] => (verifyDir ? legacySetsFor(verifyDir, id) : []);
-  // how a refusal names those sets: one whose only trace is an open run as that run (stemHolders)
-  const holders = (names: string[]): string => (verifyDir ? stemHolders(verifyDir, names, open) : names.join(", "));
+  const claim = claimSet(opts);
   const exportDir = opts.exportDir ?? null;
   if (exportDir && fs.existsSync(path.join(exportDir, "pages", "index.json"))) {
     const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
@@ -78,24 +83,23 @@ export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
         : `'${q}' matches no screen in ${exportDir}`;
       return { status: "unresolved", why, candidates: r.candidates };
     }
-    const k = nodeStem(verifyDir, r.row.id, r.row.name, open);
-    if ("why" in k) return { status: "unresolved", why: k.why, candidates: [] };
-    return { status: "resolved", nodeId: r.row.id, stem: k.stem, via: r.stage, name: r.row.name, existing: k.existing, legacy: k.legacy };
+    const k = claim(r.row.id, { layerName: r.row.name });
+    if (!k.ok) return { status: "unresolved", why: k.why, candidates: [] };
+    return { status: "resolved", nodeId: r.row.id, stem: k.name, via: r.stage, name: r.row.name, existing: k.existing, legacy: k.legacy };
   }
   // no export index: only what names its node by itself
   const lit = (q.split(/[\\/]/).pop() ?? q).replace(FILE_TAIL_RE, "");
   const fromStem = STEM_RE.test(lit) ? nodeIdFromStem(lit) : null;
   if (fromStem !== null) {
-    const others = [...stemsOf(fromStem).filter((s) => s !== lit), ...legacyOf(fromStem)];
-    if (others.length) return { status: "unresolved", why: `node ${fromStem} already has a verify set under another name (${holders(others)}) — pass that name, or run verify-screen --migrate`, candidates: [] };
-    return { status: "resolved", nodeId: fromStem, stem: lit, via: "canonical stem", name: null, existing: stemsOf(fromStem).includes(lit), legacy: [] };
+    const k = claim(fromStem, { target: lit });
+    if (!k.ok) return { status: "unresolved", why: `${k.why}: pass that name`, candidates: [] };
+    return { status: "resolved", nodeId: fromStem, stem: lit, via: "canonical stem", name: null, existing: k.existing, legacy: k.legacy };
   }
   if (isNodeId(q)) {
-    const stems = stemsOf(q);
-    const only = stems.length === 1 ? stems[0] : undefined;
-    if (only !== undefined) return { status: "resolved", nodeId: q, stem: only, via: "node id (existing verify set)", name: null, existing: true, legacy: legacyOf(q) };
-    return { status: "unresolved", why: stems.length > 1 ? `node ${q} has ${stems.length} verify sets under different names (${holders(stems)}) — keep one`
-      : `no export index to name node ${q} by — pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
+    const k = claim(q, {});
+    if (!k.ok) return { status: "unresolved", why: k.why, candidates: [] };
+    if (k.existing) return { status: "resolved", nodeId: q, stem: k.name, via: "node id (existing verify set)", name: null, existing: true, legacy: k.legacy };
+    return { status: "unresolved", why: `no export index to name node ${q} by — pass its stem (<Layer>__<id>) or the export dir`, candidates: [] };
   }
   return { status: "unresolved", why: `no export index to resolve '${q}' against — pass the stem (<Layer>__<id>), or the export dir`, candidates: [] };
 }
@@ -123,11 +127,9 @@ export function setKey(query: string, opts: ScreenKeyOpts = {}): SetKey {
   const lit = base.replace(FILE_TAIL_RE, "");
   const p = parseSetName(lit);
   if (p !== null) {
-    const open = opts.openSets ?? [];
-    const stems = verifyDir ? canonicalStemsFor(verifyDir, p.nodeId, open) : [];
-    const others = stems.filter((s) => s !== p.stem);
-    if (others.length) return { status: "unresolved", why: `node ${p.nodeId} already has a verify set under another name (${verifyDir ? stemHolders(verifyDir, others, open) : others.join(", ")}) — pass that name`, candidates: [] };
-    return { status: "resolved", nodeId: p.nodeId, stem: p.stem, variant: p.variant, name: lit, via: "set name", existing: stems.includes(p.stem), legacy: verifyDir ? legacySetsFor(verifyDir, p.nodeId) : [] };
+    const k = claimSet(opts)(p.nodeId, { target: p.stem });
+    if (!k.ok) return { status: "unresolved", why: `${k.why}: pass that name`, candidates: [] };
+    return { status: "resolved", nodeId: p.nodeId, stem: p.stem, variant: p.variant, name: lit, via: "set name", existing: k.existing, legacy: k.legacy };
   }
   if (verifyDir && lit && verifySets(verifyDir).includes(lit)) {
     return { status: "unresolved", why: `${lit} is a legacy-named verify set — run verify-screen --migrate --apply --dir ${verifyDir}, then pass the name it prints (<Layer>__<id>)`, candidates: [], legacySet: lit };

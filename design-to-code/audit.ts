@@ -69,6 +69,7 @@ import { alnumKey } from "./map-util.ts";
 import { runCli } from "./proc.ts";
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
+import { nodeArtefacts } from "./node-artefacts.ts";
 import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
 import { safe } from "../bridge/src/pages-layout.ts";
 
@@ -1499,27 +1500,6 @@ function reportFindings(auditDoc: unknown): Array<{ code?: string; nodeId?: stri
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 
-// An explicit `--out <nickname>` would write a second
-// complete report pair for a screen that already has one under its default name. Scans a directory's
-// own `*.json` audit reports (never a subdirectory — one screen, one flat design/audit/) for one
-// whose `nodeIds` already includes this run's root node, at a DIFFERENT basename than the one about
-// to be written. Returns that file's path, or null.
-function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget: string): string | null {
-  if (!nodeId || !fs.existsSync(dir)) return null;
-  for (const f of fs.readdirSync(dir)) {
-    // A sidecar (<screen>.cross.json, <screen>.library.json, …) has a dot in its stem; a report name never does.
-    // Writing one beside its own report (the stem before the dot) is that report's sidecar, not a duplicate.
-    if (!f.endsWith(".json") || f.slice(0, -5).includes(".")) continue;
-    if (path.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
-    const full = path.join(dir, f);
-    if (path.resolve(full) === path.resolve(ownTarget)) continue;
-    // design/audit/ also holds cross-check reports; only an object with a nodeIds[] counts.
-    const doc = readJsonOrNull(full, isJsonObject);
-    if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
-  }
-  return null;
-}
-
 // The ONLY codes that can be a blocker. The audit-design SKILL's "Blocker codes:" line must list
 // exactly these (test/audit.test.ts parses both, and scans audit.ts/cross-check.ts for "blocker" emits).
 // Everything else with a sensible default is a warning — cross-file ones carry a `confirm` question.
@@ -1530,7 +1510,7 @@ const BLOCKER_CODES: readonly BlockerCode[] = ["export-truncated", "assets-faile
 const _allBlockerCodes: Record<BlockerCode, true> = { "export-truncated": true, "assets-failed": true, "missing-font": true, "token-name-collision": true };
 void _allBlockerCodes;
 
-export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, reportFindings, findExistingAuditFor, BLOCKER_CODES };
+export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, reportFindings, BLOCKER_CODES };
 
 // CLI: bun design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
@@ -1625,12 +1605,11 @@ export function main(argv: string[]): number {
   // Refuse an explicit --out under a different name than an existing
   // report already covering this node, unless --force.
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
-    if (dup && !force) {
-      console.error(
-        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} — refusing to also write ${outBase}.json/.md ` +
-          "(one screen, one report pair). Use that existing name, or pass --force to write this one anyway."
-      );
+    // one node, one report pair (node-artefacts.ts claim: a report of the node is one whose nodeIds[] has it), in the dir
+    // the pair is written to
+    const c = nodeArtefacts(process.cwd(), { auditDir: path.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
+    if (!c.ok && !force) {
+      console.error(`error  ${c.why}: refusing to also write ${outBase}.json/.md. Use that existing name, or pass --force to write this one anyway.`);
       return 1;
     }
   }
