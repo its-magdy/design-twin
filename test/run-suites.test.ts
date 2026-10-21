@@ -240,6 +240,31 @@ console.log("OPTS=" + (process.env.BUN_OPTIONS ?? "<unset>") + " DOTENV=" + r.st
     const leaked = runSync(process.execPath, ["-e", childSrc], { cwd: envDir, env: { ...process.env, BUN_OPTIONS: "" }, timeoutMs: 30_000 });
     check(`[bun-options] control: without --no-env-file that bun does load the .env (saw ${JSON.stringify(leaked.stdout)})`, leaked.stdout === "leaked");
     check("[bun-options] a BUN_OPTIONS the caller set is kept, ours added after it", /^OPTS=--smol --no-install --no-env-file DOTENV=undefined$/m.test(probe({ BUN_OPTIONS: "--smol" })));
+    // `bun run --filter '*' build|typecheck` starts each workspace's script IN that workspace, where the root bunfig.toml
+    // is not read (and no BUN_OPTIONS is set): each workspace carries its own. Its bunfig, copied beside a .env, must keep
+    // that .env out of a bun started there — the control above shows the same bun without it loads it.
+    const ROOT = path.join(import.meta.dirname, "..");
+    const workspaces = (JSON.parse(read(path.join(ROOT, "package.json"))) as { workspaces?: string[] }).workspaces ?? [];
+    for (const ws of workspaces) {
+      const cfg = read(path.join(ROOT, ws, "bunfig.toml"));
+      const dir = path.join(tmp, "ws-" + ws.replace(/\W/g, "_"));
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "bunfig.toml"), cfg);
+      fs.writeFileSync(path.join(dir, ".env"), "DT_FROM_DOTENV=leaked\n");
+      const r = runSync(process.execPath, ["-e", childSrc], { cwd: dir, env: { ...process.env, BUN_OPTIONS: "" }, timeoutMs: 30_000 });
+      check(`[bun-options] workspace ${ws}/ has a bunfig.toml with env = false and install.auto = "disable", and a bun started under it does not load a .env (saw ${JSON.stringify(r.stdout)})`,
+        /^env = false$/m.test(cfg) && /^\[install\][^[]*^auto = "disable"$/m.test(cfg) && r.stdout === "undefined");
+    }
+    check(`[bun-options] the workspaces are the ones package.json lists (${workspaces.join(", ")})`, workspaces.length >= 2 && workspaces.includes("bridge") && workspaces.includes("figma-plugin"));
+    // The docs that describe a run agree with the runner: one full-run figure (FAST_SKIP's comment, README, TESTING,
+    // CONTRIBUTING), and no doc forbids `bun test` outright — it runs test/spawn-stress/ (bunfig.toml [test] root).
+    const docs = ["README.md", "TESTING.md", "CONTRIBUTING.md", "CLAUDE.md"].map((f) => [f, read(path.join(ROOT, f))] as const);
+    const full = docs.flatMap(([f, t]) => [...t.matchAll(/3 min(?:utes)? instead of ~(\d+)|every suite \(~(\d+) min\)/g)].map((m) => `${f}:${m[1] ?? m[2]}`));
+    check(`[docs] README, TESTING and CONTRIBUTING quote one full-run duration (${full.join(", ")})`,
+      full.length >= 3 && new Set(full.map((s) => s.split(":")[1])).size === 1 && ["README.md", "TESTING.md", "CONTRIBUTING.md"].every((f) => full.some((s) => s.startsWith(f + ":"))));
+    const forbids = docs.filter(([, t]) => /never `bun test`|not `bun test`/.test(t)).map(([f]) => f);
+    check(`[docs] no doc says "never \`bun test\`" — a bare \`bun test\` runs test/spawn-stress/${forbids.length ? " — " + forbids.join(", ") : ""}`,
+      forbids.length === 0 && /^root = "test\/spawn-stress"$/m.test(read(path.join(ROOT, "bunfig.toml"))));
   }
 
   // ---- the real list + the coverage guard
@@ -389,7 +414,7 @@ console.log("OPTS=" + (process.env.BUN_OPTIONS ?? "<unset>") + " DOTENV=" + r.st
     check("[pool] poolSize: CI counts as set for any value but \"\", \"0\" and \"false\" (CI=1 and CI=yes give 2)", ps({ CI: "true" }) === 2 && ps({ CI: "1" }) === 2 && ps({ CI: "yes" }) === 2 && ps({ CI: "" }) === 4 && ps({ CI: "0" }) === 4 && ps({ CI: "false" }) === 4);
     check("[pool] poolSize: without CI it is half the cores clamped to 2-4", ps({}, 2) === 2 && ps({}, 6) === 3 && ps({}, 64) === 4 && ps({}, 1) === 2);
   }
-  // runNode: the shared async spawn of the e2e suites (a tiny `node -e`, no port)
+  // runNode: the shared async spawn of the e2e suites (a tiny `bun -e` — runNode runs this bun, whatever its name says — no port)
   {
     const r = await within(runNode(tmp, "-e", ["console.log('out'); console.error('err'); process.exit(3)"]), TIMED_OUT);
     check("[pool] runNode: resolves the exit status and both captured streams, not killed, with a spawn → close time", r !== TIMED_OUT && r.status === 3 && r.stdout === "out\n" && r.stderr === "err\n" && !r.killed && r.ms >= 0);

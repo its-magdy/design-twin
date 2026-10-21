@@ -297,7 +297,7 @@ bun test/bridge.test.ts          # CLI + bridge
 bun test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
-Every other `test/*.test.ts` suite runs the same way. `bun run test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `bun test/run-suites.ts <name>…` runs a subset. `bun run test:fast` skips four of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `bun run test` before committing (not `bun test`, which is Bun's own test runner), CI's other matrix legs run them. `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once. `TESTING.md`
+Every other `test/*.test.ts` suite runs the same way. `bun run test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `bun test/run-suites.ts <name>…` runs a subset. `bun run test:fast` skips four of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `bun run test` before committing (a bare `bun test` is Bun's own test runner, pointed by `bunfig.toml` at `test/spawn-stress/` only), CI's other matrix legs run them. `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once. `TESTING.md`
 lists each suite and the live-Figma checks (the run-suites summary is the authority for check counts). The plugin's `code.js` and
 `claude-plugin/scripts/` are committed build output (the bridge has none: it runs and ships as TypeScript). After
 editing their sources, rebuild them:

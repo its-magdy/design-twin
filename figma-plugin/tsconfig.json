@@ -31,7 +31,8 @@
     "moduleResolution": "bundler",
     "noEmit": true,
     // The shared bridge modules are imported as ../../bridge/src/x.ts (esbuild inlines them; nothing
-    // here emits), and erasableSyntaxOnly keeps them Node-strippable for the bridge's own runtime.
+    // here emits), and erasableSyntaxOnly keeps them plain type-erasable TypeScript (no enums, namespaces or
+    // parameter properties) — what esbuild strips here and Bun runs as-is for the bridge.
     "allowImportingTsExtensions": true,
     // Type-only imports must say `import type` (oxlint consistent-type-imports enforces the same);
     // esbuild honours this flag when it strips them, so the bundle never keeps a type-only import.

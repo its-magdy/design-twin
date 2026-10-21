@@ -211,8 +211,8 @@ ok("a query that hits only texts[] ('Units') is needs-confirmation, never resolv
 console.log("\nresolve-screen — the empty-state sibling collision:");
 
 // The real empty-state sibling of "Jet Roles" — node 7314:83742, layer name `Jet roles` (lowercase
-// r), visible title ALSO "Jet Roles" — pulled live with this worktree's bridge
-// (`node bridge/figma-pull.js /tmp/p3-pull-310 --node 7314:83742 --client "TideStack (Copy)"`) and
+// r), visible title ALSO "Jet Roles" — pulled live with the bridge of the time (then a Node script; today the same pull
+// is `dtwin /tmp/p3-pull-310 --node 7314:83742 --client "TideStack (Copy)"`) and
 // pruned into test/fixtures/livetest3/pages-titled/__Optimization_management_/Jet_roles__7314_83742.json
 // the same way as the fixture's other pages-titled/ files. The row below is exactly what write-out.js
 // would index for it (name/title/texts/id/w/h/nodes/reference all copied from that real pull's own

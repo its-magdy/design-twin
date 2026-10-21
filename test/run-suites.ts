@@ -4,7 +4,8 @@
 //   bun test/run-suites.ts --list         print the order and exit (the coverage guard still runs)
 //   bun test/run-suites.ts --fast         everything except the four slow probe e2e suites (`bun run test:fast`, ~3 min vs ~20)
 //   bun test/run-suites.ts --fast --list  what --fast would run
-// (Not `bun test`: that is Bun's own jest-style runner, which would take every test/*.test.ts for a bun:test file.)
+// (Not a bare `bun test`: that is Bun's own jest-style runner, which would take every test/*.test.ts for a bun:test file —
+// bunfig.toml's [test] root points it at test/spawn-stress/, the only bun:test files, instead.)
 //
 // --fast: the name filters (if any) pick the suites first, then FAST_SKIP is dropped from that pick. The dropped suites
 // stay in the SUMMARY as `not run` (why `--fast`) and do NOT make the exit code 1 — `not run` otherwise means an
