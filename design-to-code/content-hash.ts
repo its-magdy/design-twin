@@ -11,7 +11,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { runSync } from "./proc.ts";
 import { isRecord, isUnknownArray } from "../bridge/src/json-util.ts";
 
 // Deep copy without the pull's timestamps. Key order is kept (the exporter writes it deterministically).
@@ -47,18 +46,7 @@ function fileHashes(files: unknown, cwd: string, cached?: (rel: string) => Uint8
   return out;
 }
 
-// `git rev-parse HEAD` in cwd, or null (not a repo, no git, anything else). Informational only: the
-// file hashes are what status is decided on — a commit does not say whether the tree was dirty.
-const OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
-function gitHead(cwd: string): string | null {
-  try {
-    // exit 0 must come with an object id — 40 hex digits (SHA-1), or 64 in a SHA-256 repository (`git init
-    // --object-format=sha256`): an empty capture (Bun #46142) is re-run once, then reads as "no head"
-    const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2000, expect: OBJECT_ID_LINE });
-    const h = r.status === 0 && r.stdout.trim();
-    return h && OBJECT_ID_LINE.test(h) ? h : null;
-  } catch { return null; }
-}
+// (git HEAD, recorded beside the hashes but never deciding anything, is report-freshness.ts systemGit)
 
 // the code files a plan's verification depends on — `files[]` (as written, in order), then
 // every anchors{}/components[] `mapModule` path not already listed, sorted. A shared shell (a Sidebar/Header the plan
@@ -140,4 +128,4 @@ function legacyPlanHash(plan: object | null | undefined): string {
   return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
 
-export { stripPullTimes, exportContentSha256, fileHashes, gitHead, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash };
+export { stripPullTimes, exportContentSha256, fileHashes, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash };

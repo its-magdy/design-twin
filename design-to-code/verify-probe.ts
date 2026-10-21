@@ -74,7 +74,8 @@ import type { DriveResult } from "./probe-drive.ts";
 import { CLOSE_STEP_CAP_MS, KILL_STEP_CAP_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
 import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
-import { gitHead } from "./content-hash.ts";
+import { systemGit } from "./report-freshness.ts";
+import type { Git } from "./report-freshness.ts";
 import { RunCacheUnwritable, RunEnded, RunNotCurrent, RunOpen, RunReplaced, endedRun, liveStatusFile, newRunId, notCurrentRun, openRun, probeAttemptNote, publishStatus, readStatus, replacedNote, replacedRun, stageDirOf, statusFile, writeStatus } from "./verify-run.ts";
 import { LockBusy, LockLost, thisProcess } from "../bridge/src/file-lock.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
@@ -82,7 +83,7 @@ import type { StatusWrite, StatusWriteHooks, VerifyStatusV2 } from "./verify-run
 import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
-import { exitFlushed, runCli, runSync } from "./proc.ts";
+import { exitFlushed, runCli } from "./proc.ts";
 import { expectationSetProblem, outBaseOf, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
@@ -283,15 +284,9 @@ export function buildFrom(url: string, served: ReadonlyMap<string, string>, vite
   return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...(unhashed > 0 ? { unhashed } : {}) };
 }
 /** The project's git state — null when it is not a git work tree. Changes under design/ (the verifier's own files) do not count. */
-function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | null } {
-  const head = gitHead(dir);
-  if (!head) return { gitHead: null, gitDirty: null };
-  try {
-    // porcelain v2 --branch always prints its `# branch.oid` header, so an empty capture (Bun #46142: exit 0, no stdout)
-    // is never read as "clean": it is re-run once, then gitDirty is unknown (null). A change is any non-header line.
-    const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd: dir, timeoutMs: 5000, expect: /^# branch\.oid /m });
-    return { gitHead: head, gitDirty: r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null };
-  } catch { return { gitHead: head, gitDirty: null }; }
+function gitState(dir: string, git: Git = systemGit): { gitHead: string | null; gitDirty: boolean | null } {
+  const head = git.head(dir);
+  return head ? { gitHead: head, gitDirty: git.dirty(dir) } : { gitHead: null, gitDirty: null };
 }
 
 // ---------------------------------------------------------------- readiness + navigation

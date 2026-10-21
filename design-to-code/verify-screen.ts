@@ -36,14 +36,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { fileHashes, gitHead, planCodeFiles, planCodeSkippedNote } from "./content-hash.ts";
+import { planCodeSkippedNote } from "./content-hash.ts";
+import { reportFreshness } from "./report-freshness.ts";
+import type { ReportFreshness } from "./report-freshness.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
   isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
   readableMeasured,
 } from "./doc-guards.ts";
-import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { isPassingVerdict } from "./plan-waivers.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
@@ -417,23 +419,26 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   const target = outBase + ".expected.json";
   const next = JSON.stringify(exp, null, 2) + "\n";
   const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
-  const h = sha256Hex(next);
   let prevContent: JsonValue | undefined = null;
   try { if (prev !== null) { const prevDoc: unknown = JSON.parse(prev); prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null; } } catch { /* unreadable */ }
   const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
+  // the sha256 of the expectation on disk after this run: the kept bytes when only exportedAt changed (below)
+  const h = sha256Hex(onlyExportedAt && prev !== null ? prev : next);
   // a REPLACED expectation keeps its previous bytes (one generation) — written before the new one
   const prevFile = outBase + PREV_EXPECTED_SUFFIX;
   if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
-  write(true, outBase, exp);
+  // only exportedAt changed: the file is left as it is — its sha256 is what the measured file and the report were bound
+  // to (report-freshness.ts), and rewriting the timestamp alone would unbind both from the same design
+  if (!onlyExportedAt) write(true, outBase, exp);
   // what the last run beside this expectation says (failed/blocked, never finished, in progress, hand-written)
   const runNote = runStatusNote(outBase);
   if (runNote) console.error(`note  ${runNote}`);
   if (prev !== null && prev === next) console.error(`note  ${target} is byte-identical to the expectation on disk (same export inputs, sha256 ${h.slice(0, 12)}…) — unchanged; ` +
     `this says nothing about the build: re-measure to check the code`);
   else if (onlyExportedAt) {
-    // a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
-    // the measurements and report beside it still describe it.
-    console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}… unchanged) — existing measurements and report still apply`);
+    // a re-pull with nothing changed rewrites only exportedAt. Same design, same specs — the expectation is kept byte for
+    // byte, so the measurements and report beside it still describe it.
+    console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}… unchanged) — kept as it is; existing measurements and report still apply`);
   } else if (prev !== null) {
     // say WHY it differs — the same export content means verify-screen itself changed (an upgrade)
     const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content — the expectation generator changed (verify-screen upgrade)"
@@ -536,6 +541,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   // the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
   let planHit: ChosenPlan | undefined;
   let recordedPlanGone: string | undefined;
+  let stamped: ReturnType<ReportFreshness["stamp"]> | undefined;
   const compareNotes: string[] = [];
   let flagged: { file: string; plan: Plan } | undefined;
   if (planFlag !== undefined) {
@@ -572,9 +578,11 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
       console.error(`--record-plan: no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} (run from the project root) — pass --plan <plan.json>`);
       return 2;
     }
-    if (planHit && planHit.plan.files) {
-      // the chosen plan's files[] and every module its anchors/components map (a shared shell)
-      code = { plan: planHit.file, files: fileHashes(planCodeFiles(planHit.plan, process.cwd()), process.cwd()), gitHead: gitHead(process.cwd()) };
+    // what this compare was computed against (report-freshness.ts stamp): the chosen plan's files[] and every module its
+    // anchors/components map (a shared shell), git HEAD, and the plan's waivers/descopes
+    stamped = planHit ? reportFreshness(process.cwd()).stamp(planHit) : undefined;
+    if (planHit && stamped?.code) {
+      code = stamped.code;
       // what the code hashes leave out, beside them in the report's input notes
       const skipped = planCodeSkippedNote(planHit.plan, process.cwd());
       if (skipped) { compareNotes.push(`${planHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
@@ -585,7 +593,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   }
   const planInputs = planHit ? {
     ...ifDefined("waivers", planHit.plan.waivers), ...ifDefined("descopes", planHit.plan.descopes), ...ifDefined("anchors", planHit.plan.anchors),
-    waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) },
+    ...(stamped ? { waiversInput: stamped.waivers } : {}),
   } : {};
   // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
   // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit

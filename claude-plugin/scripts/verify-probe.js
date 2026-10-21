@@ -6056,17 +6056,27 @@ function visualLine(v) {
   return `visual (informational \u2014 never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) \xB7 ${v.regionsTotal} hot region(s) \xB7 at the reference's ${scaleText(v.reference.scale)} (${v.reference.from}) \xB7 grid ${v.grid}${v.diff !== null ? ` \xB7 ${v.diff}` : ""}`;
 }
 
-// design-to-code/content-hash.ts
+// design-to-code/report-freshness.ts
 var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
-function gitHead(cwd) {
-  try {
-    const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
-    const h = r.status === 0 && r.stdout.trim();
-    return h && OBJECT_ID_LINE.test(h) ? h : null;
-  } catch {
-    return null;
+var systemGit = {
+  head(cwd) {
+    try {
+      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
+      const h = r.status === 0 && r.stdout.trim();
+      return h && OBJECT_ID_LINE.test(h) ? h : null;
+    } catch {
+      return null;
+    }
+  },
+  dirty(cwd) {
+    try {
+      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
+      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
+    } catch {
+      return null;
+    }
   }
-}
+};
 
 // design-to-code/verify-run.ts
 import path11 from "node:path";
@@ -6875,15 +6885,9 @@ function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
   return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Hex(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
 }
-function gitState(dir) {
-  const head = gitHead(dir);
-  if (!head) return { gitHead: null, gitDirty: null };
-  try {
-    const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd: dir, timeoutMs: 5e3, expect: /^# branch\.oid /m });
-    return { gitHead: head, gitDirty: r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null };
-  } catch {
-    return { gitHead: head, gitDirty: null };
-  }
+function gitState(dir, git = systemGit) {
+  const head = git.head(dir);
+  return head ? { gitHead: head, gitDirty: git.dirty(dir) } : { gitHead: null, gitDirty: null };
 }
 var INIT_SCRIPT = `(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
@@ -8288,7 +8292,7 @@ ${USAGE}`);
       if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${firstLine(e)})`] };
     }
     const measured = { ...measuredBase, visual };
-    const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+    const measuredText2 = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
     writeFileAtomic(png, r.png);
     const forcedPath = outBase + ".forced-colors.png";
     try {
@@ -8297,9 +8301,9 @@ ${USAGE}`);
     } catch (e) {
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
-    writeFileAtomic(outBase + ".measured.json", measuredText);
+    writeFileAtomic(outBase + ".measured.json", measuredText2);
     written = true;
-    return { measuredSha256: sha256Hex(measuredText) };
+    return { measuredSha256: sha256Hex(measuredText2) };
   };
   const lastPhase = ownRun ? "done" : "measured";
   const publish = (d) => {

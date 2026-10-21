@@ -62,7 +62,7 @@ const problems = (files: Record<string, string>, plan: Plan, map?: CodeConnectMa
 const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => split(files, plan, map).blocking;
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
-const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, behaviour: null, shippedProbe: false, ...r });
+const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, measuredAt: null, mtimeMs: 0, inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false, ...r });
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server in package.json" };
@@ -1037,10 +1037,13 @@ console.log("freshness by content, never by clock:");
   check(`\`touch\` on the code and the export changes nothing — no mtime is consulted (got ${s1.status}, not unverified "older than the newest file")`, s1.status === "verified");
   // a no-change re-pull: the export is replaced by the real "after" pull, then --expect is re-run
   fs.copyFileSync(after, exportFile);
+  const expBefore = fs.readFileSync(path.join(root, `design/verify/${JR}.expected.json`), "utf8");
   const x2 = vs(["--expect", `${E}/${JR}.json`]);
   const s2 = st();
-  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}, not unverified)`,
-    /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
+  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, keeps the expectation byte for byte (the report's and measured file's sha binds it), and the screen stays verified (got ${s2.status}, not unverified)`,
+    /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified"
+    && fs.readFileSync(path.join(root, `design/verify/${JR}.expected.json`), "utf8") === expBefore
+    && x2.stderr.includes(`expectation sha256 ${crypto.createHash("sha256").update(expBefore).digest("hex").slice(0, 12)}…`));
   // a real design change
   const edited = parseAs(rawA, isScreenExport, "the export");
   const editedChild = must(must(must(edited.nodes[0], "edited.nodes[0]").children, "edited.nodes[0].children")[0], "edited.nodes[0].children[0]");
@@ -1743,7 +1746,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   const l6b = bw({ verification: { mode: "rendered", a11y: { violations: 3, report: "design/verify/80_1.report.json" } } }, [own, older]);
   check("a11y.report names the other report (fail 3), violations 3 → no disagreement with the one it does not name", !!l6b && dis(l6b).length === 0);
   const l6c = bw({ verification: { mode: "rendered", a11y: { violations: 3 } } }, [own, older]);
-  check("no a11y.report, violations 3 → ONE disagreement, against the plan's own (name-matched, newest) report", !!l6c && dis(l6c).length === 1 && /Crates\.report\.json behaviour has 1 fail/.test(dis(l6c)[0] ?? ""));
+  check("no a11y.report, violations 3 → ONE disagreement, against the plan's own (name-matched) report", !!l6c && dis(l6c).length === 1 && /Crates\.report\.json behaviour has 1 fail/.test(dis(l6c)[0] ?? ""));
   const l6d = bw({ verification: { mode: "rendered", a11y: { violations: 1, report: "./design/verify/Crates.report.md" } } }, [own, older]);
   check("a11y.report naming the .md (with ./) resolves to its report.json", !!l6d && dis(l6d).length === 0 && !l6d.some((w) => /not a verify report found/.test(w)));
   const l6e = bw({ verification: { mode: "rendered", a11y: { violations: 1, report: "design/verify/Gone.report.json" } } }, [own, older]);
@@ -1771,8 +1774,36 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     return dis(abs).length === 0 && dis(rel).length === 0 && dis(absNoPlan).length === 0 && !abs.some((m) => NF.test(m)) && !rel.some((m) => NF.test(m));
   })());
   check("a11y.report naming no located report → says so, compares with none", !!l6e && dis(l6e).length === 0 && l6e.some((w) => /a11y\.report names design\/verify\/Gone\.report\.json, which is not a verify report found/.test(w)));
+  // with no a11y.report, the report that speaks is chosen by content, never by a clock (a clone or a `touch` reorders
+  // mtimes): the one verification.recorded.report names, else the latest measuredAt; mtime only breaks a tie
+  {
+    const sp = (rel: string, measuredAt: string | null, mtimeMs: number, fail: number): ReportRef => reportRef({ rel, matchedBy: "name", measuredAt, mtimeMs, shippedProbe: true, behaviour: beh(fail, ["a11y.name"]) });
+    // (a recorded@1 block: the a11y number is still read from verification's top level)
+    const rec1 = (report: string) => ({ by: "verify-screen --record-plan" as const, at: "2026-10-07T12:00:00.000Z", report, reportSha256: "0".repeat(64), verdict: "pass", headline: "PASS",
+      counts: { high: 0, medium: 0, low: 0, accepted: 0, notMeasured: 0, inferred: 0 } });
+    const plan = (recordedReport?: string): Plan => ({ verification: { mode: "rendered", a11y: { violations: 99 }, ...(recordedReport === undefined ? {} : { recorded: rec1(recordedReport) }) } });
+    const against = (ws: string[] | null): string => (dis(ws)[0] ?? "").replace(/^verification\.a11y records 99 violations but (\S+) behaviour has .*$/, "$1");
+    const A = sp("design/verify/A.report.json", "2026-10-01T00:00:00Z", 9, 1);
+    const B = sp("design/verify/B.report.json", "2026-10-02T00:00:00Z", 1, 2);
+    const C = sp("design/verify/C.report.json", "2026-09-01T00:00:00Z", 0, 3);
+    check("the report verification.recorded.report names speaks, over a newer mtime and a later measuredAt",
+      against(bw(plan("design/verify/C.report.json"), [A, B, C])) === C.rel && against(bw(plan("./design/verify/C.report.json"), [C, A, B])) === C.rel);
+    check("…named by an absolute path (with the project's cwd) it still speaks",
+      against(bw(plan(path.join(CTX.cwd, "design", "verify", "C.report.json")), [A, B, C], CTX)) === C.rel);
+    check("no record: the later measuredAt speaks even when its mtime is older (a fresh clone)",
+      against(bw(plan(), [A, B])) === B.rel && against(bw(plan(), [B, A])) === B.rel);
+    check("a record naming no located report → the latest measuredAt speaks", against(bw(plan("design/verify/Gone.report.json"), [A, B, C])) === B.rel);
+    const D = sp("design/verify/D.report.json", "2026-10-02T00:00:00Z", 5, 4);
+    check("equal measuredAt → the newer mtime breaks the tie", against(bw(plan(), [D, B])) === D.rel && against(bw(plan(), [B, D])) === D.rel);
+    const N = sp("design/verify/N.report.json", null, 99, 5);
+    check("a report with no measuredAt is the oldest, whatever its mtime", against(bw(plan(), [N, C])) === C.rel && against(bw(plan(), [C, N])) === C.rel);
+    // a11y.report a bare name two reports share (other dirs): among them, the recorded one speaks too, not the later measuredAt
+    const X = sp("design/verify/x/Crates.report.json", "2026-09-01T00:00:00Z", 0, 6), Y = sp("design/verify/y/Crates.report.json", "2026-10-09T00:00:00Z", 9, 7);
+    const shared = (recordedReport: string): Plan => ({ verification: { mode: "rendered", a11y: { violations: 99, report: "Crates.report.json" }, recorded: rec1(recordedReport) } });
+    check("a11y.report a basename two reports share → the recorded one among them speaks", against(bw(shared(X.rel), [Y, X])) === X.rel && against(bw(shared(Y.rel), [X, Y])) === Y.rel);
+  }
   check("[behaviour] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
-  // ONE behaviour warning for the run — the plan's own newest report (or the one a11y.report names) — with its
+  // ONE behaviour warning for the run — the plan's own report (or the one a11y.report names) — with its
   // count's singular/plural. design/verify/ is flat (locateReports reads only it), so a re-run with the same --out
   // overwrites its report and every other matched file is another --out: each warns on its own failures, never "not run"
   const own1 = reportRef({ rel: "design/verify/Crates.report.json", matchedBy: "name", mtimeMs: 2, shippedProbe: true, behaviour: beh(1, ["a11y.name"]) });

@@ -3,7 +3,6 @@
 // leaves every plan finding the reports it found. A module of its own so --migrate does not bundle verify-build.
 import fs from "node:fs";
 import path from "node:path";
-import { sha256Hex } from "../bridge/src/hash.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
@@ -12,7 +11,9 @@ import { readJsonOrNull } from "./read-json.ts";
 import { canonical } from "./run-cache.ts";
 import { nodeArtefacts, planNode } from "./node-artefacts.ts";
 import { setFacts } from "./verify-sets.ts";
-import type { CodeInputs, IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import type { IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import { reportInputs } from "./report-freshness.ts";
+import type { ReportInputs } from "./report-freshness.ts";
 
 // Stricter than project-layout's findExportDir (any export marker): the plan's screen is looked up in pages/,
 // so design/export counts only once it holds pages/ — else the pre-split design/ is tried.
@@ -130,10 +131,9 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
 export type ReportMatch = "name" | "nodeId" | "expectation frame" | "layer name";
 export interface ReportRef {
   rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
-  exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
-  expectationChanged: boolean; expectationRel: string | null;
-  /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
-  waiversSha256: string | null;
+  measuredAt: string | null; mtimeMs: number;
+  /** what the report was computed against (report-freshness.ts reportInputs) — judged there, never here */
+  inputs: ReportInputs;
   /** report.behaviour, summarised (null = none or unreadable — a report without a behaviour section). Warnings only. */
   behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
   /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
@@ -183,15 +183,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     if (!by) continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
-    // @2: which expectation the report was computed against, and whether that file still says the same
-    const want = r.inputs && r.inputs.expectationSha256;
-    let expectationChanged = false;
-    if (want && fs.existsSync(expFile)) { try { expectationChanged = sha256Hex(fs.readFileSync(expFile)) !== want; } catch { /* ignore */ } }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
-      why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
-      exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
-      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
-      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null,
+      why: r.why || [], deltas: r.deltas || null, measuredAt: r.measuredAt || null, mtimeMs, inputs: reportInputs(r),
       behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;

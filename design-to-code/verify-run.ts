@@ -39,6 +39,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+import { bindMeasured, measuredText } from "./report-freshness.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
@@ -441,35 +442,25 @@ function runBase(screen: string, dir: string | undefined, at: RunAt): { base: st
   return { base: path.join(verifyDir, k.name), notes: legacy !== null ? [`note  ${legacy} — verify-screen --migrate renames them to ${k.stem}`] : [] };
 }
 
-/** The measured file's expectationSha256 (and runId, when it names one), or why it has none. */
-function measuredExpectation(file: string): { sha: string; runId?: string } | { error: string } {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return { error: `${file} ${r.error}` };
-  if (!isJsonObject(r.doc)) return { error: `${file} is not a JSON object` };
-  const v = r.doc.expectationSha256, run = r.doc.runId;
-  return typeof v === "string" && v ? { sha: v, ...(typeof run === "string" && run ? { runId: run } : {}) } : { error: `${file} names no expectation (expectationSha256)` };
-}
-
 /** The checks `done` and `measured` apply before recording a measured file as this run's: the current
- *  expectation exists, the file exists and names it, names no other run, and is the file the probe recorded in
- *  this run (when it recorded one). Returns the two shas to record, or the refusal (one line, exit 1). */
+ *  expectation exists, the file exists and is bound to it and to this run (report-freshness.ts bindMeasured: it names
+ *  that expectation, no other run, and is the file the probe recorded in this run when it recorded one). Returns the two
+ *  shas to record, or the refusal (one line, exit 1). */
 function checkMeasured(base: string, measFile: string, runId: string, sameRun: VerifyStatusV2 | null, prev: VerifyStatusV2 | null): { expectationSha256: string; measuredSha256: string } | { refused: string } {
   const exp = sha256File(base + ".expected.json");
   if (!exp) return { refused: `${base}.expected.json does not exist — nothing to be done against` };
   const meas = sha256File(measFile);
   if (!meas) return { refused: `${measFile} does not exist — measure first (the probe on web; on native write it with expectationSha256) (phase stays ${prev ? prev.phase : "unset"})` };
-  const named = measuredExpectation(measFile);
-  if ("error" in named) return { refused: `${named.error} — re-run the probe` };
-  if (named.sha !== exp) return { refused: `${measFile} was measured against expectation ${short(named.sha)}, not the current ${short(exp)} — re-run the probe` };
-  if (named.runId !== undefined && named.runId !== runId) return { refused: `${measFile} was measured in run ${named.runId}, not ${runId} — re-run the probe with --run ${runId}` };
-  if (sameRun && sameRun.measuredSha256 && sameRun.measuredSha256 !== meas) {
-    return { refused: `run ${runId} recorded measured file ${short(sameRun.measuredSha256)} (by the probe), but ${measFile} is ${short(meas)} — measured again outside this run? re-run the probe with --run ${runId}` };
-  }
-  return { expectationSha256: exp, measuredSha256: meas };
+  const r = readJson(measFile, anyJson);
+  if (!("doc" in r)) return { refused: `${measFile} ${r.error} — re-run the probe` };
+  if (!isJsonObject(r.doc)) return { refused: `${measFile} is not a JSON object — re-run the probe` };
+  const why = bindMeasured({ expectationSha256: exp, measured: r.doc, measuredSha256: meas, run: { runId, measuredSha256: sameRun?.measuredSha256 } })[0];
+  if (why === undefined) return { expectationSha256: exp, measuredSha256: meas };
+  const next = why.kind === "no-expectation" || why.kind === "other-expectation" ? "re-run the probe" : `${why.kind === "other-measured" ? "measured again outside this run? " : ""}re-run the probe with --run ${runId}`;
+  return { refused: `${measFile}: ${measuredText(why)} — ${next}` };
 }
 
 const RUN_ID = /^[\w.:-]+$/;
-const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0, 12)}…` : "none");
 
 export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined;
   by?: string | undefined }

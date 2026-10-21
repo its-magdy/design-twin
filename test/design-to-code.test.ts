@@ -34,7 +34,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runAsync, runSync } from "../design-to-code/proc.ts";
-import { gitHead } from "../design-to-code/content-hash.ts";
+import { systemGit } from "../design-to-code/report-freshness.ts";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { cliRunner } from "./cli-runner.ts";
@@ -2057,20 +2057,20 @@ await (async () => {
     check(`[proc] runAsync: an exit event after it settled (poll: pid ${deadPid} gone) leaves no timer behind — the process ends at once (${late.ms} ms, exit ${String(late.status)})`,
       deadPid > 0 && late.status === 0 && late.stdout.trim() === "lost" && late.ms < 15_000);
   }
-  // git's object ids are 64 hex digits in a SHA-256 repository: still the HEAD (content-hash gitHead), never "no head"
+  // git's object ids are 64 hex digits in a SHA-256 repository: still the HEAD (report-freshness systemGit), never "no head"
   {
     const repo = (fmt: string): string | null => {
       const d = fs.mkdtempSync(path.join(dir, `git-${fmt}-`));
       const g = (...a: string[]) => runSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { cwd: d });
       if (g("init", "-q", `--object-format=${fmt}`).status !== 0) return "no-git";
       fs.writeFileSync(path.join(d, "a.txt"), "a"); g("add", "-A"); g("commit", "-qm", "a");
-      return gitHead(d);
+      return systemGit.head(d);
     };
     const h1 = repo("sha1"), h256 = repo("sha256");
     // (a git too old for --object-format, before 2.29, cannot make the second repository: only then is it skipped)
-    check(`[content-hash] gitHead: a SHA-1 HEAD (40 hex) and a SHA-256 one (64 hex) are both read (got ${h1}, ${h256})`,
+    check(`[git] systemGit.head: a SHA-1 HEAD (40 hex) and a SHA-256 one (64 hex) are both read (got ${h1}, ${h256})`,
       /^[0-9a-f]{40}$/.test(h1 ?? "") && (/^[0-9a-f]{64}$/.test(h256 ?? "") || h256 === "no-git"));
-    check("[content-hash] gitHead outside a repository → null", gitHead(dir) === null);
+    check("[git] systemGit.head outside a repository → null", systemGit.head(dir) === null);
   }
   fs.rmSync(dir, { recursive: true, force: true });
 })();

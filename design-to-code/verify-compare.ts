@@ -13,6 +13,8 @@ import { parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { MEASURED_PHASES, TERMINAL_PHASES } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { shellArg } from "./cli-args.ts";
+import { bindMeasured, codeChanged, measuredText, stampEvidence } from "./report-freshness.ts";
+import type { MeasuredReason } from "./report-freshness.ts";
 import { isJsonObject } from "./types.ts";
 import { CANONICAL_MATCHED_BY, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
@@ -363,11 +365,9 @@ function fieldTolerance(label: string): number | null {
 const fieldBase = (f: string): string => f.replace(/\s*\(.*\)$/, "");
 // the wording of the verdict reasons that say the run itself is unverified (runIntegrity). The reasons are
 // recorded as report.integrity; --accept reads that field, never this wording.
+// (the measured file's own binding — expectation, run, recorded file — is report-freshness.ts bindMeasured, worded there)
 const INTEGRITY_PHRASES = {
-  otherExpectation: "the measurements were taken against a DIFFERENT expectation",
-  noExpectation: "measured file names no expectation (expectationSha256)",
   unfinished: "— the verifier had not finished",
-  otherMeasured: "names a different measured file",
   unrecorded: "no status of that run records it",
 } as const;
 interface CoverageNow {
@@ -1477,14 +1477,18 @@ function componentsAbsentOf(g: Pick<Graded, "comps" | "bySet">): Pick<Graded, "c
 function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measuredRun"> {
   const { measured, opts } = cx;
   const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
-  const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
+  // the measured file bound to the expectation on disk and to the run beside it (report-freshness.ts)
+  const bound = bindMeasured({ expectationSha256: opts.expectationSha256, measured, measuredSha256: opts.measuredSha256, run: st });
+  const has = (k: MeasuredReason["kind"]): MeasuredReason | undefined => bound.find((r) => r.kind === k);
   const integrity: string[] = [];
   // the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
   // run (another expectation, no expectation, an unfinished run, another measured file) — so the verdict is
   // `incomplete` even with high mismatches: a `fail` would grade numbers nothing ties to this design and run.
   // The report is still written (the coverage-baseline chain stays intact).
-  if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
-  if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} — nothing ties these numbers to this design; re-measure with the shipped probe`);
+  const otherExp = has("other-expectation"), noExp = has("no-expectation");
+  let otherMeasured: MeasuredReason | undefined;
+  if (otherExp) integrity.push(`${measuredText(otherExp)} — re-measure`);
+  if (noExp) integrity.push(`${measuredText(noExp)} — nothing ties these numbers to this design; re-measure with the shipped probe`);
   // a measured file that names its run, beside no status of that run (none found, a v1 file, another run's) —
   // nothing recorded it as that run's (the probe's status write was refused, or another run has started since).
   // Only when compare looked for one (opts.status null or set; undefined = an in-process caller that passed none).
@@ -1492,7 +1496,7 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
   // the set the advice's --status commands name: the one the CLI keyed the status by (never the status's own `screen`)
   const screen = opts.status?.screen;
   const S = screen !== undefined ? shellArg(screen) : "<Layer>__<id>";
-  if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
+  if (measuredRun !== undefined && opts.status !== undefined && (st === null || has("other-run"))) {
     integrity.push(`the measured file was taken in run ${measuredRun}, but ` +
       `${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} ` +
       `— ${INTEGRITY_PHRASES.unrecorded}; ` +
@@ -1514,8 +1518,8 @@ function runIntegrity(cx: CompareCtx): Pick<Graded, "st" | "integrity" | "measur
     const record = measuredRun === undefined && TERMINAL_PHASES.includes(st.phase)
       ? ` — a measured file that names no run is tied to a run by recording it: --status ${S} --phase starting --new-run, then --status ${S} --phase measured --run <id>` : "";
     if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256)
-      integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?${record}`);
+    else if ((otherMeasured = has("other-measured")) !== undefined)
+      integrity.push(`${measuredText(otherMeasured, stFile)} — measured again outside run ${st.runId}?${record}`);
     else if (measuredRun === undefined && !st.measuredSha256)
       integrity.push(`${stFile} (run ${st.runId}, phase ${st.phase}) records no measured file, and this one names no run — nothing ties it to that run${record}`);
   }
@@ -1907,12 +1911,9 @@ function evidenceInputs(
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
-    ...ifDefined("expectationSha256", opts.expectationSha256),
-    ...ifDefined("measuredSha256", opts.measuredSha256),
-    ...ifDefined("measuredAgainst", measured.expectationSha256 || undefined),
-    // WHAT was measured, by content — the design (timestamps stripped)
-    // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
-    ...ifDefined("exportContentSha256", expectation.exportContentSha256 || undefined),
+    // what this report was computed against (report-freshness.ts: stampEvidence here; the code and waivers its `stamp`
+    // gave the CLI) — what verify-build's freshness judge reads back
+    ...stampEvidence({ expectation, expectationSha256: opts.expectationSha256, measuredSha256: opts.measuredSha256, measured }),
     ...ifDefined("code", opts.code || undefined),
     // Which probe produced these numbers: a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
@@ -2064,13 +2065,8 @@ function headlineOf(
   } = g;
   // the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
   const prevCode = opts.against && opts.against.report.inputs ? opts.against.report.inputs.code : undefined;
-  // only the files BOTH reports hashed — a key the previous report never recorded (a mapped module, a file just
-  // added to files[]) says nothing about whether the code changed; none in common → the git commits
-  const codeNow = opts.code ? opts.code.files : {};
-  const common = prevCode ? Object.keys(prevCode.files).filter((f) => Object.hasOwn(codeNow, f)) : [];
-  const codeChanged = prevCode && opts.code ? (common.length ? common.some((f) => prevCode.files[f] !== codeNow[f])
-    : !!(prevCode.gitHead && opts.code.gitHead && prevCode.gitHead !== opts.code.gitHead)) : false;
-  const sameBuildServed = !!(against && against.sameBuild === true && codeChanged);
+  // (report-freshness.ts codeChanged: only the files BOTH reports hashed; none in common → the git commits)
+  const sameBuildServed = !!(against && against.sameBuild === true && codeChanged(prevCode, opts.code));
   const lost = against && against.deltas ? against.deltas.lostCoverage.length : 0;
   const unmatchedCount = unmatchedInteractionEvidence.length;
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
