@@ -219,9 +219,10 @@ export async function collectMotion(node: SceneNode): Promise<NodeMotion | undef
       // "CUSTOM" (a CustomAnimationStyle applied to this node) carries only the ids and timelineOffset. A
       // runtime older than the CUSTOM kind sends no `type` at all, which the typings define as FIGMA. The
       // typings close the union, so a kind added after them is read through an `unknown` view of `type`:
-      // any other string is exported as that kind without reading a FIGMA shape out of it.
-      const kind: unknown = (s as { type?: unknown }).type;
-      if (typeof kind === "string" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
+      // any other non-empty string is exported as that kind without reading a FIGMA shape out of it. An
+      // empty `type` counts as absent (FIGMA).
+      const kind: unknown = s.type;
+      if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
       if (s.type === "CUSTOM") {
         const o: MotionStyle = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);

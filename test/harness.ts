@@ -303,8 +303,9 @@ const scrollFrame = {
       { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
   },
   // AppliedAnimationStyle is discriminated on `type` (typings 1.141): the first entry has NO `type` (a
-  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, the rest
-  // CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props).
+  // runtime older than the CUSTOM kind — read as FIGMA), the second is an explicit FIGMA style, applied3-9
+  // are CUSTOM ones (a CustomAnimationStyle applied: ids, name and timelineOffset only — no duration/props),
+  // applied10-11 are kinds added after the typings (SPRING, MORPH), applied12-13 are FIGMA styles with a description.
   // A CUSTOM row is expanded from the style its styleId resolves to (getStyleByIdAsync below): cas1
   // resolves (twice — one fetch), the others do not resolve to a readable custom animation style.
   animationStyles: [{
@@ -334,8 +335,11 @@ const scrollFrame = {
     type: "CUSTOM", id: "applied9", styleId: "cas_empty", name: "Empty",
   }, {
     // a kind added after the typings: exported as its lower-cased kind, never read as a FIGMA style (the
-    // duration/props it carries are ignored)
-    type: "SPRING", id: "applied10", styleId: "as3", name: "Bounce", duration: 0.8, timelineOffset: 0.5, props: { stiffness: 3 },
+    // duration/props/entries it carries are never read: the getters throw)
+    type: "SPRING", id: "applied10", styleId: "as3", name: "Bounce", timelineOffset: 0.5,
+    get duration(): number { throw new Error("unknown-kind row: duration read"); },
+    get props(): Record<string, number> { throw new Error("unknown-kind row: props read"); },
+    get entries(): unknown[] { throw new Error("unknown-kind row: entries read"); },
   }, {
     // an unknown kind whose id, name and styleId are not strings, with a zero offset: none of them is exported
     type: "MORPH", id: 11, name: 7, styleId: 9, timelineOffset: 0,

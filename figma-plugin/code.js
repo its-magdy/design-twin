@@ -2326,7 +2326,7 @@
     if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
       out.styles = await Promise.all(node.animationStyles.map(async (s) => {
         const kind = s.type;
-        if (typeof kind === "string" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
+        if (typeof kind === "string" && kind !== "" && kind !== "FIGMA" && kind !== "CUSTOM") return unknownKindStyle(s, kind);
         if (s.type === "CUSTOM") {
           const o = { id: s.id, name: s.name, styleId: s.styleId, custom: true };
           if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);

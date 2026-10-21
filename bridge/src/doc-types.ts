@@ -454,7 +454,7 @@ export interface MotionStyle extends Omit<MotionStyleEntry, "id" | "name" | "sty
   name?: string;
   styleId?: string;
   /** a row of an animation style kind this exporter does not know (a kind added to the Plugin API after
-   *  the typings it was built on): the applied row's `type`, lower-cased. Only the ids, name and
+   *  the typings it uses): the applied row's `type`, lower-cased. Only the ids, name and
    *  timelineOffset are exported, each only when present, since the row's shape is not guessed: it
    *  carries no duration, props or entries, and a consumer treats it as an unknown animation style.
    *  Absent on Figma and custom rows. */
