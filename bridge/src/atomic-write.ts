@@ -11,10 +11,35 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { errCode } from "./errmsg.ts";
 
 /** A `.tmp-<pid>-<random>` suffix: unique per call, so two writers (two processes, or two writes in one) never
  *  share a tmp name, and a stale tmp from a killed run is never reused. */
 export const tmpSuffix = (): string => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+
+// On Windows a rename over a file that another process has open — a reader polling it (verify-screen --wait reads the live
+// status every --interval while the verifier writes it), an antivirus scan or an indexer — is refused
+// (ERROR_ACCESS_DENIED / ERROR_SHARING_VIOLATION → EPERM, EACCES, EBUSY) until that handle closes, which is a moment: the
+// rename is retried for up to RENAME_RETRY_MS (as graceful-fs does for npm) before the refusal stands. POSIX renames over
+// an open file at once; there the first error is final — as it is for a target that is a directory (a refusal no handle
+// closing will lift).
+const RENAME_RETRY_MS = 2_000;
+const RENAME_TRANSIENT = new Set(["EPERM", "EACCES", "EBUSY"]);
+const sleeper = new Int32Array(new SharedArrayBuffer(4));
+/** fs.renameSync(from, to), retried on Windows while the refusal can be another process's open handle (see above). */
+export function renameOver(from: string, to: string): void {
+  const t0 = Date.now();
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try { fs.renameSync(from, to); return; } catch (e) {
+      const code = errCode(e);
+      if (process.platform !== "win32" || code === undefined || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
+      let dir = false;
+      try { dir = fs.statSync(to).isDirectory(); } catch { /* gone or unreadable: retried */ }
+      if (dir) throw e;
+      Atomics.wait(sleeper, 0, 0, delay);
+    }
+  }
+}
 
 /** The directory's entries flushed to disk (a rename into it, made durable). Not on Windows, where a directory
  *  cannot be opened for it; a filesystem that refuses it keeps the rename as it is. */
@@ -45,7 +70,7 @@ export function writeFileAtomic(file: string, data: string | Uint8Array, opts: {
       fs.writeFileSync(tmp, data, { flag: "wx", ...(opts.mode === undefined ? {} : { mode: opts.mode }) });
     }
     if (opts.mode !== undefined) fs.chmodSync(tmp, opts.mode);
-    fs.renameSync(tmp, file);
+    renameOver(tmp, file);
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
     throw e;

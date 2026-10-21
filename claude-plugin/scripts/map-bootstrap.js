@@ -889,6 +889,28 @@ import crypto from "node:crypto";
 import fs3 from "node:fs";
 import path3 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+var RENAME_RETRY_MS = 2e3;
+var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+function renameOver(from, to) {
+  const t0 = Date.now();
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      fs3.renameSync(from, to);
+      return;
+    } catch (e) {
+      const code = errCode(e);
+      if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
+      let dir = false;
+      try {
+        dir = fs3.statSync(to).isDirectory();
+      } catch {
+      }
+      if (dir) throw e;
+      Atomics.wait(sleeper, 0, 0, delay);
+    }
+  }
+}
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
@@ -918,7 +940,7 @@ function writeFileAtomic(file, data, opts = {}) {
       fs3.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
     if (opts.mode !== void 0) fs3.chmodSync(tmp, opts.mode);
-    fs3.renameSync(tmp, file);
+    renameOver(tmp, file);
   } catch (e) {
     try {
       fs3.rmSync(tmp, { force: true });
@@ -940,7 +962,7 @@ var PID_NS = (() => {
     return "";
   }
 })();
-var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
 
 // bridge/src/json-file.ts
 var indentOf = (text) => /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";

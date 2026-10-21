@@ -1963,30 +1963,45 @@ await (async () => {
     // exitCli under runCli: unwinds to runCli (exit code 2), the output before it still drains
     exitCli: `import { exitCli, runCli } from ${PROC};\nrunCli(() => { ${BODY} exitCli(2); }, { name: "t" });\n`,
   };
-  const slowRead = (file: string, holdMs: number): Promise<{ code: number | null; out: string; err: string; ms: number }> => new Promise((resolve) => {
+  // holdMs: how long the reader does not read (null: never); every child is killed at KILL_MS, so a child that does not
+  // end fails its check in seconds (code null), never at the suite's cap. exitMs: when the CHILD exited — `close` also
+  // waits for the reader's side of the pipe
+  const KILL_MS = 20_000;
+  const slowRead = (file: string, holdMs: number | null): Promise<{ code: number | null; out: string; err: string; ms: number; exitMs: number }> => new Promise((resolve) => {
     const t0 = Date.now();
     const c = spawn(process.execPath, [file], { stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "";
+    let out = "", err = "", exitMs = -1;
     c.stdout.pause();
-    const hold = setTimeout(() => c.stdout.resume(), holdMs);
+    const hold = holdMs === null ? undefined : setTimeout(() => c.stdout.resume(), holdMs);
+    const kill = setTimeout(() => c.kill("SIGKILL"), KILL_MS);
     c.stdout.on("data", (d: Buffer) => { out += d.toString(); });
     c.stderr.on("data", (d: Buffer) => { err += d.toString(); });
-    c.on("close", (code) => { clearTimeout(hold); resolve({ code, out, err, ms: Date.now() - t0 }); });
+    c.on("exit", () => { exitMs = Date.now() - t0; });
+    c.on("close", (code) => { clearTimeout(hold); clearTimeout(kill); resolve({ code, out, err, ms: Date.now() - t0, exitMs }); });
   });
   const want = Array.from({ length: 4000 }, (_, i) => String(i).padStart(6, "0") + "y".repeat(93)).join("\n") + "\n" + "z".repeat(50_000) + "\nEND\n";
   const cases = [["runCli", 4], ["exitFlushed", 3], ["exitCli", 2]] as const;
   for (const [name] of cases) fs.writeFileSync(path.join(dir, name + ".ts"), scripts[name] ?? "");
-  // a reader that never drains: exitFlushed still ends the process at its cap (a few hundred ms here), not never
+  // a reader that never drains: exitFlushed still ends the process at its cap (a few hundred ms here), not never — on
+  // POSIX, where a write to a pipe is queued. On Windows a write to a pipe is SYNCHRONOUS (Bun forces process.stdout/stderr
+  // on a pipe blocking there, as Node documents for itself): the 400 KB write blocks the thread until the reader takes
+  // it, before exitFlushed is even called, and no timer can end a thread blocked in a write. A reader that never reads
+  // holds it forever there — as it holds any program writing to it, Node's included — so on Windows the reader is
+  // 1.5 s late instead, and the check is what the CLI owes it: every one of the 400 KB arrives and the exit code is 5,
+  // promptly once the reader reads (the title says when the child exited: after the hold, while its write blocked).
   const never = path.join(dir, "never.ts");
   fs.writeFileSync(never, `import { exitFlushed, installQueuedConsole } from ${PROC};\ninstallQueuedConsole();\nprocess.stdout.write("x".repeat(400_000));\nexitFlushed(5, 300);\n`);
+  const WIN = process.platform === "win32", WIN_HOLD = 1_500;
   // all at once (each its own child and pipe)
-  const [runs, nr] = await Promise.all([Promise.all(cases.map(([name]) => slowRead(path.join(dir, name + ".ts"), 400))), slowRead(never, 60_000 * 10)]);
+  const [runs, nr] = await Promise.all([Promise.all(cases.map(([name]) => slowRead(path.join(dir, name + ".ts"), 400))), slowRead(never, WIN ? WIN_HOLD : null)]);
   cases.forEach(([name, code], i) => {
     const r = runs[i];
     check(`[proc] ${name}: exit ${code} and every byte of ~450 KB to a reader 400 ms late, in order (got exit ${r?.code}, ${r?.out.length}/${want.length} B)`,
       r !== undefined && r.code === code && r.out === want && r.err === "to stderr\n");
   });
-  check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (${nr.ms} ms < 5000)`, nr.code === 5 && nr.ms < 5_000);
+  if (!WIN) check(`[proc] exitFlushed with a reader that never drains: exit 5 at its cap (got exit ${nr.code} in ${nr.ms} ms < 5000; killed at ${KILL_MS} ms otherwise)`, nr.code === 5 && nr.ms < 5_000);
+  else check(`[proc] exitFlushed on Windows, a reader ${WIN_HOLD} ms late: all 400000 B arrive (${nr.out.length}) and it exits 5 once the reader reads (got exit ${nr.code} in ${nr.ms} ms < ${WIN_HOLD + 5_000}; the child exited at ${nr.exitMs} ms)`,
+    nr.code === 5 && nr.out.length === 400_000 && nr.ms < WIN_HOLD + 5_000);
   fs.rmSync(dir, { recursive: true, force: true });
 })();
 

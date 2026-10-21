@@ -121,16 +121,21 @@ export function planLockRefused(planFile: string, e: unknown): unknown {
   return cache !== null && code !== undefined && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
 }
 
-/** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount). */
-export const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+/** Filesystem refusals that mean "this process may not write there" (the sandbox's write scope, a read-only mount), or
+ *  that the run cache's path is gone (ENOENT, ENOTDIR — see GONE_CODES). */
+export const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOENT", "ENOTDIR"]);
+/** The refusals that say a directory on the run cache's path is gone, not a permission. ENOTDIR as well as ENOENT: a
+ *  node_modules that is a link to a removed directory (a reinstall mid-run) is ENOENT on POSIX but ENOTDIR from Bun's
+ *  mkdir on Windows (the link is there, not a directory), and a node_modules replaced by a file is ENOTDIR everywhere. */
+const GONE_CODES = new Set(["ENOENT", "ENOTDIR"]);
 /** A write into the run cache was refused: the one sentence --status (exit 6), --wait (exit 6) and the probe (a warning) print. */
 export class RunCacheUnwritable extends Error {
   readonly cacheDir: string;
   readonly root: string;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
-   *  permission: a directory on the way was removed while the run wrote there */
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT / ENOTDIR are
+   *  not a permission: a directory on the way was removed while the run wrote there */
   constructor(cacheDir: string, root: string, code: string) {
-    super(code === "ENOENT"
+    super(GONE_CODES.has(code)
       ? `run cache ${cacheDir} disappeared — was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) — start a new run once it is back`
       : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) — run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
     this.name = "RunCacheUnwritable";

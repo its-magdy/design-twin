@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
-import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
+import { renameOver, tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import * as tokenStore from "../bridge/src/token-store.ts";
 
 const t = (name: string, cond: () => boolean): void => {
@@ -51,6 +51,45 @@ console.log("writeFileAtomic — a unique tmp name beside the target:");
   fs.writeFileSync(stale, "stale");
   writeFileAtomic(f, "3");
   t("a stale tmp file with the old pid-only name is left alone", () => fs.readFileSync(stale, "utf8") === "stale" && fs.readFileSync(f, "utf8") === "3");
+}
+
+console.log("renameOver — a Windows rename refused while another process has the target open:");
+{
+  // Windows refuses a rename over a file another process holds open (a --wait polling the live status, an antivirus
+  // scan): EPERM / EACCES / EBUSY until that handle closes. Played here with process.platform and fs.renameSync swapped
+  // for the call, so every OS runs it.
+  const d = mk();
+  const f = path.join(d, "live.json");
+  fs.writeFileSync(f, "old");
+  const realRename = fs.renameSync, realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const as = (platform: string, refusals: string[], from: string, to: string): { threw: string | null; calls: number; ms: number } => {
+    let calls = 0, threw: string | null = null;
+    const t0 = Date.now();
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    fs.renameSync = (a: fs.PathLike, b: fs.PathLike): void => {
+      const code = refusals[calls++];
+      if (code !== undefined) throw Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+      realRename(a, b);
+    };
+    try { renameOver(from, to); } catch (e) { threw = e instanceof Error && "code" in e ? String(e.code) : String(e); } finally {
+      fs.renameSync = realRename;
+      if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+    }
+    return { threw, calls, ms: Date.now() - t0 };
+  };
+  const tmp1 = path.join(d, "a.tmp"); fs.writeFileSync(tmp1, "new");
+  const w = as("win32", ["EPERM", "EBUSY", "EACCES"], tmp1, f);
+  t(`win32: refused 3 times (EPERM, EBUSY, EACCES), then the handle closes → the rename goes through on the 4th try (${w.calls} calls, ${w.ms} ms)`,
+    () => w.threw === null && w.calls === 4 && fs.readFileSync(f, "utf8") === "new" && !fs.existsSync(tmp1) && w.ms < 1_000);
+  const tmp2 = path.join(d, "b.tmp"); fs.writeFileSync(tmp2, "newer");
+  const p = as("linux", ["EPERM"], tmp2, f);
+  t("POSIX: the first refusal is final (no retry; nothing renamed)", () => p.threw === "EPERM" && p.calls === 1 && fs.readFileSync(f, "utf8") === "new" && fs.existsSync(tmp2));
+  const other = as("win32", ["ENOENT"], tmp2, f);
+  t("win32: a refusal no closing handle lifts (ENOENT) is final at once", () => other.threw === "ENOENT" && other.calls === 1);
+  const asDir = path.join(d, "a-dir"); fs.mkdirSync(asDir);
+  const dirT = as("win32", ["EPERM", "EPERM"], tmp2, asDir);
+  t("win32: an EPERM over a target that is a directory is final at once (no handle closing lifts it)", () => dirT.threw === "EPERM" && dirT.calls === 1);
+  t("process.platform and fs.renameSync are restored", () => process.platform === realPlatform?.value && fs.renameSync === realRename);
 }
 
 console.log("writeFileAtomic — failures:");

@@ -146,7 +146,10 @@ export function runCli(main: (argv: string[]) => number | Promise<number>, o: Ru
 export const insideCli = (): boolean => cliDepth > 0;
 /** Exit with `code` once everything written to stdout and stderr is out (flushStdio) — or after `capMs` when a reader never
  *  drains them. For a process that has to end while something still holds the loop (a hung step's watchdog, a browser that
- *  will not go). Needs installQueuedConsole (runCli calls it) to know what is in flight. */
+ *  will not go). Needs installQueuedConsole (runCli calls it) to know what is in flight.
+ *  The cap bounds QUEUED writes (POSIX, where a write to a pipe is queued). On Windows Bun makes stdout/stderr on a pipe
+ *  synchronous (as Node does there): a write into a full pipe blocks the thread until the reader takes it, so nothing is
+ *  ever left in flight here — and a reader that never reads holds the process in that write, as it would any program. */
 export function exitFlushed(code: number, capMs = 2_000): void {
   const exit = (): never => process.exit(code);
   setTimeout(exit, capMs).unref(); // a pending write keeps the loop up, so this still fires

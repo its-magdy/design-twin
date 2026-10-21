@@ -340,13 +340,26 @@ await block("a run cache that disappeared:", async () => {
   const cwd = mk("dt-run-gone-");
   fs.writeFileSync(path.join(cwd, "package.json"), "{\"name\":\"plots-app\",\"private\":true}\n");
   fs.mkdirSync(path.join(cwd, "design", "verify"), { recursive: true });
-  // node_modules mid-reinstall: a link to a directory that is gone — every write under it is ENOENT
+  // node_modules mid-reinstall: a link to a directory that is gone — every write under it is ENOENT (POSIX), ENOTDIR (Bun's
+  // mkdir on Windows)
   fs.symlinkSync(path.join(cwd, "gone-node-modules"), path.join(cwd, "node_modules"));
   const r = runSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "queued", "--new-run"], { cwd });
   safe("--status into a run cache that no longer exists → exit 6, 'run cache <dir> disappeared — was node_modules reinstalled during the run?', not 'not writable'", () =>
     r.status === 6 && /run cache \S+ disappeared — was node_modules reinstalled during the run\?/.test(r.stderr) && !/not writable/.test(r.stderr) && !/\n\s+at /.test(r.stderr));
-  safe("the class says the same for ENOENT; a permission refusal keeps 'not writable (sandbox write scope?)'", () =>
-    /disappeared — was node_modules reinstalled/.test(new VR.RunCacheUnwritable("/c", "/r", "ENOENT").message) && /not writable \(sandbox write scope\?\)/.test(new VR.RunCacheUnwritable("/c", "/r", "EACCES").message));
+  if (r.status !== 6) console.log(`    (exit ${String(r.status)}; stderr: ${r.stderr.trim()})`);
+  // a node_modules that is a FILE: mkdir through it is ENOTDIR on every platform — the errno Bun's mkdir gives on Windows
+  // for the dangling link above (the link is there, and it is not a directory), so this is that case on every OS
+  const cwd2 = mk("dt-run-gone-file-");
+  fs.writeFileSync(path.join(cwd2, "package.json"), "{\"name\":\"plots-app\",\"private\":true}\n");
+  fs.mkdirSync(path.join(cwd2, "design", "verify"), { recursive: true });
+  fs.writeFileSync(path.join(cwd2, "node_modules"), "");
+  const f = runSync(process.execPath, [VS_TS, "--status", "Plots__1_1", "--phase", "queued", "--new-run"], { cwd: cwd2 });
+  safe("…a node_modules that is a file (ENOTDIR) → the same exit 6 and sentence, not a raw ENOTDIR (exit 1)", () =>
+    f.status === 6 && /run cache \S+ disappeared — was node_modules reinstalled during the run\?/.test(f.stderr) && !/ENOTDIR|not writable/.test(f.stderr));
+  if (f.status !== 6) console.log(`    (exit ${String(f.status)}; stderr: ${f.stderr.trim()})`);
+  safe("the class says the same for ENOENT and ENOTDIR; a permission refusal keeps 'not writable (sandbox write scope?)'", () =>
+    ["ENOENT", "ENOTDIR"].every((c) => /disappeared — was node_modules reinstalled/.test(new VR.RunCacheUnwritable("/c", "/r", c).message))
+    && /not writable \(sandbox write scope\?\)/.test(new VR.RunCacheUnwritable("/c", "/r", "EACCES").message));
 });
 
 // `.git` as a FILE (a submodule / worktree checkout) is a repo boundary too; --wait before the cache exists
@@ -921,17 +934,22 @@ await block("verify-screen --wait:", async () => {
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir));
   const stage = VR.stageDirOf(base, "run-e");
   fs.writeFileSync(path.join(stage, "Plots__1_1.evidence.json"), JSON.stringify({ interactions: [{ nodeId: "2:4", trigger: "on_click", ok: null }] }));
-  let out = "";
+  // both of the waiter's pipes are read (an unread pipe is a writer blocked on Windows, where a write to a pipe is
+  // synchronous), and on a failure the done write's and the waiter's own words are printed
+  let out = "", werr = "";
   const waiting = new Promise<number | null>((resolve) => {
-    const p = spawn(process.execPath, [VS_TS, "--wait", "Plots__1_1", "--run", "run-e", "--timeout", "15", "--interval", "0.1"], { cwd: path.dirname(path.dirname(dir)) });
+    const p = spawn(process.execPath, [VS_TS, "--wait", "Plots__1_1", "--run", "run-e", "--timeout", "15", "--interval", "0.1"], { cwd: path.dirname(path.dirname(dir)), stdio: ["ignore", "pipe", "pipe"] });
     p.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    p.stderr.on("data", (d: Buffer) => { werr += d.toString(); });
     p.on("close", (code) => resolve(code));
   });
   await sleep(700);
-  cli("--status", "Plots__1_1", "--phase", "done", "--run", "run-e", "--publish", stage);
+  const doneE = cli("--status", "Plots__1_1", "--phase", "done", "--run", "run-e", "--publish", stage);
   const code = await waiting;
+  safe("…the done write that ends it, while the wait polls the live status → exit 0, the evidence published", () => doneE.status === 0 && /published 1 file\(s\)/.test(doneE.stderr));
   safe("…a wait that is polling when the run reaches done → exit 0", () => code === 0);
   safe("…and prints --interactions for the evidence published in this run", () => out.includes(`--interactions ${relPrinted("Plots__1_1.evidence.json")}`));
+  if (doneE.status !== 0 || code !== 0) console.log(`    (done: exit ${String(doneE.status)}, stderr: ${doneE.stderr.trim()}\n     wait: exit ${String(code)}, stderr: ${werr.trim()})`);
   // the window between done's live write and its commit, held open: done names this run's evidence, not in design/verify yet
   const evStaged = path.join(VR.stageDirOf(base, "run-w"), "Plots__1_1.evidence.json");
   fs.mkdirSync(path.dirname(evStaged), { recursive: true });

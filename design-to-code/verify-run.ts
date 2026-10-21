@@ -44,7 +44,7 @@ import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import { RunCacheUnwritable, UNWRITABLE_CODES, canonical, runCacheDir, runCacheOf } from "./run-cache.ts";
 import { errCode, firstLine } from "../bridge/src/errmsg.ts";
-import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
+import { renameOver, tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { screenKey, setKey } from "./screen-key.ts";
@@ -369,7 +369,7 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
       return { error: `--publish: copying ${f} failed (${firstLine(e)}) — nothing was published` };
     }
   }
-  return { files, tmpOf, abort, commit: () => { for (const f of files) fs.renameSync(tmpOf(f), path.join(destDir, f)); } };
+  return { files, tmpOf, abort, commit: () => { for (const f of files) renameOver(tmpOf(f), path.join(destDir, f)); } };
 }
 /** prepareStaged + commit. */
 export function publishStaged(stageDir: string, destDir: string): { published: string[] } | { error: string } {
