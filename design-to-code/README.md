@@ -46,16 +46,16 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 #    NOTE: pass the SPLIT files below, never design-system.json — that is a slim pointer
 #    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):
-node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json
+bun design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json
 # 3. Validate the map shape:
-node design-to-code/map-validate.ts design/codeconnect.local.json
+bun design-to-code/map-validate.ts design/codeconnect.local.json
 # 4. Check it against the current Figma catalog (run this in CI / pre-commit):
-node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json
+bun design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json
 # 5. Emit code tokens:
-node design-to-code/tokens.ts design/export/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
+bun design-to-code/tokens.ts design/export/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
 #                                                                             #    + out/tokens.resolver.json + out/tokens/*.json
 # the input is design/export/variables.json instead when the export was a single-screen pull
-node design-to-code/tokens.ts design/export/variables.json ./out --web tailwind  # -> out/theme.css (Tailwind v4 @theme) only;
+bun design-to-code/tokens.ts design/export/variables.json ./out --web tailwind  # -> out/theme.css (Tailwind v4 @theme) only;
 #                                                                             #    add --also-generic for the set above too
 #    (or feed tokens.dtcg.json to Style Dictionary for Tailwind/SwiftUI/Compose output; feed
 #     tokens.resolver.json to any DTCG 2025.10 resolver-aware tool to pick a theme/mode)
@@ -96,7 +96,7 @@ does, it emits from `design/export/variables.json` (or the split `design-system/
 complementary.
 
 ## Validating on a real file
-`node test/design-to-code.test.ts` runs on **mock** data. Before trusting the tooling on real
+`bun test/design-to-code.test.ts` runs on **mock** data. Before trusting the tooling on real
 output, walk the **Layer C checklist in `../TESTING.md`** — it runs the token emitter, bootstrap,
 validator, and drift-lint against a genuine export (`design/export/design-system/`) and injects each drift class to confirm
 the lint catches it.

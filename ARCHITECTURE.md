@@ -296,9 +296,11 @@ records the design decisions behind it. Every read is guarded by `in` / `figma.m
   **ws** (via `.mcp.json` / `claude mcp add-json` only). Our MCP server exposes **stdio** to Claude Code
   and keeps the WebSocket-to-plugin internal.
 - **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "designtwin": { "type":"stdio",
-  "command":"node", "args":["/abs/path/to/bridge/src/figma-mcp.ts"] } } }` — `bridge/dist/figma-mcp.js`
-  (built with `npm run build`, as a linked `dtwin` runs) or `bridge/src/figma-mcp.ts` (run from
-  source) — registered in the project you point the bridge at, never in this repo.
+  "command":"/abs/path/to/bun", "args":["--no-install","--no-env-file","/abs/path/to/bridge/src/figma-mcp.ts"] } } }`
+  (what `dtwin init --mcp` writes: the `bun` that ran it, by absolute path, and the TypeScript entry — there is no
+  build) — registered in the project you point the bridge at, never in this repo. `--no-install` / `--no-env-file`
+  keep that project's `.env` and its missing packages out of the server: Bun would otherwise load the one into
+  `process.env` and auto-install the other from the registry.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
   (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`.
 - **Skill vs MCP:** the skills **orchestrate** — `audit-design` reviews the export before code
@@ -339,8 +341,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
    the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` package, which is
-   **not on npm**: clone, `npm install`, `npm run build --workspace bridge`, then `npm link --workspace bridge`
-   (or run `node bridge/src/figma-pull.ts` from the clone);
+   **not on npm**: clone, `bun install`, then `bun link` in `bridge/` (or run `bun bridge/src/figma-pull.ts` from the
+   clone); it runs as TypeScript on Bun (≥ 1.4.2), with no build step;
    `bridge/src/figma-pull.ts` is its entry point. `dtwin init` sets a consumer project up in one command.
 3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
    interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
@@ -360,6 +362,18 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   Connections without it are rejected at the handshake (401, compared as SHA-256 digests through
   `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
+  The WebSocket server is Bun's own (`Bun.serve`): the handshake checks run before the upgrade, and its
+  `maxPayloadLength` is the real per-message cap (`FIGMA_BRIDGE_MAX_PAYLOAD_MB`) — there is no `ws` dependency.
+- Runtime: everything runs on **Bun ≥ 1.4.2** (CLI, MCP server, the plugin's scripts and hooks; Node is not
+  supported). Bun loads a `.env` from the working directory and auto-installs a missing import from the
+  registry by default — in a *user's* project, that would let the project's `.env` move the bridge's port or
+  token, and a stray import pull unpinned code. So every invocation that runs in a user's project is
+  `bun --no-install --no-env-file …`: the plugin's hooks (exec form, no shell), every script call in the skills,
+  the `.mcp.json` `dtwin init --mcp` writes (absolute `bun` path), and the `dtwin` bin's shebang; the probe also
+  accepts a Playwright/axe-core only from the project's own `node_modules`. In this repo, `bunfig.toml` sets
+  the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`. The plugin's
+  SessionStart hook checks `bun` is on PATH and new enough, and the verifier guard is `onFailure: block`, so a
+  missing `bun` refuses the verifier's calls instead of letting them through unguarded.
 - Daemon socket: unauthenticated, and it forwards every command a bridge takes, writes included, so
   its only protection is its directory — private to the user (`0700`, owner-checked, never a symlink),
   and refused otherwise (`daemon.ts` sockDir).
