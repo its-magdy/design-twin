@@ -374,6 +374,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`. The plugin's
   SessionStart hook checks `bun` is on PATH and new enough, and the verifier guard is `onFailure: block`, so a
   missing `bun` refuses the verifier's calls instead of letting them through unguarded.
+- Output: Bun's `console.*` writes the fd directly and drops what meets a full pipe, and an exit drops what is still
+  queued on one. So every entry point (`dtwin`, the MCP server, the daemon, each design-to-code script) routes console
+  through the stream queue and ends on `process.exitCode`, or with `exitFlushed` when something still holds the loop
+  (`bridge/src/stdio.ts`, re-exported by `design-to-code/proc.ts`; `test/cli-exit.test.ts` keeps `process.exit` out of
+  both trees). The MCP server sends all of its console output to stderr: its stdout carries JSON-RPC only.
 - Daemon socket: unauthenticated, and it forwards every command a bridge takes, writes included, so
   its only protection is its directory — private to the user (`0700`, owner-checked, never a symlink),
   and refused otherwise (`daemon.ts` sockDir).
