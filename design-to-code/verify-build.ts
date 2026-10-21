@@ -548,18 +548,36 @@ function recordedShadowWarnings(plan: Plan): string[] {
 // What the report's behaviour/a11y section says — WARNINGS only, never a block (not the fidelity verdict).
 // (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
 // (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
-// (report.json or its .md), else the report for the plan's own screen (matched by name, as locateReports ranks), newest first.
+// (report.json or its .md), else the plan's own report (newestOwn).
 // The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
 // fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
 // them. "Not found" only when nothing matches, so a real disagreement is never hidden behind a path spelling.
-const newestOwn = (reports: ReportRef[]): ReportRef | null => {
-  const own = reports.filter((r) => r.matchedBy === "name");
-  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || r.mtimeMs > best.mtimeMs ? r : best), null);
+// The plan's own report is chosen by CONTENT, never by a clock (a `touch` or a fresh clone reorders mtimes — the
+// freshness rule of computeStatus): the report verification.recorded.report names (the one its record was written from),
+// else, among the reports for the plan's own screen (matched by name, as locateReports ranks; all of them when none is),
+// the latest measuredAt — none is the oldest — with mtime only breaking a tie.
+const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
+const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+// verification.recorded.report in ReportRef.rel's spelling (read as recordedReportWarnings reads it: project-relative or absolute)
+function recordedReportRel(plan: Plan, cwd: string | undefined): string | null {
+  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
+  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
+  const named = rec.report.trim();
+  return json(slash(cwd === undefined ? named : path.relative(cwd, path.resolve(cwd, named))).replace(/^\.\//, ""));
+}
+const measuredMs = (r: ReportRef): number => {
+  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
+  return Number.isNaN(t) ? -Infinity : t;
 };
-function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): { ref: ReportRef | null; missing?: string } {
-  if (named === undefined || !named.trim()) return { ref: newestOwn(reports) };
-  const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
-  const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+const newestOwn = (reports: ReportRef[], recordedRel: string | null = null): ReportRef | null => {
+  const recorded = recordedRel === null ? undefined : reports.find((r) => r.rel === recordedRel);
+  if (recorded) return recorded;
+  const own = reports.filter((r) => r.matchedBy === "name");
+  const later = (r: ReportRef, best: ReportRef): boolean => measuredMs(r) > measuredMs(best) || (measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs);
+  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || later(r, best) ? r : best), null);
+};
+function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string; recordedRel?: string | null } = {}): { ref: ReportRef | null; missing?: string } {
+  if (named === undefined || !named.trim()) return { ref: newestOwn(reports, ctx.recordedRel) };
   const want = slash(named.trim());
   const rels = new Set<string>([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== undefined) {
@@ -573,7 +591,7 @@ function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cw
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
   return { ref: null, missing: want };
 }
-// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
+// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own (newestOwn); its fail count is of
 // failed elements ("+N more" rows count N), so it says "failures". A re-run of a set overwrites its report, so a run's
 // older rounds are gone. Every OTHER report file locateReports matched (design/verify/ is flat, so
 // another file is another set — a variant <Layer>__<id>.<slug> (a narrow width, a dark theme), or a legacy-named one)
@@ -585,10 +603,11 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   const f = verificationFacts(plan.verification);
   const a11y = f.a11y;
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
-  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
+  const recordedRel = recordedReportRel(plan, ctx.cwd);
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, { ...ctx, recordedRel });
   if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran))
     out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
-  const r = target.ref ?? newestOwn(all);
+  const r = target.ref ?? newestOwn(all, recordedRel);
   const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
     const ids = [...new Set(failed)];

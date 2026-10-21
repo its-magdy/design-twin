@@ -2894,14 +2894,27 @@ function recordedShadowWarnings(plan) {
   const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
-var newestOwn = (reports) => {
+var json = (x) => x.replace(/\.report\.md$/, ".report.json");
+var slash2 = (x) => x.split(path14.sep).join("/").split("\\").join("/");
+function recordedReportRel(plan, cwd) {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
+  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
+  const named = rec.report.trim();
+  return json(slash2(cwd === void 0 ? named : path14.relative(cwd, path14.resolve(cwd, named))).replace(/^\.\//, ""));
+}
+var measuredMs = (r) => {
+  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
+  return Number.isNaN(t) ? -Infinity : t;
+};
+var newestOwn = (reports, recordedRel = null) => {
+  const recorded = recordedRel === null ? void 0 : reports.find((r) => r.rel === recordedRel);
+  if (recorded) return recorded;
   const own = reports.filter((r) => r.matchedBy === "name");
-  return (own.length ? own : reports).reduce((best, r) => !best || r.mtimeMs > best.mtimeMs ? r : best, null);
+  const later = (r, best) => measuredMs(r) > measuredMs(best) || measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs;
+  return (own.length ? own : reports).reduce((best, r) => !best || later(r, best) ? r : best, null);
 };
 function a11yReportOf(named, reports, ctx = {}) {
-  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
-  const json = (x) => x.replace(/\.report\.md$/, ".report.json");
-  const slash2 = (x) => x.split(path14.sep).join("/").split("\\").join("/");
+  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports, ctx.recordedRel) };
   const want = slash2(named.trim());
   const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== void 0) {
@@ -2921,10 +2934,11 @@ function behaviourWarnings(plan, reports, ctx = {}) {
   const f = verificationFacts(plan.verification);
   const a11y = f.a11y;
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
-  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
+  const recordedRel = recordedReportRel(plan, ctx.cwd);
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, { ...ctx, recordedRel });
   if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran))
     out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
-  const r = target.ref ?? newestOwn(all);
+  const r = target.ref ?? newestOwn(all, recordedRel);
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref, fail, failed) => {
     const ids = [...new Set(failed)];
@@ -3808,7 +3822,7 @@ async function main(argv) {
     console.log(USAGE2);
     return 0;
   }
-  const statusMode = !!flags.status, json = !!flags.json;
+  const statusMode = !!flags.status, json2 = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
     const found = planArgs.length ? planArgs.map((f) => readPlan(path14.resolve(f))) : null;
@@ -3826,7 +3840,7 @@ async function main(argv) {
       const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
-    if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
+    if (json2) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
     return 0;
