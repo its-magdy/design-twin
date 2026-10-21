@@ -1,4 +1,4 @@
-// GENERATED from src/*.ts by build.js — do not edit by hand. Run `npm run build`.
+// GENERATED from src/*.ts by build.ts — do not edit by hand. Run `bun run build`.
 "use strict";
 (() => {
   // ../bridge/src/json-util.ts

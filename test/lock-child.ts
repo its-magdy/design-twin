@@ -1,19 +1,19 @@
 // A separate process for the lock tests (file-lock, verify-run, plan-record): another writer contending for the same
 // lock, the way a second tool run would. Not a suite. Usage:
-//   node test/lock-child.ts counter <lockFile> <counterFile> <iterations>   locked read → nap 1 ms → write +1
-//   node test/lock-child.ts status <base> <who> <iterations>                 writeStatus(base) of run-cc; prints the revs
-//   node test/lock-child.ts end-run <base> <readyFile> <goFile>              holds base's status lock (then writes readyFile);
+//   bun test/lock-child.ts counter <lockFile> <counterFile> <iterations>   locked read → nap 1 ms → write +1
+//   bun test/lock-child.ts status <base> <who> <iterations>                 writeStatus(base) of run-cc; prints the revs
+//   bun test/lock-child.ts end-run <base> <readyFile> <goFile>              holds base's status lock (then writes readyFile);
 //                                                                           on goFile, ends the run (failed, "gave up") and releases
-//   node test/lock-child.ts waive <plan> <who> <iterations>                  updatePlan(plan) adding one waiver row each time
-//   node test/lock-child.ts hold <lockFile> <readyFile> <ms>                takes the lock (staleMs 300), writes readyFile, holds
+//   bun test/lock-child.ts waive <plan> <who> <iterations>                  updatePlan(plan) adding one waiver row each time
+//   bun test/lock-child.ts hold <lockFile> <readyFile> <ms>                takes the lock (staleMs 300), writes readyFile, holds
 //                                                                           it <ms>, writes <readyFile>.done, then releases
-//   node test/lock-child.ts try <lockFile> <waitMs>                         one acquire; prints {"ms", "name", "code"} of how it ended
-//   node test/lock-child.ts crasher <lockFile> <untilMs> <deadPid>          until untilMs, every 2 ms: when the lock is free, takes
+//   bun test/lock-child.ts try <lockFile> <waitMs>                         one acquire; prints {"ms", "name", "code"} of how it ended
+//   bun test/lock-child.ts crasher <lockFile> <untilMs> <deadPid>          until untilMs, every 2 ms: when the lock is free, takes
 //                                                                           it as a holder that died at once (deadPid)
-//   node test/lock-child.ts worker <lockFile> <markerFile> <untilMs>        until untilMs: lock → create markerFile O_EXCL (EEXIST:
+//   bun test/lock-child.ts worker <lockFile> <markerFile> <untilMs>        until untilMs: lock → create markerFile O_EXCL (EEXIST:
 //                                                                           another holder is inside) → nap 1 ms → remove → release;
 //                                                                           prints {"rounds", "overlaps"}
-//   node test/lock-child.ts transient <lockFile> <waitMs> <busyMs> <refuseMs> lock|guard
+//   bun test/lock-child.ts transient <lockFile> <waitMs> <busyMs> <refuseMs> lock|guard
 //                                                                           reports as win32; "lock": a live lock (this pid)
 //                                                                           held busyMs, then released, and creating it refused
 //                                                                           (EPERM) refuseMs (-1: always); "guard": a dead

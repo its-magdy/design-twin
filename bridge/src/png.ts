@@ -10,7 +10,7 @@
 // What it reads: colour type 2 (RGB) and 6 (RGBA), bit depth 8, not interlaced — every Figma reference and every Playwright
 // screenshot seen. Anything else throws PngError naming the colour type / depth / interlace. Every chunk's CRC
 // is checked (W3C PNG 3 §5.3), the filters are §9 (None, Sub, Up, Average, Paeth). What it writes: RGB8, filter 0, deflate
-// level 1 (a mostly uniform diff image compresses well at level 1, and fast), CRC via zlib.crc32 (Node ≥ 22.2).
+// level 1 (a mostly uniform diff image compresses well at level 1, and fast), CRC via node:zlib's crc32 (which Bun implements).
 import { crc32, deflateSync, inflateSync } from "node:zlib";
 import { errMsg } from "./errmsg.ts";
 

@@ -1321,8 +1321,8 @@ void (async () => {
     return rows.length === 3 && new Set(nameAt).size === 1 && (nameAt[0] ?? -1) > 0;
   })());
 
-  // The MCP twin. Checked against the server's own source, src/figma-mcp.ts — the file Node runs from a
-  // checkout and tsc emits to dist/ — because the source compiling is not evidence the tool is
+  // The MCP twin. Checked against the server's own source, src/figma-mcp.ts — the file Bun runs, from a
+  // checkout and from the npm package alike — because the source compiling is not evidence the tool is
   // registered, and Zod silently strips anything undeclared.
   // Read here rather than reusing the `mcpSrc` below: this section runs first, and a const declared
   // further down is in its temporal dead zone.

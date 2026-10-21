@@ -25,8 +25,8 @@
 // verify-shared.ts so the expectation format and the comparison never drift; the expectation is built in verify-expect.ts,
 // compared in verify-compare.ts and rendered in verify-report-md.ts. This file reads the inputs, writes the artefacts and
 // routes the modes:
-//   node verify-screen.js --expect  <screen.json>... [--out design/verify]
-//   node verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out design/verify]
+//   bun verify-screen.js --expect  <screen.json>... [--out design/verify]
+//   bun verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out design/verify]
 // --out is the verify directory; the set's name is its node's (`<Layer>__<id>`, verify-sets.ts), never the caller's.
 //
 // There is NO browser here. `--compare` diffs two JSON files; the rendering, measuring and
