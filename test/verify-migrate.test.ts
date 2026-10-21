@@ -247,6 +247,26 @@ console.log("\nrefusals leave the disk as it was:");
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
+  // a run open in the run cache with no file yet names the node's stem (node-artefacts.ts claim): the set is not renamed to
+  // a second stem beside it; it waits for that run (its new name has an open run)
+  const p = project();
+  writeStatus(path.join(p.root, "design/verify/Old_Crates__80_1"), { runId: "r7", phase: "queued", by: "agent" });
+  const before = p.ls(), planBefore = p.planText();
+  const { r } = run(p, true);
+  check(`an open run under another stem of the node: the set takes that stem and waits for the run, no second stem (got ${JSON.stringify(r.skipped.map((s) => s.why[0]))})`,
+    r.skipped.length === 1 && /run r7 of Old_Crates__80_1 is open/.test(r.skipped[0]?.why[0] ?? "") && JSON.stringify(p.ls()) === JSON.stringify(before) && p.planText() === planBefore);
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
+  // a legacy set whose name carries one node and whose expectation another is no node's: skipped, never one picked
+  const p = project("Crates", { record: false });
+  p.put("design/verify/Old__6_6.Dark.expected.json", { frame: { nodeId: "80:1", name: "Crates" } });
+  const { r } = run(p, false);
+  const why = r.skipped.find((x) => x.set === "Old__6_6.Dark")?.why[0] ?? "";
+  check(`a legacy set carrying two node ids (name 6:6, frame 80:1): skipped, naming both (got ${why})`, /carry nodes 6:6 and 80:1 — retire the stale one by hand/.test(why));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
+{
   const p = project();
   p.put("design/verify/Crates__80_1-diff.png", "someone else's");
   const before = p.ls();

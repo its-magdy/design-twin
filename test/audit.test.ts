@@ -8,7 +8,7 @@ import path from "node:path";
 import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES, blockerIds } from "../design-to-code/audit.ts";
 import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
-import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
+import { auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
 import { cliRunner, stdoutOf } from "./cli-runner.ts";
 import { main as auditMain } from "../design-to-code/audit.ts";
@@ -381,41 +381,13 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
 }
 
-// ---------- audit-gate: which audit file belongs to a screen -----------------------------------
-// The name fallback matched a slug PREFIX either way, so "Jet Roles" picked up the audit of
-// "Jet Roles Detail" — another screen's blockers gating (or pre-filling the plan of) this one.
-(() => {
-  console.log("audit-gate — locating a screen's audit by name:");
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-gate-"));
-  fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Jet_Roles_Detail__9_9.json"), JSON.stringify({ findings: [] }));
-  check("[gate] screen \"Jet Roles\" does NOT take Jet_Roles_Detail__9_9.json (longer name, prefix match)",
-    locateAuditFile(cwd, null, "Jet Roles") === null && auditGateStatus(cwd, null, "Jet Roles").auditFile === null);
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Job.json"), JSON.stringify({ findings: [] }));
-  check("[gate] …nor Job.json (shorter name, reverse prefix match)", locateAuditFile(cwd, null, "Jet Roles") === null);
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Jet_Roles__9_9.json"), JSON.stringify({ findings: [] }));
-  check("[gate] the screen's OWN <Name>__<id>.json audit (audit.ts --out naming) is found by name alone",
-    locateAuditFile(cwd, null, "Jet Roles") === "design/audit/Jet_Roles__9_9.json");
-  fs.unlinkSync(path.join(cwd, "design", "audit", "Jet_Roles__9_9.json"));
-  // safe() turns " - " into "___": the name part itself contains "__", so the id split must be at the LAST one.
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"), JSON.stringify({ findings: [] }));
-  check("[gate] a doubled separator in the layer name (Detail - Overview) does NOT match the screen \"Detail\"",
-    locateAuditFile(cwd, null, "Detail") === null);
-  check("[gate] …but does match its own screen \"Detail - Overview\"",
-    locateAuditFile(cwd, null, "Detail - Overview") === "design/audit/Detail___Overview__9_9.json");
-  fs.unlinkSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"));
-  fs.writeFileSync(path.join(cwd, "design", "audit", "jet-roles.json"), JSON.stringify({ findings: [] }));
-  check("[gate] the exact case/punctuation-insensitive name still matches", locateAuditFile(cwd, null, "Jet Roles") === "design/audit/jet-roles.json");
-  check("[gate] and the screen file's own basename still wins first",
-    locateAuditFile(cwd, path.join(cwd, "design", "export", "pages", "P", "Jet_Roles_Detail__9_9.json"), "Jet Roles") === "design/audit/Jet_Roles_Detail__9_9.json");
-})();
-
+// ---------- audit-gate: which audit file belongs to a screen is node-artefacts.ts auditFor (test/node-artefacts.test.ts) ----------
 // A file in design/audit/ that is not an audit report is `unreadable` — never "this screen has no blockers".
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-gate-shape-"));
   fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
   fs.writeFileSync(path.join(cwd, "design", "audit", "Home__1_1.json"), JSON.stringify({ findings: "none" }));
-  const g = auditGateStatus(cwd, null, "Home");
+  const g = auditGateStatus(cwd, null, null, "Home");
   check("[gate-shape] an audit file that is not an audit report is reported unreadable, not read blindly as 0 blockers",
     g.auditFile === "design/audit/Home__1_1.json" && g.unreadable === true && g.blockers.length === 0);
 })();
@@ -747,7 +719,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   fs.mkdirSync(path.dirname(ovFile), { recursive: true });
   const run = (args: string[] = []) => auditCli([path.relative(cwd, screenFile), "--platform", "ios", ...args], { cwd });
   const before = run();
-  const beforeGate = auditGateStatus(cwd, screenFile, "Login");
+  const beforeGate = auditGateStatus(cwd, "1:1", screenFile, "Login");
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [
     { code: "missing-font", nodeId: "1:11", severity: "warning", reason: "the font files are licensed and in the repo", decidedBy: "user", decidedAt: "2026-09-30T00:00:00Z" },
     { code: "export-truncated", severity: "info", reason: "stale decision" },
@@ -760,16 +732,12 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   check("an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
     after.status === 0 && json.summary.blockers === 0 && font?.severity === "warning" && font.overridden?.from === "blocker" && font.overridden.decidedBy === "user");
   check("…and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
-  check("the gate reads the same decision: no blockers left", auditGateStatus(cwd, screenFile, "Login").blockers.length === 0);
+  check("the gate reads the same decision: no blockers left", auditGateStatus(cwd, "1:1", screenFile, "Login").blockers.length === 0);
   check("an override that matches nothing is reported (JSON, .md, stderr), not dropped",
     json.overridesUnmatched?.length === 1 && json.overridesUnmatched[0]?.code === "export-truncated" && /matched no finding/.test(md) && /override for export-truncated NOT applied: matched no finding/.test(after.stderr));
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [{ code: "missing-font", severity: "warning", reason: "" }] }));
   const bad = run();
   check("an override with no reason is refused (exit 2, one line) — a silent non-decision would re-open the blocker", bad.status === 2 && /audit overrides: .* is not an audit overrides file/.test(bad.stderr));
-  // The gate's name lookup must never take a sidecar (.overrides/.cross) for the report.
-  fs.writeFileSync(ovFile, JSON.stringify({ overrides: [] }));
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Login__1_1.cross.json"), JSON.stringify({ findings: [{ severity: "blocker", code: "catalog-rekeyed", message: "x" }], summary: {} }));
-  check("[gate] name lookup skips <screen>.cross.json / .overrides.json and finds the report itself", locateAuditFile(cwd, null, "Login") === "design/audit/Login__1_1.json");
 }
 {
   // a same-page frame whose copy reads like the missing state is named; orphan screenshots are listed.

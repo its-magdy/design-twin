@@ -44,7 +44,7 @@ import {
   readableMeasured,
 } from "./doc-guards.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { STATUS_PHASES, TERMINAL_PHASES, openRunSets, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
+import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
@@ -56,8 +56,8 @@ import type { ArtifactCheck, CodeInputs, IndexRow, InteractionEvidence, JsonValu
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
-import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
+import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
+import { nodeArtefacts } from "./node-artefacts.ts";
 import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
@@ -65,7 +65,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { endsInSep, expectationSetProblem, formatSetName, nodeIdFromSetName, nodeStem, outBaseOf, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
+import { endsInSep, expectationSetProblem, formatSetName, outBaseOf, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -93,7 +93,7 @@ function runStatusNote(base: string, now = Date.now()): string | null {
 // reads a verify dir's sets (verify-sets.ts, verify-build's report lookup, the run's expectation) takes it for a live one.
 const PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 
-/** The verify directory --expect names the node's stem in (nodeStem) before the set's name is known: --out when it is
+/** The verify directory --expect names the node's stem in (node-artefacts.ts claim) before the set's name is known: --out when it is
  *  an existing directory, ends in a separator or is design/verify; the parent of the older `<dir>/<set>` spelling;
  *  design/verify without --out. outBaseOf then decides, by the set's name, whether --out is taken at all. */
 function expectDirOf(out: string | undefined): string {
@@ -126,23 +126,15 @@ function migratedArtifact(listed: string, o: { setName: string; verifyDir: strin
   return fs.existsSync(candidate) ? candidate : null;
 }
 
-// The plans under design/plan/ (relative to the working directory) of node `nodeId`, by node id only: a plan's `nodeId`,
-// else (none given) the id its `<Layer>__<id>` file name carries — never its screen or file name (a name is no identity,
-// and `nodeId` wins when the two disagree). `idless`: the plans that name no node either way (none of them can be
-// matched — each one says to add "nodeId").
-function plansForNode(nodeId: string | undefined): { hits: Array<{ file: string; plan: Plan }>; idless: string[] } {
-  const hits: Array<{ file: string; plan: Plan }> = [];
-  const idless: string[] = [];
-  for (const f of listPlans(PLAN_DIR)) {
-    // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
-    const p = readJsonOrNull(path.join(PLAN_DIR, f), isPlan);
-    if (!p) continue;
-    const file = path.join(PLAN_DIR, f).split(path.sep).join("/");
-    const id = p.nodeId || nodeIdFromStem(path.basename(f, ".json"));
-    if (!id) idless.push(file);
-    else if (nodeId !== undefined && id === nodeId) hits.push({ file, plan: p });
-  }
-  return { hits, idless };
+// The plans under design/plan/ (relative to the working directory) of node `nodeId`, by node id only (node-artefacts.ts
+// planNode: a plan's `nodeId`, else the id its `<Layer>__<id>` file name carries — never its screen or file header).
+// `idless`: the plans that name no node either way (none of them can be matched — each one says to add "nodeId").
+function plansForNode(nodeId: string | undefined): { hits: Array<{ file: string; plan: Plan }>; idless: string[]; several: string | null } {
+  const art = nodeArtefacts(process.cwd());
+  const hits = nodeId === undefined ? [] : art.plansOf(nodeId);
+  // several plans of the node: the one refusal (node-artefacts.ts claim)
+  const c = nodeId !== undefined && hits.length > 1 ? art.claim("plan", nodeId) : null;
+  return { hits, idless: art.idlessPlans(), several: c && !c.ok ? c.why : null };
 }
 /** What the "no plan describes this frame" note adds about the plans that name no node. */
 const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node — add "nodeId")` : "";
@@ -153,13 +145,13 @@ const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.joi
  *  multi-frame plan); none is no plan. */
 function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined):
   { hit?: ChosenPlan; all: Array<{ file: string; plan: Plan }>; idless: string[]; note?: string; error?: string } {
-  const { hits: all, idless } = plansForNode(frameId);
+  const { hits: all, idless, several } = plansForNode(frameId);
   if (flagged) {
     const others = all.filter((h) => !samePlanFile(h.file, flagged.file));
     return { hit: { ...flagged, choice: "flag" }, all, idless, ...(others.length ? { note: `using ${flagged.file} (--plan); design/plan/ also describes node ${frameId ?? "?"} in ${others.map((h) => h.file).join(", ")}` } : {}) };
   }
   if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all, idless };
-  if (all.length > 1) return { all, idless, error: `${all.length} plans in design/plan/ describe node ${frameId ?? "?"} (${all.map((h) => h.file).join(", ")}) — keep one, or pass --plan <plan.json> (a multi-frame plan)` };
+  if (several !== null) return { all, idless, error: `${several}, or pass --plan <plan.json> (a multi-frame plan)` };
   return { all, idless };
 }
 
@@ -406,18 +398,18 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   if (!nodeId) { console.error(`error  the export's frame has no node id — its set cannot be named; re-pull the screen`); return 2; }
   const layerName = layers.find((l) => l.id === nodeId)?.name ?? exp.frame.name ?? "";
   const kDir = expectDirOf(out);
-  const k = nodeStem(kDir, nodeId, layerName, openRunSets(kDir));
-  if ("why" in k) { console.error(`error  ${k.why}`); return 2; }
-  const setName = formatSetName(k.stem, variant);
+  const k = nodeArtefacts(process.cwd(), { verifyDir: kDir }).claim("verify set", nodeId, { layerName });
+  if (!k.ok) { console.error(`error  ${k.why}`); return 2; }
+  const setName = formatSetName(k.name, variant);
   const ob = outBaseOf(out, setName, VERIFY_DIR);
   if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
   // a slug that extends another live variant of the node by "-" (or that one extends) would share files with it (variantOverlap)
   if (variant !== undefined) {
-    const clash = variantOverlap(variant, variantsOf(ob.dir, k.stem));
-    if (clash !== null) { console.error(`error  --variant ${variant} overlaps the variant ${k.stem}.${clash} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other — pick a slug that neither extends`); return 2; }
+    const clash = variantOverlap(variant, variantsOf(ob.dir, k.name));
+    if (clash !== null) { console.error(`error  --variant ${variant} overlaps the variant ${k.name}.${clash} of node ${nodeId} by "-": <set>-<state>.png of one names a screenshot of the other — pick a slug that neither extends`); return 2; }
   }
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
-  if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} — verify-screen --migrate renames them to ${k.stem}`);
+  if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} — verify-screen --migrate renames them to ${k.name}`);
   const outBase = ob.base;
   // Re-running --expect replaces the file in place and leaves a measurement and a report from the
   // PREVIOUS expectation beside it, undated. The file itself stays byte-deterministic —
@@ -682,11 +674,15 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   const recorded = (report.inputs && report.inputs.waivers && report.inputs.waivers.plan) || (report.inputs && report.inputs.code && report.inputs.code.plan) || undefined;
   let planFile = flags.plan ?? (recorded && fs.existsSync(recorded) ? recorded : undefined);
   if (!planFile) {
-    // the report's node: its nodeId (an older report's), else the id its set name (`<Layer>__<id>[.<slug>]`) carries
-    const nodeId = report.nodeId || nodeIdFromSetName(path.basename(reportFile).replace(/\.report\.json$/, "")) || undefined;
-    const { hits, idless } = plansForNode(nodeId);
+    // the report's node: its set's (node-artefacts.ts setNode — the expectation beside it, else the report's nodeId, else
+    // the id its set name `<Layer>__<id>[.<slug>]` carries); an expectation and a report that disagree name none, and
+    // whose plan a waiver goes into is not ours to guess
+    const set = path.basename(reportFile).replace(/\.report\.json$/, "");
+    const nodeId = nodeArtefacts(process.cwd(), { verifyDir: path.dirname(reportFile) }).setNode(set);
+    if (nodeId === null) { console.error(`error  the set ${set} names no node (its expectation and report name different nodes, or neither names one) — pass --plan <plan.json>`); return 1; }
+    const { hits, idless, several } = plansForNode(nodeId);
     // several plans of the report's node: a data error, as at --expect and --compare
-    if (hits.length > 1) { console.error(`error  ${hits.length} plans in design/plan/ describe node ${nodeId ?? "?"} (${hits.map((h) => h.file).join(", ")}) — keep one, or pass --plan <plan.json>`); return 2; }
+    if (several !== null) { console.error(`error  ${several}, or pass --plan <plan.json>`); return 2; }
     const only = hits[0];
     if (!only) { console.error(`error  no plan in design/plan/ describes this screen${idlessNote(idless)} (run from the project root, or pass --plan <plan.json>)`); return 1; }
     planFile = only.file;

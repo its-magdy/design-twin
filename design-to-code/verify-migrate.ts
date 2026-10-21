@@ -35,7 +35,7 @@
 //     whose reportSha256 no longer names the report on disk (a rename would hide that), skips the set;
 //   - a plan verify-build ties the set's report to by the name alone (verify-locate.ts locateReports: its `screen`, its
 //     `file`, its export's or its own file name is the set's name) would lose it under the new name unless its node id
-//     (planNodeId: its nodeId, its export's, the id in its `screen` or file name) is the set's — it then finds the
+//     (node-artefacts.ts planNode: its nodeId, else the id its file name carries) is the set's — it then finds the
 //     renamed report by id. Otherwise the set is skipped (renamed or retired), saying to add `nodeId` to the plan — or,
 //     a plan of another node, naming both nodes;
 //   - a set with an open run (status v2 not ended), under its name or the new one, is skipped. Both status locks are held
@@ -60,15 +60,16 @@ import { tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { acquireFileLock } from "../bridge/src/file-lock.ts";
 import type { HeldLock } from "../bridge/src/file-lock.ts";
 import { errCode, errMsg } from "../bridge/src/errmsg.ts";
-import { nodeIdFromStem, safe, screenStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem, safe } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, reportRecordNames, updatePlan } from "./plan-record.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
+import { MAX_SLUG, RESERVED_SLUGS, allSets, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
-import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
+import { locateReports } from "./verify-locate.ts";
+import { nodeArtefacts, planNode } from "./node-artefacts.ts";
 import type { ReportRef } from "./verify-locate.ts";
 import { getOrInit } from "./map-util.ts";
 import { readJsonOrNull } from "./read-json.ts";
@@ -310,12 +311,12 @@ function plansFinding(plans: readonly PlanText[], set: string, d: { cwd: string;
   return plans.flatMap((p) => { const ref = refsOf(p).find((r) => r.rel === rel); return ref ? [{ p, ref }] : []; });
 }
 /** Why the set `set` of node `id` cannot change its name: a plan that finds its report by the name alone (its `screen`,
- *  its `file`, its export's or its own file name is the set's name) and whose node id (planNodeId) is another, or none,
+ *  its `file`, its export's or its own file name is the set's name) and whose node id (planNode) is another, or none,
  *  would find nothing under the new name. A plan with no node id is told to add the set's; one of another node is told
  *  which two nodes differ. */
 function nameOnlyBlocks(plans: readonly PlanText[], set: string, id: string, d: { cwd: string; verifyDir: string }, refsOf: RefsOf): string[] {
   return plansFinding(plans, set, d, refsOf).filter((f) => f.ref.matchedBy === "name").flatMap(({ p }) => {
-    const pid = planNodeId(p.plan, p.file, locateExport(p.plan, p.file, d.cwd));
+    const pid = planNode(p.plan, p.file);
     if (pid === id) return [];
     if (pid === null) return [`${p.rel} finds this set only by its name — add \`"nodeId": "${id}"\` to it, then --migrate`];
     return [`${p.rel} is a plan of node ${pid}, and finds this set (of node ${id}) only by its name — if the plan is of node ${id}, give it \`"nodeId": "${id}"\`; ` +
@@ -358,15 +359,17 @@ export function planMigration(d: Dirs): MigrateStep[] {
   const steps: MigrateStep[] = [];
   const hasIndex = exists(path.join(d.exportDir, "pages", "index.json"));
 
-  // node id of each legacy set
+  // node id of each legacy set: the one id it carries (node-artefacts.ts setIds — its name's, its expectation's frame,
+  // its report's), else its name resolved; two ids are skipped, never one picked
+  const art = nodeArtefacts(d.cwd, { verifyDir: d.verifyDir });
   const byId = new Map<string, string[]>();
   for (const name of legacy) {
-    const f = setFacts(d.verifyDir, name);
-    if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) {
-      steps.push({ kind: "skip", set: name, why: [`its expectation is of node ${f.expectedId}, its report of node ${f.reportId} — retire the stale one by hand`] });
+    const ids = art.setIds(name);
+    if (ids.length > 1) {
+      steps.push({ kind: "skip", set: name, why: [`its name, expectation and report carry nodes ${ids.join(" and ")} — retire the stale one by hand`] });
       continue;
     }
-    let id = f.expectedId ?? f.reportId;
+    let id = ids[0] ?? null;
     if (id === null) {
       const k = screenKey(name, { exportDir: d.exportDir, planDir: d.planDir });
       if (k.status !== "resolved") { steps.push({ kind: "skip", set: name, why: [`no node id: its expectation and report name none, and the name gives none (${k.why})`] }); continue; }
@@ -381,25 +384,26 @@ export function planMigration(d: Dirs): MigrateStep[] {
   const refsOf: RefsOf = (p) => getOrInit(refCache, p.file, () => fresh(p));
   const taken = new Set<string>(sets.map((s) => s.name));
   for (const [id, group] of byId) {
-    const stems = canonicalStemsFor(d.verifyDir, id);
-    if (stems.length > 1) {
-      for (const name of group) steps.push({ kind: "skip", set: name, why: [`node ${id} has ${stems.length} grammar-named verify sets (${stems.join(", ")}) — keep one, then --migrate`] });
-      continue;
-    }
     // the node's layer name: the index's, else (per set) what the set's files say
     const row = hasIndex ? resolveScreen(d.exportDir, id) : null;
     const indexed = row && row.status === "resolved" ? row.row.name : null;
     const layerOf = (name: string): string | null => { if (indexed !== null) return indexed; const f = setFacts(d.verifyDir, name); return f.expectedName ?? f.reportScreen; };
-    // the stem: the node's existing one, else from its layer name (else the set's own name)
+    // the stem: the node's existing one — a run open in the run cache with no file yet included — else from its layer name
+    // (else the set's own name): node-artefacts.ts claim. A set whose new name has an open run is skipped below.
     const first = group[0] ?? "";
-    const T = stems[0] ?? screenStem(layerOf(first) ?? first, id);
+    const k = art.claim("verify set", id, { layerName: layerOf(first) ?? first });
+    if (!k.ok) {
+      for (const name of group) steps.push({ kind: "skip", set: name, why: [`${k.why}, then --migrate`] });
+      continue;
+    }
+    const T = k.name;
     const baseExists = live.includes(T);
     // a set that extends another name of the node (`<S>@320`, `<S>.dark`, `<S>-r1`) is a variant of it; `cut` is where its
     // own part starts (after the "." / "@" / "-")
     const parentOf = new Map<string, string>();
     const cutOf = new Map<string, number>();
     for (const name of group) {
-      const cands = new Set<string>([T, ...stems, ...group.filter((g) => g !== name)]);
+      const cands = new Set<string>([T, ...group.filter((g) => g !== name)]);
       for (let i = 1; i < name.length; i++) {
         const p = name.slice(0, i);
         if (".@-".includes(name[i] ?? "") && /^[A-Za-z0-9_]+$/.test(p) && nodeIdFromStem(p) === id) cands.add(p);

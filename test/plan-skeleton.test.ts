@@ -366,25 +366,10 @@ console.log("[canonical] a new plan is <stem>.json, one per node; an existing pl
   const merged = sk(own);
   check("[canonical] an existing plan merges under any name", merged.status === 0 && /merged into/.test(merged.stderr));
 
-  // a second plan of the node: by its nodeId (the copy) or by the id its file name carries (no nodeId)
+  // a second plan of the node (which plans hold a node, and the stem a new one takes: test/node-artefacts.test.ts)
   const second = sk(path.join(dir, "elsewhere", "Sample_A__5_6.json"));
   check(`[canonical] a second plan of a node (another plan there has its nodeId) is refused, exit 2, naming that plan (exit ${second.status})`,
     second.status === 2 && second.stderr.includes(own) && !fs.existsSync(path.join(dir, "elsewhere", "Sample_A__5_6.json")));
-  const byStem = path.join(dir, "bystem");
-  fs.mkdirSync(byStem);
-  const idless = put("bystem/Older_Name__5_6.json", { schema: "designtwin/plan@2", screenName: "Older Name" });
-  const second2 = sk(path.join(byStem, "Sample_A__5_6.json"));
-  check(`[canonical] a plan with no nodeId whose file name carries the node's id holds it too (exit ${second2.status})`,
-    second2.status === 2 && second2.stderr.includes(idless) && !fs.existsSync(path.join(byStem, "Sample_A__5_6.json")));
-
-  // the verify dir already names the node by an older stem (the layer was renamed since): the plan takes that stem
-  put("design/verify/Older_Name__5_6.expected.json", { frame: { nodeId: "5:6", name: "Older Name" } });
-  const fresh = path.join(dir, "fresh");
-  fs.mkdirSync(fresh);
-  const layerNamed = sk(path.join(fresh, "Sample_A__5_6.json"));
-  const stemNamed = sk(path.join(fresh, "Older_Name__5_6.json"));
-  check(`[canonical] the stem is the one the node's verify set already has (exit ${layerNamed.status} for the layer's name, ${stemNamed.status} for the set's)`,
-    layerNamed.status === 2 && layerNamed.stderr.includes(path.join(fresh, "Older_Name__5_6.json")) && stemNamed.status === 0 && fs.readdirSync(fresh).join() === "Older_Name__5_6.json");
 }
 {
   // a run opened by --status before any of its set's files exist names the node's set too: the frame renamed in Figma and

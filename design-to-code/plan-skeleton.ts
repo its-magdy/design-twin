@@ -44,7 +44,7 @@ import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { isAlias, isComponentsCatalog, isPageIndex, isPagesRootIndex, isPlan, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import { isAlias, isComponentsCatalog, isPageIndex, isPagesRootIndex, isTokensDoc, parsePlan } from "./doc-guards.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -61,10 +61,8 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
 import { parsePlanText, updatePlan } from "./plan-record.ts";
 import { runCli } from "./proc.ts";
-import { VERIFY_DIR, findMapFile, listPlans } from "../bridge/src/project-layout.ts";
-import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
-import { nodeStem } from "./verify-sets.ts";
-import { openRunSets } from "./verify-status.ts";
+import { findMapFile } from "../bridge/src/project-layout.ts";
+import { nodeArtefacts } from "./node-artefacts.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
 const USAGE = [
@@ -510,7 +508,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   let auditGate: Required<PlanAuditGate> | null = null;
   try {
     const base = cwd || process.cwd();
-    const g = auditGateStatus(base, screenFile, screenName);
+    const g = auditGateStatus(base, nodeId, screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       const cross = g.auditFile.replace(/\.json$/, ".cross.json");
       const crossCheckFile = cross !== g.auditFile && fs.existsSync(path.join(base, cross)) ? cross : null;
@@ -664,24 +662,14 @@ function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow 
 }
 
 /** Why a NEW plan (its --out not there yet) cannot be written at `out`, or null. A node has one plan, and it is named by
- *  the node: `<stem>.json`, the stem the verify dir (or a run open in its run cache) already names the node by, else
- *  `<Layer>__<id>` (nodeStem). Another plan in the same directory that describes the node — by its `nodeId`, else the
- *  id its file name carries, as verify-screen finds a frame's plans — is the one to merge into. An existing plan merges
- *  under any name. */
+ *  the node (node-artefacts.ts claim): `<stem>.json`, the stem the verify dir (or a run open in its run cache) already
+ *  names the node by, else `<Layer>__<id>`. Another plan in the same directory that describes the node (planNode: its
+ *  `nodeId`, else the id its file name carries) is the one to merge into. An existing plan merges under any name. */
 function newPlanProblem(out: string, nodeId: string | undefined, layerName: string): string | null {
   if (!nodeId) return "the screen export names no node id, and a new plan is named by its node — re-pull the screen";
-  const dir = path.dirname(out);
-  for (const f of listPlans(dir)) {
-    const p = readJsonOrNull(path.join(dir, f), isPlan);
-    if (p && (p.nodeId || nodeIdFromStem(path.basename(f, ".json"))) === nodeId) {
-      const have = path.join(dir, f);
-      return `${have} is already the plan of node ${nodeId} — one node, one plan: pass --out ${have} to merge into it`;
-    }
-  }
-  const k = nodeStem(VERIFY_DIR, nodeId, layerName, openRunSets(VERIFY_DIR));
-  if ("why" in k) return k.why;
-  const want = k.stem + ".json";
-  return path.basename(out) === want ? null : `a new plan is named by its node: --out ${path.join(dir, want)}, not ${path.basename(out)}`;
+  const c = nodeArtefacts(process.cwd(), { planDir: path.dirname(out) }).claim("plan", nodeId, { layerName, target: out });
+  if (c.ok) return null;
+  return c.reason === "held" ? `${c.why}: pass --out ${c.holders[0] ?? ""} to merge into it` : c.why;
 }
 
 // One line for a file that is there but cannot be used; `what` names it the way the messages always have.

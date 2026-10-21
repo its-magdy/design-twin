@@ -1805,12 +1805,12 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   check("one warning per other report FILE: two failing files sharing a basename → two warnings (no grouping by name)",
     l3.length === 2 && (l3[0] ?? "").startsWith("design/verify/a/Crates@320.report.json: behaviour/a11y — 4 failures") && (l3[1] ?? "").startsWith("design/verify/b/Crates@320.report.json: behaviour/a11y — 2 failures"));
   // a report under a name outside `<Layer>__<id>` / `<Layer>__<id>.<variant>` is still read, and named for --migrate
-  const legacyW = verifyBuild.legacySetWarnings({ nodeId: "80:1" }, undefined, [narrow, clean, darkOff, earlier3, reportRef({ rel: "design/verify/Crates__80_1.report.json" }), reportRef({ rel: "design/verify/Crates__80_1.dark.report.json" })], null);
+  const legacyW = verifyBuild.legacySetWarnings({ nodeId: "80:1" }, undefined, [narrow, clean, darkOff, earlier3, reportRef({ rel: "design/verify/Crates__80_1.report.json" }), reportRef({ rel: "design/verify/Crates__80_1.dark.report.json" })]);
   check(`legacy-named reports (a nickname, @320, a dotted nickname, -r1) each warn once; <Layer>__<id> and <Layer>__<id>.dark do not (got ${JSON.stringify(legacyW)})`,
     JSON.stringify(legacyW) === JSON.stringify(["Crates@320", "Crates", "Crates.dark", "Crates-r1"].map((s) => `legacy-named verify set ${s} for node 80:1 — run verify-screen --migrate`)));
   check("…with no node id known, it names the plan's screen",
-    JSON.stringify(verifyBuild.legacySetWarnings({}, undefined, [clean], null)) === JSON.stringify(["legacy-named verify set Crates for this plan's screen — run verify-screen --migrate"])
-    && verifyBuild.legacySetWarnings({}, path.join("design", "plan", "Crates__80_1.json"), [clean], null)[0]?.includes("node 80:1") === true);
+    JSON.stringify(verifyBuild.legacySetWarnings({}, undefined, [clean])) === JSON.stringify(["legacy-named verify set Crates for this plan's screen — run verify-screen --migrate"])
+    && verifyBuild.legacySetWarnings({}, path.join("design", "plan", "Crates__80_1.json"), [clean])[0]?.includes("node 80:1") === true);
   {
     // [variant] a variant's report that names no node and has no expectation beside it is the plan's node's by its set name
     const vroot = project({ "design/verify/Crates__80_1.dark.report.json": JSON.stringify({ verdict: "pass" }), "design/verify/Crates__80_1.report.json": JSON.stringify({ verdict: "pass" }) }, { nodeId: "80:1" });
@@ -2258,18 +2258,19 @@ void build(tmp).then(async () => {
   }
 
   {
-    // The node id a plan's `screen` stem carries ties a report named for the same id to it: an instance
+    // The node id a plan's own file name carries ties a report whose set name carries the same id to it: an instance
     // sublayer's stem (`__I5_2_30_7`, how a pull of a layer inside an instance is filed) carries "I5:2;30:7".
     // `__I5_2` is no name the exporter writes (an instance sublayer's id has at least two pairs), so it carries none.
+    // (A `screen` header is no identity: node-artefacts.ts planNode.)
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vb-stem-id-"));
     const v = path.join(root, "design", "verify");
     fs.mkdirSync(v, { recursive: true });
-    const rep = JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass", screen: "Other", nodeId: "9:9", why: [], deltas: [], inputs: {} });
+    const rep = JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass", screen: "Other", why: [], deltas: [], inputs: {} });
     fs.writeFileSync(path.join(v, "Chip_copy__I5_2_30_7.report.json"), rep);
     fs.writeFileSync(path.join(v, "Chip_copy__I5_2.report.json"), rep);
-    const found = (screen: string): string[] => verifyBuild.locateReports({ screen }, path.join(root, "design", "plan", "chip.json"), root, null).map((r) => `${r.rel} by ${r.matchedBy}`);
+    const found = (stem: string): string[] => verifyBuild.locateReports({}, path.join(root, "design", "plan", stem + ".json"), root, null).map((r) => `${r.rel} by ${r.matchedBy}`);
     const inst = found("Chip__I5_2_30_7");
-    check(`a plan screen stem carrying an instance-sublayer id finds the report whose stem carries the same id (got ${JSON.stringify(inst)})`,
+    check(`a plan file name carrying an instance-sublayer id finds the report whose stem carries the same id (got ${JSON.stringify(inst)})`,
       JSON.stringify(inst) === JSON.stringify(["design/verify/Chip_copy__I5_2_30_7.report.json by nodeId"]));
     const lone = found("Chip__I5_2");
     check(`a stem ending \`__I5_2\` carries no node id, so finds nothing by id (got ${JSON.stringify(lone)})`, lone.length === 0);

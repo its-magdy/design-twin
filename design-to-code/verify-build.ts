@@ -54,8 +54,8 @@ import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isRecordV2Shaped, isVerificationRecord, parsePlan } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
+import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
+import { anyJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import type {
   IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
@@ -63,10 +63,12 @@ import type {
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
 import { parsePlanText, recordedEdits, reportRecordNames, updatePlan, verificationFacts } from "./plan-record.ts";
-import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
+import { locateExport, locateReports } from "./verify-locate.ts";
+import { isPlanFile, nodeArtefacts, planNode, readPlan } from "./node-artefacts.ts";
+import type { BadPlan, PlanFile } from "./node-artefacts.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { exitFlushed, runCli } from "./proc.ts";
-import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, listPlans } from "../bridge/src/project-layout.ts";
+import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE } from "../bridge/src/project-layout.ts";
 import { parseSetName } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
@@ -110,25 +112,10 @@ function isStale(file: string, now: number = Date.now()): boolean {
   try { return now - fs.statSync(file).mtimeMs > cutoff; } catch { return false; }
 }
 
-/** A plan file on disk, parsed and checked (doc-guards.ts parsePlan): plan-skeleton.ts writes it, a model fills it. */
-export interface PlanFile { file: string; plan: Plan }
-/** A plan file that could not be used, and why (one line). */
-export interface BadPlan { file: string; error: string }
-
-function readPlan(file: string): PlanFile | BadPlan {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return { file, error: r.error };
-  const p = parsePlan(r.doc);
-  return "plan" in p ? { file, plan: p.plan } : { file, error: p.error };
-}
-const isPlanFile = (p: PlanFile | BadPlan): p is PlanFile => "plan" in p;
-
 // Every plan under design/plan/, and — separately — the ones that could not be read: those are reported,
 // never silently skipped (a hand-broken plan would otherwise vanish from the hook's view, so it would never be checked).
 function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
-  const dir = path.join(cwd, PLAN_DIR);
-  const read = listPlans(dir).map((f) => readPlan(path.join(dir, f)));
-  return { plans: read.filter(isPlanFile), bad: read.filter((p): p is BadPlan => !isPlanFile(p)) };
+  return nodeArtefacts(cwd, { planDir: path.join(cwd, PLAN_DIR) }).plans();
 }
 
 // The project root a plan belongs to: <root>/design/plan/<x>.json → <root>.
@@ -1184,11 +1171,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
-  warnings.push(...legacySetWarnings(plan, file, reports, exp));
+  warnings.push(...legacySetWarnings(plan, file, reports));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
-  warnings.push(...auditGateWarnings(plan, cwd, exp));
+  warnings.push(...auditGateWarnings(plan, cwd, exp, file));
   // One line per distinct message (the same sentence repeated is noise that buries the real ones).
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...(tagCoverage ? { tagCoverage } : {}) };
 }
@@ -1197,11 +1184,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 // plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
 // be indistinguishable, on disk, from one that never read it.
 // (audit-gate.ts is a static import, which cannot fail at this point.)
-function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined): string[] {
+function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined, planFile?: string): string[] {
   const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || (exp && exp.layerName) || null;
   let g: ReturnType<typeof auditGateStatus>;
-  try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
+  try { g = auditGateStatus(cwd, planNode(plan, planFile), screenFile, screenName); } catch { return []; }
   // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
   if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run the audit script for this screen`];
   if (!g.auditFile || !g.blockers.length) return [];
@@ -1243,8 +1230,8 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // A report found for this plan under a name outside the key grammar (`<Layer>__<id>`, `<Layer>__<id>.<variant>` —
 // screen-key.ts): a nickname, or an `@320` / `-r1` variant. It is still read (locateReports matches it by content); the
 // warning names it so `verify-screen --migrate` can give it the screen's key.
-function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[], exp: ExportHit | null | undefined): string[] {
-  const nodeId = planNodeId(plan, planFile, exp ?? null);
+function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[]): string[] {
+  const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
     const set = path.posix.basename(r.rel).replace(/\.report\.json$/, "");
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} — run verify-screen --migrate`] : [];

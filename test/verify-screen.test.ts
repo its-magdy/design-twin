@@ -23,7 +23,7 @@ import { malformed, must, readFixture, screenExport } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
-import { isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
+import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { check as ok, report } from "./assert.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -554,7 +554,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // two grammar-named sets of the node: which one is not ours to guess
   fs.copyFileSync(path.join(vdir, "Old__5_6.expected.json"), path.join(vdir, "New__5_6.expected.json"));
   const r3 = run("--expect", screenFile);
-  ok("[fixed-stem] two <Layer>__<id> sets of the node → exit 2 naming both", r3.status === 2 && /node 5:6 has 2 verify sets under different names \(New__5_6, Old__5_6\)/.test(r3.stderr));
+  ok("[fixed-stem] two <Layer>__<id> sets of the node → exit 2 naming both", r3.status === 2 && /node 5:6 has 2 verify sets \(New__5_6, Old__5_6\) — one node, one verify set: keep one/.test(r3.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
@@ -988,7 +988,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   put("design/plan/Orders.json", { nodeId: "1:1", files: ["src/Orders.tsx"] });
   const amb = run("--compare", exp, meas, "--record-plan");
   okOuter("two plans of the frame's node, no --plan → exit 2 naming both, NO report written",
-    amb.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Orders\.json, design\/plan\/Orders__1_1\.json\) — keep one, or pass --plan/m.test(amb.stderr) && !fs.existsSync(report));
+    amb.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Orders\.json, design\/plan\/Orders__1_1\.json\) — one node, one plan: keep one, or pass --plan/m.test(amb.stderr) && !fs.existsSync(report));
   okOuter("--record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
   fs.rmSync(path.join(cwd, "design/plan/Orders.json"));
   const rec = run("--compare", exp, meas, "--record-plan");
@@ -1036,7 +1036,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   fs.rmSync(report);
   const two = run("--compare", exp, meas);
   okOuter(`[plans] two plans of the node at --compare → exit 2 naming both, no report written (got ${two.status}: ${two.stderr.trim()})`,
-    two.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — keep one, or pass --plan/m.test(two.stderr) && !fs.existsSync(report));
+    two.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — one node, one plan: keep one, or pass --plan/m.test(two.stderr) && !fs.existsSync(report));
   const flag = run("--compare", exp, meas, "--plan", "design/plan/Crates_bins.json");
   okOuter(`[plans] --plan wins over them: the report is written with that plan's code hashes, and a note names the other (got ${codeOf()})`,
     (flag.status === 0 || flag.status === 1) && codeOf() === "design/plan/Crates_bins.json src/B.tsx"
@@ -1046,7 +1046,18 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   if (rep) { const { inputs, ...rest } = rep; fs.writeFileSync(report, JSON.stringify({ ...rest, inputs: { exportContentSha256: inputs?.exportContentSha256 } }, null, 2)); }
   const acc = run("--accept", "design/verify/Bins__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "kept", "--by", "owner");
   okOuter(`[plans] --accept: two plans of the report's node → exit 2 naming both (got ${acc.status}: ${acc.stderr.trim()})`,
-    acc.status === 2 && /2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — keep one, or pass --plan/.test(acc.stderr));
+    acc.status === 2 && /node 1:1 has 2 plans \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — one node, one plan: keep one, or pass --plan/.test(acc.stderr));
+  // the report's set names no node (its expectation is of 2:2, its report of 1:1): no plan is guessed, none is written
+  fs.rmSync(path.join(cwd, "design/plan/Crates_bins.json"));
+  const expDoc = readFixture(path.join(cwd, exp), isVerifyExpectation);
+  put(exp, { ...expDoc, frame: { ...expDoc.frame, nodeId: "2:2" } });
+  const repNow = readFixture(report, isVerifyReport);
+  fs.writeFileSync(report, JSON.stringify({ ...repNow, nodeId: "1:1" }, null, 2));
+  const planBefore = fs.readFileSync(path.join(cwd, "design/plan/Bins__1_1.json"), "utf8");
+  const clash = run("--accept", "design/verify/Bins__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "kept", "--by", "owner");
+  okOuter(`[plans] --accept on a set whose expectation and report name different nodes → refused, no plan written (got ${clash.status}: ${clash.stderr.trim()})`,
+    clash.status === 1 && /the set Bins__1_1 names no node/.test(clash.stderr) && fs.readFileSync(path.join(cwd, "design/plan/Bins__1_1.json"), "utf8") === planBefore);
+  put("design/plan/Crates_bins.json", { nodeId: "1:1", files: ["src/B.tsx"] });
   // the plan --expect merged interactions from (outside design/plan/) is used at --compare: the code hashes are ITS files
   const mine = { nodeId: "1:1", interactions: [], files: ["src/A.tsx"] };
   put("scratch/mine.json", mine);

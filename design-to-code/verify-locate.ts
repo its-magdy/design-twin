@@ -10,8 +10,8 @@ import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVe
 import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { canonical } from "./run-cache.ts";
-import { nodeIdFromSetName } from "./verify-sets.ts";
-import { isJsonObject } from "./types.ts";
+import { nodeArtefacts, planNode } from "./node-artefacts.ts";
+import { setFacts } from "./verify-sets.ts";
 import type { CodeInputs, IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 
 // Stricter than project-layout's findExportDir (any export marker): the plan's screen is looked up in pages/,
@@ -89,7 +89,8 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
+  // the plan's node (node-artefacts.ts planNode), then — a lookup hint, not its identity — the id in its `screen` stem
+  const ids = [planNode(plan, planFile), nodeIdFromStem(plan.screen)].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   let staleFile: string | null = null;
@@ -124,12 +125,6 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 
-/** The node id a plan is of, as locateReports reads it: its `nodeId`, else its export's, else the id in its `screen`
- *  stem or its own file name; null when none names one. */
-function planNodeId(plan: Plan, planFile: string | undefined, exp: ExportHit | null): string | null {
-  return plan.nodeId || (exp && exp.nodeId) || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null);
-}
-
 /** A verify report as locateReports() summarises it for the status computation. */
 /** How locateReports() tied a report to the plan (first that matches, in this order). */
 export type ReportMatch = "name" | "nodeId" | "expectation frame" | "layer name";
@@ -146,9 +141,9 @@ export interface ReportRef {
 }
 
 // Reports are found by name first — `<Layer>__<id>` (the set verify-screen names the node), the plan's
-// own name, its `screen` — then by content: a report whose `nodeId` is the plan's (or whose set name carries it, a
-// variant's `<Layer>__<id>.<slug>` too), whose sibling
-// `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
+// own name, its `screen` — then by node: a report whose set is of the plan's node (node-artefacts.ts: the plan's
+// planNode; the set's setNode — its expectation's frame, else the report's `nodeId`, the two disagreeing: none — else
+// the id its set name carries, a variant's `<Layer>__<id>.<slug>` too), or whose `screen` is
 // the frame's layer name when that name is unique in the export (the older `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
@@ -169,7 +164,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     planFile ? path.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null,
   ].filter((s): s is string => !!s));
-  const nodeId = planNodeId(plan, planFile, e);
+  const nodeId = planNode(plan, planFile);
+  const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out: ReportRef[] = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
@@ -181,11 +177,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     const expFile = path.join(dir, stem + ".expected.json");
     // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
     if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
-    // Only the expectation's frame.nodeId is read here, so only that is required of the file.
-    const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
@@ -204,4 +197,4 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
   return out;
 }
 
-export { exportDirOf, indexRows, locateExport, locateReports, planNodeId };
+export { exportDirOf, indexRows, locateExport, locateReports };

@@ -1,4 +1,4 @@
-// verify-sets.ts — the verify-set name grammar, the sets a verify dir holds, and the stem a known node's files take.
+// verify-sets.ts — the verify-set name grammar and the sets a verify dir holds (which stem a node's files take: node-artefacts.ts).
 //
 // A verify set is the files that share one name in the verify dir (`<name>.expected.json`, `.report.json`,
 // `.measured.json`, `.report.md`, `.status.json`, `<name>.png`, `<name>-diff.png`, …). Its name is the stem, or the stem
@@ -7,11 +7,11 @@
 // a "." — the part before the first "." is always the stem. Any other name (a nickname, `<Screen>@320`, `<Screen>-r1`)
 // is legacy: `verify-screen --migrate` renames it (verify-migrate.ts).
 //
-// A module of its own, under screen-key.ts (which resolves a query to a node first, through resolve-screen.ts): so
-// resolve-screen's CLI can name a node's stem the way screenKey does without importing screen-key.
+// A module of its own, under node-artefacts.ts (which names a node's stem from these sets) and screen-key.ts (which
+// resolves a query to a node first, through resolve-screen.ts).
 import fs from "node:fs";
 import path from "node:path";
-import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
+import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
@@ -169,27 +169,7 @@ export function setFacts(verifyDir: string, name: string): SetFacts {
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 
-/** The node id a set is of, from its own files: the expectation's frame, else the report; null when neither names one
- *  or when they name two. */
-export function setNodeId(verifyDir: string, name: string): string | null {
-  const f = setFacts(verifyDir, name);
-  if (f.expectedId !== null && f.reportId !== null && f.expectedId !== f.reportId) return null;
-  return f.expectedId ?? f.reportId;
-}
-
-/** The stems of the grammar-named sets (base or variant) in `verifyDir` that carry `nodeId`, sorted. `open`: the names of
- *  the dir's sets with a run open in the run cache (verify-status.ts openRunSets) — a run opened by --status before any of
- *  its files exist names its set too. */
-export function canonicalStemsFor(verifyDir: string, nodeId: string, open: readonly string[] = []): string[] {
-  const stems = new Set<string>();
-  for (const name of [...verifySets(verifyDir), ...open]) {
-    const p = parseSetName(name);
-    if (p && p.nodeId === nodeId) stems.add(p.stem);
-  }
-  return [...stems].sort();
-}
-
-/** How a refusal names the stems `stems` of `verifyDir`'s sets (canonicalStemsFor's), joined by ", ": a stem with files
+/** How a refusal names the stems `stems` of `verifyDir`'s sets (node-artefacts.ts's), joined by ", ": a stem with files
  *  there as itself; one whose only trace is a run open in the run cache (`open`) as that run — the user finds no file of
  *  it in the verify dir — with the command that ends it. */
 export function stemHolders(verifyDir: string, stems: readonly string[], open: readonly string[]): string {
@@ -205,26 +185,4 @@ export function stemHolders(verifyDir: string, stems: readonly string[], open: r
 /** The variant slugs of `stem` among the live sets of `verifyDir`, sorted. */
 export function variantsOf(verifyDir: string, stem: string): string[] {
   return verifySets(verifyDir).flatMap((name) => { const p = parseSetName(name); return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : []; });
-}
-
-/** The stem the verify dir already names `nodeId` by — the ONE grammar-named set's stem — or null (none, or several). */
-export function existingStem(verifyDir: string, nodeId: string): string | null {
-  const stems = canonicalStemsFor(verifyDir, nodeId);
-  return stems.length === 1 ? stems[0] ?? null : null;
-}
-
-/** The legacy-named live sets in `verifyDir` whose own files say they are of `nodeId` (setNodeId), sorted. */
-export function legacySetsFor(verifyDir: string, nodeId: string): string[] {
-  return verifySets(verifyDir).filter((name) => parseSetName(name) === null && setNodeId(verifyDir, name) === nodeId);
-}
-
-/** The stem a known node's files take — the verify dir's existing one for it (fixed once a set exists), else
- *  screenStem(its layer name, id) — with its legacy-named sets; or why none (several grammar-named sets for the node).
- *  screenKey's answer once a query has named the node. `open`: as canonicalStemsFor's — a set whose only trace is an
- *  open run's live status fixes the stem as well. */
-export function nodeStem(verifyDir: string | null, nodeId: string, layerName: string, open: readonly string[] = []): { stem: string; existing: boolean; legacy: string[] } | { why: string } {
-  const stems = verifyDir ? canonicalStemsFor(verifyDir, nodeId, open) : [];
-  if (verifyDir && stems.length > 1) return { why: `node ${nodeId} has ${stems.length} verify sets under different names (${stemHolders(verifyDir, stems, open)}) — keep one` };
-  const have = stems[0];
-  return { stem: have ?? screenStem(layerName, nodeId), existing: have !== undefined, legacy: verifyDir ? legacySetsFor(verifyDir, nodeId) : [] };
 }
