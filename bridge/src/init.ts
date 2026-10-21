@@ -26,6 +26,7 @@ import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { isRecord } from "./json-util.ts";
+import { exitCli } from "./stdio.ts";
 
 /** One .mcp.json server entry, as init writes it. */
 export interface McpEntry {
@@ -239,7 +240,7 @@ function apply(cwd: string, actions: InitAction[], log: (m: string) => void): vo
 function main(argv: string[]): void {
   const known = ["--mcp", "--dry-run", "--help", "-h"];
   const bad = argv.filter((a) => !known.includes(a));
-  if (bad.length) { console.error(`[dtwin init] error: unknown argument${bad.length > 1 ? "s" : ""}: ${bad.join(", ")}. Usage: dtwin init [--mcp] [--dry-run]`); process.exit(1); }
+  if (bad.length) { console.error(`[dtwin init] error: unknown argument${bad.length > 1 ? "s" : ""}: ${bad.join(", ")}. Usage: dtwin init [--mcp] [--dry-run]`); exitCli(1); }
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(
       "dtwin init [--mcp] [--dry-run]\n\n" +
@@ -255,7 +256,7 @@ function main(argv: string[]): void {
       "  --dry-run  print what would happen; write nothing (no token is created either)\n\n" +
       "  Never overwrites an existing file."
     );
-    process.exit(0);
+    exitCli(0);
   }
   const dry = argv.includes("--dry-run");
   const cwd = process.cwd();

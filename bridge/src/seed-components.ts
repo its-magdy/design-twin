@@ -23,6 +23,7 @@ import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
 import { ifDefined, nullProto } from "./json-util.ts";
 import { writeJsonLike } from "./json-file.ts";
+import { exitCli, runCli } from "./stdio.ts";
 import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "out", "vendor", "Pods", ".build"]);
@@ -156,7 +157,7 @@ interface SeedOptions { codeRoot: string; outDir: string; dryRun: boolean }
 export function main(argv: string[]): void {
   if (argv.some((a) => a === "--help" || a === "-h")) {
     console.log(SEED_HELP);
-    process.exit(0);
+    exitCli(0);
   }
   let dryRun = false;
   const positional: string[] = [];
@@ -164,7 +165,7 @@ export function main(argv: string[]): void {
     if (a === "--dry-run") dryRun = true;
     else if (a.startsWith("-") && a !== "-") {
       console.error(`[seed-components] error: unknown flag ${a} — use: dtwin seed [codeRoot] [outDir] [--dry-run]`);
-      process.exit(2);
+      exitCli(2);
     } else positional.push(a);
   }
   run({ codeRoot: positional[0] || ".", outDir: positional[1] || "design", dryRun });
@@ -193,7 +194,7 @@ function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
   if (!found.length) {
     console.error("[seed-components] no Code Connect mappings found under " + path.resolve(codeRoot) + ".");
     console.error("[seed-components] (looked for `// url=`+`// component=` templates, `figma.connect(...)`, and `@FigmaConnect`.)");
-    process.exit(0);
+    exitCli(0);
   }
 
   const outPath = path.join(outDir, "components.json");
@@ -235,4 +236,4 @@ function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
 
 // Only when RUN directly (it is a CLI, driven by the tests as a subprocess). `dtwin seed` imports this
 // module and calls main() itself, so the guard is what keeps that import from also scanning the tree.
-if (import.meta.main) main(process.argv.slice(2));
+if (import.meta.main) runCli((argv) => { main(argv); return Number(process.exitCode ?? 0); }, { name: "[seed-components] error" });

@@ -18,7 +18,76 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// bridge/src/stdio.ts
 import { format } from "node:util";
+function installQueuedConsole(o = {}) {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const line = (s) => (...a) => {
+    s.write(format(...a) + "\n");
+  };
+  console.log = console.info = console.debug = line(o.logTo === "stderr" ? process.stderr : process.stdout);
+  console.warn = console.error = line(process.stderr);
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write2 = s.write.bind(s);
+  const settle2 = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write2(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write2(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle2();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") done(r);
+    else r.then(done, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
+// design-to-code/proc.ts
 var readBytes = (f) => {
   try {
     return fs.readFileSync(f);
@@ -82,71 +151,6 @@ function runSync(cmd, args, o = {}) {
   return r;
 }
 var pause = new Int32Array(new SharedArrayBuffer(4));
-function installQueuedConsole() {
-  trackWrites(process.stdout);
-  trackWrites(process.stderr);
-  const line = (s) => (...a) => {
-    s.write(format(...a) + "\n");
-  };
-  console.log = console.info = console.debug = line(process.stdout);
-  console.warn = console.error = line(process.stderr);
-}
-var inFlight = /* @__PURE__ */ new Map();
-function trackWrites(s) {
-  if (inFlight.has(s)) return;
-  const st = { n: 0, idle: [] };
-  inFlight.set(s, st);
-  const write2 = s.write.bind(s);
-  const settle2 = () => {
-    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
-  };
-  s.write = (chunk, encoding, cb) => {
-    const done = typeof encoding === "function" ? encoding : cb;
-    const enc = typeof encoding === "function" ? void 0 : encoding;
-    if (chunk.length === 0) return write2(chunk, enc, done);
-    st.n++;
-    let called = false;
-    return write2(chunk, enc, (err) => {
-      if (!called) {
-        called = true;
-        settle2();
-      }
-      done?.(err);
-    });
-  };
-}
-var CliExit = class extends Error {
-  code;
-  constructor(code) {
-    super(`exit ${code}`);
-    this.name = "CliExit";
-    this.code = code;
-  }
-};
-var cliDepth = 0;
-function exitCli(code) {
-  if (cliDepth > 0) throw new CliExit(code);
-  process.exit(code);
-}
-function runCli(main2, o, argv = process.argv.slice(2)) {
-  installQueuedConsole();
-  const done = o.done ?? ((code) => {
-    process.exitCode = code;
-  });
-  const fail = (e) => {
-    if (e instanceof CliExit) return done(e.code);
-    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
-    done(o.errorCode ?? 1);
-  };
-  cliDepth++;
-  try {
-    const r = main2(argv);
-    if (typeof r === "number") done(r);
-    else r.then(done, fail);
-  } catch (e) {
-    fail(e);
-  }
-}
 
 // bridge/src/json-util.ts
 function isRecord(x) {

@@ -191,16 +191,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-// design-to-code/proc.ts
+// bridge/src/stdio.ts
 import { format } from "node:util";
-var pause = new Int32Array(new SharedArrayBuffer(4));
-function installQueuedConsole() {
+function installQueuedConsole(o = {}) {
   trackWrites(process.stdout);
   trackWrites(process.stderr);
   const line = (s) => (...a) => {
     s.write(format(...a) + "\n");
   };
-  console.log = console.info = console.debug = line(process.stdout);
+  console.log = console.info = console.debug = line(o.logTo === "stderr" ? process.stderr : process.stdout);
   console.warn = console.error = line(process.stderr);
 }
 var inFlight = /* @__PURE__ */ new Map();
@@ -269,6 +268,9 @@ function exitFlushed(code, capMs = 2e3) {
   setTimeout(exit, capMs).unref();
   void flushStdio().then(exit);
 }
+
+// design-to-code/proc.ts
+var pause = new Int32Array(new SharedArrayBuffer(4));
 
 // design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);

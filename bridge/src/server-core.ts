@@ -31,6 +31,7 @@ import type { Cmd, Commands } from "./commands.ts";
 // Version reporting lives in staleness.ts so the CLI's pure helpers and doctor.ts can use it without
 // loading this module; callers import it from there.
 import { pluginStalenessNote } from "./staleness.ts";
+import { exitFlushed } from "./stdio.ts";
 
 // The handshake check keeps the CALLBACK shape of ws's async verifyClient — done(ok, code, message) —
 // that it was written against: the check runs in Bun.serve's fetch() (see createBridge), and its unit
@@ -962,7 +963,9 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       const err = errCode(e) === "EADDRINUSE" ? new Error(portInUseMessage(port)) : e;
       if (opts.onListenError) return opts.onListenError(err);
       console.error(errCode(e) === "EADDRINUSE" ? err.message : `[bridge] could not listen on 127.0.0.1:${port}: ${errMsg(e)}`);
-      process.exit(1);
+      // Off the CLI's call stack (a turn later), and the caller is awaiting `listening`, which never settles: an
+      // explicit exit, once that line is out.
+      exitFlushed(1);
     });
   }
 

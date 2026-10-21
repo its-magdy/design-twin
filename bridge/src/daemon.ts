@@ -31,6 +31,7 @@ import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ConnectionInfo, ProgressTick, RequestOptions } from "./server-core.ts";
+import { exitFlushed } from "./stdio.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
 //
@@ -469,7 +470,8 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
   process.on("uncaughtException", (e) => {
     log("uncaught exception — exiting: " + errMsg(e));
     if (cleanup) { try { cleanup(); } catch { /* exiting anyway */ } }
-    process.exit(1);
+    // Once that line is out (exitFlushed; a reader that never drains it holds the exit 1 s at most).
+    exitFlushed(1, 1_000);
   });
 }
 
@@ -693,7 +695,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
     // socket nobody is listening on. `as const`: process.on's overload wants NodeJS.Signals, not string.
-    if (signals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { shutdown(); process.exit(0); });
+    if (signals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { shutdown(); exitFlushed(0); });
     // A host that exits some other way (the MCP server ends when its stdio closes) still must not
     // leave the socket file behind for the next probe to trip over. One process-level hook, and this
     // socket is forgotten again on shutdown (the MCP server re-serves after every `dtwin stop`).

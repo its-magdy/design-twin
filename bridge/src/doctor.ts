@@ -47,6 +47,7 @@ import { dtwinPortWarning } from "./verbs.ts";
 // compiled binary too): engines.bun is the Bun version this install needs.
 import pkg from "../package.json" with { type: "json" };
 import type { ClientRow, Bridge } from "./server-core.ts";
+import { exitCli } from "./stdio.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
@@ -592,12 +593,12 @@ async function main(argv: string[]): Promise<void> {
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
       console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Bun version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
-      process.exit(0);
+      exitCli(0);
     } else if (a === "--wait" || a.startsWith("--wait=")) {
       const v = a === "--wait" ? argv[++i] : a.slice("--wait=".length);
       waitSec = Number(v);
-      if (!v || !Number.isFinite(waitSec) || waitSec < 0) { console.error(`[dtwin doctor] error: --wait needs a number of seconds. ${usage}`); process.exit(1); }
-    } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); process.exit(1); }
+      if (!v || !Number.isFinite(waitSec) || waitSec < 0) { console.error(`[dtwin doctor] error: --wait needs a number of seconds. ${usage}`); exitCli(1); }
+    } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); exitCli(1); }
   }
   // Human output streams; --json stays one document at the end (a consumer parses it whole).
   const report = await run(json ? { waitSec } : {

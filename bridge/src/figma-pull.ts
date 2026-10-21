@@ -67,6 +67,7 @@ import { ifDefined, isUnknownArray } from "./json-util.ts";
 // The package's own package.json, imported (not read by a path at run time, so a compiled binary has it
 // too): `dtwin --version` prints its version.
 import pkg from "../package.json" with { type: "json" };
+import { CliExit, exitCli, exitFlushed, runCli } from "./stdio.ts";
 
 // --help / -h: print USAGE and exit 0. Handled in cli() BEFORE server-core is loaded, so help has no
 // side effects at all — no token minted, no port bound. A constant, not text read back from this file
@@ -1277,13 +1278,17 @@ async function cli(argv: string[]): Promise<void> {
         "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
         "  of node payloads inline — asset bytes are never returned inline."
       );
-      process.exit(0);
+      exitCli(0);
     }
     // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
     process.argv.splice(2, 1);
+    // Not awaited: the server runs on after cli() returns. A failure to load it (an invalid FIGMA_BRIDGE_PORT exits
+    // through exitCli at server-core's load — the CliExit lands here) ends the process on its exit code, naturally:
+    // nothing holds the loop once the module failed.
     import("./figma-mcp.ts").catch((e: unknown) => {
+      if (e instanceof CliExit) { process.exitCode = e.code; return; }
       console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));
-      process.exit(1);
+      process.exitCode = 1;
     });
     return;
   }
@@ -1320,23 +1325,23 @@ async function cli(argv: string[]): Promise<void> {
     const vh = verbHelp(argv);
     if (vh) {
       console.log(vh);
-      process.exit(0);
+      exitCli(0);
     }
     try {
       argv = translate(argv, (p) => fs.existsSync(p));
     } catch (e) {
       if (!(e instanceof VerbError)) throw e;
       console.error("[dtwin] error: " + e.message);
-      process.exit(1);
+      exitCli(1);
     }
   }
   if (argv[0] === "--version" || argv[0] === "-v") {
     console.log(pkg.version);
-    process.exit(0);
+    exitCli(0);
   }
   if (argv.some((a) => a === "--help" || a === "-h")) {
     console.log(usageText());
-    process.exit(0);
+    exitCli(0);
   }
 
   // DTWIN_PORT is not a thing this tool reads (FIGMA_BRIDGE_PORT is); say so once rather than
@@ -1368,24 +1373,30 @@ async function cli(argv: string[]): Promise<void> {
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     console.error("[dtwin] error: " + errMsg(e));
-    process.exit(1);
+    exitCli(1);
   }
   const check = validateArgs(parsed);
   for (const w of check.warnings) console.error("[dtwin] warn: " + w);
   if (check.error !== null) {
     console.error("[dtwin] error: " + check.error);
-    process.exit(1);
+    exitCli(1);
   }
 
-  await main(parsed, core).catch((e) => {
+  // A failed command may leave the bridge it opened listening (it holds the loop), so this one ends with an explicit
+  // exit — once the error line is out (exitFlushed), never cutting it off.
+  await main(parsed, core).catch((e: unknown) => {
+    if (e instanceof CliExit) throw e;
     console.error("[dtwin] error:", errMsg(e));
-    process.exit(1);
+    process.exitCode = 1;
+    exitFlushed(1);
   });
 }
 
 // Only actually pull when RUN. Importing this file (test/bridge.test.ts drives parseArgs and
 // writeJson directly) must not open a WebSocket server and sit there waiting for Figma.
-if (import.meta.main) await cli(process.argv.slice(2));
+// runCli (stdio.ts): console through the queued streams, exitCli unwinding to the exit code, which is process.exitCode —
+// the process ends once its output has drained (a piped --list / --json is never cut at the pipe buffer).
+if (import.meta.main) runCli(async (argv) => { await cli(argv); return Number(process.exitCode ?? 0); }, { name: "[dtwin] error" });
 
 // writeJson is exported for the test suite: it's the ONE place a design-system.json / screen.json
 // actually lands on disk, and the freshness stamp (`exportedAt`/`file`, stamped by the plugin itself —

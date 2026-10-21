@@ -1,4 +1,4 @@
-// Tests that the design-to-code CLIs never lose the tail of a long stdout.
+// Tests that the design-to-code CLIs (and the dtwin CLI, MCP server and daemon) never lose the tail of a long stdout.
 //   bun test/cli-exit.test.ts
 // A CLI that writes to process.stdout and then calls process.exit() is cut off when stdout is a pipe:
 // pipe writes are asynchronous on POSIX, so whatever the consumer has not yet read (past the 64 KiB pipe
@@ -6,7 +6,7 @@
 // an exit code, set as process.exitCode, so every printed byte flushes first.
 //   1. behaviour: run the CLIs with a synthetic screen whose report is far larger than the pipe buffer, into
 //      a deliberately slow reader, and demand every byte;
-//   2. static guard: no design-to-code/*.ts calls process.exit() outside a reasoned allow-list.
+//   2. static guard: no design-to-code/*.ts or bridge/src/*.ts calls process.exit() outside a reasoned allow-list.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,20 +86,30 @@ try {
 
 // ---------------------------------------------------------------- 2. the pattern cannot come back
 
-// file → [how many process.exit( calls it may hold, why]. Anything else must `return` a code from main().
+// file (repo-relative) → [how many process.exit( calls it may hold, why]. Anything else must `return` a code from main()
+// (process.exitCode), end through exitCli / exitFlushed (bridge/src/stdio.ts), or set process.exitCode and let the loop end.
+// Both trees are scanned: the dtwin CLI, the MCP server and the daemon (bridge/src) end the same way the design-to-code
+// CLIs do. design-to-code no longer calls the runtime's exit outside stdio.ts: cliParse and catalog-input go through
+// exitCli, the verify-build watchdog and verify-probe's grace / stop-signal exit through exitFlushed; in bridge/src the
+// usage/help exits of dtwin, doctor, init and seed go through exitCli, and the exits made while something still holds the
+// loop (a failed command's open bridge, a held port, the daemon's and the MCP server's signal / shutdown backstops, the
+// crash handler) through exitFlushed.
 const ALLOWED: Record<string, [number, string]> = {
-  "cli-args.ts": [1, "cliParse rejects a bad command line before the tool has written anything to stdout"],
-  "catalog-input.ts": [3, "input-file guards: every current caller reads its inputs before writing any stdout, and they print only to stderr — a NEW caller must do the same, or this exit truncates piped output again"],
-  "verify-build.ts": [1, "the hook watchdog: it fires when the process is hung (a stuck read), where a clean exit is not available"],
-  "verify-probe.ts": [1, "exitFlushed: when the process is still up 1 s after main returned (Playwright waiting up to 30 s on a browser slow to quit), or on a stop signal that ended the probe's own run (the listener replaces Node's default exit), and only inside the stderr/stdout write callbacks, so every printed byte has flushed; the exit runs Playwright's exit hook, which kills that browser"],
+  "bridge/src/stdio.ts": [2, "exitCli outside runCli (a suite calling main() in-process, the MCP server importing a module: an immediate exit, as before — inside runCli it throws CliExit and the code becomes process.exitCode) and exitFlushed (exits only once every counted stdout/stderr write is out, or at its cap: the verify-build hook watchdog, verify-probe's grace timer / stop signal, whose exit runs Playwright's exit hook that kills the browser, and the bridge's exits while a server still holds the loop)"],
 };
-console.log("no process.exit() in design-to-code/*.ts outside the allow-list:");
-for (const f of fs.readdirSync(D2C).filter((x) => x.endsWith(".ts")).sort()) {
-  const lines = fs.readFileSync(path.join(D2C, f), "utf8").split("\n");
-  const hits = lines.flatMap((l, i) => (l.trimStart().startsWith("//") ? [] : (l.match(/\bprocess\.exit\(/g) ?? []).map(() => i + 1)));
-  const allowed = ALLOWED[f]?.[0] ?? 0;
-  check(`${f}: ${hits.length} process.exit() call(s), ${allowed} allowed${hits.length > allowed ? ` (lines ${hits.join(", ")}) — return the code from main() and set process.exitCode` : ""}`, hits.length === allowed);
+const ROOT = path.join(import.meta.dirname, "..");
+const SCANNED = ["design-to-code", path.join("bridge", "src")];
+console.log("no process.exit() in design-to-code/*.ts or bridge/src/*.ts outside the allow-list:");
+for (const dir of SCANNED) {
+  for (const f of fs.readdirSync(path.join(ROOT, dir)).filter((x) => x.endsWith(".ts")).sort()) {
+    const rel = path.posix.join(...dir.split(path.sep), f);
+    const lines = fs.readFileSync(path.join(ROOT, dir, f), "utf8").split("\n");
+    const hits = lines.flatMap((l, i) => (l.trimStart().startsWith("//") ? [] : (l.match(/\bprocess\.exit\(/g) ?? []).map(() => i + 1)));
+    const allowed = ALLOWED[rel]?.[0] ?? 0;
+    check(`${rel}: ${hits.length} process.exit() call(s), ${allowed} allowed${hits.length > allowed ? ` (lines ${hits.join(", ")}) — return the code from main() and set process.exitCode, or end through exitCli / exitFlushed` : ""}`, hits.length === allowed);
+  }
 }
-for (const [f, [n, why]] of Object.entries(ALLOWED)) check(`allow-list entry ${f} (${n}: ${why}) still exists`, fs.existsSync(path.join(D2C, f)));
+check("the scan saw the dtwin entry point (a moved tree would otherwise pass vacuously)", fs.existsSync(path.join(ROOT, "bridge", "src", "figma-pull.ts")) && fs.existsSync(path.join(D2C, "audit.ts")));
+for (const [f, [n, why]] of Object.entries(ALLOWED)) check(`allow-list entry ${f} (${n}: ${why}) still exists`, fs.existsSync(path.join(ROOT, f)));
 
 report();

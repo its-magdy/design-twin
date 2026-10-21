@@ -56,6 +56,7 @@ import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
 // daemon socket so the NEXT session (or a `dtwin pull`) shares it instead of fighting for the port.
 // Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
 import * as daemon from "./daemon.ts";
+import { exitFlushed, installQueuedConsole } from "./stdio.ts";
 import type { DaemonBridge, DaemonConnection, ServeHandle } from "./daemon.ts";
 type Holder = { own: Bridge } | { via: DaemonConnection };
 let own: Bridge | null = null;
@@ -366,7 +367,7 @@ function leave(msg: string): void {
   if (s) s.shutdown(); // aborts its forwarded requests, unlinks the socket, closes the bridge (shared.close)
   else if (closeOwn) closeOwn();
   process.exitCode = 0;
-  setTimeout(() => process.exit(0), 3000).unref();
+  setTimeout(() => exitFlushed(0, 1000), 3000).unref();
 }
 
 // Once the client has gone, its end of our stdout (and maybe stderr) is closed, and the next write —
@@ -401,7 +402,8 @@ function onSignal(sig: NodeJS.Signals): void {
   guardStdio();
   if (!clientGone.signal.aborted) clientGone.abort(new Error(`${sig} — request abandoned`));
   leave(`${sig} — closing the bridge and exiting`);
-  setTimeout(() => process.exit(0), 150);
+  // exitFlushed: the log lines above reach stderr first; capped well inside the ~500 ms before SIGKILL
+  setTimeout(() => exitFlushed(0, 200), 150);
 }
 const callSignal = (extra: ToolExtra | undefined): AbortSignal => (extra ? AbortSignal.any([extra.signal, clientGone.signal]) : clientGone.signal);
 
@@ -1246,6 +1248,9 @@ async function main() {
   daemon.installCrashHandlers(wlog);
   // Before anything can write to stdout (guardStdio says why it cannot wait for the client to go).
   guardStdio();
+  // console.* through the streams' queue (Bun drops a direct console write that meets a full pipe) — and ALL of it to
+  // stderr: stdout carries the JSON-RPC the transport writes and nothing else.
+  installQueuedConsole({ logTo: "stderr" });
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => onSignal(sig));
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
@@ -1268,5 +1273,5 @@ async function main() {
 
 main().catch((e) => {
   console.error("[figma-mcp] fatal:", errMsg(e));
-  process.exit(1);
+  exitFlushed(1);
 });
