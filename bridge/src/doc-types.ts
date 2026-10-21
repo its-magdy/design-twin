@@ -153,8 +153,9 @@ export type ShaderPropType =
   | "boolean" | "text" | "number" | "image" | "instance_swap" | "slot" | "color" | "point" | "line" | "circle"
   | "circle_point" | "color_point" | "gradient";
 /** One entry of a shader paint/effect's `propertyDefs` (paint.ts putShaderProperties), keyed by the same
- *  property-definition id as `properties`. `name` is the author-defined input name; `type` is Figma's
- *  declared input type lowercased (`boolean`, `text`, `number`, `image`, `instance_swap`, `slot`, `color`,
+ *  property-definition id as `properties`. `name` is the input's identifier as the shader source declares
+ *  it (Figma's properties panel can show a different label, which the Plugin API does not expose); `type`
+ *  is Figma's declared input type lowercased (`boolean`, `text`, `number`, `image`, `instance_swap`, `slot`, `color`,
  *  `point`, `line`, `circle`, `circle_point`, `color_point`, `gradient`); `default` is normalised like a
  *  `properties` value (a variable-bound default, or a bound colour inside one, is left out of `default`
  *  and named in this definition's `tokens` under `default`, `default.color` or `default.stops.N.color`);

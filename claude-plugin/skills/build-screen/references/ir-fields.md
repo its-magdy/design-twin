@@ -230,8 +230,9 @@ Read these before writing ANY script against an export JSON (field names guessed
     A shader paint/effect carries `shaderId` + **`properties`** `{defId: value}` — its inputs keyed by
     Figma's opaque property id (colours `{color:"#hex"}`, points `{x,y,…}`, gradients `{stops}`; bound
     inputs named in `tokens` instead). **`propertyDefs`** `{defId: {name, type, default?, description?,
-    tokens?}}` names those inputs — read `propertyDefs[defId].name` to name a shader input, `type`
-    (lowercased: `number`, `color`, `point`, `gradient`, …) for its kind; it can list inputs
+    tokens?}}` names those inputs — read `propertyDefs[defId].name` to name a shader input (the
+    identifier the shader's source declares, e.g. `rotationSpeed`; Figma's properties panel can show a
+    different label, which the Plugin API does not expose), `type` (lowercased: `number`, `color`, `point`, `gradient`, …) for its kind; it can list inputs
     `properties` omits (a bound one, or one never assigned), and is absent when Figma supplied no
     definitions. A bound `default` (or a bound colour inside a point/gradient default) is left out of
     `default` and named under that definition's own `tokens` (`propertyDefs[defId].tokens`, keys
