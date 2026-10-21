@@ -83,7 +83,7 @@ else {
   const run = (binDir: string | null, h = home) => {
     const r = runSync(path.join(tools, "sh"), [SCRIPT], { env: { PATH: (binDir ? binDir + path.delimiter : "") + tools, HOME: h }, timeoutMs: 10_000 });
     let json: unknown = null;
-    try { json = r.stdout.trim() ? JSON.parse(r.stdout) : null; } catch { json = "unparsable"; }
+    try { json = r.stdout.trim() ? JSON.parse(r.stdout) as unknown : null; } catch { json = "unparsable"; }
     const sys = isJsonObject(json) && typeof json.systemMessage === "string" ? json.systemMessage : "";
     const hso = isJsonObject(json) && isJsonObject(json.hookSpecificOutput) ? json.hookSpecificOutput : null;
     const ctx = hso && typeof hso.additionalContext === "string" ? hso.additionalContext : "";
