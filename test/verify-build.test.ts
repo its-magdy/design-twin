@@ -62,7 +62,7 @@ const problems = (files: Record<string, string>, plan: Plan, map?: CodeConnectMa
 const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => split(files, plan, map).blocking;
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
-const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, behaviour: null, shippedProbe: false, ...r });
+const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, measuredAt: null, mtimeMs: 0, inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false, ...r });
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server in package.json" };
@@ -1037,10 +1037,13 @@ console.log("freshness by content, never by clock:");
   check(`\`touch\` on the code and the export changes nothing — no mtime is consulted (got ${s1.status}, not unverified "older than the newest file")`, s1.status === "verified");
   // a no-change re-pull: the export is replaced by the real "after" pull, then --expect is re-run
   fs.copyFileSync(after, exportFile);
+  const expBefore = fs.readFileSync(path.join(root, `design/verify/${JR}.expected.json`), "utf8");
   const x2 = vs(["--expect", `${E}/${JR}.json`]);
   const s2 = st();
-  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}, not unverified)`,
-    /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
+  check(`a no-change re-pull + re-run --expect: --expect says only exportedAt changed, keeps the expectation byte for byte (the report's and measured file's sha binds it), and the screen stays verified (got ${s2.status}, not unverified)`,
+    /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified"
+    && fs.readFileSync(path.join(root, `design/verify/${JR}.expected.json`), "utf8") === expBefore
+    && x2.stderr.includes(`expectation sha256 ${crypto.createHash("sha256").update(expBefore).digest("hex").slice(0, 12)}…`));
   // a real design change
   const edited = parseAs(rawA, isScreenExport, "the export");
   const editedChild = must(must(must(edited.nodes[0], "edited.nodes[0]").children, "edited.nodes[0].children")[0], "edited.nodes[0].children[0]");

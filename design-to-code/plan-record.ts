@@ -32,7 +32,7 @@ import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, RECORD_V1_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
-import { readRegularFile } from "./read-json.ts";
+import { reportRecordNames } from "./report-freshness.ts";
 import { legacyPlanHash, planHash } from "./content-hash.ts";
 import { canonical } from "./plan-waivers.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
@@ -259,17 +259,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
 export interface RecordedEdit { fact: string; advice: string }
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
-// The report a record's reportSha256 still names, parsed — null when there is none to compare with: no report on disk
-// (or not a regular file), its bytes rewritten since (the sha differs: an older record, verify-build.ts
-// recordedReportWarnings), or not a verify report.
-function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string): VerifyReport | null {
-  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
-  const bytes = readRegularFile(path.resolve(cwd, report));
-  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
-  let parsed: unknown = null;
-  try { const x: unknown = JSON.parse(bytes.toString("utf8")); parsed = x; } catch { /* unparseable: not the report the sha names */ }
-  return isVerifyReport(parsed) ? parsed : null;
-}
+// (the report a record's reportSha256 still names: report-freshness.ts reportRecordNames)
 // A recorded@1 block (the first record's keys only) whose reportSha256 still names the report on disk: its verdict,
 // headline, behaviourHeadline and counts that are not what that report says were edited by hand. The first writer took
 // each of them from the report as recordFacts does now — verdict and headline copied as they are (the headline is the
@@ -334,4 +324,4 @@ function recordedEditFacts(plan: Plan, cwd: string): RecordedEdit[] {
   return out;
 }
 
-export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, reportRecordNames, updatePlan, verificationFacts };
+export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, updatePlan, verificationFacts };

@@ -196,8 +196,8 @@ console.log("recordPlan:");
   // a report of lows only: deltas [] is the record, not a "copy them" gap
   const lowsOnly: VerifyReportV2 = { ...rep, deltas: rep.deltas.filter((d) => d.severity === "low") };
   const v: PlanVerification = { mode: "rendered", deltas: [], recorded: { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: "x", verdict: "pass", headline: "", counts: { high: 0, medium: 0, low: 2, accepted: 0, notMeasured: 0, inferred: 0 } } };
-  const refRow: ReportRef = { rel: REPORT, matchedBy: "name", schema: "designtwin/verify-report@2", verdict: lowsOnly.verdict, headline: null, why: [], deltas: lowsOnly.deltas, exportedAt: null, measuredAt: null, mtimeMs: 0,
-    exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, behaviour: null, shippedProbe: false };
+  const refRow: ReportRef = { rel: REPORT, matchedBy: "name", schema: "designtwin/verify-report@2", verdict: lowsOnly.verdict, headline: null, why: [], deltas: lowsOnly.deltas, measuredAt: null, mtimeMs: 0,
+    inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false };
   check("a recorded plan with deltas [] beside its report's 2 lows → no 'verification.deltas is [] but … lists 2' contradiction",
     verificationContradictions({ verification: { ...v } }, [refRow]).length === 0
     && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);

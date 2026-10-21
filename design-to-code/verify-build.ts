@@ -20,10 +20,11 @@
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold: hook
 // result "pass"; every file in files[] (and every mapped module) still hashes the same; and the verify
-// report (design/verify/<…>.report.json, schema @2) passes and measured THIS design and THIS code — by
-// content: its inputs.exportContentSha256 equals the export's (timestamps stripped), its
-// inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the hash of the
-// plan's waivers[]/descopes[] now (absent = none). No clock is consulted. A stored "verified"/
+// report (design/verify/<…>.report.json, schema @2) passes and is fresh (report-freshness.ts judge) — by
+// content: its inputs.exportContentSha256 equals the export's (timestamps stripped), its expectation is the one on
+// disk, its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the hash of the
+// plan's waivers[]/descopes[] now (absent = none). No clock decides a status (STALE_HOURS below decides only which
+// plans the Stop hook looks at). A stored "verified"/
 // "static-only" (written by an older hook) is ignored and deleted the next time the hook checks that
 // plan. `status` keeps only the states a PERSON sets: "pending" (default) · "awaiting-user" (paused on
 // a question — skipped, never closed) · "abandoned" (retired — skipped). Every reader runs
@@ -45,7 +46,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { sha256Hex } from "../bridge/src/hash.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { visibility } from "./plan-skeleton.ts";
 import * as contentHash from "./content-hash.ts";
@@ -53,16 +53,17 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
-import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { isPassingVerdict } from "./plan-waivers.ts";
+import { WAIVERS_CHANGED, recordedReport, reportFreshness, reportRecordNames, staleText } from "./report-freshness.ts";
 import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
-import { anyJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
+import { anyJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import type {
   IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
-import { parsePlanText, recordedEdits, reportRecordNames, updatePlan, verificationFacts } from "./plan-record.ts";
+import { parsePlanText, recordedEdits, updatePlan, verificationFacts } from "./plan-record.ts";
 import { locateExport, locateReports } from "./verify-locate.ts";
 import { isPlanFile, nodeArtefacts, planNode, readPlan } from "./node-artefacts.ts";
 import type { BadPlan, PlanFile } from "./node-artefacts.ts";
@@ -106,6 +107,9 @@ function staleCutoffMs(): number {
   return Number.isFinite(h) && h > 0 ? h * 3600 * 1000 : 0;
 }
 
+// DELIBERATE clock: this decides the Stop hook's SCOPE (a plan untouched for STALE_HOURS is a leftover from another
+// session, so its hook does not block this one), never a plan's status or a report's freshness — computeStatus and
+// `--status` ignore it, and the hook puts a plan's mtime back after writing it so its own write does not reset this.
 function isStale(file: string, now: number = Date.now()): boolean {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
@@ -515,16 +519,12 @@ function verificationWarnings(plan: Plan): string[] {
 // A record naming a report that is not on disk at all (renamed or deleted) cannot be compared with it, so a hand edit of
 // the record would go unseen (recordedEdits): that is a warning of its own.
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
-  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  if (!fs.existsSync(path.resolve(cwd, rec.report))) {
-    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
+  const r = recordedReport(plan, cwd);
+  if (r.kind === "missing") {
+    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
       "legacy-named verify set, else re-run verify-screen --compare --record-plan"];
   }
-  const bytes = readRegularFile(path.resolve(cwd, rec.report));
-  if (!bytes) return [];
-  const now = sha256Hex(bytes);
-  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
+  return r.kind === "rewritten" ? [`plan.verification records an older run of ${r.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`] : [];
 }
 
 // Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written
@@ -1244,11 +1244,8 @@ interface Verdict { status: PlanComputedStatus; reasons: string[] }
 
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
 // failed | unverified | static-only | verified | verified-with-deviations. Never empty reasons.
-// A report that recorded no inputs.waivers (an older report) applied none: it stays fresh while the
-// plan has none, and goes stale once the owner accepts one.
-const NO_WAIVERS = waiversHash(null);
-const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
-const WAIVERS_CHANGED = "waivers changed since the last compare — re-run --compare (with --plan <plan.json> when several plans describe the frame)";
+// Whether a passing report still holds is report-freshness.ts judge (by content: the export, the expectation, the code,
+// the waivers — never a clock); a stale one reads as unverified, with its first reason.
 function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[], cached?: CachedBytes): Verdict {
   const f = verificationFacts(plan.verification);
   if (!reports.length) {
@@ -1261,37 +1258,19 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, ` +
     `whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
-  const waiversNow = waiversHash(plan);
+  const fresh = reportFreshness(cwd, { ...(cached ? { cached } : {}) });
   const failing = reports.filter((r) => r.verdict === "fail");
   // A fail stays a fail until it is re-compared — but say when the owner has since accepted something.
-  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` — ${WAIVERS_CHANGED}` : "")) };
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (fresh.waiversChanged(r.inputs, plan) ? ` — ${WAIVERS_CHANGED}` : "")) };
   // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
   // not a pass — and not a failure the build caused either.
   const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
-  // Freshness is decided by CONTENT, never by a clock: not exportedAt (a no-change
-  // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
-  const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
   for (const r of reports) {
-    if (!r.exportContentSha256) {
-      if (r.expectationChanged) return { status: "unverified",
-        reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
-    }
-    if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`] };
-    if (r.exportContentSha256 !== expSha) return { status: "unverified",
-      reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
-    const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, ` +
-      `where design/plan/ lists this screen's files`] };
-    const now = fileHashes(plan, cwd, cached);
-    // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
-    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — ` +
-      `re-run --compare`] };
-    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
+    const stale = fresh.judge(r.rel, r.inputs, { plan, exportDoc: exp ? exp.doc : null })[0];
+    if (stale !== undefined) return { status: "unverified", reasons: [staleText(r.rel, stale)] };
   }
-  const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
+  const head = reports.map((r) => r.inputs.code && r.inputs.code.gitHead).find(Boolean);
   const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
   const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
   return { status: withDeviations.length ? "verified-with-deviations" : "verified",

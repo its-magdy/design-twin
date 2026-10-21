@@ -164,12 +164,12 @@ await block("verify-screen --status:", async () => {
   safe("done with no measured file → refused, exit 1", () => d0.status === 1 && /measured\.json does not exist/.test(d0.stderr));
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), JSON.stringify({ expectationSha256: "0".repeat(64), nodes: [] }));
   const d1 = cli("--status", "Plots__1_1", "--phase", "done", "--run", runId);
-  safe("done with a measured file taken against another expectation → refused, exit 1", () => d1.status === 1 && /measured against expectation 000000000000…/.test(d1.stderr));
+  safe("done with a measured file taken against another expectation → refused, exit 1", () => d1.status === 1 && /a DIFFERENT expectation \(000000000000…/.test(d1.stderr));
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), JSON.stringify({ nodes: [] }));
   safe("done with a measured file naming no expectation → refused, exit 1", () => cli("--status", "Plots__1_1", "--phase", "done", "--run", runId).status === 1);
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir, { runId: "another-run" }));
   const d4 = cli("--status", "Plots__1_1", "--phase", "done", "--run", runId);
-  safe("done with a measured file whose runId is another run → refused, exit 1", () => d4.status === 1 && /measured in run another-run/.test(d4.stderr));
+  safe("done with a measured file whose runId is another run → refused, exit 1", () => d4.status === 1 && /taken in run another-run, not run /.test(d4.stderr));
   safe("…and no refused done published a status into design/verify", () => !fs.existsSync(path.join(dir, "Plots__1_1.status.json")));
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir, { runId }));
   fs.writeFileSync(path.join(dir, "Plots__1_1.evidence.json"), JSON.stringify({ interactions: [] }));
@@ -204,7 +204,7 @@ await block("done — the probe's record of this run:", async () => {
   safe("a later write of the same run still names the probe's measured sha", () => { const st = VR.readStatus(base); return st !== null && st !== "v1" && st.measuredSha256 === sha(path.join(dir, "Plots__1_1.measured.json")); });
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir, { runId: "run-p", nodes: [{ nodeId: "9:9", styles: {} }] }));
   const d = cli("--status", "Plots__1_1", "--phase", "done", "--run", "run-p");
-  safe("the measured file changed since the probe recorded it in this run → done refused, exit 1", () => d.status === 1 && /recorded measured file/.test(d.stderr));
+  safe("the measured file changed since the probe recorded it in this run → done refused, exit 1", () => d.status === 1 && /its run names a different measured file/.test(d.stderr));
 });
 
 console.log("verify-screen --status --publish (staging):");
@@ -251,7 +251,7 @@ await block("verify-screen --status --publish (staging):", async () => {
   fs.writeFileSync(path.join(stage, "Plots__1_1-hover.png"), "hover");
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir));
   const bad = cli("--status", "Plots__1_1", "--phase", "done", "--run", runId, "--publish", stage);
-  safe("done --publish with a staged measured file taken against another expectation → refused, NOTHING copied", () => bad.status === 1 && /measured against expectation/.test(bad.stderr)
+  safe("done --publish with a staged measured file taken against another expectation → refused, NOTHING copied", () => bad.status === 1 && /a DIFFERENT expectation/.test(bad.stderr)
     && !fs.existsSync(path.join(dir, "Plots__1_1-hover.png")) && fs.readFileSync(path.join(dir, "Plots__1_1-dialog.png"), "utf8") === "png bytes");
   fs.writeFileSync(path.join(stage, "Plots__1_1.measured.json"), measuredFor(dir, { runId }));
   const ok = cli("--status", "Plots__1_1", "--phase", "done", "--run", runId, "--publish", stage);
@@ -292,15 +292,15 @@ await block("--status --phase measured:", async () => {
     && st.measuredSha256 === sha(path.join(dir, "Plots__1_1.measured.json")) && st.expectationSha256 === sha(path.join(dir, "Plots__1_1.expected.json")));
   fs.writeFileSync(path.join(dir, "Plots__1_1.measured.json"), measuredFor(dir, { runId: "run-r", nodes: [{ nodeId: "9:9", styles: {} }] }));
   const d = cli("--status", "Plots__1_1", "--phase", "done", "--run", "run-r");
-  safe("…the file changed after that record → done refused 'recorded measured file', exit 1", () => d.status === 1 && /recorded measured file/.test(d.stderr));
+  safe("…the file changed after that record → done refused 'names a different measured file', exit 1", () => d.status === 1 && /its run names a different measured file/.test(d.stderr));
   const { dir: dir2, base: base2, live: live2, cli: cli2 } = project();
   cli2("--status", "Plots__1_1", "--phase", "measuring", "--run", "run-s");
   fs.writeFileSync(path.join(dir2, "Plots__1_1.measured.json"), JSON.stringify({ expectationSha256: "0".repeat(64), runId: "run-s", nodes: [] }));
   const x1 = cli2("--status", "Plots__1_1", "--phase", "measured", "--run", "run-s");
-  safe("measured with a file taken against another expectation → refused, exit 1, the status unchanged", () => x1.status === 1 && /measured against expectation 000000000000…/.test(x1.stderr) && readStatusFile(live2)?.phase === "measuring");
+  safe("measured with a file taken against another expectation → refused, exit 1, the status unchanged", () => x1.status === 1 && /a DIFFERENT expectation \(000000000000…/.test(x1.stderr) && readStatusFile(live2)?.phase === "measuring");
   fs.writeFileSync(path.join(dir2, "Plots__1_1.measured.json"), measuredFor(dir2, { runId: "run-other" }));
   const x2 = cli2("--status", "Plots__1_1", "--phase", "measured", "--run", "run-s");
-  safe("measured with a file of another run → refused, exit 1", () => x2.status === 1 && /measured in run run-other/.test(x2.stderr));
+  safe("measured with a file of another run → refused, exit 1", () => x2.status === 1 && /taken in run run-other, not run /.test(x2.stderr));
   fs.rmSync(path.join(dir2, "Plots__1_1.measured.json"));
   safe("measured with no measured file → refused, exit 1", () => cli2("--status", "Plots__1_1", "--phase", "measured", "--run", "run-s").status === 1);
   // the probe wrote into the run's stage dir (--out <stage>/Plots__1_1): that file is the one recorded

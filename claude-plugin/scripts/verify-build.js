@@ -2,13 +2,9 @@
 
 
 // design-to-code/verify-build.ts
-import fs13 from "node:fs";
-import path13 from "node:path";
+import fs15 from "node:fs";
+import path14 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
-
-// bridge/src/hash.ts
-import crypto from "node:crypto";
-var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -78,17 +74,17 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path14, parent, depth) {
+  (function go(node, parentHidden, path15, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path14, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path15, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path14 ? path14 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path15 ? path15 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
 // design-to-code/audit-gate.ts
-import path8 from "node:path";
+import path9 from "node:path";
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -186,9 +182,15 @@ function legacyBlockerIds(findings) {
 }
 
 // design-to-code/cli-args.ts
-import path from "node:path";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+// design-to-code/proc.ts
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // bridge/src/stdio.ts
 import { format, inspect } from "node:util";
@@ -355,6 +357,76 @@ function exitFlushed(code, capMs = 2e3) {
 }
 
 // design-to-code/proc.ts
+var readBytes = (f) => {
+  try {
+    return fs.readFileSync(f);
+  } catch {
+    return Buffer.alloc(0);
+  }
+};
+function syncOnce(cmd, args, o, attempt) {
+  const t0 = Date.now();
+  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
+  const stdin = o.input !== void 0 ? "pipe" : "ignore";
+  const done = (s, stdout, stderr) => ({
+    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
+    signal: s.signal ?? null,
+    stdout,
+    stderr,
+    ms: Date.now() - t0,
+    ...s.error ? { error: s.error } : {},
+    ...s.pid ? { pid: s.pid } : {},
+    timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
+    attempts: attempt
+  });
+  const piped = () => {
+    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
+    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
+    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  };
+  let dir = null;
+  if (o.capture !== "pipe") try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
+  } catch {
+  }
+  if (dir === null) return piped();
+  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
+  try {
+    let out = null, err = null;
+    try {
+      out = fs.openSync(outF, "wx+");
+      err = fs.openSync(errF, "wx+");
+    } catch {
+      if (out !== null) fs.closeSync(out);
+      return piped();
+    }
+    let s;
+    try {
+      s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
+    } finally {
+      fs.closeSync(out);
+      fs.closeSync(err);
+    }
+    const bytes = readBytes(outF);
+    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+function runSync(cmd, args, o = {}) {
+  const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
+  let r = syncOnce(cmd, args, o, 1);
+  if (!valid(r) && r.status === 0 && !r.error) {
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+`);
+    r = syncOnce(cmd, args, o, 2);
+  }
+  if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
+  return r;
+}
 var pause = new Int32Array(new SharedArrayBuffer(4));
 
 // design-to-code/cli-args.ts
@@ -362,7 +434,7 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -448,7 +520,7 @@ ${usage}`;
 }
 
 // design-to-code/read-json.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
@@ -460,7 +532,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs.readFileSync(file);
+    buf = fs2.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -481,22 +553,22 @@ function readJson(file, guard) {
 }
 function readRegularFile(file) {
   try {
-    if (!fs.statSync(file).isFile()) return null;
+    if (!fs2.statSync(file).isFile()) return null;
   } catch {
     return null;
   }
   let fd;
   try {
-    fd = fs.openSync(file, "r");
+    fd = fs2.openSync(file, "r");
   } catch {
     return null;
   }
   try {
-    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null;
+    return fs2.fstatSync(fd).isFile() ? fs2.readFileSync(fd) : null;
   } catch {
     return null;
   } finally {
-    fs.closeSync(fd);
+    fs2.closeSync(fd);
   }
 }
 function readJsonOrNull(file, guard) {
@@ -534,7 +606,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path14, message) => errors.push({ path: path14, message });
+  const err = (path15, message) => errors.push({ path: path15, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -933,52 +1005,56 @@ var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, S
 var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 
 // bridge/src/project-layout.ts
-import fs2 from "node:fs";
-import path2 from "node:path";
+import fs3 from "node:fs";
+import path3 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
 var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path2.join(DESIGN_DIR, ".sync");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path2.sep).join("/");
+var slashed = (p) => p.split(path3.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 function listPlans(dir) {
-  if (!fs2.existsSync(dir)) return [];
-  return fs2.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  if (!fs3.existsSync(dir)) return [];
+  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
 }
 
 // design-to-code/cross-check.ts
 if (false) runCli3(main, { name: "cross-check" });
 
 // design-to-code/node-artefacts.ts
+import fs8 from "node:fs";
+import path8 from "node:path";
+
+// design-to-code/verify-sets.ts
 import fs7 from "node:fs";
 import path7 from "node:path";
 
-// design-to-code/verify-sets.ts
-import fs6 from "node:fs";
-import path6 from "node:path";
-
 // design-to-code/verify-status.ts
-import path5 from "node:path";
-import fs5 from "node:fs";
+import path6 from "node:path";
+import fs6 from "node:fs";
 
 // design-to-code/run-cache.ts
-import fs4 from "node:fs";
-import os2 from "node:os";
-import path4 from "node:path";
+import fs5 from "node:fs";
+import os3 from "node:os";
+import path5 from "node:path";
+
+// bridge/src/hash.ts
+import crypto from "node:crypto";
+var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/file-lock.ts
 import crypto2 from "node:crypto";
-import fs3 from "node:fs";
-import os from "node:os";
-import path3 from "node:path";
+import fs4 from "node:fs";
+import os2 from "node:os";
+import path4 from "node:path";
 var STALE_MS = 3e4;
 var WAIT_MS = 1e4;
 var POLL_MS = 25;
@@ -1005,7 +1081,7 @@ var LockLost = class extends LockBusy {
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs3.readlinkSync("/proc/self/ns/pid");
+    return fs4.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -1029,15 +1105,15 @@ function pidAlive(pid) {
     return errCode(e) === "EPERM";
   }
 }
-var sameMachine = (h) => h.host === os.hostname() && h.ns === PID_NS;
-var thisProcess = () => ({ pid: process.pid, host: os.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
+var sameMachine = (h) => h.host === os2.hostname() && h.ns === PID_NS;
+var thisProcess = () => ({ pid: process.pid, host: os2.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
 function processState(p) {
   if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
   return pidAlive(p.pid) ? "alive" : "gone";
 }
 var read = (file) => {
   try {
-    return fs3.readFileSync(file, "utf8");
+    return fs4.readFileSync(file, "utf8");
   } catch {
     return null;
   }
@@ -1045,13 +1121,13 @@ var read = (file) => {
 var ageOf = (t) => Math.abs(Date.now() - t);
 var describeHolder = (text) => {
   const h = text === null ? null : holderOf(text);
-  return h ? `process ${h.pid}${h.host !== os.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
+  return h ? `process ${h.pid}${h.host !== os2.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
 };
 function isStale(file, text, staleMs) {
   const h = holderOf(text);
   if (h === null) {
     try {
-      return ageOf(fs3.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+      return ageOf(fs4.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
     } catch {
       return false;
     }
@@ -1062,16 +1138,16 @@ function isStale(file, text, staleMs) {
 }
 var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
 function claim(file, token) {
-  const fd = fs3.openSync(file, "wx");
+  const fd = fs4.openSync(file, "wx");
   const mine = stampOf(token);
   try {
-    fs3.writeSync(fd, mine);
+    fs4.writeSync(fd, mine);
   } catch (e) {
-    fs3.closeSync(fd);
-    fs3.rmSync(file, { force: true });
+    fs4.closeSync(fd);
+    fs4.rmSync(file, { force: true });
     throw e;
   }
-  fs3.closeSync(fd);
+  fs4.closeSync(fd);
   return read(file) === mine ? mine : null;
 }
 function breakStale(lockFile, seen, staleMs = STALE_MS) {
@@ -1083,7 +1159,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (errCode(e) !== "EEXIST") throw e;
     const g = read(guard);
     if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
-      fs3.unlinkSync(guard);
+      fs4.unlinkSync(guard);
     } catch {
     }
     return false;
@@ -1093,7 +1169,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
     if (read(guard) !== mine) return false;
     try {
-      fs3.unlinkSync(lockFile);
+      fs4.unlinkSync(lockFile);
     } catch (e) {
       if (errCode(e) === "ENOENT") return false;
       throw e;
@@ -1101,7 +1177,7 @@ function breakStale(lockFile, seen, staleMs = STALE_MS) {
     return true;
   } finally {
     if (read(guard) === mine) try {
-      fs3.rmSync(guard, { force: true });
+      fs4.rmSync(guard, { force: true });
     } catch {
     }
   }
@@ -1114,7 +1190,7 @@ var sleepSync = (ms) => {
 function acquireFileLock(lockFile, opts = {}) {
   const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
   const token = crypto2.randomBytes(8).toString("hex");
-  fs3.mkdirSync(path3.dirname(path3.resolve(lockFile)), { recursive: true });
+  fs4.mkdirSync(path4.dirname(path4.resolve(lockFile)), { recursive: true });
   const t0 = Date.now();
   let firstTransientAt = null;
   const transientYet = (e) => {
@@ -1150,7 +1226,7 @@ function acquireFileLock(lockFile, opts = {}) {
         // only our own lock: one broken as stale and taken by another holder is theirs now
         release: () => {
           if (stillMine()) try {
-            fs3.rmSync(lockFile, { force: true });
+            fs4.rmSync(lockFile, { force: true });
           } catch {
           }
         },
@@ -1175,55 +1251,55 @@ var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs4.statSync(p).isDirectory();
+    return fs5.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs4.existsSync(p);
+var exists = (p) => fs5.existsSync(p);
 function realpath(p) {
-  if (typeof fs4.realpathSync.native === "function") {
+  if (typeof fs5.realpathSync.native === "function") {
     try {
-      return fs4.realpathSync.native(p);
+      return fs5.realpathSync.native(p);
     } catch {
     }
   }
-  return fs4.realpathSync(p);
+  return fs5.realpathSync(p);
 }
 function canonical(p) {
-  const abs = path4.resolve(p);
+  const abs = path5.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path4.dirname(abs);
-    return parent === abs ? abs : path4.join(canonical(parent), path4.basename(abs));
+    const parent = path5.dirname(abs);
+    return parent === abs ? abs : path5.join(canonical(parent), path5.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path4.join(d, ".pnp.cjs")) || exists(path4.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path5.join(d, ".pnp.cjs")) || exists(path5.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path4.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path4.join(d, "package.json"), anyJson);
+  if (exists(path5.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path5.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path4.dirname(d)) {
-    if (exists(path4.join(d, "package.json"))) {
+  for (let d = dir; ; d = path5.dirname(d)) {
+    if (exists(path5.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) return null;
+    if (exists(path5.join(d, ".git")) || path5.dirname(d) === d) return null;
   }
-  if (isDir(path4.join(P, "node_modules"))) return P;
+  if (isDir(path5.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path4.dirname(d)) {
+  for (let d = P; ; d = path5.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path4.join(d, ".git")) || path4.dirname(d) === d) break;
+    if (exists(path5.join(d, ".git")) || path5.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path4.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path5.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
@@ -1231,22 +1307,22 @@ function runCacheOf(verifyDir) {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path4.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path4.relative(root, v).split(path4.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path4.sep).join("/") ? cache : path4.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path5.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path5.relative(root, v).split(path5.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path5.sep).join("/") ? cache : path5.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path4.join(os2.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path5.join(os3.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 function planLockOf(planFile) {
   const abs = canonical(planFile);
-  const root = installRootOf(path4.dirname(abs));
+  const root = installRootOf(path5.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
-  const rel = path4.relative(root, abs).split(path4.sep).join("/");
-  const dir = path4.join(root, "node_modules", ".cache", CACHE_NAME);
-  return { lockFile: path4.join(dir, "plan-locks", `${path4.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
+  const rel = path5.relative(root, abs).split(path5.sep).join("/");
+  const dir = path5.join(root, "node_modules", ".cache", CACHE_NAME);
+  return { lockFile: path5.join(dir, "plan-locks", `${path5.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
 }
 var planLockFile = (planFile) => planLockOf(planFile).lockFile;
 var PLAN_LOCK_UNWRITABLE = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS"]);
@@ -1282,7 +1358,7 @@ function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path5.join(runCacheDir(path5.dirname(base)), path5.basename(base) + ".status.json");
+var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -1295,19 +1371,19 @@ function readStatusFile(file) {
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
 function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path5.basename(base)), id = shellArg(open.runId), dir = shellArg(path5.resolve(path5.dirname(base)));
+  const vs = scriptCmd("verify-screen"), S = shellArg(path6.basename(base)), id = shellArg(open.runId), dir = shellArg(path6.resolve(path6.dirname(base)));
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 function openRunSets(verifyDir) {
   const SUFFIX = ".status.json";
   let files;
   try {
-    files = fs5.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+    files = fs6.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
   return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path5.join(verifyDir, name)));
+    const st = readStatusFile(liveStatusFile(path6.join(verifyDir, name)));
     return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
   }).sort();
 }
@@ -1332,13 +1408,13 @@ function nodeIdFromSetName(name) {
   const dot = name.indexOf(".");
   return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
 }
-var TRAILING_SEP = path6.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var TRAILING_SEP = path7.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
 var RETIRED = ".expected.json.retired";
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs6.readdirSync(verifyDir);
+    files = fs7.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -1354,25 +1430,25 @@ function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
-  const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path6.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const str2 = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(path7.join(verifyDir, name + ".expected.json"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path6.join(verifyDir, name + ".report.json"), isJsonObject);
-  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+  const rep = readJsonOrNull(path7.join(verifyDir, name + ".report.json"), isJsonObject);
+  return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(rep && rep.nodeId), reportScreen: str2(rep && rep.screen) };
 }
 function stemHolders(verifyDir, stems, open) {
   const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
   return stems.map((stem) => {
     const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
-    const st = set !== void 0 ? readStatusFile(liveStatusFile(path6.join(verifyDir, set))) : null;
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path7.join(verifyDir, set))) : null;
     if (set === void 0 || st === null || st === "v1") return stem;
-    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path6.join(verifyDir, set), st).endIt})`;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path7.join(verifyDir, set), st).endIt})`;
   }).join(", ");
 }
 
 // design-to-code/node-artefacts.ts
 function planNode(plan, file) {
-  return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path7.basename(file).replace(/\.json$/i, "")) : null);
+  return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path8.basename(file).replace(/\.json$/i, "")) : null);
 }
 function readPlan(file) {
   const r = readJson(file, anyJson);
@@ -1384,13 +1460,13 @@ var isPlanFile = (p) => "plan" in p;
 var article = (kind) => kind === "audit report" ? "an" : "a";
 var several = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} has ${holders.length} ${kind}s (${shown}) \u2014 one node, one ${kind}: keep one`, holders, reason: "several" });
 var already = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} already has ${article(kind)} ${kind} (${shown}) \u2014 one node, one ${kind}`, holders, reason: "held" });
-var slash = (p) => p.split(path7.sep).join("/");
+var slash = (p) => p.split(path8.sep).join("/");
 function nodeArtefacts(root, dirs = {}) {
   const planDir = dirs.planDir ?? PLAN_DIR;
   const verifyDir = dirs.verifyDir ?? VERIFY_DIR;
   const auditDir = dirs.auditDir ?? AUDIT_DIR;
-  const abs = (p) => path7.resolve(root, p);
-  const spell = (dir, name) => path7.isAbsolute(dir) ? path7.join(dir, name) : slash(path7.join(dir, name));
+  const abs = (p) => path8.resolve(root, p);
+  const spell = (dir, name) => path8.isAbsolute(dir) ? path8.join(dir, name) : slash(path8.join(dir, name));
   const verifyAbs = abs(verifyDir);
   const open = () => dirs.openSets ?? openRunSets(verifyAbs);
   function plans() {
@@ -1430,12 +1506,12 @@ function nodeArtefacts(root, dirs = {}) {
   function auditReports() {
     let files;
     try {
-      files = fs7.readdirSync(abs(auditDir)).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")).sort();
+      files = fs8.readdirSync(abs(auditDir)).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")).sort();
     } catch {
       return [];
     }
     return files.map((f) => {
-      const doc = readJsonOrNull(path7.join(abs(auditDir), f), isJsonObject);
+      const doc = readJsonOrNull(path8.join(abs(auditDir), f), isJsonObject);
       const ids = doc && Array.isArray(doc.nodeIds) ? doc.nodeIds.filter((x) => typeof x === "string") : [];
       return { f, stem: f.slice(0, -5), nodeIds: ids.length ? ids : null };
     });
@@ -1444,10 +1520,10 @@ function nodeArtefacts(root, dirs = {}) {
   const auditNamesNode = (r) => r.nodeIds !== null || nodeIdFromStem(r.stem) !== null;
   const auditsOf = (nodeId) => auditReports().filter((r) => auditNodeIs(r, nodeId)).map((r) => spell(auditDir, r.f));
   function auditFor(nodeId, hints = {}) {
-    if (!fs7.existsSync(abs(auditDir))) return null;
+    if (!fs8.existsSync(abs(auditDir))) return null;
     if (hints.screenFile) {
-      const own = path7.basename(hints.screenFile, ".json") + ".json";
-      if (fs7.existsSync(path7.join(abs(auditDir), own))) return spell(auditDir, own);
+      const own = path8.basename(hints.screenFile, ".json") + ".json";
+      if (fs8.existsSync(path8.join(abs(auditDir), own))) return spell(auditDir, own);
     }
     if (nodeId) {
       const held = auditsOf(nodeId)[0];
@@ -1497,13 +1573,13 @@ function nodeArtefacts(root, dirs = {}) {
     const s = claimSet(nodeId, { layerName: o.layerName });
     if (!s.ok) return s;
     const name = spell(planDir, s.name + ".json");
-    if (target !== void 0 && path7.basename(target) !== path7.basename(name)) return { ok: false, why: `a new plan of node ${nodeId} is named by its node: ${name}, not ${path7.basename(target)}`, holders: [], reason: "misnamed" };
+    if (target !== void 0 && path8.basename(target) !== path8.basename(name)) return { ok: false, why: `a new plan of node ${nodeId} is named by its node: ${name}, not ${path8.basename(target)}`, holders: [], reason: "misnamed" };
     return { ok: true, name, existing: false, legacy: [] };
   }
   function claimAudit(nodeId, target) {
     const t = abs(target);
-    const own = path7.basename(t, ".json");
-    const held = auditsOf(nodeId).filter((f) => abs(f) !== t && !own.startsWith(path7.basename(f, ".json") + "."));
+    const own = path8.basename(t, ".json");
+    const held = auditsOf(nodeId).filter((f) => abs(f) !== t && !own.startsWith(path8.basename(f, ".json") + "."));
     return held.length ? already("audit report", nodeId, held) : { ok: true, name: target, existing: false, legacy: [] };
   }
   function claim2(kind, nodeId, o = {}) {
@@ -1542,8 +1618,8 @@ function blockerIds(auditDoc) {
 }
 function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-  const str = (v) => typeof v === "string" && v ? v : void 0;
-  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
+  const str2 = (v) => typeof v === "string" && v ? v : void 0;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str2(f.code)), ...ifDefined("nodeId", str2(f.nodeId)), ...ifDefined("severity", str2(f.severity)), ...ifDefined("id", str2(f.id)) }));
 }
 if (false) runCli4(main, { name: "audit" });
 
@@ -1551,21 +1627,18 @@ if (false) runCli4(main, { name: "audit" });
 function auditGateStatus(cwd, nodeId, screenFile, screenName) {
   const rel = nodeArtefacts(cwd).auditFor(nodeId, { screenFile, screenName });
   if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
-  const r = readJson(path8.join(cwd, rel), isAuditReport);
+  const r = readJson(path9.join(cwd, rel), isAuditReport);
   if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
   return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
 }
 
-// design-to-code/plan-record.ts
-import path11 from "node:path";
-
 // bridge/src/json-file.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto3 from "node:crypto";
-import fs8 from "node:fs";
-import path9 from "node:path";
+import fs9 from "node:fs";
+import path10 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
 var RENAME_RETRY_MS = 2e3;
 var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -1574,14 +1647,14 @@ function renameOver(from, to) {
   const t0 = Date.now();
   for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
     try {
-      fs8.renameSync(from, to);
+      fs9.renameSync(from, to);
       return;
     } catch (e) {
       const code = errCode(e);
       if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
       let dir = false;
       try {
-        dir = fs8.statSync(to).isDirectory();
+        dir = fs9.statSync(to).isDirectory();
       } catch {
       }
       if (dir) throw e;
@@ -1592,36 +1665,36 @@ function renameOver(from, to) {
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs8.openSync(dir, "r");
+    const fd = fs9.openSync(dir, "r");
     try {
-      fs8.fsyncSync(fd);
+      fs9.fsyncSync(fd);
     } finally {
-      fs8.closeSync(fd);
+      fs9.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
-  const dir = path9.dirname(path9.resolve(file));
-  fs8.mkdirSync(dir, { recursive: true });
+  const dir = path10.dirname(path10.resolve(file));
+  fs9.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs8.openSync(tmp, "wx", opts.mode);
+      const fd = fs9.openSync(tmp, "wx", opts.mode);
       try {
-        fs8.writeFileSync(fd, data);
-        fs8.fsyncSync(fd);
+        fs9.writeFileSync(fd, data);
+        fs9.fsyncSync(fd);
       } finally {
-        fs8.closeSync(fd);
+        fs9.closeSync(fd);
       }
     } else {
-      fs8.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs9.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs8.chmodSync(tmp, opts.mode);
+    if (opts.mode !== void 0) fs9.chmodSync(tmp, opts.mode);
     renameOver(tmp, file);
   } catch (e) {
     try {
-      fs8.rmSync(tmp, { force: true });
+      fs9.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -1641,7 +1714,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs9.readFileSync(file, "utf8");
+    return fs10.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -1673,9 +1746,13 @@ function updateJsonLike(file, fn, opts = {}) {
   }
 }
 
+// design-to-code/report-freshness.ts
+import fs12 from "node:fs";
+import path12 from "node:path";
+
 // design-to-code/content-hash.ts
-import fs10 from "node:fs";
-import path10 from "node:path";
+import fs11 from "node:fs";
+import path11 from "node:path";
 function stripPullTimes(v, parentKey) {
   if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
@@ -1695,7 +1772,7 @@ function fileHashes(files, cwd, cached) {
   const out = {};
   for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256Hex(cached?.(rel) ?? fs10.readFileSync(path10.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256Hex(cached?.(rel) ?? fs11.readFileSync(path11.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
@@ -1705,7 +1782,7 @@ function fileHashes(files, cwd, cached) {
 var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
 var isFile = (abs) => {
   try {
-    return fs10.statSync(abs).isFile();
+    return fs11.statSync(abs).isFile();
   } catch {
     return false;
   }
@@ -1714,13 +1791,13 @@ function mappedModulePath(raw, cwd) {
   if (typeof raw !== "string") return null;
   const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
   if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
-  const rel = path10.posix.normalize(s).replace(/\/+$/, "");
+  const rel = path11.posix.normalize(s).replace(/\/+$/, "");
   if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
-  const dotted = /\.[A-Za-z0-9]+$/.test(path10.posix.basename(rel));
+  const dotted = /\.[A-Za-z0-9]+$/.test(path11.posix.basename(rel));
   if (cwd === void 0) return dotted ? rel : null;
-  if (dotted && isFile(path10.join(cwd, rel))) return rel;
+  if (dotted && isFile(path11.join(cwd, rel))) return rel;
   const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
-  return tries.find((t) => isFile(path10.join(cwd, t))) ?? (dotted ? rel : null);
+  return tries.find((t) => isFile(path11.join(cwd, t))) ?? (dotted ? rel : null);
 }
 function mapModules(plan) {
   const out = [];
@@ -1734,7 +1811,7 @@ function mapModules(plan) {
 }
 function planCodeFiles(plan, cwd) {
   const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
-  const seen = new Set(listed.map((f) => path10.posix.normalize(f.trim().split("\\").join("/"))));
+  const seen = new Set(listed.map((f) => path11.posix.normalize(f.trim().split("\\").join("/"))));
   const extra = /* @__PURE__ */ new Set();
   for (const m of mapModules(plan)) {
     const rel = mappedModulePath(m, cwd);
@@ -1747,7 +1824,7 @@ function planCodeSkipped(plan, cwd) {
   for (const m of mapModules(plan)) {
     if (typeof m !== "string" || !m.trim()) continue;
     const rel = mappedModulePath(m, cwd);
-    if (rel === null || !isFile(path10.join(cwd, rel))) out.add(m.trim());
+    if (rel === null || !isFile(path11.join(cwd, rel))) out.add(m.trim());
   }
   return [...out].sort();
 }
@@ -1794,6 +1871,131 @@ function waiversHash(plan) {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
   return sha256Hex(canonical2({ descopes, waivers }));
+}
+
+// design-to-code/report-freshness.ts
+var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
+var systemGit = {
+  head(cwd) {
+    try {
+      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
+      const h = r.status === 0 && r.stdout.trim();
+      return h && OBJECT_ID_LINE.test(h) ? h : null;
+    } catch {
+      return null;
+    }
+  },
+  dirty(cwd) {
+    try {
+      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
+      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
+    } catch {
+      return null;
+    }
+  }
+};
+var str = (x) => typeof x === "string" && x ? x : null;
+function reportInputs(report) {
+  const i = isJsonObject(report.inputs) ? report.inputs : {};
+  const code = isJsonObject(i.code) && isJsonObject(i.code.files) ? i.code : null;
+  const files = {};
+  if (code && isJsonObject(code.files)) for (const [k, v] of Object.entries(code.files)) files[k] = typeof v === "string" ? v : null;
+  return {
+    exportContentSha256: str(i.exportContentSha256),
+    expectationSha256: str(i.expectationSha256),
+    code: code ? { ...typeof code.plan === "string" ? { plan: code.plan } : {}, files, ...code.gitHead === null || typeof code.gitHead === "string" ? { gitHead: code.gitHead } : {} } : null,
+    waiversSha256: isJsonObject(i.waivers) ? str(i.waivers.sha256) : null
+  };
+}
+var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
+function staleText(rel, r) {
+  switch (r.kind) {
+    case "no-export-sha":
+      return `${rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`;
+    case "no-export":
+      return `cannot find this plan's screen export to compare with ${rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`;
+    case "export-changed":
+      return `the design changed since ${rel} was computed (export content sha256 ${r.was.slice(0, 12)}\u2026 \u2192 ${r.now.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`;
+    case "expectation-changed":
+      return `${rel} was computed against a different ${r.expectation} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`;
+    case "no-code":
+      return `${rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`;
+    case "code-changed":
+      return `${rel} measured different code \u2014 changed since: ${r.files.slice(0, 6).join(", ")}${r.files.length > 6 ? `, +${r.files.length - 6} more` : ""} \u2014 re-run --compare`;
+    case "waivers-changed":
+      return `${rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`;
+  }
+}
+function recordedReport(plan, cwd) {
+  const v = plan.verification;
+  const rec = isJsonObject(v) ? v.recorded : void 0;
+  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return { kind: "none" };
+  return reportNamed(rec.report, rec.reportSha256, cwd);
+}
+function reportNamed(report, sha, cwd) {
+  if (!fs12.existsSync(path12.resolve(cwd, report))) return { kind: "missing", report };
+  const bytes = readRegularFile(path12.resolve(cwd, report));
+  if (!bytes) return { kind: "unreadable", report };
+  if (typeof sha !== "string" || sha256Hex(bytes) !== sha) return { kind: "rewritten", report };
+  let parsed = null;
+  try {
+    const x = JSON.parse(bytes.toString("utf8"));
+    parsed = x;
+  } catch {
+  }
+  return isVerifyReport(parsed) ? { kind: "names", report, doc: parsed } : { kind: "not-a-report", report };
+}
+function reportRecordNames(report, reportSha256, cwd) {
+  if (typeof report !== "string" || !report) return null;
+  const r = reportNamed(report, reportSha256, cwd);
+  return r.kind === "names" ? r.doc : null;
+}
+function reportFreshness(root, o = {}) {
+  const git = o.git ?? systemGit;
+  const NO_WAIVERS = waiversHash(null);
+  const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
+  const waiversChanged = (inputs, plan) => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
+  function expectationChanged(rel, inputs) {
+    const want = inputs.expectationSha256;
+    if (!want) return null;
+    const expRel = rel.replace(/\.report\.json$/, ".expected.json");
+    try {
+      return sha256Hex(fs12.readFileSync(path12.resolve(root, expRel))) !== want ? expRel : null;
+    } catch {
+      return null;
+    }
+  }
+  return {
+    stamp(p) {
+      return {
+        ...p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {},
+        waivers: { plan: p.file, sha256: waiversHash(p.plan) }
+      };
+    },
+    judge(rel, inputs, now) {
+      const out = [];
+      const exp = expectationChanged(rel, inputs);
+      if (!inputs.exportContentSha256) {
+        if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
+        out.push({ kind: "no-export-sha" });
+        return out;
+      }
+      const nowSha = now.exportDoc ? exportContentSha256(now.exportDoc) : null;
+      if (nowSha === null) return [{ kind: "no-export" }];
+      if (inputs.exportContentSha256 !== nowSha) out.push({ kind: "export-changed", was: inputs.exportContentSha256, now: nowSha });
+      if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
+      const measured = inputs.code ? inputs.code.files : null;
+      if (!measured) out.push({ kind: "no-code" });
+      else {
+        const h = codeNow(now.plan);
+        const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
+        if (differ.length) out.push({ kind: "code-changed", files: differ });
+      }
+      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      return out;
+    },
+    waiversChanged
+  };
 }
 
 // design-to-code/plan-record.ts
@@ -1847,17 +2049,17 @@ function verificationFacts(v) {
   }
   const r = rec;
   const has = (k) => r[k] !== void 0;
-  const str = (x) => typeof x === "string" ? x : void 0;
+  const str2 = (x) => typeof x === "string" ? x : void 0;
   const num = (x) => typeof x === "number" ? x : void 0;
   const a = r.a11y;
-  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str(a.report)) } : void 0;
+  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str2(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str2(a.report)) } : void 0;
   return {
     at: "verification.recorded",
     a11yAt: has("a11y") ? "verification.recorded" : "verification",
     record: isVerificationRecord(r) ? r : null,
-    mode: has("mode") ? str(r.mode) : top.mode,
-    reason: has("reason") ? str(r.reason) : top.reason,
-    renderer: has("renderer") ? str(r.renderer) : top.renderer,
+    mode: has("mode") ? str2(r.mode) : top.mode,
+    reason: has("reason") ? str2(r.reason) : top.reason,
+    renderer: has("renderer") ? str2(r.renderer) : top.renderer,
     artifacts: has("artifacts") ? r.artifacts : top.artifacts,
     deltas: has("deltas") ? r.deltas : top.deltas,
     a11y: has("a11y") ? a11y : top.a11y
@@ -1865,18 +2067,6 @@ function verificationFacts(v) {
 }
 var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
-function reportRecordNames(report, reportSha256, cwd) {
-  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
-  const bytes = readRegularFile(path11.resolve(cwd, report));
-  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
-  let parsed = null;
-  try {
-    const x = JSON.parse(bytes.toString("utf8"));
-    parsed = x;
-  } catch {
-  }
-  return isVerifyReport(parsed) ? parsed : null;
-}
 function recordedV1Edits(rec, cwd) {
   const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
   if (!report || typeof rec.report !== "string") return [];
@@ -2000,25 +2190,25 @@ function visibility(doc) {
 if (false) runCli5(main, { name: "plan-skeleton" });
 
 // design-to-code/verify-locate.ts
-import fs11 from "node:fs";
-import path12 from "node:path";
+import fs13 from "node:fs";
+import path13 from "node:path";
 function exportDirOf(cwd) {
-  const e = path12.join(cwd, EXPORT_DIR);
-  return fs11.existsSync(path12.join(e, "pages")) ? e : path12.join(cwd, DESIGN_DIR);
+  const e = path13.join(cwd, EXPORT_DIR);
+  return fs13.existsSync(path13.join(e, "pages")) ? e : path13.join(cwd, DESIGN_DIR);
 }
 function indexRows(exportDir) {
-  const root = readJsonOrNull(path12.join(exportDir, "pages", "index.json"), isPagesRootIndex);
+  const root = readJsonOrNull(path13.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = readJsonOrNull(path12.join(exportDir, pd.index || path12.join("pages", pd.dir || "", "index.json")), isPageIndex);
+    const idx = readJsonOrNull(path13.join(exportDir, pd.index || path13.join("pages", pd.dir || "", "index.json")), isPageIndex);
     if (idx) rows.push(...idx.layers);
   }
   return rows;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
-var sameFile = (a, b) => path12.resolve(a) === path12.resolve(b) || canonical(a) === canonical(b);
+var sameFile = (a, b) => path13.resolve(a) === path13.resolve(b) || canonical(a) === canonical(b);
 function sourceOf(doc) {
   const exp = screenExportOf(doc);
   const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
@@ -2040,7 +2230,7 @@ function locateExport(plan, planFile, cwd) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path12.resolve(cwd, rel), path12.resolve(exportDir, rel)]) {
+    for (const f of [path13.resolve(cwd, rel), path13.resolve(exportDir, rel)]) {
       const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
@@ -2095,60 +2285,47 @@ function behaviourRef(x) {
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan, planFile, cwd, exp) {
-  const dir = path12.join(cwd, VERIFY_DIR);
-  if (!fs11.existsSync(dir)) return [];
+  const dir = path13.join(cwd, VERIFY_DIR);
+  if (!fs13.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
-    plan.file ? path12.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path12.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path12.basename(planFile, ".json") : null,
+    plan.file ? path13.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path13.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path13.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
   const nodeId = planNode(plan, planFile);
   const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs11.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
-    const abs = path12.join(dir, f);
+  for (const f of fs13.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+    const abs = path13.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
-    const expFile = path12.join(dir, stem + ".expected.json");
-    if (!fs11.existsSync(expFile) && fs11.existsSync(expFile + ".retired")) continue;
+    const expFile = path13.join(dir, stem + ".expected.json");
+    if (!fs13.existsSync(expFile) && fs13.existsSync(expFile + ".retired")) continue;
     if (stems.has(stem)) by = "name";
     else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs11.statSync(abs).mtimeMs;
+      mtimeMs = fs13.statSync(abs).mtimeMs;
     } catch {
     }
-    const want = r.inputs && r.inputs.expectationSha256;
-    let expectationChanged = false;
-    if (want && fs11.existsSync(expFile)) {
-      try {
-        expectationChanged = sha256Hex(fs11.readFileSync(expFile)) !== want;
-      } catch {
-      }
-    }
     out.push({
-      rel: path12.relative(cwd, abs).split(path12.sep).join("/"),
+      rel: path13.relative(cwd, abs).split(path13.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
       headline: r.headline || null,
       why: r.why || [],
       deltas: r.deltas || null,
-      exportedAt: r.exportedAt || null,
       measuredAt: r.measuredAt || null,
       mtimeMs,
-      exportContentSha256: r.inputs && r.inputs.exportContentSha256 || null,
-      code: r.inputs && r.inputs.code || null,
-      expectationChanged,
-      expectationRel: expectationChanged ? path12.relative(cwd, expFile).split(path12.sep).join("/") : null,
-      waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null,
+      inputs: reportInputs(r),
       behaviour: behaviourRef(r.behaviour),
       shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
     });
@@ -2157,7 +2334,7 @@ function locateReports(plan, planFile, cwd, exp) {
 }
 
 // design-to-code/hook-input.ts
-import fs12 from "node:fs";
+import fs14 from "node:fs";
 function parseHookPayload(raw) {
   if (!raw.trim()) return {};
   try {
@@ -2171,13 +2348,13 @@ function readHookInput(opts) {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs12.fstatSync(0);
+    st = fs14.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parseHookPayload(fs12.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parseHookPayload(fs14.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -2353,18 +2530,18 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs13.statSync(file).mtimeMs > cutoff;
+    return now - fs15.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function findPlans(cwd) {
-  return nodeArtefacts(cwd, { planDir: path13.join(cwd, PLAN_DIR) }).plans();
+  return nodeArtefacts(cwd, { planDir: path14.join(cwd, PLAN_DIR) }).plans();
 }
 function rootOfPlan(file, fallback) {
-  const abs = path13.resolve(file);
-  const dir = path13.dirname(abs);
-  if (dir.endsWith(path13.sep + PLAN_DIR)) return path13.dirname(path13.dirname(dir));
+  const abs = path14.resolve(file);
+  const dir = path14.dirname(abs);
+  if (dir.endsWith(path14.sep + PLAN_DIR)) return path14.dirname(path14.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
@@ -2583,11 +2760,11 @@ function moduleImported(mapModule, byFile, cwd) {
     }
     return true;
   };
-  const wantAbs = moduleSegments(path13.relative(cwd, path13.resolve(cwd, String(mapModule))));
+  const wantAbs = moduleSegments(path14.relative(cwd, path14.resolve(cwd, String(mapModule))));
   for (const f of byFile) {
     for (const spec of cachedImports(f.text)) {
       if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path13.relative(cwd, path13.resolve(cwd, path13.dirname(f.rel), spec)));
+        const resolved = moduleSegments(path14.relative(cwd, path14.resolve(cwd, path14.dirname(f.rel), spec)));
         if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
       } else if (suffixMatch(moduleSegments(spec))) return true;
     }
@@ -2649,7 +2826,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path13.join(cwd, MAP_FILE), path13.join(cwd, LEGACY_MAP_FILE)]) {
+  for (const f of [path14.join(cwd, MAP_FILE), path14.join(cwd, LEGACY_MAP_FILE)]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -2676,7 +2853,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs13.existsSync(path13.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs15.existsSync(path14.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -2699,15 +2876,11 @@ function verificationWarnings(plan) {
   return out;
 }
 function recordedReportWarnings(plan, cwd) {
-  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  if (!fs13.existsSync(path13.resolve(cwd, rec.report))) {
-    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
+  const r = recordedReport(plan, cwd);
+  if (r.kind === "missing") {
+    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
   }
-  const bytes = readRegularFile(path13.resolve(cwd, rec.report));
-  if (!bytes) return [];
-  const now = sha256Hex(bytes);
-  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
+  return r.kind === "rewritten" ? [`plan.verification records an older run of ${r.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`] : [];
 }
 var SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
 var HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"];
@@ -2728,17 +2901,17 @@ var newestOwn = (reports) => {
 function a11yReportOf(named, reports, ctx = {}) {
   if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
   const json = (x) => x.replace(/\.report\.md$/, ".report.json");
-  const slash2 = (x) => x.split(path13.sep).join("/").split("\\").join("/");
+  const slash2 = (x) => x.split(path14.sep).join("/").split("\\").join("/");
   const want = slash2(named.trim());
   const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== void 0) {
-    rels.add(json(slash2(path13.relative(ctx.cwd, path13.resolve(ctx.cwd, named.trim())))));
-    if (ctx.planFile !== void 0) rels.add(json(slash2(path13.relative(ctx.cwd, path13.resolve(path13.dirname(path13.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+    rels.add(json(slash2(path14.relative(ctx.cwd, path14.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash2(path14.relative(ctx.cwd, path14.resolve(path14.dirname(path14.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
   }
   const exact = reports.find((r) => rels.has(r.rel));
   if (exact) return { ref: exact };
-  const base = json(path13.posix.basename(want));
-  const byBase = reports.filter((r) => path13.posix.basename(r.rel) === base);
+  const base = json(path14.posix.basename(want));
+  const byBase = reports.filter((r) => path14.posix.basename(r.rel) === base);
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
   return { ref: null, missing: want };
 }
@@ -2894,10 +3067,10 @@ var isAcknowledged = (row) => typeof row.acknowledged === "string" && !!row.ackn
 function readFiles(rels, cwd, bytes) {
   const out = [];
   for (const rel of rels) {
-    const abs = path13.join(cwd, rel);
+    const abs = path14.join(cwd, rel);
     try {
-      if (!fs13.statSync(abs).isFile()) continue;
-      const buf = fs13.readFileSync(abs);
+      if (!fs15.statSync(abs).isFile()) continue;
+      const buf = fs15.readFileSync(abs);
       out.push({ rel, text: buf.toString("utf8") });
       bytes?.set(rel, buf);
     } catch {
@@ -2913,9 +3086,9 @@ function buildGraph(cwd, extra = [], plans) {
   const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd, bytes);
   const byRel = new Map(files.map((f) => [f.rel, f]));
   const rewritten = /* @__PURE__ */ new Set();
-  const cached = (rel) => rewritten.has(path13.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
+  const cached = (rel) => rewritten.has(path14.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
   const rewrote = (file) => {
-    rewritten.add(path13.resolve(cwd, file));
+    rewritten.add(path14.resolve(cwd, file));
   };
   const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
   const lower = (segs) => segs.map((x) => x.toLowerCase()).join("/");
@@ -2929,7 +3102,7 @@ function buildGraph(cwd, extra = [], plans) {
   for (const f of scripts) {
     const found = /* @__PURE__ */ new Set();
     for (const spec of cachedImports(f.text)) {
-      const segs = spec.startsWith(".") ? moduleSegments(path13.relative(cwd, path13.resolve(cwd, path13.dirname(f.rel), spec))) : moduleSegments(spec);
+      const segs = spec.startsWith(".") ? moduleSegments(path14.relative(cwd, path14.resolve(cwd, path14.dirname(f.rel), spec))) : moduleSegments(spec);
       if (!segs.length) continue;
       for (const r of bySuffix.get(lower(segs)) || []) found.add(r);
       for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r);
@@ -2942,7 +3115,7 @@ function buildGraph(cwd, extra = [], plans) {
   const scan = () => {
     if (scanned) return scanned;
     const walked = projectScan(cwd);
-    const dirs = /* @__PURE__ */ new Set([path13.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    const dirs = /* @__PURE__ */ new Set([path14.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
     return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
   };
   return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
@@ -2967,7 +3140,7 @@ function profileOf(plan, cwd) {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path13.join(cwd, TARGET_FILE), isJsonObject);
+  const doc = readJsonOrNull(path14.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
@@ -3005,15 +3178,15 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
 var hasTwConfig = (dir) => {
   try {
-    return fs13.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+    return fs15.readdirSync(dir).some((n) => TW_CONFIG.test(n));
   } catch {
     return false;
   }
 };
 function packageDirOf(cwd, rel) {
-  const root = path13.resolve(cwd);
-  for (let d = path13.dirname(path13.resolve(cwd, rel)); d.startsWith(root); d = path13.dirname(d)) {
-    if (fs13.existsSync(path13.join(d, "package.json"))) return d;
+  const root = path14.resolve(cwd);
+  for (let d = path14.dirname(path14.resolve(cwd, rel)); d.startsWith(root); d = path14.dirname(d)) {
+    if (fs15.existsSync(path14.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -3024,19 +3197,19 @@ function projectScan(cwd, limit = 2e3) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs13.readdirSync(dir, { withFileTypes: true });
+      entries = fs15.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const e of entries) {
       if (css.length >= limit) return;
-      const abs = path13.join(dir, e.name);
+      const abs = path14.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) walk(abs);
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path13.relative(cwd, abs).split(path13.sep).join("/"), text: fs13.readFileSync(abs, "utf8") });
+          css.push({ rel: path14.relative(cwd, abs).split(path14.sep).join("/"), text: fs15.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -3125,7 +3298,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = plan.files || [];
-  const absent = listed.filter((f) => !fs13.existsSync(path13.join(cwd, f)));
+  const absent = listed.filter((f) => !fs15.existsSync(path14.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -3133,12 +3306,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs13.statSync(path13.join(cwd, rel)).isFile();
+      return fs15.statSync(path14.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs13.readFileSync(path13.join(cwd, rel), "utf8") });
+  const byFile = listed.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs15.readFileSync(path14.join(cwd, rel), "utf8") });
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -3232,7 +3405,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     if (exp.staleFile) {
-      const now = path13.relative(cwd, exp.file).split(path13.sep).join("/");
+      const now = path14.relative(cwd, exp.file).split(path14.sep).join("/");
       warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
     }
     const cov = anchorCoverage(plan, exp.doc);
@@ -3277,7 +3450,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp, planFile) {
-  const screenFile = plan.file ? path13.resolve(cwd, plan.file) : null;
+  const screenFile = plan.file ? path14.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || exp && exp.layerName || null;
   let g;
   try {
@@ -3312,13 +3485,10 @@ function auditGateWarnings(plan, cwd, exp, planFile) {
 function legacySetWarnings(plan, planFile, reports) {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = path13.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    const set = path14.posix.basename(r.rel).replace(/\.report\.json$/, "");
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
 }
-var NO_WAIVERS = waiversHash(null);
-var waiversChanged = (r, now) => (r.waiversSha256 || NO_WAIVERS) !== now;
-var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
 function reportVerdict(plan, cwd, exp, reports, cached) {
   const f = verificationFacts(plan.verification);
   if (!reports.length) {
@@ -3328,33 +3498,16 @@ function reportVerdict(plan, cwd, exp, reports, cached) {
   const legacy2 = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
   if (legacy2.length) return { status: "unverified", reasons: legacy2.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
-  const waiversNow = waiversHash(plan);
+  const fresh = reportFreshness(cwd, { ...cached ? { cached } : {} });
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` \u2014 ${WAIVERS_CHANGED}` : "")) };
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (fresh.waiversChanged(r.inputs, plan) ? ` \u2014 ${WAIVERS_CHANGED}` : "")) };
   const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
-  const expSha = exp && exp.doc ? exportContentSha256(exp.doc) : null;
   for (const r of reports) {
-    if (!r.exportContentSha256) {
-      if (r.expectationChanged) return {
-        status: "unverified",
-        reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`]
-      };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
-    }
-    if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`] };
-    if (r.exportContentSha256 !== expSha) return {
-      status: "unverified",
-      reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`]
-    };
-    const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
-    const now = fileHashes2(plan, cwd, cached);
-    const differ = Object.keys(now).filter((f2) => measured[f2] !== now[f2]).map((f2) => measured[f2] === void 0 ? `${f2} (not recorded)` : f2);
-    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`] };
-    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
+    const stale = fresh.judge(r.rel, r.inputs, { plan, exportDoc: exp ? exp.doc : null })[0];
+    if (stale !== void 0) return { status: "unverified", reasons: [staleText(r.rel, stale)] };
   }
-  const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
+  const head = reports.map((r) => r.inputs.code && r.inputs.code.gitHead).find(Boolean);
   const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
   const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
   return {
@@ -3434,12 +3587,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs13.openSync(file, "r");
+  const fd = fs15.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(chunk);
     let carry = [];
     for (; ; ) {
-      const n = fs13.readSync(fd, buf, 0, chunk, null);
+      const n = fs15.readSync(fd, buf, 0, chunk, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -3453,7 +3606,7 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs13.closeSync(fd);
+    fs15.closeSync(fd);
   }
 }
 var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
@@ -3510,9 +3663,9 @@ function planSkeletonOuts(cmd, powershell = false) {
 function sameFile2(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
   if (!c) return false;
-  const want = path13.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path13.posix.normalize(c).toLowerCase().endsWith("/" + path13.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path13.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  const want = path14.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path14.posix.normalize(c).toLowerCase().endsWith("/" + path14.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path14.resolve(w.base || cwd, c).replace(/\\/g, "/");
   return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
 }
 function ownPlans(open, input, all, cwd) {
@@ -3529,7 +3682,7 @@ function ownPlans(open, input, all, cwd) {
   const listers = /* @__PURE__ */ new Map();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => {
-    const planRel = path13.relative(cwd, path13.resolve(p.file));
+    const planRel = path14.relative(cwd, path14.resolve(p.file));
     if (writes.some((w) => sameFile2(w, planRel, cwd))) return true;
     return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile2(w, f, cwd)));
   };
@@ -3540,7 +3693,7 @@ function ownPlans(open, input, all, cwd) {
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
   return bad.filter((b) => {
-    const rel = path13.relative(cwd, path13.resolve(b.file));
+    const rel = path14.relative(cwd, path14.resolve(b.file));
     return scan.writes.some((w) => sameFile2(w, rel, cwd)) && !closedStatusOf(b);
   });
 }
@@ -3593,14 +3746,14 @@ var USAGE2 = [
 function checkAndRecord(p, cwd, graph) {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
-  setPhase(`checking ${path13.basename(p.file)}`);
+  setPhase(`checking ${path14.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const isComputed = (x) => COMPUTED_STORED.has(String(x.status || "").toLowerCase());
   const cleared = isComputed(plan) ? plan.status : null;
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path13.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path14.basename(p.file)}`);
   const cached = graph ? graph().cached : void 0;
   const hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -3619,7 +3772,7 @@ function checkAndRecord(p, cwd, graph) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs13.statSync(p.file);
+        const s = fs15.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -3630,7 +3783,7 @@ function checkAndRecord(p, cwd, graph) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs13.utimesSync(p.file, was.times[0], was.times[1]);
+        fs15.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
@@ -3638,7 +3791,7 @@ function checkAndRecord(p, cwd, graph) {
     const v = { ...plan.verification };
     delete v.hook;
     recorded = { ...plan, verification: v };
-    warnings.push(`the hook record was not written into ${path13.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
+    warnings.push(`the hook record was not written into ${path14.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file);
   const st = computeStatus(recorded, { cwd, planFile: p.file, export: exp, reports, ...cached ? { cached } : {} });
@@ -3658,10 +3811,10 @@ async function main(argv) {
   const statusMode = !!flags.status, json = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path13.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path14.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     const show = (f) => {
-      const r = path13.relative(process.cwd(), f);
+      const r = path14.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
     for (const b of bad) {
@@ -3681,10 +3834,10 @@ async function main(argv) {
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read2 = planArgs.map((f) => readPlan(path13.resolve(f)));
+    const read2 = planArgs.map((f) => readPlan(path14.resolve(f)));
     const bad = read2.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path13.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path14.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read2.filter(isPlanFile);
@@ -3714,7 +3867,7 @@ async function main(argv) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path13.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path14.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -3730,16 +3883,16 @@ async function main(argv) {
     const own = ownPlans(open, input, plans, cwd);
     const badOwn = ownBadPlans(bad, own.scan, cwd);
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path13.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path14.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
-      const rel = path13.relative(cwd, b.file);
-      blockedOut.push(`# ${path13.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
+      const rel = path14.relative(cwd, b.file);
+      blockedOut.push(`# ${path14.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type) && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
-        const names = open.map((p) => path13.relative(cwd, p.file).replace(/\\/g, "/"));
+        const names = open.map((p) => path14.relative(cwd, p.file).replace(/\\/g, "/"));
         console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
@@ -3751,7 +3904,7 @@ async function main(argv) {
   const graphs = /* @__PURE__ */ new Map();
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)));
-    const name = path13.basename(p.file);
+    const name = path14.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) {
