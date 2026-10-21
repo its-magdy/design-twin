@@ -26,3 +26,10 @@ linker = "hoisted"
 # CLI shims start with `#!/usr/bin/env node`). The default turns this on only when no node is on PATH; stating it keeps a
 # machine with an unrelated Node from running half the toolchain on it — the repo needs Bun alone.
 bun = true
+
+[test]
+# `bun test` is Bun's own runner, and the suites under test/ are not bun:test files: they are scripts test/run-suites.ts runs
+# one by one (`bun run test`). Collected by a bare `bun test`, each would RUN at import — bind ports, spawn browsers —
+# with its `N/N checks passed` lost in the runner's output. The only bun:test files are the spawn-stress ones
+# (.github/workflows/spawn-stress.yml), so that is where `bun test` looks.
+root = "test/spawn-stress"
