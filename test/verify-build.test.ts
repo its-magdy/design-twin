@@ -2005,6 +2005,13 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["']axe-core(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports axe-core literally`);
   }
   check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
+  // …and what that one call site resolves is loaded only from the project's own node_modules: under Bun a package the
+  // project lacks resolves to a copy auto-installed from npm into Bun's global cache (verify-probe.ts installedInProject;
+  // its cases are in test/verify-probe.test.ts). The guard must be in the bundle, before each load.
+  const vp = fs.readFileSync(path.join(SCRIPTS, "verify-probe.js"), "utf8");
+  const guards = [...vp.matchAll(/\binstalledInProject\(/g)].length;
+  check(`verify-probe.js checks every resolved Playwright package and axe-core against the project's node_modules before loading it (installedInProject: ${guards} mentions — its definition and the Playwright and axe-core call sites, want 3)`,
+    guards === 3 && /resolved outside the project's node_modules/.test(vp));
 }
 // the visual diff ports pixelmatch v6.0.0 (ISC) — its licence notice must ship with the code: visual-diff.ts carries it
 // as a `/*! … */` legal comment, which esbuild keeps (moved to the end of the file, legalComments "eof" when bundling)
