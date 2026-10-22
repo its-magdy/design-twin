@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
 import { HELP, OWN_HELP_ROUTED, VERBS, dtwinPortWarning, verbHelp } from "../bridge/src/verbs.ts";
 import { UsageError, parseArgs } from "../bridge/src/figma-pull.ts";
+import { COMMAND_ROWS, COMMAND_SUMMARY, MODIFIERS, VERB_DEFS } from "../bridge/src/cli-commands.ts";
 import { checkPort } from "../bridge/src/doctor.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
@@ -23,19 +24,25 @@ const usageError = (fn: () => unknown): string | null => {
 };
 
 try {
-  // every verb in the usage header answers --help with ITS OWN page.
-  console.log("\ncli help — per-verb pages:");
-  for (const v of VERBS) {
+  // Every verb row (cli-commands.ts VERB_ROWS) answers --help with ITS OWN page.
+  console.log("\ncli help — per-verb pages, walking the verb table:");
+  check("VERBS is exactly the verb table's words", JSON.stringify(VERBS) === JSON.stringify(VERB_DEFS.map((v) => v.word)));
+  for (const { word: v, help } of VERB_DEFS) {
     if (v === "help") continue; // its page IS the full usage — below
-    const inTable = typeof HELP[v] === "string";
-    check(`${v}: has a HELP page, or answers through its own entry point`, inTable || OWN_HELP_ROUTED.includes(v));
+    check(`${v}: has a HELP page, or answers through its own entry point`, (help !== undefined && HELP[v] === help) || OWN_HELP_ROUTED.includes(v));
     const r = run([v, "--help"]);
     check(`\`dtwin ${v} --help\` exits 0 and its first line starts "dtwin ${v}"`, r.status === 0 && r.stdout.startsWith(`dtwin ${v}`));
-    if (inTable) check(`${v}: the spawned page is the table's page (no full-usage fallthrough)`, r.stdout.trim() === HELP[v]);
+    if (help !== undefined) check(`${v}: the spawned page is the table's page (no full-usage fallthrough)`, r.stdout.trim() === help);
+    if (help !== undefined && !OWN_HELP_ROUTED.includes(v) && v !== "seed" && v !== "mcp") check(`${v}: verbHelp answers with the row's page`, verbHelp([v, "--help"]) === help);
   }
+  check("OWN_HELP_ROUTED is exactly the routed verbs without a page of their own",
+    JSON.stringify(OWN_HELP_ROUTED) === JSON.stringify(VERB_DEFS.filter((v) => v.to === "routed" && !("help" in v)).map((v) => v.word)));
   const full = run(["help", "--help"]);
   check("`dtwin help --help` prints the full usage", full.status === 0 && full.stdout.startsWith("dtwin — pull a design") && full.stdout.includes("dtwin --stop"));
-  check("verbHelp answers whoami/serve/stop/status/version", ["whoami", "serve", "stop", "status", "version"].every((v) => verbHelp([v, "--help"]) === HELP[v] && !!HELP[v]));
+  check("`dtwin --help` carries every verb row's summary line, in row order", full.stdout.includes(COMMAND_SUMMARY + "\n"));
+  const undocumented = [...COMMAND_ROWS.flatMap((r) => (r.flag ? [r.flag] : [])), ...MODIFIERS.map((m) => m.flag)].filter((f) => !new RegExp(`${f}\\b`).test(full.stdout));
+  for (const f of undocumented) console.log("      undocumented: " + f);
+  check("`dtwin --help` documents every command and modifier flag in the table", undocumented.length === 0);
   check("the whoami page says `connection` is the ADDRESSED file's socket", /ADDRESSED file/.test(HELP.whoami ?? ""));
   check("the serve page covers the idle shutdown", /FIGMA_DAEMON_IDLE_MIN/.test(HELP.serve ?? ""));
   check("`dtwin version --help` prints the page, not the bare version", !/^\d+\.\d+\.\d+\s*$/.test(run(["version", "--help"]).stdout));
