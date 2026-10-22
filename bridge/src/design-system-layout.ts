@@ -14,10 +14,9 @@
 //        CustomAnimationStyle, each its own BaseStyle object with its own id/name/description.
 //        Variables can be BOUND into a style's fields (`boundVariables`), which is a reference between
 //        the two systems, not a merger.
-//        -> styles.paint.json / styles.text.json / styles.effect.json / styles.grid.json /
-//        styles.animation.json (see below — split the same way tokens/components/hygiene are, and for
-//        the same reason: a caller after only typography does not have to load every gradient and
-//        shadow in the file to get it)
+//        -> one styles.<kind>.json per style kind, STYLE_KIND_ROWS below (split the same way
+//        tokens/components/hygiene are, and for the same reason: a caller after only typography does
+//        not have to load every gradient and shadow in the file to get it)
 //      - Components/ComponentSets are a third concept, with variant properties of their own.
 //        -> components.local.json / components.library.json
 //    The component split is a correctness fix, not just tidiness: entries flagged `remote: true` are
@@ -47,16 +46,14 @@ import { safe } from "./pages-layout.ts"; // same filesystem-boundary sanitiser 
 import type { PageLayoutFile } from "./pages-layout.ts";
 import { ifDefined } from "./json-util.ts";
 import type {
-  DesignSystemStamp, DesignSystemManifest, TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc,
-  AnimationStylesDoc, HygieneDoc, CatalogVariant, CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles,
-  DesignSystemDoc,
+  DesignSystemStamp, DesignSystemManifest, TokensDoc, StylesDoc, AnyStyle, StyleKind, StyleKey, StyleKeyed, HygieneDoc, CatalogVariant,
+  CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles, DesignSystemDoc,
 } from "./doc-types.ts";
 
-/** Every document the split writes, in `files` order: tokens, the five style files, the two
+/** Every document the split writes, in `files` order: tokens, one style file per kind, the two
  *  component catalogs, hygiene, any per-component detail files, and the slim manifest (last). */
 export type DesignSystemFileData =
-  | TokensDoc | PaintStylesDoc | TextStylesDoc | EffectStylesDoc | GridStylesDoc | AnimationStylesDoc | ComponentsCatalog | HygieneDoc
-  | ComponentDetailFile | DesignSystemManifest;
+  | TokensDoc | StylesDoc | ComponentsCatalog | HygieneDoc | ComponentDetailFile | DesignSystemManifest;
 
 export interface DesignSystemLayout {
   /** Every file to write, INCLUDING the slim manifest (last). */
@@ -71,15 +68,38 @@ export interface DesignSystemLayout {
 const DIR = "design-system";
 const COMPONENTS_DIR = "components"; // sibling subdir of design-system/, holds one detail file per COMPONENT_SET
 const TOKENS = "tokens.json";
-const STYLES_PAINT = "styles.paint.json";
-const STYLES_TEXT = "styles.text.json";
-const STYLES_EFFECT = "styles.effect.json";
-const STYLES_GRID = "styles.grid.json";
-const STYLES_ANIMATION = "styles.animation.json"; // local custom animation styles
 const COMPONENTS_LOCAL = "components.local.json";
 const COMPONENTS_LIBRARY = "components.library.json";
 const HYGIENE = "hygiene.json";
 const MANIFEST = "design-system.json";
+
+/** One style kind as the split files it: the plugin's `styles.<kind>` list lands in `file`, which the
+ *  manifest points at, and counts, under `key`. Both are typed from the kind, so a row cannot drift. */
+export type StyleKindRow = { [K in StyleKind]: { kind: K; file: `styles.${K}.json`; key: StyleKey<K> } }[StyleKind];
+/** The style kinds, one row each — the ONE place a kind's file and manifest key are named. Both layouts
+ *  (this one and library-layout.ts) and design-diff loop over it; a kind in doc-types.ts StyleByKind with
+ *  no row here does not compile. The order is the order of the files and of their `files`/`counts` keys. */
+export const STYLE_KIND_ROWS: { readonly [K in StyleKind]: Extract<StyleKindRow, { kind: K }> } = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }, // local custom animation styles
+};
+export const STYLE_KINDS: readonly StyleKindRow[] = Object.values(STYLE_KIND_ROWS);
+
+/** A kind's styles from the plugin's styles block — `[]` when the block has no list for it. */
+export function stylesOf(styles: DesignSystemStyles | null | undefined, kind: StyleKind): AnyStyle[] {
+  const list = styles ? styles[kind] : undefined;
+  return Array.isArray(list) ? list : [];
+}
+/** One value per style kind under its manifest key, in STYLE_KINDS order — what a manifest's `files`
+ *  and `counts` spread between their other keys. */
+export function byStyleKey<V>(value: (row: StyleKindRow) => V): StyleKeyed<V> {
+  const out: Partial<StyleKeyed<V>> = {};
+  for (const row of STYLE_KINDS) out[row.key] = value(row);
+  return out as StyleKeyed<V>; // every key set: the loop walks every kind
+}
 
 // A library entry is one the plugin flagged `remote: true` (components.ts sets it for a consumed
 // library main). The task's other signal — "has id/page/pageId" — is the same partition seen from the
@@ -154,20 +174,9 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     });
     return { ...c, variants: slimVariants, variantsFile: detailPath };
   });
-  const styles: DesignSystemStyles = d.styles || {};
-  const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-  const stylesText = Array.isArray(styles.text) ? styles.text : [];
-  const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-  const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-  const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
-
   const files: Array<PageLayoutFile<DesignSystemFileData>> = [
     { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
-    { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-    { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-    { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-    { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-    { path: join(STYLES_ANIMATION), data: { ...stamp, styles: stylesAnimation } },
+    ...STYLE_KINDS.map((row) => ({ path: join(row.file), data: { ...stamp, styles: stylesOf(d.styles, row.kind) } })),
     { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
     { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
     { path: join(HYGIENE), data: { ...stamp, hygiene } },
@@ -177,11 +186,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   const counts: DesignSystemManifest["counts"] = {
     collections: (d.collections || []).length,
     variables: (d.variables || []).length,
-    stylesPaint: stylesPaint.length,
-    stylesText: stylesText.length,
-    stylesEffect: stylesEffect.length,
-    stylesGrid: stylesGrid.length,
-    stylesAnimation: stylesAnimation.length,
+    ...byStyleKey((row) => stylesOf(d.styles, row.kind).length),
     components: local.length,
     libraryComponents: library.length,
     hygiene: hygiene.length,
@@ -194,11 +199,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     ...stamp,
     files: {
       tokens: join(TOKENS),
-      stylesPaint: join(STYLES_PAINT),
-      stylesText: join(STYLES_TEXT),
-      stylesEffect: join(STYLES_EFFECT),
-      stylesGrid: join(STYLES_GRID),
-      stylesAnimation: join(STYLES_ANIMATION),
+      ...byStyleKey((row) => join(row.file)),
       componentsLocal: join(COMPONENTS_LOCAL),
       componentsLibrary: join(COMPONENTS_LIBRARY),
       hygiene: join(HYGIENE),
@@ -221,14 +222,11 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
 
 export const DESIGN_SYSTEM_DIR: string = DIR;
 
-// A type alias, not an interface: aliases carry an implicit string index signature, so
-// Object.values<string>(DESIGN_SYSTEM_FILES) types as string[] (design-diff lists the sibling files).
-/** Every file/dir name the split uses — the manifest's own name included (MANIFEST). */
-export type DesignSystemFileNames = {
-  TOKENS: string; STYLES_PAINT: string; STYLES_TEXT: string; STYLES_EFFECT: string; STYLES_GRID: string; STYLES_ANIMATION: string;
-  COMPONENTS_LOCAL: string; COMPONENTS_LIBRARY: string; COMPONENTS_DIR: string; HYGIENE: string; MANIFEST: string;
-};
-export const DESIGN_SYSTEM_FILES: DesignSystemFileNames = {
-  TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, STYLES_ANIMATION, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
-  COMPONENTS_DIR, HYGIENE, MANIFEST,
-};
+/** The file/dir names the split uses besides the style files (STYLE_KIND_ROWS) — the manifest's own name included (MANIFEST). */
+export interface DesignSystemFileNames {
+  TOKENS: string; COMPONENTS_LOCAL: string; COMPONENTS_LIBRARY: string; COMPONENTS_DIR: string; HYGIENE: string; MANIFEST: string;
+}
+export const DESIGN_SYSTEM_FILES: DesignSystemFileNames = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+/** Every file buildDesignSystemLayout always writes, in `files` order (the manifest, MANIFEST, last; the per-component
+ *  detail files under COMPONENTS_DIR are not in it — they exist only under variantVisuals). */
+export const DESIGN_SYSTEM_FILE_NAMES: readonly string[] = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];

@@ -973,34 +973,31 @@ function screenStem(name, id) {
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
-var STYLES_PAINT = "styles.paint.json";
-var STYLES_TEXT = "styles.text.json";
-var STYLES_EFFECT = "styles.effect.json";
-var STYLES_GRID = "styles.grid.json";
-var STYLES_ANIMATION = "styles.animation.json";
 var COMPONENTS_LOCAL = "components.local.json";
 var COMPONENTS_LIBRARY = "components.library.json";
 var HYGIENE = "hygiene.json";
 var MANIFEST = "design-system.json";
-var DESIGN_SYSTEM_FILES = {
-  TOKENS,
-  STYLES_PAINT,
-  STYLES_TEXT,
-  STYLES_EFFECT,
-  STYLES_GRID,
-  STYLES_ANIMATION,
-  COMPONENTS_LOCAL,
-  COMPONENTS_LIBRARY,
-  COMPONENTS_DIR,
-  HYGIENE,
-  MANIFEST
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
 };
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
 // bridge/src/library-layout.ts
-var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, STYLES_ANIMATION: STYLES_ANIMATION2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var INDEX = "index.json";
+var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX];
 
 // design-to-code/design-system-dir.ts
-var { TOKENS: TOKENS3, STYLES_TEXT: STYLES_TEXT3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
 
 // bridge/src/project-layout.ts
 import fs2 from "node:fs";

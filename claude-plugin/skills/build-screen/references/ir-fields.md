@@ -369,7 +369,7 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 | Slot rules | `components.local.json` `props[*]` with `type:"SLOT"` → `slotSettings {minChildren, maxChildren, allowPreferredValuesOnly, stretchChildOnInsert, displayEmptyByDefault}` (each only as set; no min/max = unlimited) |
 | Library components | `components.library.json` — props SAMPLED from instances in this file |
 | Token catalog | `design-system/tokens.json` — `collections[] {name, modes, default, theming}`, `variables[] {name, type, collection, collectionKey, tier, values{mode: hex \| number \| {aliasOf}}, scopes, codeSyntax{WEB,ANDROID,iOS}, key}` — `collectionKey` is the collection's own key (collection NAMES repeat: two collections can both be "Spacing"); absent on an older export |
-| Text/paint/effect/grid styles | `design-system/styles.{text,paint,effect,grid}.json` |
+| Text/paint/effect/grid/animation styles | `design-system/styles.{text,paint,effect,grid,animation}.json` — one file per style kind, each `styles[]` |
 | Smells | `design-system/hygiene.json` `hygiene[]` — ALL_SCOPES, raw semantic values, broken aliases, variant explosion (>30), unnamed/duplicate components. It does NOT check per-node unbound values — `audit.js` does. |
 | Color profile | `design-system.json` `colorProfile` (`srgb`/`display-p3`/`legacy`) — hex is always 8-bit sRGB-clamped |
 

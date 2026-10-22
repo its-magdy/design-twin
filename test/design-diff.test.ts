@@ -13,7 +13,7 @@ import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
 // design-diff --json: the diff result; only its kind/summary/warnings/against/changed are read here.
 const isDiffResult = (x: unknown): x is DiffResult => isJsonObject(x) && typeof x.kind === "string" && isJsonObject(x.summary) && Array.isArray(x.warnings);
-import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { buildDesignSystemLayout, DESIGN_SYSTEM_FILE_NAMES, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { buildLibraryLayout, LIBRARY_FILE_NAMES } from "../bridge/src/library-layout.ts";
 import { bag, isJsonObject } from "../design-to-code/types.ts";
 import type {
@@ -260,15 +260,15 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
 })());
 
 // a snapshot of ONE file is not a copy of the export it belongs to. --snapshot also
-// copies the sibling set: a design-system file's other 9 siblings (bridge/src/design-system-layout.ts is
-// the one definition of that 10-file set), and a screen's .vars.json/.assets.json plus the shared
+// copies the sibling set: every other design-system file (bridge/src/design-system-layout.ts is
+// the one definition of that set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.
 console.log("CLI — --snapshot copies the sibling set:");
-check("snapshotting ONE design-system file also snapshots its 9 siblings", (() => {
+check("snapshotting ONE design-system file also snapshots all its siblings", (() => {
   // the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
-  // design-system/ subdirectory that holds the other 9 files (bridge/src/design-system-layout.ts's own
+  // design-system/ subdirectory that holds the other files (bridge/src/design-system-layout.ts's own
   // header comment) — not flat alongside them, which a fixture must not assume.
-  const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+  const names = DESIGN_SYSTEM_FILE_NAMES;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
@@ -488,42 +488,39 @@ check("markdown renders styles/hygiene kinds without throwing, and names the rig
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
-check("CLI end to end: ALL TEN design-system files diff one by one on the real fixtures (incl. the manifest)", (() => {
+check("CLI end to end: EVERY design-system file diffs one by one on the real fixtures (incl. the manifest)", (() => {
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
-  // The 9 files that live INSIDE design-system/ (bridge/src/design-system-layout.ts's DESIGN_SYSTEM_FILES,
-  // minus the manifest, which lives one level up). tokens.json/components.*.json/styles.animation.json
-  // aren't in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
-  // components.*.json by the catalog tests, and the real export predates styles.animation.json) —
-  // minimal stand-ins are enough here, since this check is about ALL TEN names resolving and diffing,
-  // not re-proving each format's own logic again.
-  const inDsDir = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "styles.animation.json", "components.local.json", "components.library.json", "hygiene.json"];
-  fs.writeFileSync(path.join(dsDir, "tokens.json"), JSON.stringify({ variables: [] }));
-  fs.writeFileSync(path.join(dsDir, "styles.animation.json"), JSON.stringify({ styles: [] }));
-  fs.writeFileSync(path.join(dsDir, "components.local.json"), JSON.stringify({ components: [] }));
-  fs.writeFileSync(path.join(dsDir, "components.library.json"), JSON.stringify({ components: [] }));
-  for (const f of ["styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"]) {
-    fs.writeFileSync(path.join(dsDir, f), fs.readFileSync(path.join(FIX_DS, f)));
+  // The files that live INSIDE design-system/ (bridge/src/design-system-layout.ts's DESIGN_SYSTEM_FILE_NAMES,
+  // minus the manifest, which lives one level up). The trimmed real-fixture set holds some of them; the rest
+  // (tokens.json, components.*.json, any style file newer than the real export) get minimal stand-ins of their
+  // shape — tokens.json is covered by the tokens tests above and components.*.json by the catalog tests, and this
+  // check is about EVERY name resolving and diffing, not re-proving each format's own logic again.
+  const inDsDir = DESIGN_SYSTEM_FILE_NAMES.filter((f) => f !== DESIGN_SYSTEM_FILES.MANIFEST);
+  const standIn = (f: string): string => JSON.stringify(f === DESIGN_SYSTEM_FILES.TOKENS ? { variables: [] } : /^components\./.test(f) ? { components: [] } : { styles: [] });
+  for (const f of inDsDir) {
+    const real = path.join(FIX_DS, f);
+    fs.writeFileSync(path.join(dsDir, f), fs.existsSync(real) ? fs.readFileSync(real) : standIn(f));
   }
   // The manifest (design-system.json) at the export ROOT — real fixture, from the same export.
   fs.writeFileSync(path.join(root, "design", "export", "design-system.json"), fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest4", "design-system.json")));
-  const allTen = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
+  const allFiles = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
 
   let allOk = true;
-  for (const rel of allTen) {
+  for (const rel of allFiles) {
     const r = cli(root, rel);
     if (r.status !== 0 && !(r.status === 2 && /no snapshot/.test(r.stderr))) allOk = false; // first run has no baseline yet — that's a separate, already-tested exit 2
   }
   // Snapshot ONLY the manifest (mirrors a real repro: "on a copy of a real export,
-  // after --snapshot of all ten files") — siblingFilesOf() must pull in the other 9 on its own, and
+  // after --snapshot of every file") — siblingFilesOf() must pull in the others on its own, and
   // must never print a spurious "not found" for any of them, since every one of them is
   // right there on disk.
   const snap = cli(root, "--snapshot", path.join("design", "export", "design-system.json"));
   const spuriousNotFound = /not found — nothing to snapshot/.test(snap.stderr);
 
   let allDiffOk = true;
-  for (const rel of allTen) {
+  for (const rel of allFiles) {
     const r = cli(root, rel);
     if (r.status !== 0) allDiffOk = false;
   }
@@ -702,6 +699,10 @@ check("a set member in the snapshot that left the export is 'Not compared', not 
   fs.rmSync(path.join(root, exp, "design-system", "hygiene.json"));
   const r = cli(root, exp);
   return r.status === 0 && /^- `[^`]*hygiene\.json`: in the snapshot, no longer in the export$/m.test(r.stdout);
+})());
+check("DESIGN_SYSTEM_FILE_NAMES is exactly the file set buildDesignSystemLayout writes (manifest last; no detail files without variantVisuals)", (() => {
+  const names = buildDesignSystemLayout({ file: "F" }, "/").files.map((f) => path.basename(f.path));
+  return JSON.stringify(names) === JSON.stringify(DESIGN_SYSTEM_FILE_NAMES);
 })());
 check("LIBRARY_FILE_NAMES is exactly the file set buildLibraryLayout writes", (() => {
   const names = buildLibraryLayout({ file: "Lib", source: { role: "library", libraryName: "Lib", fileKey: "abcdefgh123" } }, "/").files.map((f) => path.basename(f.path));

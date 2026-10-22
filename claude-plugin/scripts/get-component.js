@@ -460,7 +460,22 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
 
 // bridge/src/design-system-layout.ts
 var DIR = "design-system";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
 var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
 // design-to-code/get-component.ts
 function findComponent(catalog, handle) {
