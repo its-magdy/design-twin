@@ -23,14 +23,20 @@ keeps plain names out of the tree but is not secrecy: they are dictionary-revers
 the old names.
 
 The plugin's extraction transforms are TypeScript (`figma-plugin/src/*.ts`), bundled to
-`figma-plugin/code.js`. `test/harness.ts` loads the built `code.js` in a VM with a mock `figma` object
-and a representative node tree (mixed text, gradient, reaction, effects, bound token, scroll frame,
-multi-mode variables), then asserts the emitted JSON. The bundle exposes its read API on a namespaced
-global (`__designExport`) which the harness lifts onto the sandbox.
+`figma-plugin/code.js`. `test/harness.ts` runs the cases in `test/harness/<area>.ts`, and every case
+builds its own world with `test/fake-figma.ts`: a fresh VM running the plugin bundle against a fake
+`figma` derived from a scene (pages, selection, the nodes / styles / variables / images reachable by id)
+over the representative file in `test/harness/scene.ts` (mixed text, gradient, reaction, effects, bound
+token, scroll frame, multi-mode variables). The plugin keeps its run state at module level
+(`figma-plugin/src/state.ts`), so the fresh VM is what keeps a case's result independent of the cases
+before it. The bundle is built once per run, in memory, from the current `figma-plugin/src`
+(`figma-plugin/build-options.ts`, the same options `build.ts` writes `code.js` with), so the harness never
+tests a stale `code.js`; it prints a note when the committed one differs, and CI fails on that diff.
 
 ```
 cd figma-plugin && bun install && bun run typecheck && bun run build && cd ..   # after editing src/
-bun test/harness.ts
+bun test/harness.ts                 # every area
+bun test/harness.ts library pages   # just those areas (the file names in test/harness/)
 ```
 
 Expected: every check passes (the run-suites summary has the count; exit 0). Any `✗ FAIL` prints which transform regressed.
@@ -45,8 +51,10 @@ bun build --no-bundle bridge/src/seed-components.ts > /dev/null
 ```
 
 When you add a new extracted field, edit the relevant `figma-plugin/src/*.ts` module, rebuild, then add
-a matching assertion to `test/harness.ts` (extend the mock node with the source property, assert the
-output key). Keep both `typecheck` and the harness green.
+a matching case to the area file in `test/harness/` it belongs to (put the source property on a node in
+the case's own scene, assert the output key). A case says what its file contains through `world(delta,
+overrides)`: the scene for what is in the file (its tables add to the base file's), overrides for a call
+that throws, counts or changes its answer, or a lookup that must not see the base file's entries. Keep both `typecheck` and the harness green.
 
 ### `design-to-code/` — design-to-code layer (agent-runnable, no Figma)
 
