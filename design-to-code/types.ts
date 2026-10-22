@@ -395,9 +395,9 @@ export interface ScreenCoverage {
 // ================================================================ design/plan/<screen>.json (plan-skeleton.ts skeleton())
 
 export type PlanLifecycle = "pending" | "awaiting-user" | "abandoned";
-/** What a PERSON sets; "verified"/"static-only" were written by an older hook and are ignored by verify-build.ts. */
+/** What a PERSON sets; "verified"/"static-only" were written by an older hook and are ignored by plan-status.ts. */
 export type PlanStoredStatus = PlanLifecycle | "verified" | "static-only" | (string & {});
-/** verify-build.ts computeStatus() */
+/** plan-status.ts status() */
 export type PlanComputedStatus = PlanLifecycle | "failed" | "blocked" | "stale" | "unverified" | "static-only" | "verified" | "verified-with-deviations";
 export type TokenKind =
   | "color" | "fontStyle" | "string" | "boolean" | "radius" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing"

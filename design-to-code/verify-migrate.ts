@@ -33,7 +33,7 @@
 //     hook's record is re-stamped only when it matched the plan under the older formula (legacyPlanHash), as
 //     --record-plan does. Before anything moves: a plan whose record was edited by hand (verify-build recordedEdits), or
 //     whose reportSha256 no longer names the report on disk (a rename would hide that), skips the set;
-//   - a plan verify-build ties the set's report to by the name alone (verify-locate.ts locateReports: its `screen`, its
+//   - a plan whose status reads the set's report by the name alone (plan-status.ts reports, verify-locate.ts locateReports: its `screen`, its
 //     `file`, its export's or its own file name is the set's name) would lose it under the new name unless its node id
 //     (node-artefacts.ts planNode: its nodeId, else the id its file name carries) is the set's — it then finds the
 //     renamed report by id. Otherwise the set is skipped (renamed or retired), saying to add `nodeId` to the plan — or,
@@ -62,15 +62,15 @@ import type { HeldLock } from "../bridge/src/file-lock.ts";
 import { errCode, errMsg } from "../bridge/src/errmsg.ts";
 import { nodeIdFromStem, safe } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
-import { legacyPlanHash, planHash } from "./content-hash.ts";
+import { hookHashOf, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, updatePlan } from "./plan-record.ts";
 import { reportRecordNames } from "./report-freshness.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
 import { MAX_SLUG, RESERVED_SLUGS, allSets, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
-import { locateReports } from "./verify-locate.ts";
 import { nodeArtefacts, planNode } from "./node-artefacts.ts";
+import { planStatus } from "./plan-status.ts";
 import type { ReportRef } from "./verify-locate.ts";
 import { getOrInit } from "./map-util.ts";
 import { readJsonOrNull } from "./read-json.ts";
@@ -301,11 +301,11 @@ function planBlocks(p: PlanText, names: ReadonlyMap<string, string>, d: { cwd: s
 
 // ---------------------------------------------------------------- the plans that find a set's report
 
-/** The reports verify-build ties a plan to (verify-locate.ts locateReports, as computeStatus reads them). */
+/** The reports a plan's status reads (plan-status.ts reports). */
 type RefsOf = (p: PlanText) => ReportRef[];
-const freshRefs = (d: { cwd: string }): RefsOf => (p) => locateReports(p.plan, p.file, d.cwd, undefined);
-/** The plans verify-build ties `<set>.report.json` to, each with how (the first matcher that holds). None when the verify
- *  dir is not the project's design/verify: verify-build reads no other. */
+const freshRefs = (d: { cwd: string }): RefsOf => (p) => planStatus(d.cwd).reports(p.plan, p.file);
+/** The plans whose status reads `<set>.report.json`, each with how (the first matcher that holds). None when the verify
+ *  dir is not the project's design/verify: a status reads no other. */
 function plansFinding(plans: readonly PlanText[], set: string, d: { cwd: string; verifyDir: string }, refsOf: RefsOf): Array<{ p: PlanText; ref: ReportRef }> {
   if (path.resolve(d.verifyDir) !== path.join(d.cwd, VERIFY_DIR)) return [];
   const rel = slash(path.relative(d.cwd, path.join(d.verifyDir, set + ".report.json")));
@@ -749,7 +749,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs &
     const refsOf = freshRefs(d);
     const blocks = [...touched.flatMap((p) => planBlocks(p, nameMap, d)), ...nameOnlyBlocks(plans, s.set, s.nodeId, d, refsOf)];
     if (blocks.length) return { why: blocks, notes };
-    // every plan verify-build ties the set's report to must still find it under the new name
+    // every plan whose status reads the set's report must still read it under the new name
     const finders = plansFinding(plans, s.set, d, refsOf).map((f) => f.p);
     const newReportRel = slash(path.relative(d.cwd, newBase + ".report.json"));
     const hadRecord = new Set(touched.filter((p) => { const r = recordedReport(p.plan); return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null; }).map((p) => p.file));
@@ -783,7 +783,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs &
         if (raw === null) throw new Error(`${p.rel} disappeared`);
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
-        const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
+        const restamp = hookHashOf(hook, plan) === "legacy";
         fields = rewriteRefs(plan, (ref, field) => { const n = namedFile(ref, field, p.file, d); const nn = n === null ? undefined : nameMap.get(n); return n !== null && nn !== undefined ? respell(ref, n, nn) : null; }, true);
         if (restamp && hook) hook.planHash = planHash(plan);
         const after = formatPlan(plan, raw);
@@ -808,7 +808,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs &
     }
     for (const p of finders) {
       const plan = parsePlanText(fs.readFileSync(p.file, "utf8"), p.rel);
-      if (!locateReports(plan, p.file, d.cwd, undefined).some((r) => r.rel === newReportRel)) problems.push(`${p.rel}: verify-build no longer finds ${path.basename(newReportRel)} for it`);
+      if (!planStatus(d.cwd).reports(plan, p.file).some((r) => r.rel === newReportRel)) problems.push(`${p.rel}: its status no longer reads ${path.basename(newReportRel)}`);
     }
     if (problems.length) {
       const left = rollback();

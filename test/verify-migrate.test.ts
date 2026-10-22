@@ -12,8 +12,8 @@ import { check, report } from "./assert.ts";
 import { must, readFixture, screenExport } from "./fixtures.ts";
 import { migrate, noHardLinks } from "../design-to-code/verify-migrate.ts";
 import type { MigrateOpts, MigrateResult } from "../design-to-code/verify-migrate.ts";
-import { recordPlan } from "../design-to-code/plan-record.ts";
-import { computeStatus, recordedEdits } from "../design-to-code/verify-build.ts";
+import { recordPlan, recordedEdits } from "../design-to-code/plan-record.ts";
+import { planStatus } from "../design-to-code/plan-status.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STATUS_SCHEMA, liveStatusFile, writeStatus } from "../design-to-code/verify-run.ts";
@@ -112,7 +112,7 @@ console.log("\n--apply renames the set and the plan's recorded paths together:")
   const p = project();
   const shaBefore = new Map(SET_FILES.map((s) => [s, sha256(fs.readFileSync(path.join(p.root, "design/verify/Crates." + s)))] as const));
   const recBefore = recOf(p.plan());
-  const stBefore = computeStatus(p.plan(), { cwd: p.root, planFile: path.join(p.root, REL) });
+  const stBefore = planStatus(p.root).status(p.plan(), { planFile: path.join(p.root, REL) });
   const c = cli(p, "--migrate", "--apply");
   check(`exit 0 (got ${c.status}: ${c.stderr.trim().split("\n").pop() ?? ""})`, c.status === 0);
   const ls = p.ls();
@@ -127,7 +127,7 @@ console.log("\n--apply renames the set and the plan's recorded paths together:")
   check("screen/file/nodeId untouched", plan.screenName === "Crates" && plan.nodeId === "80:1" && plan.file === undefined);
   const edits = recordedEdits(plan, p.root);
   check(`recordedEdits stays [] (got ${JSON.stringify(edits)})`, edits.length === 0);
-  const st = computeStatus(plan, { cwd: p.root, planFile: path.join(p.root, REL) });
+  const st = planStatus(p.root).status(plan, { planFile: path.join(p.root, REL) });
   const renamed = (x: string[]): string => JSON.stringify(x).replaceAll("design/verify/Crates.", "design/verify/Crates__80_1.");
   check(`verify-build reads the plan as before: the same status and reasons, the renamed report found (before ${stBefore.status}, after ${st.status})`,
     st.status === stBefore.status && renamed(stBefore.reasons) === JSON.stringify(st.reasons) && st.reports.some((x) => x.rel === "design/verify/Crates__80_1.report.json"));
@@ -299,7 +299,7 @@ function byNamePlan(p: Project, nodeId?: string): void {
   must(plan.verification, "verification").hook = { result: "pass", checkedAt: NOW, blocking: [], warnings: 0, planHash: planHash(plan), files: {} };
   fs.writeFileSync(path.join(p.root, REL), JSON.stringify(plan, null, 2) + "\n");
 }
-const statusOf = (p: Project) => { const st = computeStatus(p.plan(), { cwd: p.root, planFile: path.join(p.root, REL) }); return { status: st.status, reasons: st.reasons, reports: st.reports.map((r) => r.rel) }; };
+const statusOf = (p: Project) => { const st = planStatus(p.root).status(p.plan(), { planFile: path.join(p.root, REL) }); return { status: st.status, reasons: st.reasons, reports: st.reports.map((r) => r.rel) }; };
 {
   const p = project("Crates", { record: false });
   byNamePlan(p);
@@ -310,7 +310,7 @@ const statusOf = (p: Project) => { const st = computeStatus(p.plan(), { cwd: p.r
     r.skipped.length === 1 && r.skipped[0]?.why[0] === 'design/plan/Crates.json finds this set only by its name — add `"nodeId": "80:1"` to it, then --migrate');
   check("…nothing renamed, the plan untouched", JSON.stringify(p.ls()) === JSON.stringify(ls) && p.planText() === planBefore);
   const after = statusOf(p);
-  check(`…and computeStatus is the same as before (got ${after.status})`, JSON.stringify(after) === JSON.stringify(before));
+  check(`…and the status is the same as before (got ${after.status})`, JSON.stringify(after) === JSON.stringify(before));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
@@ -321,7 +321,7 @@ const statusOf = (p: Project) => { const st = computeStatus(p.plan(), { cwd: p.r
   const after = statusOf(p);
   const renamed = (x: typeof before) => JSON.stringify(x).replaceAll("design/verify/Crates.report.json", "design/verify/Crates__80_1.report.json");
   check(`with the node id: migrated (got ${JSON.stringify(r.done)}; ${err.join(" | ")})`, JSON.stringify(r.done) === JSON.stringify(["Crates"]));
-  check(`…computeStatus is identical before and after, the report found under its new name (before ${before.status}: ${JSON.stringify(before.reports)}; after ${after.status}: ${JSON.stringify(after.reports)})`,
+  check(`…the status is identical before and after, the report found under its new name (before ${before.status}: ${JSON.stringify(before.reports)}; after ${after.status}: ${JSON.stringify(after.reports)})`,
     before.status === "failed" && renamed(before) === JSON.stringify(after));
   fs.rmSync(p.root, { recursive: true, force: true });
 }

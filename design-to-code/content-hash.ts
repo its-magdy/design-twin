@@ -109,14 +109,14 @@ function planCodeSkippedNote(plan: { anchors?: unknown; components?: unknown }, 
 // The plan's own content as the Stop hook binds it (verify-build.ts verification.hook.planHash): the plan minus
 // `status`, the owner's waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report
 // records their hash instead) and ALL of `verification`: `verify-screen --compare --record-plan` writing it must not
-// reopen a plan. (Its one blocking check, a hand edit of verification.recorded, reopens the plan in verify-build isOpen.)
+// reopen a plan. (Its one blocking check, a hand edit of verification.recorded, reopens the plan in plan-status open.)
 function planHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = { ...(plan || {}) };
   delete copy.status; delete copy.waivers; delete copy.descopes; delete copy.verification;
   return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
-// The older formula: `verification` minus only `verification.hook`. Still ACCEPTED (verify-build isOpen /
-// computeStatus) so no plan the hook closed under it reopens on upgrade.
+// The older formula: `verification` minus only `verification.hook`. Still ACCEPTED (hookHashOf) so no plan the hook
+// closed under it reopens on upgrade.
 function legacyPlanHash(plan: object | null | undefined): string {
   const copy: Record<string, unknown> = structuredClone({ ...(plan || {}) });
   delete copy.status; delete copy.waivers; delete copy.descopes;
@@ -127,5 +127,14 @@ function legacyPlanHash(plan: object | null | undefined): string {
   }
   return sha256Hex(JSON.stringify(copy)).slice(0, 16);
 }
+// Which formula a hook record's planHash matches the plan under: "current", "legacy" (the older one — still accepted;
+// a writer that touches `verification` re-stamps it with planHash first, or its own write would reopen the plan) or
+// null (neither: the plan changed after the hook's check, or no planHash was recorded).
+function hookHashOf(hook: { planHash?: unknown } | null | undefined, plan: object | null | undefined): "current" | "legacy" | null {
+  const h = hook && typeof hook.planHash === "string" ? hook.planHash : null;
+  if (h === null) return null;
+  if (h === planHash(plan)) return "current";
+  return h === legacyPlanHash(plan) ? "legacy" : null;
+}
 
-export { stripPullTimes, exportContentSha256, fileHashes, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash };
+export { stripPullTimes, exportContentSha256, fileHashes, planCodeFiles, planCodeSkipped, planCodeSkippedNote, planHash, legacyPlanHash, hookHashOf };
