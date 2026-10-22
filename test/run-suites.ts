@@ -59,7 +59,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isCI } from "./pool.ts";
-import { goneOrZombie, installQueuedConsole } from "./spawn-helper.ts";
+import { goneOrZombie, installQueuedConsole } from "../design-to-code/proc.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type Kind = "lint" | "suite";

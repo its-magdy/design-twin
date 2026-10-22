@@ -5,13 +5,11 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import { checkDaemon } from "../bridge/src/doctor.ts";
 import { check, report } from "./assert.ts";
-
-const SRC = path.join(import.meta.dirname, "..", "bridge", "src");
+import { dtwin, dtwinSync } from "./children.ts";
 
 const uid = process.getuid?.();
 
@@ -78,8 +76,8 @@ const TMP_ROOT = process.platform === "win32" ? os.tmpdir() : fs.realpathSync.na
 
   // End to end on Windows: `dtwin doctor` reports the daemon line as unsupported, with the reason.
   if (process.platform === "win32") {
-    const doc = spawnSync(process.execPath, [path.join(SRC, "figma-pull.ts"), "doctor", "--json", "--wait", "0"],
-      { env: { ...process.env, FIGMA_BRIDGE_TOKEN: "s".repeat(40), FIGMA_BRIDGE_PORT: "8789" }, encoding: "utf8", cwd: fresh });
+    const doc = dtwinSync(["doctor", "--json", "--wait", "0"],
+      { env: { ...process.env, FIGMA_BRIDGE_TOKEN: "s".repeat(40), FIGMA_BRIDGE_PORT: "8789" }, cwd: fresh });
     let daemonCheck: { status?: string; detail?: string } | undefined;
     try { daemonCheck = (JSON.parse(doc.stdout) as { checks: { id: string; status: string; detail: string }[] }).checks.find((x) => x.id === "daemon"); } catch { /* checked below */ }
     check("doctor --json on Windows: the daemon check is a note quoting the reason", daemonCheck?.status === "warn" && daemonCheck.detail === why);
@@ -237,12 +235,12 @@ if (uid === undefined) {
     // End to end, with the process's TMPDIR pointing at the squatted base (XDG unset).
     const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: t, FIGMA_BRIDGE_PORT: "8789" };
     delete env.XDG_RUNTIME_DIR;
-    const ds = spawnSync(process.execPath, [path.join(SRC, "figma-pull.ts"), "--daemon-status"], { env, encoding: "utf8" });
+    const ds = dtwinSync(["--daemon-status"], { env });
     check("CLI --daemon-status under a refused directory: exit 0, reports no daemon",
       ds.status === 0 && /"daemon": false/.test(ds.stdout) && /no daemon is running/.test(ds.stderr));
     check("…with the refusal on stderr exactly once",
       (ds.stderr.match(/refusing to use/g) ?? []).length === 1 && !/refusing/.test(ds.stdout));
-    const doc = spawnSync(process.execPath, [path.join(SRC, "figma-pull.ts"), "doctor", "--json", "--wait", "0"], { env: { ...env, FIGMA_BRIDGE_TOKEN: "s".repeat(40) }, encoding: "utf8", cwd: t2 });
+    const doc = dtwinSync(["doctor", "--json", "--wait", "0"], { env: { ...env, FIGMA_BRIDGE_TOKEN: "s".repeat(40) }, cwd: t2 });
     let daemonCheck: { status?: string; detail?: string } | undefined;
     try { daemonCheck = (JSON.parse(doc.stdout) as { checks: { id: string; status: string; detail: string }[] }).checks.find((x) => x.id === "daemon"); } catch { /* checked below */ }
     check("doctor --json under a refused directory: the daemon check fails with the refusal",
@@ -280,12 +278,7 @@ if (uid === undefined) {
     const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: t, FIGMA_BRIDGE_PORT: "8789" };
     delete env.XDG_RUNTIME_DIR;
     // spawn, not spawnSync: this process serves the old daemon's socket meanwhile.
-    const r = await new Promise<{ code: number | null; err: string }>((res) => {
-      const p = spawn(process.execPath, [path.join(SRC, "figma-pull.ts"), "--stop"], { env });
-      let err = "";
-      p.stderr.on("data", (d: Buffer) => (err += String(d)));
-      p.on("exit", (code) => res({ code, err }));
-    });
+    const r = await dtwin(["--stop"], { env }).then((x) => ({ code: x.status, err: x.stderr }));
     check("CLI --stop stops a daemon at the old location and says so",
       r.code === 0 && /stopped a daemon started by an earlier dtwin version \(socket .*designtwin-8789\.sock\)/.test(r.err) && seen.includes("__shutdown"));
     await new Promise<void>((r2) => old.close(() => r2()));

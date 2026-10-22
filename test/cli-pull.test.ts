@@ -7,7 +7,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fakePlugin, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply } from "./fixtures.ts";
@@ -16,10 +15,10 @@ import { DAEMON_UNSUPPORTED, daemonSupported } from "../bridge/src/daemon.ts";
 import type { Asset } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, ScreenshotReply, WhoamiReply } from "../bridge/src/commands.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+import { bridgeEnv, dtwin as runDtwin, startChild, DTWIN } from "./children.ts";
 
 const PORT = 8789;
 const TOKEN = "cli-pull-test-token";
-const CLI = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
 
 // ---------------------------------------------------------------- the fake plugin
 
@@ -34,18 +33,10 @@ function dialPlugin(hello: { instanceId: string; file: string; fileKey: string }
 // ---------------------------------------------------------------- the CLI
 
 interface Ran { code: number | null; stdout: string; stderr: string }
-function dtwin(cwd: string, args: string[]): Promise<Ran> {
-  return new Promise((resolve) => {
-    const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, FIGMA_BRIDGE_PORT: String(PORT) };
-    delete env.FIGMA_BRIDGE_TOKEN_FILE;
-    delete env.DTWIN_PORT;
-    const p = spawn(process.execPath, [CLI, ...args], { cwd, env });
-    let stdout = "", stderr = "";
-    p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-    const kill = setTimeout(() => p.kill("SIGKILL"), 40000);
-    p.on("close", (code) => { clearTimeout(kill); resolve({ code, stdout, stderr }); });
-  });
+/** dtwin to completion (test/children.ts), killed with SIGKILL at 40 s, read the way these checks read it. */
+async function dtwin(cwd: string, args: string[]): Promise<Ran> {
+  const r = await runDtwin(args, { cwd, env: bridgeEnv({ port: PORT, token: TOKEN }), timeoutMs: 40_000 });
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 const json = (s: string): Record<string, unknown> | null => { try { const v: unknown = JSON.parse(s); return v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v)) : null; } catch { return null; } };
 
@@ -156,16 +147,10 @@ try {
   {
     const dir = path.join(tmp, "held");
     fs.mkdirSync(dir);
-    const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, FIGMA_BRIDGE_PORT: String(PORT) };
-    delete env.FIGMA_BRIDGE_TOKEN_FILE;
-    delete env.DTWIN_PORT;
-    const holder = spawn(process.execPath, [CLI, "whoami", "--timeout", "30"], { cwd: dir, env });
-    const closed = new Promise((r) => holder.once("close", r));
-    let held = "";
-    holder.stderr.on("data", (d: Buffer) => { held += d.toString(); });
+    const holder = startChild([DTWIN, "whoami", "--timeout", "30"], { cwd: dir, env: bridgeEnv({ port: PORT, token: TOKEN }) });
     try {
       let bound = false;
-      for (let i = 0; i < 100 && !bound; i++) { await sleep(100); bound = /listening on ws:\/\/localhost:8789/.test(held); }
+      for (let i = 0; i < 100 && !bound; i++) { await sleep(100); bound = /listening on ws:\/\/localhost:8789/.test(holder.stderr()); }
       check("fixture: a one-shot whoami (no plugin yet) holds 8789", bound);
       const r = await dtwin(dir, ["whoami", "--timeout", "5"]);
       const text = daemonSupported()
@@ -177,7 +162,7 @@ try {
       r.code === 1 && text.test(r.stderr));
     } finally {
       holder.kill("SIGKILL");
-      await closed;
+      await holder.done;
     }
   }
 
@@ -197,9 +182,8 @@ try {
   } else {
     const dir = path.join(tmp, "daemon");
     fs.mkdirSync(dir);
-    const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, FIGMA_BRIDGE_PORT: String(PORT) };
-    delete env.DTWIN_PORT;
-    const serve = spawn(process.execPath, [CLI, "serve"], { cwd: dir, env, stdio: "ignore" });
+    // FIGMA_BRIDGE_TOKEN_FILE is left as it was (only DTWIN_PORT is unset), as before
+    const serve = startChild([DTWIN, "serve"], { cwd: dir, env: bridgeEnv({ port: PORT, token: TOKEN, unset: ["DTWIN_PORT"] }) });
     try {
       let up = false;
       for (let i = 0; i < 60 && !up; i++) { await sleep(250); up = /"pid"/.test((await dtwin(dir, ["status"])).stdout); }

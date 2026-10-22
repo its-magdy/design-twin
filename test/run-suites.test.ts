@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { check, report } from "./assert.ts";
-import { runAsync, runSync } from "./spawn-helper.ts";
+import { runAsync, runSync } from "../design-to-code/proc.ts";
 import { bunOptions, command } from "./run-suites.ts";
 import { killBrowsers } from "./drive-e2e-fixture.ts";
 import { killPidTree, killTree, limit, poolSize, runNode, type KillHost } from "./pool.ts";
