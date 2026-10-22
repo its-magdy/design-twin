@@ -14,6 +14,9 @@ ends with a line saying it was not the full run — use it while iterating, `bun
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
 The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). The drive e2e's wall-clock-timing cases are a suite of their own, `verify-probe-drive-tail-e2e`, which runs its probes strictly one at a time (no pool); the pooled cases are `verify-probe-drive-e2e`, and the two share `test/drive-e2e-fixture.ts`.
 `DT_TEST_EPHEMERAL_PORT=1` is a test-only seam (`bridge/src/server-core.ts`): the bridge binds an ephemeral port instead of `FIGMA_BRIDGE_PORT`'s and prints the real one on stderr (`[bridge] DT_TEST_EPHEMERAL_PORT: <port> -> <real>`), so `mcp-lifecycle` spawns its MCP servers without contending for 8787–8789. Never set it outside the suites: the plugin can only reach the three ports its manifest names.
+`test/build-screen-docs.test.ts` checks that every IR field `bridge/src/doc-types.ts` declares is named in
+`claude-plugin/skills/build-screen/references/ir-fields.md`, and that every field that doc introduces exists; add a
+field to the IR and the doc in the same change. Its regex pins on ir-fields.md are kept for behaviour rules only.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
