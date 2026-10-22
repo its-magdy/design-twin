@@ -2359,6 +2359,7 @@ var sleeper = new Int32Array(new SharedArrayBuffer(4));
 
 // design-to-code/run-cache.ts
 var CACHE_NAME = "designtwin-verify";
+var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
@@ -2418,7 +2419,7 @@ function runCacheOf(verifyDir) {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path6.join(root, "node_modules", ".cache", CACHE_NAME);
+    const cache = path6.join(root, ...RUN_CACHE_SEGMENTS);
     const rel = path6.relative(root, v).split(path6.sep).join("/");
     return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
   }
@@ -2441,7 +2442,7 @@ function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), path7.basename(base) + ".status.json");
+var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), setFile(path7.basename(base), "status"));
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -2458,14 +2459,13 @@ function runCommands(base, open) {
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 function openRunSets(verifyDir) {
-  const SUFFIX = ".status.json";
   let files;
   try {
     files = fs9.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+  return files.filter((e) => e.isFile() && setBaseOf(e.name, "status") !== null).map((e) => setBaseOf(e.name, "status") ?? e.name).filter((name) => {
     const st = readStatusFile(liveStatusFile(path7.join(verifyDir, name)));
     return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
   }).sort();
@@ -2491,9 +2491,35 @@ function nodeIdFromSetName(name) {
   const dot = name.indexOf(".");
   return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
 }
+var SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired"
+};
+var setFile = (base, kind) => base + SET_FILE[kind];
+var setBaseOf = (file, kind) => file.endsWith(SET_FILE[kind]) ? file.slice(0, -SET_FILE[kind].length) : null;
+var EXPECTED_SUFFIX = SET_FILE.expected;
 var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
-var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-var RETIRED = ".expected.json.retired";
+var NAMING_KINDS = ["expected", "report", "measured"];
+var namedBy = (f) => {
+  for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length);
+  return null;
+};
 function allSets(verifyDir) {
   let files;
   try {
@@ -2504,19 +2530,20 @@ function allSets(verifyDir) {
   const have = new Set(files);
   const names = /* @__PURE__ */ new Set();
   for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+    const named = namedBy(f);
+    if (named !== null) names.add(named);
+    else if (f.endsWith(SET_FILE.retired)) names.add(f.slice(0, -SET_FILE.retired.length));
   }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+  return [...names].sort().map((name) => ({ name, retired: !have.has(setFile(name, "expected")) && have.has(setFile(name, "retired")) }));
 }
 function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
   const str = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path8.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(setFile(path8.join(verifyDir, name), "expected"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path8.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(setFile(path8.join(verifyDir, name), "report"), isJsonObject);
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 function stemHolders(verifyDir, stems, open) {

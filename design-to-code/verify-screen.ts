@@ -67,7 +67,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { endsInSep, expectationSetProblem, formatSetName, outBaseOf, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
+import { endsInSep, expectationSetProblem, formatSetName, outBaseOf, setBaseOf, setFile, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -93,7 +93,6 @@ function runStatusNote(base: string, now = Date.now()): string | null {
 
 // a replaced expectation's previous bytes, one generation (overwritten). Never `*.expected.json`, so nothing that
 // reads a verify dir's sets (verify-sets.ts, verify-build's report lookup, the run's expectation) takes it for a live one.
-const PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 
 /** The verify directory --expect names the node's stem in (node-artefacts.ts claim) before the set's name is known: --out when it is
  *  an existing directory, ends in a separator or is design/verify; the parent of the older `<dir>/<set>` spelling;
@@ -327,9 +326,10 @@ function write(doExpect: boolean, base: string | undefined, obj: unknown, md?: s
   if (!base) { process.stdout.write(reportFileText(obj)); return; }
   // atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation. The report's text is
   // the one --record-plan hashes (plan-record.ts reportFileText).
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
-  if (md) writeFileAtomic(base + ".report.md", md);
-  console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
+  const written = setFile(base, doExpect ? "expected" : "report");
+  writeFileAtomic(written, reportFileText(obj));
+  if (md) writeFileAtomic(setFile(base, "reportMd"), md);
+  console.error(`wrote ${written}${md ? " and " + setFile(base, "reportMd") : ""}`);
 }
 
 /** `--expect <screen.json>... [--out <dir>] [--variant <slug>] [--plan <plan.json>]`: writes <dir>/<Layer>__<id>[.<slug>].expected.json
@@ -416,7 +416,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // Re-running --expect replaces the file in place and leaves a measurement and a report from the
   // PREVIOUS expectation beside it, undated. The file itself stays byte-deterministic —
   // the notice goes to stderr, and every report records the sha it was computed on.
-  const target = outBase + ".expected.json";
+  const target = setFile(outBase, "expected");
   const next = JSON.stringify(exp, null, 2) + "\n";
   const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
   let prevContent: JsonValue | undefined = null;
@@ -425,7 +425,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // the sha256 of the expectation on disk after this run: the kept bytes when only exportedAt changed (below)
   const h = sha256Hex(onlyExportedAt && prev !== null ? prev : next);
   // a REPLACED expectation keeps its previous bytes (one generation) — written before the new one
-  const prevFile = outBase + PREV_EXPECTED_SUFFIX;
+  const prevFile = setFile(outBase, "expectedPrev");
   if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
   // only exportedAt changed: the file is left as it is — its sha256 is what the measured file and the report were bound
   // to (report-freshness.ts), and rewriting the timestamp alone would unbind both from the same design
@@ -446,7 +446,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
       // an expectation written before exportContentSha256 — whether the export or the generator changed is unknown
       : `the expectation recorded no export hash (exportContentSha256) — cannot tell whether the export or the expectation generator changed`;
     console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}… → ${h.slice(0, 12)}…): ${why}; the previous one is kept as ${prevFile}`);
-    const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
+    const stale = (["measured", "report", "reportMd"] as const).map((k) => setFile(outBase, k)).filter((f) => fs.existsSync(f));
     if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ` +
       `${stale.length > 1 ? "them" : "it"}.`);
   }
@@ -604,7 +604,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     if (!("doc" in r)) { console.error(`--against '${againstFile}' ${r.error}`); return 2; }
     against = { file: againstFile, report: r.doc };
   } else {
-    const own = compareBase + ".report.json";
+    const own = setFile(compareBase, "report");
     const r = readJson(own, isVerifyReport);
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
@@ -643,7 +643,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     // relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
     // still inside the project
     const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
-    const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(compareBase + ".report.json"))).split(path.sep).join("/");
+    const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(setFile(compareBase, "report")))).split(path.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -685,7 +685,7 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     // the report's node: its set's (node-artefacts.ts setNode — the expectation beside it, else the report's nodeId, else
     // the id its set name `<Layer>__<id>[.<slug>]` carries); an expectation and a report that disagree name none, and
     // whose plan a waiver goes into is not ours to guess
-    const set = path.basename(reportFile).replace(/\.report\.json$/, "");
+    const set = setBaseOf(path.basename(reportFile), "report") ?? path.basename(reportFile);
     const nodeId = nodeArtefacts(process.cwd(), { verifyDir: path.dirname(reportFile) }).setNode(set);
     if (nodeId === null) { console.error(`error  the set ${set} names no node (its expectation and report name different nodes, or neither names one) — pass --plan <plan.json>`); return 1; }
     const { hits, idless, several } = plansForNode(nodeId);

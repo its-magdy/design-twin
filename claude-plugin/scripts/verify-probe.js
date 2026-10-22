@@ -6056,31 +6056,24 @@ function visualLine(v) {
   return `visual (informational \u2014 never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) \xB7 ${v.regionsTotal} hot region(s) \xB7 at the reference's ${scaleText(v.reference.scale)} (${v.reference.from}) \xB7 grid ${v.grid}${v.diff !== null ? ` \xB7 ${v.diff}` : ""}`;
 }
 
-// design-to-code/report-freshness.ts
-var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
-var systemGit = {
-  head(cwd) {
-    try {
-      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
-      const h = r.status === 0 && r.stdout.trim();
-      return h && OBJECT_ID_LINE.test(h) ? h : null;
-    } catch {
-      return null;
-    }
-  },
-  dirty(cwd) {
-    try {
-      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
-      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
-    } catch {
-      return null;
-    }
-  }
-};
+// design-to-code/verify-sets.ts
+import fs7 from "node:fs";
+import path9 from "node:path";
 
-// design-to-code/verify-run.ts
-import path11 from "node:path";
-import crypto4 from "node:crypto";
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
+// design-to-code/verify-status.ts
+import path8 from "node:path";
 
 // design-to-code/run-cache.ts
 import fs6 from "node:fs";
@@ -6285,6 +6278,7 @@ function acquireFileLock(lockFile, opts = {}) {
 
 // design-to-code/run-cache.ts
 var CACHE_NAME = "designtwin-verify";
+var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
@@ -6344,7 +6338,7 @@ function runCacheOf(verifyDir) {
   const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path7.join(root, "node_modules", ".cache", CACHE_NAME);
+    const cache = path7.join(root, ...RUN_CACHE_SEGMENTS);
     const rel = path7.relative(root, v).split(path7.sep).join("/");
     return { dir: rel === VERIFY_DIR.split(path7.sep).join("/") ? cache : path7.join(cache, "dirs", shortSha(rel)), root };
   }
@@ -6368,95 +6362,7 @@ var RunCacheUnwritable = class extends Error {
   }
 };
 
-// bridge/src/atomic-write.ts
-import crypto3 from "node:crypto";
-import fs7 from "node:fs";
-import path8 from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
-var RENAME_RETRY_MS = 2e3;
-var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
-var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
-function renameOver(from, to) {
-  const t0 = Date.now();
-  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
-    try {
-      fs7.renameSync(from, to);
-      return;
-    } catch (e) {
-      const code = errCode(e);
-      if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
-      let dir = false;
-      try {
-        dir = fs7.statSync(to).isDirectory();
-      } catch {
-      }
-      if (dir) throw e;
-      Atomics.wait(sleeper2, 0, 0, delay);
-    }
-  }
-}
-function syncDir(dir) {
-  if (process.platform === "win32") return;
-  try {
-    const fd = fs7.openSync(dir, "r");
-    try {
-      fs7.fsyncSync(fd);
-    } finally {
-      fs7.closeSync(fd);
-    }
-  } catch {
-  }
-}
-function writeFileAtomic(file, data, opts = {}) {
-  const dir = path8.dirname(path8.resolve(file));
-  fs7.mkdirSync(dir, { recursive: true });
-  const tmp = file + tmpSuffix();
-  try {
-    if (opts.sync) {
-      const fd = fs7.openSync(tmp, "wx", opts.mode);
-      try {
-        fs7.writeFileSync(fd, data);
-        fs7.fsyncSync(fd);
-      } finally {
-        fs7.closeSync(fd);
-      }
-    } else {
-      fs7.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
-    }
-    if (opts.mode !== void 0) fs7.chmodSync(tmp, opts.mode);
-    renameOver(tmp, file);
-  } catch (e) {
-    try {
-      fs7.rmSync(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-  if (opts.sync) syncDir(dir);
-}
-
-// bridge/src/pages-layout.ts
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
-
-// bridge/src/node-id.ts
-var ID = "[A-Za-z0-9%:;_-]+";
-var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
-
-// design-to-code/verify-sets.ts
-import fs8 from "node:fs";
-import path10 from "node:path";
-
 // design-to-code/verify-status.ts
-import path9 from "node:path";
 var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
@@ -6469,7 +6375,7 @@ function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path9.join(runCacheDir(path9.dirname(base)), path9.basename(base) + ".status.json");
+var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), setFile(path8.basename(base), "status"));
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -6482,7 +6388,7 @@ function readStatusFile(file) {
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
 function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path9.basename(base)), id = shellArg(open.runId), dir = shellArg(path9.resolve(path9.dirname(base)));
+  const vs = scriptCmd("verify-screen"), S = shellArg(path8.basename(base)), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 
@@ -6502,38 +6408,156 @@ function parseSetName(name) {
   if (variant !== null && !isVariantSlug(variant)) return null;
   return { stem, nodeId, variant };
 }
-var EXPECTED_SUFFIX = ".expected.json";
+var SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired"
+};
+var setFile = (base, kind) => base + SET_FILE[kind];
+var EXPECTED_SUFFIX = SET_FILE.expected;
 function setNameOfFile(file) {
-  const b = path10.basename(file);
+  const b = path9.basename(file);
   return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
 }
 function statusBaseOf(expectedFile) {
-  return path10.join(path10.dirname(expectedFile), setNameOfFile(expectedFile));
+  return path9.join(path9.dirname(expectedFile), setNameOfFile(expectedFile));
 }
-var TRAILING_SEP = path10.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var endsInSep = (p) => TRAILING_SEP.test(p);
 var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
 function outBaseOf(out, setName, defaultDir) {
-  if (out === void 0) return { base: path10.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  if (out === void 0) return { base: path9.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
   let st = null;
   try {
-    st = fs8.statSync(out);
+    st = fs7.statSync(out);
   } catch {
   }
-  if (st?.isDirectory()) return { base: path10.join(out, setName), dir: out, deprecated: false };
+  if (st?.isDirectory()) return { base: path9.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (endsInSep(out) || path10.resolve(out) === path10.resolve(VERIFY_DIR)) return { base: path10.join(out, setName), dir: trimSep(out), deprecated: false };
-  if (path10.basename(out) === setName) return { base: out, dir: path10.dirname(out), deprecated: true };
+  if (endsInSep(out) || path9.resolve(out) === path9.resolve(VERIFY_DIR)) return { base: path9.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (path9.basename(out) === setName) return { base: out, dir: path9.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
 }
 function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   const name = setNameOfFile(expectedFile);
   const p = parseSetName(name);
-  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path10.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path9.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
+
+// design-to-code/report-freshness.ts
+var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
+var systemGit = {
+  head(cwd) {
+    try {
+      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
+      const h = r.status === 0 && r.stdout.trim();
+      return h && OBJECT_ID_LINE.test(h) ? h : null;
+    } catch {
+      return null;
+    }
+  },
+  dirty(cwd) {
+    try {
+      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
+      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
+    } catch {
+      return null;
+    }
+  }
+};
+
+// design-to-code/verify-run.ts
+import path11 from "node:path";
+import crypto4 from "node:crypto";
+
+// bridge/src/atomic-write.ts
+import crypto3 from "node:crypto";
+import fs8 from "node:fs";
+import path10 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
+var RENAME_RETRY_MS = 2e3;
+var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
+function renameOver(from, to) {
+  const t0 = Date.now();
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      fs8.renameSync(from, to);
+      return;
+    } catch (e) {
+      const code = errCode(e);
+      if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
+      let dir = false;
+      try {
+        dir = fs8.statSync(to).isDirectory();
+      } catch {
+      }
+      if (dir) throw e;
+      Atomics.wait(sleeper2, 0, 0, delay);
+    }
+  }
+}
+function syncDir(dir) {
+  if (process.platform === "win32") return;
+  try {
+    const fd = fs8.openSync(dir, "r");
+    try {
+      fs8.fsyncSync(fd);
+    } finally {
+      fs8.closeSync(fd);
+    }
+  } catch {
+  }
+}
+function writeFileAtomic(file, data, opts = {}) {
+  const dir = path10.dirname(path10.resolve(file));
+  fs8.mkdirSync(dir, { recursive: true });
+  const tmp = file + tmpSuffix();
+  try {
+    if (opts.sync) {
+      const fd = fs8.openSync(tmp, "wx", opts.mode);
+      try {
+        fs8.writeFileSync(fd, data);
+        fs8.fsyncSync(fd);
+      } finally {
+        fs8.closeSync(fd);
+      }
+    } else {
+      fs8.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+    }
+    if (opts.mode !== void 0) fs8.chmodSync(tmp, opts.mode);
+    renameOver(tmp, file);
+  } catch (e) {
+    try {
+      fs8.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+  if (opts.sync) syncDir(dir);
+}
+
+// bridge/src/node-id.ts
+var ID = "[A-Za-z0-9%:;_-]+";
+var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
 
 // design-to-code/resolve-screen.ts
 if (false) runCli2(main, { name: "resolve-screen" });
@@ -6545,7 +6569,7 @@ function probeAttemptNote(n, exit) {
   return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
 }
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
-var statusFile = (base) => base + ".status.json";
+var statusFile = (base) => setFile(base, "status");
 function inRunCache(verifyDir, fn) {
   try {
     return fn();
@@ -8188,7 +8212,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path12.sep).join("/")
+            forcedPng: setFile(outBase, "forcedColors").split(path12.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -8254,7 +8278,7 @@ ${USAGE}`);
   const r = run.result;
   const frameOut = (fr) => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
   const firstFrame = r.frames[0];
-  const diffPath = outBase + ".diff.png";
+  const diffPath = setFile(outBase, "diff");
   let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng = null;
   if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path12.sep).join("/"), captureMs }));
@@ -8294,14 +8318,14 @@ ${USAGE}`);
     const measured = { ...measuredBase, visual };
     const measuredText2 = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
     writeFileAtomic(png, r.png);
-    const forcedPath = outBase + ".forced-colors.png";
+    const forcedPath = setFile(outBase, "forcedColors");
     try {
       if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
       else if (fs9.existsSync(forcedPath)) fs9.rmSync(forcedPath, { force: true });
     } catch (e) {
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
-    writeFileAtomic(outBase + ".measured.json", measuredText2);
+    writeFileAtomic(setFile(outBase, "measured"), measuredText2);
     written = true;
     return { measuredSha256: sha256Hex(measuredText2) };
   };
@@ -8350,7 +8374,7 @@ ${USAGE}`);
     const findable = outDir === verifyDir || !ownRun && outDir === path12.resolve(stageDirOf(statusBase, runId));
     console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path12.basename(statusBase))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
   }
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(path12.dirname(outBase))}`);
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(setFile(outBase, "measured"))} --out ${shellArg(path12.dirname(outBase))}`);
   return 0;
 }
 var EXIT_GRACE_MS = 1e3;

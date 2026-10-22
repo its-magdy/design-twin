@@ -17,7 +17,8 @@
 //   - the node already has a canonical base set: the legacy expectation is retired (`<S>.expected.json.retired`, which
 //     every reader skips) and its other files stay under `<S>` — unless a plan's verification.recorded names the
 //     legacy report (re-record first: skipped);
-//   - else every file of the set is renamed: `<S>.*`, and of `<S>-*` only `<S>-diff.png` and what the set's measured
+//   - else every file of the set is renamed: `<S>.*` (its diff is `<S>.diff.png`), and of `<S>-*` only `<S>-diff.png` (no tool
+//     writes that name now; kept for a diff named by hand) and what the set's measured
 //     file or report lists in `artifacts` (any other may be another screen's); a file of a longer set name belongs to
 //     that set. A case-only rename goes through a temp name. Refused when a new name is taken; each move is a hard link
 //     then an unlink (link refuses an existing name), so a name taken meanwhile is never replaced. A disk without hard
@@ -73,6 +74,7 @@ import { nodeArtefacts, planNode } from "./node-artefacts.ts";
 import { planStatus } from "./plan-status.ts";
 import type { ReportRef } from "./verify-locate.ts";
 import { getOrInit } from "./map-util.ts";
+import { SET_FILE, isJournalFile, journalFile, setFile } from "./verify-sets.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
@@ -308,7 +310,7 @@ const freshRefs = (d: { cwd: string }): RefsOf => (p) => planStatus(d.cwd).repor
  *  dir is not the project's design/verify: a status reads no other. */
 function plansFinding(plans: readonly PlanText[], set: string, d: { cwd: string; verifyDir: string }, refsOf: RefsOf): Array<{ p: PlanText; ref: ReportRef }> {
   if (path.resolve(d.verifyDir) !== path.join(d.cwd, VERIFY_DIR)) return [];
-  const rel = slash(path.relative(d.cwd, path.join(d.verifyDir, set + ".report.json")));
+  const rel = slash(path.relative(d.cwd, setFile(path.join(d.verifyDir, set), "report")));
   return plans.flatMap((p) => { const ref = refsOf(p).find((r) => r.rel === rel); return ref ? [{ p, ref }] : []; });
 }
 /** Why the set `set` of node `id` cannot change its name: a plan that finds its report by the name alone (its `screen`,
@@ -325,12 +327,13 @@ function nameOnlyBlocks(plans: readonly PlanText[], set: string, id: string, d: 
   });
 }
 
-/** The `<set>-…` files that are the set's: `<set>-diff.png`, and every one its measured file or its report lists in
+/** The `<set>-…` files that are the set's: `<set>-diff.png` (no tool writes that name now — the probe writes `<set>.diff.png`,
+ *  SET_FILE.diff, which `<set>.*` covers — kept for a diff named by hand), and every one its measured file or its report lists in
  *  `artifacts` (a hand-taken `<set>-dark.png`, `<set>-<state>.png`). Any other `<set>-…` name may be another screen's
  *  (`Crates-detail.png` of a screen named `Crates-detail`) and stays where it is. */
 function dashFiles(verifyDir: string, set: string): Set<string> {
   const own = new Set<string>([`${set}-diff.png`]);
-  for (const tail of [".measured.json", ".report.json"]) {
+  for (const tail of [SET_FILE.measured, SET_FILE.report]) {
     const doc = readJsonOrNull(path.join(verifyDir, set + tail), isJsonObject);
     const arts = doc && Array.isArray(doc.artifacts) ? doc.artifacts : [];
     for (const a of arts) if (typeof a === "string" && path.basename(a).startsWith(set + "-")) own.add(path.basename(a));
@@ -464,16 +467,16 @@ export function planMigration(d: Dirs): MigrateStep[] {
       const open = openRunOf(path.join(d.verifyDir, name)) ?? openRunOf(path.join(d.verifyDir, to));
       if (open) { steps.push({ kind: "skip", set: name, why: [open] }); continue; }
       const files = (filesOf.get(name) ?? []).sort();
-      const report = name + ".report.json";
+      const report = setFile(name, "report");
       if (to === T && baseExists) {
         // the node's canonical set is there: this one is history — unless a plan still records its report
         const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report; }).map((p) => p.rel);
         if (recording.length) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and ${recording.join(", ")} still record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${T}, then --migrate`] }); continue; }
         const byName = nameOnlyBlocks(plans, name, id, d, refsOf);
         if (byName.length) { steps.push({ kind: "skip", set: name, why: byName }); continue; }
-        const from = path.join(d.verifyDir, name + ".expected.json");
+        const from = setFile(path.join(d.verifyDir, name), "expected");
         if (!exists(from)) { steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and this set has no expectation to retire — move its files aside by hand`] }); continue; }
-        const retired = from + ".retired";
+        const retired = setFile(path.join(d.verifyDir, name), "retired");
         // one file under both names is a retire killed between its link and its unlink: applyRetire finishes it
         if (exists(retired) && !sameFile(from, retired)) { steps.push({ kind: "skip", set: name, why: [`${path.basename(retired)} already exists — refusing to replace it`] }); continue; }
         steps.push({ kind: "retire", set: name, nodeId: id, canonical: T, file: { from, to: retired } });
@@ -627,13 +630,11 @@ function settle(plans: Array<Unsettled | null>, moves: readonly FileMove[], link
 // only, never paths: a journal can move nothing outside the verify dir, the run cache's live status of its two sets,
 // and the plan dir's plans.
 const JOURNAL_SCHEMA = "designtwin/verify-migrate-journal@1";
-const JOURNAL_RE = /^\.migrate-.+\.json$/;
 interface JournalPlan { file: string; before: string; after?: string }
 interface Journal { schema: string; set: string; to: string; at: string; moves: Array<{ from: string; to: string; tmp?: string }>; live: boolean; plans: JournalPlan[] }
 
-const journalFile = (verifyDir: string, set: string): string => path.join(verifyDir, `.migrate-${set}.json`);
 function listJournals(verifyDir: string): string[] {
-  try { return fs.readdirSync(verifyDir).filter((f) => JOURNAL_RE.test(f)).sort().map((f) => path.join(verifyDir, f)); } catch { return []; }
+  try { return fs.readdirSync(verifyDir).filter(isJournalFile).sort().map((f) => path.join(verifyDir, f)); } catch { return []; }
 }
 /** A plain file name: no directory part, not "." or "..". */
 const isName = (x: unknown): x is string => typeof x === "string" && x !== "" && x !== "." && x !== ".." && !/[\\/]/.test(x);
@@ -694,7 +695,7 @@ function applyRetire(s: Extract<MigrateStep, { kind: "retire" }>, d: ApplyDirs):
   try {
     const open = openRunOf(base);
     if (open) return { why: [open], notes: [] };
-    const report = s.set + ".report.json";
+    const report = setFile(s.set, "report");
     const plans = readPlans(d.planDir, d.cwd);
     const recording = plans.filter((p) => { const r = recordedReport(p.plan); return r !== null && namedFile(r.report, "verification.recorded.report", p.file, d) === report; });
     if (recording.length) return { why: [`${recording.map((p) => p.rel).join(", ")} now record${recording.length === 1 ? "s" : ""} ${report} — re-run verify-screen --compare --record-plan on ${s.canonical}, then --migrate`], notes: [] };
@@ -751,7 +752,7 @@ function applyRename(s: Extract<MigrateStep, { kind: "rename" }>, d: ApplyDirs &
     if (blocks.length) return { why: blocks, notes };
     // every plan whose status reads the set's report must still read it under the new name
     const finders = plansFinding(plans, s.set, d, refsOf).map((f) => f.p);
-    const newReportRel = slash(path.relative(d.cwd, newBase + ".report.json"));
+    const newReportRel = slash(path.relative(d.cwd, setFile(newBase, "report")));
     const hadRecord = new Set(touched.filter((p) => { const r = recordedReport(p.plan); return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null; }).map((p) => p.file));
 
     // the files (a case-only rename through a temp name), and the live status in the run cache when the new name has none

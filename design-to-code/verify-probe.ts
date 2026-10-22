@@ -84,7 +84,7 @@ import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { exitFlushed, runCli } from "./proc.ts";
-import { expectationSetProblem, outBaseOf, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
+import { expectationSetProblem, outBaseOf, setFile, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
 export const PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"] as const;
@@ -1803,7 +1803,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
             expectation, driven, viewport, timeout, initScript: INIT_SCRIPT, budgetMs, measuredTags: run.result.visibleTags,
             reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path.sep).join("/"),
+            forcedPng: setFile(outBase, "forcedColors").split(path.sep).join("/"),
           });
           behaviour = r.behaviour;
           forcedPng = r.forcedPng;
@@ -1876,7 +1876,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   // Decode, diff and draw in Node (the browser is closed). The diff image is written BEFORE the measured text is built: a
   // failed write leaves visual.diff null (the measured file never names a missing file). A run that drew none removes an earlier
   // run's diff. Never in measured.artifacts (compare's artifact check stays verdict-neutral).
-  const diffPath = outBase + ".diff.png";
+  const diffPath = setFile(outBase, "diff");
   let visual: MeasuredVisual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
   let diffPng: Buffer | null = null;
   if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path.sep).join("/"), captureMs }));
@@ -1926,12 +1926,12 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
     // Listed in behaviour.artifacts only (never measured.artifacts: compare's artifact check stays verdict-neutral). A run
     // that takes none removes an earlier run's (that exact path) — it would sit unlisted next to a measured file that never saw
     // it. Never a reason to lose measured.json: a failure here is a note on stderr.
-    const forcedPath = outBase + ".forced-colors.png";
+    const forcedPath = setFile(outBase, "forcedColors");
     try {
       if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
       else if (fs.existsSync(forcedPath)) fs.rmSync(forcedPath, { force: true });
     } catch (e) { console.error(`warning  ${forcedPath}: ${firstLine(e)} — the behaviour screenshot is not written`); }
-    writeFileAtomic(outBase + ".measured.json", measuredText);
+    writeFileAtomic(setFile(outBase, "measured"), measuredText);
     written = true;
     return { measuredSha256: sha256Hex(measuredText) };
   };
@@ -1990,7 +1990,7 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
       `--phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` +
       (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
   }
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(path.dirname(outBase))}`);
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(setFile(outBase, "measured"))} --out ${shellArg(path.dirname(outBase))}`);
   return 0;
 }
 

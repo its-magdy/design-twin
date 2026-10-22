@@ -72,7 +72,7 @@ import type { BadPlan, PlanFile } from "./node-artefacts.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { exitFlushed, runCli } from "./proc.ts";
 import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE } from "../bridge/src/project-layout.ts";
-import { parseSetName } from "./verify-sets.ts";
+import { parseSetName, setBaseOf, siblingFile } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
@@ -489,7 +489,7 @@ function recordedShadowWarnings(plan: Plan): string[] {
 // freshness rule of plan-status.ts): the report verification.recorded.report names (the one its record was written from),
 // else, among the reports for the plan's own screen (matched by name, as locateReports ranks; all of them when none is),
 // the latest measuredAt — none is the oldest — with mtime only breaking a tie.
-const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
+const json = (x: string): string => siblingFile(x, "reportMd", "report");
 const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
 // verification.recorded.report in ReportRef.rel's spelling (read as recordedReportWarnings reads it: project-relative or absolute)
 function recordedReportRel(plan: Plan, cwd: string | undefined): string | null {
@@ -1185,7 +1185,7 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[]): string[] {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = path.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    const set = setBaseOf(path.posix.basename(r.rel), "report") ?? path.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} — run verify-screen --migrate`] : [];
   });
 }

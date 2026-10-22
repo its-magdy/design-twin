@@ -64,19 +64,16 @@ console.log("\nwrites — refused:");
 const WRITE_NO: readonly string[] = [
   "/proj/src/App.tsx", "/proj/src/components/Button.tsx", "/proj/vite.config.ts", "/proj/package.json", "/proj/tailwind.config.js",
   "/proj/.claude/settings.json", "/proj/design/plan/home.json", "/proj/design/export/Home__1_2.json", "/proj/design/tokens.json",
-  "/proj/design/verify/Home__1_2.expected.json", "/proj/design/verify/Home__1_2.expected.prev.json", "/proj/design/verify/Home__1_2.report.json",
-  "/proj/design/verify/Home__1_2.report.md", "/proj/design/verify/Home__1_2.status.json", "/proj/design/verify/Home__1_2.diff.png",
-  "/proj/design/verify/.migrate-Home.json", // a --migrate journal: the next --migrate --apply acts on it
+  // a tool-owned file (which ones: verify-sets.test.ts isToolOwned), and the probe's diff, which only the guard adds
+  "/proj/design/verify/Home__1_2.w320-dialog.report.json", "/proj/design/verify/.migrate-Home.json", "/proj/design/verify/Home__1_2.diff.png",
+  "/proj/design/verify/Home__1_2.w320-dialog.DIFF.PNG",
   "/proj/design/verify/../../src/App.tsx", "/proj/node_modules/.cache/designtwin-verify/../../../src/App.tsx",
   "/proj/node_modules/.cache/other-tool/x.js", "/proj/node_modules/designtwin-verify/x.js", "/proj/node_modules/.cache/designtwin-verify",
   "/tmp/drive.cjs", "/proj/designtwin-verify/x.ts", "/proj/src/designtwin-verify/x.ts", "/proj/design/verify",
   "src/App.tsx", "C:\\proj\\src\\App.tsx", "C:\\proj\\design\\verify\\..\\..\\src\\App.tsx",
 ];
 for (const f of WRITE_NO) check(`Write ${f}`, denied(write(f)));
-// [slug] a variant set's files (`<stem>.<slug>`): its tool-owned ones refused like the base set's, its measured file and
-// screenshots (a state's `-dialog.png`, a `-diff.png` as the base set's) allowed — the regex is anchored at the end, so a slug changes nothing
-for (const f of ["expected.json", "expected.prev.json", "report.json", "report.md", "status.json", "diff.png"].map((t) => `/proj/design/verify/Home__1_2.w320-dialog.${t}`))
-  check(`[slug] Write ${f} → refused`, denied(write(f)) && writeVerdict(f, CTX) !== null);
+// [slug] a variant set's measured file and screenshots (a state's `-dialog.png`, a `-diff.png`) allowed
 for (const f of ["measured.json", "png"].map((t) => `/proj/design/verify/Home__1_2.w320-dialog.${t}`).concat(["/proj/design/verify/Home__1_2.dark-dialog.png", "/proj/design/verify/Home__1_2.dark-diff.png"]))
   check(`[slug] Write ${f} → allowed`, allowed(write(f)) && writeVerdict(f, CTX) === null);
 check("Edit / MultiEdit / NotebookEdit go through the same allow-list (if the agent is ever given them)",

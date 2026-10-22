@@ -33,6 +33,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, RECORD_V1_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
 import { reportRecordNames } from "./report-freshness.ts";
+import { siblingFile } from "./verify-sets.ts";
 import { hookHashOf, planHash } from "./content-hash.ts";
 import { canonical } from "./plan-waivers.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
@@ -173,7 +174,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
       if (r === null) { if (!outside.includes(slash(p))) outside.push(slash(p)); } else if (!artifacts.includes(r)) artifacts.push(r);
     };
     addArtifact(reportAt);
-    addArtifact(reportAt.replace(/\.report\.json$/, ".report.md"));
+    addArtifact(siblingFile(reportAt, "report", "reportMd"));
     for (const a of report.artifacts) {
       if (typeof a === "string") addArtifact(a);
       else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);

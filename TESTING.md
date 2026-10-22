@@ -93,6 +93,8 @@ bun test/report-freshness.test.ts     # expect: all checks pass, exit 0 — what
                                        # a measured file bound to its expectation and run, a plan's record vs its report (fake git)
 bun test/plan-status.test.ts          # expect: all checks pass, exit 0 — a plan's computed status: the lifecycle a person sets, the
                                        # Stop hook's record against the plan and its code, open or closed, the precedence, on temp projects
+bun test/verify-sets.test.ts          # expect: all checks pass, exit 0 — a verify set's files by kind, the --migrate journal, which
+                                       # files only the verify tools write (the guard's and --publish's rule), the run cache's place
 bun test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
 bun test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin

@@ -44,6 +44,9 @@ import { scriptCmd } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { JsonObject } from "./types.ts";
 import { runCli } from "./proc.ts";
+import { VERIFY_DIR as VERIFY_PATH } from "../bridge/src/project-layout.ts";
+import { CACHE_NAME, RUN_CACHE_SEGMENTS } from "./run-cache.ts";
+import { SET_FILE, isToolOwned } from "./verify-sets.ts";
 
 /** The agent this guard applies to: the plugin-scoped name, or the bare one (the same agent copied into a project's .claude/agents/). */
 export const VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
@@ -56,12 +59,12 @@ const HOOK_HARD_MS = 5000;
 
 // ================================================================ file writes
 
-// Written only by verify-screen.js / verify-probe.js, never by hand: the expectation the build is graded
-// against, the report and its markdown, the run status, the visual diff, and a --migrate journal (`.migrate-<S>.json`,
-// which the next --migrate --apply acts on).
-const TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png))$/i;
-const CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
-const VERIFY_DIR = ["design", "verify"];
+// Never written by hand: what only the verify tools write (verify-sets.ts isToolOwned — the expectation the build is
+// graded against, the report and its markdown, the run status, a --migrate journal, which the next --migrate --apply acts
+// on), and the probe's visual diff (it writes it; a hand-drawn one would pass for its measurement).
+const handWriteRefused = (name: string): boolean => isToolOwned(name) || name.toLowerCase().endsWith(SET_FILE.diff);
+const CACHE_RUN = RUN_CACHE_SEGMENTS.map((s) => s.toLowerCase());
+const VERIFY_DIR = VERIFY_PATH.split(/[\\/]/).map((s) => s.toLowerCase());
 
 // A path as lower-cased segments, `.`/`..` resolved — `/` and `\` alike, so a Windows path reads the same on
 // any host. A relative path is taken from cwd (Claude Code passes file paths absolute; this is the fallback).
@@ -91,10 +94,10 @@ export function writeVerdict(file: string, ctx: GuardCtx): string | null {
   if (after(segs, CACHE_RUN) >= 0) return null;
   for (const root of ctx.tmpRoots) {
     const r = segments(root, "/");
-    if (startsWith(segs, r) && after(segs.slice(r.length), ["designtwin-verify"]) >= 0) return null;
+    if (startsWith(segs, r) && after(segs.slice(r.length), [CACHE_NAME]) >= 0) return null;
   }
   if (after(segs, VERIFY_DIR) >= 0) {
-    if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
+    if (!handWriteRefused(segs[segs.length - 1] ?? "")) return null;
     return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. `
       + `Report progress with \`${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }

@@ -11,7 +11,10 @@ import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 
-const CACHE_NAME = "designtwin-verify";
+/** The run cache's own directory name (under a project's node_modules/.cache/, or the OS temp dir). */
+export const CACHE_NAME = "designtwin-verify";
+/** A project's run cache, as path segments below its root: node_modules/.cache/<CACHE_NAME>. */
+export const RUN_CACHE_SEGMENTS: readonly string[] = ["node_modules", ".cache", CACHE_NAME];
 const shortSha = (s: string): string => sha256Hex(s).slice(0, 16);
 const isDir = (p: string): boolean => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const exists = (p: string): boolean => fs.existsSync(p);
@@ -70,7 +73,7 @@ export function runCacheOf(verifyDir: string): { dir: string; root: string } {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path.join(root, "node_modules", ".cache", CACHE_NAME);
+    const cache = path.join(root, ...RUN_CACHE_SEGMENTS);
     const rel = path.relative(root, v).split(path.sep).join("/");
     return { dir: rel === VERIFY_DIR.split(path.sep).join("/") ? cache : path.join(cache, "dirs", shortSha(rel)), root };
   }
@@ -105,7 +108,7 @@ export function planLockOf(planFile: string): { lockFile: string; cache: { dir: 
   const root = installRootOf(path.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path.relative(root, abs).split(path.sep).join("/");
-  const dir = path.join(root, "node_modules", ".cache", CACHE_NAME);
+  const dir = path.join(root, ...RUN_CACHE_SEGMENTS);
   return { lockFile: path.join(dir, "plan-locks", `${path.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
 }
 /** The write lock of a plan (planLockOf). */
