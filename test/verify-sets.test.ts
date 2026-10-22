@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { CACHE_NAME, RUN_CACHE_SEGMENTS, runCacheDir } from "../design-to-code/run-cache.ts";
+import { CACHE_NAME, RUN_CACHE_SEGMENTS, runCacheOf } from "../design-to-code/run-cache.ts";
 import { SET_FILE, allSets, isJournalFile, isToolOwned, journalFile, setBaseOf, setFile, setNameOfFile, siblingFile } from "../design-to-code/verify-sets.ts";
 import { check, report } from "./assert.ts";
 
@@ -46,9 +46,12 @@ console.log("isToolOwned — the files only the verify tools write (never by han
 console.log("the run cache — its place under a project:");
 {
   check("[cache] node_modules/.cache/<CACHE_NAME> are its segments", RUN_CACHE_SEGMENTS.join("/") === `node_modules/.cache/${CACHE_NAME}` && CACHE_NAME === "designtwin-verify");
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dt-verify-sets-")));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dt-verify-sets-"));
   fs.writeFileSync(path.join(root, "package.json"), "{}");
-  check("[cache] a project's design/verify run cache sits at those segments", path.relative(root, runCacheDir(path.join(root, VERIFY_DIR))).split(path.sep).join("/") === RUN_CACHE_SEGMENTS.join("/"));
+  // (relative to the root the run cache reports: it canonicalises the path, which a temp dir's spelling may not be — an
+  // 8.3 short name on Windows, /var → /private/var on macOS)
+  const cache = runCacheOf(path.join(root, VERIFY_DIR));
+  check("[cache] a project's design/verify run cache sits at those segments", path.relative(cache.root, cache.dir).split(path.sep).join("/") === RUN_CACHE_SEGMENTS.join("/"));
 
   // the set names a verify dir gives, through the table's suffixes
   const vd = path.join(root, VERIFY_DIR);
