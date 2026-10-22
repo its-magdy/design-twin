@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import type { Writable } from "node:stream";
-import { checkPlan, computeStatus, colorLiterals, arbitraryPx, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
+import { checkPlan, colorLiterals, arbitraryPx, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
   scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import { blockerIds } from "../design-to-code/audit.ts";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
@@ -18,6 +18,7 @@ import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
+import { planStatus } from "../design-to-code/plan-status.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
@@ -63,7 +64,7 @@ const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap)
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
 const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, measuredAt: null, mtimeMs: 0, inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false, ...r });
-const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
+const statusOf = (root: string) => planStatus(root).status(planOf(root), { planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server in package.json" };
 const brand: PlanTokenRow = { value: "#5B5FC7", kind: "color", codeToken: "brand-600", verdict: "exact" };
@@ -412,15 +413,6 @@ check("a rendered plan with NO verify report is never `verified` — the plan's 
   const root = project({ "a.tsx": "", "design/verify/login.png": "png" }, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
   return runHook(root).status === 0 && planOf(root).status === "pending" && statusOf(root) === "unverified";
 })());
-check("…nor with a 'pass' report that predates verify-report@2 — it says so instead of trusting it", (() => {
-  const root = project({ "a.tsx": "", "design/verify/login.png": "png" }, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
-  const past = new Date(Date.now() - 60000);
-  fs.utimesSync(path.join(root, "a.tsx"), past, past);
-  fs.writeFileSync(path.join(root, "design", "verify", "login.report.json"), JSON.stringify({ verdict: "pass", why: [] }));
-  runHook(root);
-  const st = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
-  return st.status === "unverified" && /predates designtwin\/verify-report@2/.test(st.reasons.join(" "));
-})());
 check("a failing verify report turns the same plan into `failed`, whatever the plan says", (() => {
   const root = project({ "a.tsx": "" }, { status: "verified", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["a.tsx"], deltas: [] } });
   fs.mkdirSync(path.join(root, "design", "verify"), { recursive: true });
@@ -460,35 +452,17 @@ check("planCodeFiles = files[] (as written, in order) then the mapped modules no
   check(`the hook passes and hashes the mapped shell outside files[] (got ${JSON.stringify(Object.keys(hooked))})`,
     r.status === 0 && statusOf(root) === "static-only" && JSON.stringify(Object.keys(hooked)) === JSON.stringify(["src/Screen.tsx", "src/shell/Shell.tsx"]) && typeof hooked["src/shell/Shell.tsx"] === "string");
   fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// a shared nav item\n");
-  const st = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  const st = planStatus(root).status(planOf(root), { planFile: path.join(root, "design", "plan", "login.json") });
   check(`editing the shared shell → stale, naming it (not static-only) (got ${st.status}: ${st.reasons.join(" | ")})`,
     st.status === "stale" && st.reasons.some((x) => /file\(s\) changed since the hook passed: src\/shell\/Shell\.tsx$/.test(x)));
-  // a hook record written when only files[] was hashed — the shell key is absent. That is the
-  // upgrade, not a change: the plan the hook closed stays closed (not stale + open with no file changed), one note
+  // a hook record written when only files[] was hashed (the shell key absent) is the upgrade, not a change: the Stop hook
+  // leaves the plan closed — silent, its record not rewritten (plan-status.test.ts covers the status and open() of it)
   runHook(root);
   const p = planOf(root);
   const hook = p.verification?.hook;
   if (hook) delete hook.files["src/shell/Shell.tsx"];
-  const planFile = path.join(root, "design", "plan", "login.json");
-  fs.writeFileSync(planFile, JSON.stringify(p, null, 2));
-  const old = computeStatus(planOf(root), { cwd: root, planFile });
-  check(`an older hook record (shell not hashed) → NOT stale, not open; a note "src/shell/Shell.tsx (now hashed: mapped module)" (got ${old.status}: ${old.reasons.join(" | ")})`,
-    old.status === "static-only" && !verifyBuild.isOpen({ file: planFile, plan: planOf(root) }, root)
-    && old.reasons.some((x) => /^hook: not hashed by the hook's last check \(its record predates hashing of mapped modules\), so not a change: src\/shell\/Shell\.tsx \(now hashed: mapped module\)/.test(x))
-    && !old.reasons.some((x) => /file\(s\) changed since/.test(x)));
-  check("…the Stop hook's fast path stays silent on it (closed)", (() => { const r = runHook(root); return r.status === 0 && r.stderr === "" && hookOf(root).files?.["src/shell/Shell.tsx"] === undefined; })());
-  // a files[] entry the old record never hashed is still a change
-  const p2 = planOf(root);
-  if (p2.verification?.hook) delete p2.verification.hook.files["src/Screen.tsx"];
-  fs.writeFileSync(planFile, JSON.stringify(p2, null, 2));
-  const st2 = computeStatus(planOf(root), { cwd: root, planFile });
-  check(`control: a files[] entry missing from the record is still a change → stale "(added to files[])" (got ${st2.status})`,
-    st2.status === "stale" && st2.reasons.some((x) => x.includes("src/Screen.tsx (added to files[])")));
-  // once the hook records the shell, an edit to it reopens the plan
-  runSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root }); // an explicit check re-records
-  const recorded = typeof hookOf(root).files?.["src/shell/Shell.tsx"] === "string";
-  fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// edited after the record\n");
-  check("once a hook check records it, an edit to the shell is a change again (stale)", recorded && statusOf(root) === "stale");
+  fs.writeFileSync(path.join(root, "design", "plan", "login.json"), JSON.stringify(p, null, 2));
+  check("an older hook record (shell not hashed): the Stop hook's fast path stays silent on it (closed)", (() => { const r = runHook(root); return r.status === 0 && r.stderr === "" && hookOf(root).files?.["src/shell/Shell.tsx"] === undefined; })());
 }
 // Extensionless mapModule paths (queued): resolved like an import, under the project, and the resolved FILE
 // hashed; aliases / packages / no file → one hook warning naming them; a resolved module gone → labelled.
@@ -525,7 +499,7 @@ check("planCodeFiles(plan, cwd): an extensionless mapModule resolves .tsx/.ts/.j
     && !checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings.some((x) => /mapModule path\(s\) not hashed/.test(x)));
   runHook(root);
   fs.rmSync(path.join(root, "src/shell/Shell.tsx"));
-  const gone = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  const gone = planStatus(root).status(planOf(root), { planFile: path.join(root, "design", "plan", "login.json") });
   check(`the resolved module deleted → stale, labelled "no longer hashed" (not "no longer in files[]") (got ${gone.reasons.join(" | ")})`,
     gone.status === "stale" && gone.reasons.some((x) => x.includes("src/shell/Shell.tsx (no longer hashed: not in files[] nor a mapped module that resolves)")) && !gone.reasons.some((x) => /\(no longer in files\[\]\)/.test(x)));
 }
@@ -647,7 +621,7 @@ check("hook: a plan listed in a later plan's files[] is hashed as the hook rewro
   const r = runHook(root, { cwd: root, transcript_path: t });
   const rec = readFixture(later, isPlan).verification?.hook?.files || {};
   const onDisk = hashFiles(["design/plan/login.json"], root)["design/plan/login.json"];
-  const st = computeStatus(readFixture(later, isPlan), { cwd: root, planFile: later }).status;
+  const st = planStatus(root).status(readFixture(later, isPlan), { planFile: later }).status;
   return r.status === 0 && !!hookOf(root).result && rec["design/plan/login.json"] === onDisk && st !== "stale";
 })());
 check("missing coverage / a11y evidence WARNS on a passing rendered plan — exit 0", (() => {
@@ -882,7 +856,7 @@ console.log("the live plans and reports: neither comes out `verified`:");
 {
   const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
   const planFile = (s: string) => path.join(root, "design/plan", s + ".json");
-  const st = (s: string) => computeStatus(readFixture(planFile(s), isPlan), { cwd: root, planFile: planFile(s) });
+  const st = (s: string) => planStatus(root).status(readFixture(planFile(s), isPlan), { planFile: planFile(s) });
   const before = [st(JR), st(GP)];
   check("before the hook runs, the stored \"verified\" is ignored — computed status is pending, and says why",
     fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0] ?? "")));
@@ -946,38 +920,9 @@ console.log("end to end — plan-skeleton.js writes the plan, the hook checks it
   p.route = "/jet-roles";
   fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
   const r2 = hook();
-  const st = computeStatus(readFixture(path.join(root, planRel), isPlan), { cwd: root, planFile: path.join(root, planRel) });
+  const st = planStatus(root).status(readFixture(path.join(root, planRel), isPlan), { planFile: path.join(root, planRel) });
   check(`one anchor on the frame + files[] → the hook passes (exit ${r2.status}); status is computed from the live JetRoles report — @1, so unverified: ${st.status}`,
     r2.status === 0 && st.status === "unverified" && /JetRoles\.report\.json is designtwin\/verify-report@1/.test(st.reasons.join(" ")));
-}
-
-console.log("the verify-report@2 shape: incomplete ≠ pass, a changed expectation invalidates the report:");
-{
-  const sha = (t: string) => crypto.createHash("sha256").update(t).digest("hex");
-  // A plan that passes its hook; its report is then swapped between @2 shapes (field names as
-  // verify-screen.js --compare writes them since the @2 schema: verdict pass|fail|incomplete, headline, inputs).
-  const setup = (report: unknown, expectation: string | undefined) => {
-    const root = project({ "a.tsx": "" }, { status: "pending", nodeId: "7314:87192", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["a.tsx"], deltas: [] } });
-    const past = new Date(Date.now() - 60000);
-    fs.utimesSync(path.join(root, "a.tsx"), past, past);
-    fs.mkdirSync(path.join(root, "design", "verify"), { recursive: true });
-    if (expectation !== undefined) fs.writeFileSync(path.join(root, "design", "verify", "JetRoles.expected.json"), expectation);
-    fs.writeFileSync(path.join(root, "design", "verify", "JetRoles.report.json"), JSON.stringify(report));
-    runHook(root);
-    return computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
-  };
-  const EXP = JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "7314:87192", name: "positions " }, hidden: { ids: [] } });
-  const v2 = (verdict: string, extra?: object) => Object.assign({ schema: "designtwin/verify-report@2", screen: "positions ", verdict, headline: `${verdict.toUpperCase()} — nodes measured 180/189`, why: [], inputs: { expectationSha256: sha(EXP) }, summary: { componentsAbsent: 0 } }, extra);
-  const inc = setup(v2("incomplete"), EXP);
-  check(`an @2 report found through its expectation's frame.nodeId; verdict "incomplete" → unverified, quoting the headline (got ${inc.status})`,
-    inc.status === "unverified" && inc.reports[0]?.matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
-  const pass = setup(v2("pass"), EXP);
-  check(`an @2 "pass" that does not record the export content hash it measured → unverified, saying so (got ${pass.status})`, pass.status === "unverified" && /inputs\.exportContentSha256/.test(pass.reasons.join(" ")));
-  const moved = setup(v2("pass"), EXP.replace("positions ", "positions"));
-  check(`an @2 "pass" whose inputs.expectationSha256 no longer matches the .expected.json on disk → unverified (got ${moved.status})`,
-    moved.status === "unverified" && /inputs\.expectationSha256 no longer matches/.test(moved.reasons.join(" ")));
-  const fail = setup(v2("fail"), EXP);
-  check(`an @2 "fail" → failed (got ${fail.status})`, fail.status === "failed");
 }
 
 console.log("freshness by content, never by clock:");
@@ -1011,7 +956,7 @@ console.log("freshness by content, never by clock:");
     verification: { mode: "rendered", artifacts: ["app/src/layout/Header.tsx"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }, null, 2));
   const vs = (args: string[]) => runSync(process.execPath, [VS, ...args], { cwd: root });
   const hook = () => runSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }) });
-  const st = () => computeStatus(readFixture(planFile, isPlan), { cwd: root, planFile });
+  const st = () => planStatus(root).status(readFixture(planFile, isPlan), { planFile });
   const x = vs(["--expect", `${E}/${JR}.json`]);
   fs.writeFileSync(path.join(root, "design/verify/m.json"), JSON.stringify({ measuredAt: "2026-09-23T00:00:00Z", renderer: "test", nodes: [] }));
   vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
@@ -1127,10 +1072,6 @@ check("a plan claiming \"pass-with-deviations\" beside that report is no contrad
   && verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "incomplete" })]).length === 1);
 check("[deviations] a plan summarising a pass-with-deviations report as a plain \"pass\" gets a warning to say the deviations",
   verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "pass-with-deviations" })]).some((w) => /say the accepted deviations/.test(w)));
-check("[deviations] a hand-stored \"verified-with-deviations\" is ignored and noted like a stored \"verified\"", (() => {
-  const src = fs.readFileSync(path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts"), "utf8");
-  return /COMPUTED_STORED = new Set<string>\(\[[^\]]*"verified-with-deviations"/.test(src);
-})());
 check("the block message names the file that USES the literal, not the allow-listed token file", (() => {
   const b = blocks({ "app/src/theme/theme.css": ".x { background: #5B5FC7 }", "app/src/Screen.tsx": "<div style={{ color: '#5B5FC7' }} />" },
     { files: ["app/src/theme/theme.css", "app/src/Screen.tsx"], tokens: [brand], allowedLiterals: [{ file: "app/src/theme/theme.css", reason: "generated token source" }], verification: STATIC });
@@ -2281,7 +2222,7 @@ void build(tmp).then(async () => {
     const got = rels();
     check(`a report whose expectation was retired (.retired) is not located; the canonical one is (got ${JSON.stringify(got)})`,
       !got.includes("design/verify/Nick.report.json") && got.includes("design/verify/Sample_Screen__1_2.report.json"));
-    const st = computeStatus(planOf(root), { cwd: root, planFile: pf });
+    const st = planStatus(root).status(planOf(root), { planFile: pf });
     check(`…so the retired fail does not keep the plan failed (got ${st.status})`, st.status !== "failed" && !st.reasons.some((x) => x.includes("Nick")));
     // control: the same report beside a LIVE expectation is still read
     fs.renameSync(path.join(v, "Nick.expected.json.retired"), path.join(v, "Nick.expected.json"));

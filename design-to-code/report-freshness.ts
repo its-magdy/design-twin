@@ -1,5 +1,5 @@
 // report-freshness.ts — what a verify report was computed against, and whether that still holds. ONE module both stamps
-// (verify-screen --compare records it in report.inputs) and judges (verify-build's status, verify-compare's SAME BUILD
+// (verify-screen --compare records it in report.inputs) and judges (plan-status.ts, a plan's status; verify-compare's SAME BUILD
 // SERVED note): a report is fresh, or stale with typed reasons, each worded once (staleText). It also binds a measured
 // file to its expectation and run (verify-compare's integrity reasons, verify-run's --phase measured/done refusals —
 // measuredText) and reads a plan's verification.recorded against the report it names (recordedReport).
@@ -9,7 +9,7 @@
 // or a fresh clone flips) and the hash of the plan's waivers[]/descopes[]. git HEAD is recorded and shown, never a reason:
 // a commit does not say whether the tree was dirty. The git calls go through `Git` (injected; systemGit runs git).
 //
-// The consequence of a reason is each caller's: verify-build reads a stale report as `unverified`, verify-compare grades
+// The consequence of a reason is each caller's: plan-status reads a stale report as `unverified`, verify-compare grades
 // an unbound measured file `incomplete`, verify-run refuses to record it.
 import fs from "node:fs";
 import path from "node:path";

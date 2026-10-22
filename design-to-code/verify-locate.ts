@@ -1,6 +1,6 @@
 // verify-locate.ts — which screen export and which verify reports a plan is about (locateExport, locateReports).
-// verify-build computes a plan's status from them; verify-screen --migrate (verify-migrate.ts) checks that a rename
-// leaves every plan finding the reports it found. A module of its own so --migrate does not bundle verify-build.
+// plan-status.ts computes a plan's status from them (verify-build's checks read them too); verify-screen --migrate
+// (verify-migrate.ts) checks, through plan-status, that a rename leaves every plan finding the reports it found.
 import fs from "node:fs";
 import path from "node:path";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)

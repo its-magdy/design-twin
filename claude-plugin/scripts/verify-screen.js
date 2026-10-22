@@ -87,14 +87,14 @@ function mapModules(plan) {
   return out;
 }
 function planCodeFiles(plan, cwd) {
-  const listed2 = isUnknownArray(plan.files) ? plan.files.map(String) : [];
-  const seen = new Set(listed2.map((f) => path.posix.normalize(f.trim().split("\\").join("/"))));
+  const listed3 = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed3.map((f) => path.posix.normalize(f.trim().split("\\").join("/"))));
   const extra = /* @__PURE__ */ new Set();
   for (const m of mapModules(plan)) {
     const rel = mappedModulePath(m, cwd);
     if (rel !== null && !seen.has(rel)) extra.add(rel);
   }
-  return [...listed2, ...[...extra].sort()];
+  return [...listed3, ...[...extra].sort()];
 }
 function planCodeSkipped(plan, cwd) {
   const out = /* @__PURE__ */ new Set();
@@ -129,6 +129,12 @@ function legacyPlanHash(plan) {
     else delete copy.verification;
   }
   return sha256Hex(JSON.stringify(copy)).slice(0, 16);
+}
+function hookHashOf(hook, plan) {
+  const h = hook && typeof hook.planHash === "string" ? hook.planHash : null;
+  if (h === null) return null;
+  if (h === planHash(plan)) return "current";
+  return h === legacyPlanHash(plan) ? "legacy" : null;
 }
 
 // design-to-code/report-freshness.ts
@@ -857,6 +863,25 @@ function reportInputs(report) {
     waiversSha256: isJsonObject(i.waivers) ? str(i.waivers.sha256) : null
   };
 }
+var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
+function staleText(rel, r) {
+  switch (r.kind) {
+    case "no-export-sha":
+      return `${rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`;
+    case "no-export":
+      return `cannot find this plan's screen export to compare with ${rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`;
+    case "export-changed":
+      return `the design changed since ${rel} was computed (export content sha256 ${r.was.slice(0, 12)}\u2026 \u2192 ${r.now.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`;
+    case "expectation-changed":
+      return `${rel} was computed against a different ${r.expectation} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`;
+    case "no-code":
+      return `${rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`;
+    case "code-changed":
+      return `${rel} measured different code \u2014 changed since: ${r.files.slice(0, 6).join(", ")}${r.files.length > 6 ? `, +${r.files.length - 6} more` : ""} \u2014 re-run --compare`;
+    case "waivers-changed":
+      return `${rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`;
+  }
+}
 function stampEvidence(o) {
   const against = str(o.measured.expectationSha256), exportSha = str(o.expectation.exportContentSha256);
   return {
@@ -1578,7 +1603,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
     };
     const v = plan.verification ?? {};
     const hook = v.hook;
-    if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
+    if (hook && hookHashOf(hook, plan) === "legacy") {
       hook.planHash = planHash(plan);
       notes.push("the hook's record held an older plan hash that also covered verification \u2014 re-stamped with the current one, so this record does not reopen the plan");
     }
@@ -6333,9 +6358,9 @@ function reportToMarkdown(r) {
 function artifactText(a) {
   if (typeof a === "string") return mdText(a);
   if (!a.path) return "";
-  const listed2 = "listedAs" in a && a.listedAs ? ` (listed as ${mdText(a.listedAs)})` : "";
+  const listed3 = "listedAs" in a && a.listedAs ? ` (listed as ${mdText(a.listedAs)})` : "";
   const missing = "exists" in a && !a.exists ? " (missing on disk)" : "";
-  return mdText(a.path) + listed2 + missing;
+  return mdText(a.path) + listed3 + missing;
 }
 function headMarkdown(r) {
   const L = [];
@@ -6730,6 +6755,126 @@ function locateReports(plan, planFile, cwd, exp) {
   return out;
 }
 
+// design-to-code/plan-status.ts
+var LIFECYCLE = /* @__PURE__ */ new Set(["pending", "awaiting-user", "abandoned"]);
+var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "verified-with-deviations", "static-only"]);
+var storedText = (doc) => isJsonObject(doc) && typeof doc.status === "string" ? doc.status : null;
+var isLifecycle = (s) => LIFECYCLE.has(s);
+function lifecycleOf(doc) {
+  const s = (storedText(doc) ?? "").trim().toLowerCase();
+  return isLifecycle(s) ? s : "pending";
+}
+function storedComputed(doc) {
+  const s = storedText(doc);
+  return s !== null && COMPUTED_STORED.has(s.trim().toLowerCase()) ? s : null;
+}
+var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
+var listed = (xs) => `${xs.slice(0, 6).join(", ")}${xs.length > 6 ? `, +${xs.length - 6} more` : ""}`;
+function planStatus(root, o = {}) {
+  const codeHashes = (plan) => fileHashes(planCodeFiles(plan || {}, root), root, o.cached);
+  function codeDiff(plan, recorded) {
+    const now = codeHashes(plan);
+    const files = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+    const changed = [], unhashed = [];
+    for (const f of /* @__PURE__ */ new Set([...Object.keys(recorded), ...Object.keys(now)])) {
+      if (recorded[f] === now[f]) continue;
+      if (now[f] === void 0) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+      else if (recorded[f] === void 0) {
+        if (files.has(f)) changed.push(`${f} (added to files[])`);
+        else unhashed.push(`${f} (now hashed: mapped module)`);
+      } else changed.push(now[f] === null ? `${f} (missing)` : f);
+    }
+    return { changed, unhashed };
+  }
+  function hook(plan) {
+    const h = plan.verification && plan.verification.hook;
+    if (!h || !h.result) return { kind: "unchecked" };
+    const matches = hookHashOf(h, plan) !== null;
+    if (h.planHash && !matches) return { kind: "plan-changed" };
+    if (h.result !== "pass") return { kind: "blocked", blocking: h.blocking && h.blocking.length ? h.blocking : ["the hook's last check blocked"] };
+    const d = h.files ? codeDiff(plan, h.files) : { changed: [], unhashed: [] };
+    const edits = recordedEdits(plan, root);
+    if (edits.length) return { kind: "edited", edits, unhashed: d.unhashed };
+    if (d.changed.length) return { kind: "stale", changed: d.changed, unhashed: d.unhashed };
+    return { kind: "passed", complete: matches && !!h.files, unhashed: d.unhashed };
+  }
+  const open = (plan) => {
+    if (lifecycleOf(plan) !== "pending") return false;
+    const h = hook(plan);
+    return h.kind !== "passed" || !h.complete;
+  };
+  const reports = (plan, planFile, exp) => locateReports(plan, planFile, root, exp);
+  function reportVerdict(plan, exp, found) {
+    const f = verificationFacts(plan.verification);
+    if (!found.length) {
+      if (f.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${f.reason || "no reason recorded"})`] };
+      return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
+    }
+    const legacy2 = found.filter((r) => r.schema !== REPORT_SCHEMA_V2);
+    if (legacy2.length) return { status: "unverified", reasons: legacy2.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
+    const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+    const fresh = reportFreshness(root, { ...o.cached ? { cached: o.cached } : {} });
+    const failing = found.filter((r) => r.verdict === "fail");
+    if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (fresh.waiversChanged(r.inputs, plan) ? ` \u2014 ${WAIVERS_CHANGED}` : "")) };
+    const notPass = found.filter((r) => !isPassingVerdict(r.verdict));
+    if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
+    for (const r of found) {
+      const stale = fresh.judge(r.rel, r.inputs, { plan, exportDoc: exp ? exp.doc : null })[0];
+      if (stale !== void 0) return { status: "unverified", reasons: [staleText(r.rel, stale)] };
+    }
+    const head = found.map((r) => r.inputs.code && r.inputs.code.gitHead).find(Boolean);
+    const withDeviations = found.filter((r) => r.verdict === "pass-with-deviations");
+    const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
+    return {
+      status: withDeviations.length ? "verified-with-deviations" : "verified",
+      reasons: [`${found.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`]
+    };
+  }
+  function status(plan, so = {}) {
+    const notes = [];
+    const stored = storedComputed(plan);
+    if (stored !== null) notes.push(`the stored "status": "${stored}" was not confirmed by the current hook and is ignored \u2014 status is computed, never stored`);
+    const life = lifecycleOf(plan);
+    if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? 'retired by hand ("status": "abandoned")' : 'paused on a question for the user ("status": "awaiting-user")'], reports: [] };
+    const exp = so.export === void 0 ? locateExport(plan, so.planFile, root) : so.export;
+    const found = so.reports || reports(plan, so.planFile, exp);
+    const rv = reportVerdict(plan, exp, found);
+    const h = hook(plan);
+    let hookState = null, hookWhy = [];
+    switch (h.kind) {
+      case "unchecked":
+        hookState = "pending";
+        hookWhy = ["the build-screen Stop hook has not checked this plan"];
+        break;
+      case "plan-changed":
+        hookState = "pending";
+        hookWhy = ["the plan changed after the hook's last check"];
+        break;
+      case "blocked":
+        hookState = "blocked";
+        hookWhy = h.blocking;
+        break;
+      case "edited":
+        hookState = "blocked";
+        hookWhy = h.edits;
+        break;
+      case "stale":
+        hookState = "stale";
+        hookWhy = [`file(s) changed since the hook passed: ${listed(h.changed)}`];
+        break;
+      case "passed":
+        break;
+    }
+    const unhashed = "unhashed" in h ? h.unhashed : [];
+    const unhashedWhy = unhashed.length ? [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ${listed(unhashed)} \u2014 the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`] : [];
+    const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
+    if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((x) => "hook: " + x), unhashedWhy), reports: found };
+    if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports: found };
+    return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports: found };
+  }
+  return { root, codeHashes, hook, open, reports, status };
+}
+
 // design-to-code/verify-migrate.ts
 var slash3 = (p) => p.split(path19.sep).join("/");
 var exists2 = (p) => fs19.existsSync(p);
@@ -6907,7 +7052,7 @@ function planBlocks(p, names, d) {
   }
   return [];
 }
-var freshRefs = (d) => (p) => locateReports(p.plan, p.file, d.cwd, void 0);
+var freshRefs = (d) => (p) => planStatus(d.cwd).reports(p.plan, p.file);
 function plansFinding(plans, set, d, refsOf) {
   if (path19.resolve(d.verifyDir) !== path19.join(d.cwd, VERIFY_DIR)) return [];
   const rel = slash3(path19.relative(d.cwd, path19.join(d.verifyDir, set + ".report.json")));
@@ -7192,7 +7337,7 @@ function doMove(m, link) {
     throw e;
   }
 }
-function listed(p) {
+function listed2(p) {
   try {
     return fs19.readdirSync(path19.dirname(p)).includes(path19.basename(p));
   } catch {
@@ -7202,13 +7347,13 @@ function listed(p) {
 function undoMove(m, link) {
   const name = path19.basename;
   try {
-    if (m.tmp !== void 0 && listed(m.tmp)) {
-      if (listed(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
-      if (listed(m.to) && sameFile2(m.tmp, m.to)) fs19.unlinkSync(m.to);
+    if (m.tmp !== void 0 && listed2(m.tmp)) {
+      if (listed2(m.from)) return `${name(m.tmp)} and ${name(m.from)} both exist \u2014 keep one by hand`;
+      if (listed2(m.to) && sameFile2(m.tmp, m.to)) fs19.unlinkSync(m.to);
       moveNoReplace(m.tmp, m.from, link);
       return null;
     }
-    const atFrom = listed(m.from), atTo = listed(m.to);
+    const atFrom = listed2(m.from), atTo = listed2(m.to);
     if (atFrom && atTo) {
       if (!sameFile2(m.from, m.to)) return `${name(m.from)} and ${name(m.to)} both exist \u2014 keep one by hand`;
       fs19.unlinkSync(m.to);
@@ -7427,7 +7572,7 @@ function applyRename(s, d) {
         if (raw === null) throw new Error(`${p.rel} disappeared`);
         const plan = parsePlanText(raw, p.rel);
         const hook = plan.verification && plan.verification.hook;
-        const restamp = !!hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan);
+        const restamp = hookHashOf(hook, plan) === "legacy";
         fields = rewriteRefs(plan, (ref, field) => {
           const n = namedFile(ref, field, p.file, d);
           const nn = n === null ? void 0 : nameMap.get(n);
@@ -7458,7 +7603,7 @@ function applyRename(s, d) {
     }
     for (const p of finders) {
       const plan = parsePlanText(fs19.readFileSync(p.file, "utf8"), p.rel);
-      if (!locateReports(plan, p.file, d.cwd, void 0).some((r) => r.rel === newReportRel)) problems.push(`${p.rel}: verify-build no longer finds ${path19.basename(newReportRel)} for it`);
+      if (!planStatus(d.cwd).reports(plan, p.file).some((r) => r.rel === newReportRel)) problems.push(`${p.rel}: its status no longer reads ${path19.basename(newReportRel)}`);
     }
     if (problems.length) {
       const left = rollback();
@@ -7512,16 +7657,16 @@ function expectDirOf(out) {
   if (endsInSep(out)) return trimSep(out);
   return path20.dirname(out);
 }
-function migratedArtifact(listed2, o) {
+function migratedArtifact(listed3, o) {
   const st = o.status;
-  if (fs20.existsSync(listed2) || st === null || st === "v1" || st.screen === o.setName) return null;
+  if (fs20.existsSync(listed3) || st === null || st === "v1" || st.screen === o.setName) return null;
   if (o.measuredRun === void 0 || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
-  if (path20.resolve(path20.dirname(listed2)) !== path20.resolve(o.verifyDir)) return null;
-  const base = path20.basename(listed2);
+  if (path20.resolve(path20.dirname(listed3)) !== path20.resolve(o.verifyDir)) return null;
+  const base = path20.basename(listed3);
   if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
   const old = st.screen.toLowerCase();
   if (verifySets(o.verifyDir).some((n) => n.toLowerCase() === old)) return null;
-  const candidate = listed2.slice(0, listed2.length - base.length) + o.setName + base.slice(st.screen.length);
+  const candidate = listed3.slice(0, listed3.length - base.length) + o.setName + base.slice(st.screen.length);
   return fs20.existsSync(candidate) ? candidate : null;
 }
 function plansForNode(nodeId) {
@@ -7954,20 +8099,20 @@ function compareMain(files, flags, USAGE) {
   const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path20.basename(found.file) : `${path20.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
   const measuredSha = sha(measuredFile);
-  const migrated = (listed2) => migratedArtifact(listed2, { setName, verifyDir: path20.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
+  const migrated = (listed3) => migratedArtifact(listed3, { setName, verifyDir: path20.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
   const artifactNotes = [];
-  const movedNote = (listed2, now) => {
-    artifactNotes.push(`${listed2} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) \u2014 read as ${now}`);
+  const movedNote = (listed3, now) => {
+    artifactNotes.push(`${listed3} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) \u2014 read as ${now}`);
     console.error(`note  ${artifactNotes[artifactNotes.length - 1]}`);
   };
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
-    const listed2 = typeof a === "string" ? a : a && a.path;
-    const moved = listed2 ? migrated(listed2) : null;
-    if (listed2 && moved !== null) movedNote(listed2, moved);
-    const p = moved ?? listed2;
+    const listed3 = typeof a === "string" ? a : a && a.path;
+    const moved = listed3 ? migrated(listed3) : null;
+    if (listed3 && moved !== null) movedNote(listed3, moved);
+    const p = moved ?? listed3;
     const exists3 = !!p && fs20.existsSync(p);
-    return { ...ifDefined("path", p), exists: exists3, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists3 ? sha(p) : void 0), ...moved !== null ? { listedAs: listed2 } : {} };
+    return { ...ifDefined("path", p), exists: exists3, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists3 ? sha(p) : void 0), ...moved !== null ? { listedAs: listed3 } : {} };
   });
   let code;
   let planHit;
