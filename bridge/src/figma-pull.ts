@@ -1262,12 +1262,13 @@ async function cli(argv: string[]): Promise<void> {
     }
     // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
     process.argv.splice(2, 1);
-    // Awaited only until the module has LOADED (its main() runs on, unawaited, after cli() returns): a failure to load
-    // it — an invalid FIGMA_BRIDGE_PORT exits through exitCli at server-core's load, still inside runCli, so the CliExit
-    // lands here — ends the process on its exit code, naturally: nothing holds the loop once the module failed. Once
-    // cli() has returned, runCli is done with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
+    // Awaited only until the module has LOADED; then its server is started (runServer — loading it starts nothing, so a
+    // suite can load it) and runs on, unawaited, after cli() returns. A failure to load it — an invalid FIGMA_BRIDGE_PORT
+    // exits through exitCli at server-core's load, still inside runCli, so the CliExit lands here — ends the process on
+    // its exit code, naturally: nothing holds the loop once the module failed. Once cli() has returned, runCli is done
+    // with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
     try {
-      await import("./figma-mcp.ts");
+      (await import("./figma-mcp.ts")).runServer();
     } catch (e) {
       if (e instanceof CliExit) { process.exitCode = e.code; return; }
       console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));

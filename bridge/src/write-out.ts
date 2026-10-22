@@ -43,6 +43,17 @@ export type Stamped<R> = R & { sourceFile?: string; sourceFileKey?: string };
 
 export type Log = (m: string) => void;
 
+/** What a write did to files already on disk — returned (as `changes`) only when the write keeps `.prev` copies
+ *  (keepPrev: the MCP server's implicit spill). Absolute paths. */
+export interface ChangeReport {
+  /** The `.prev` copies this write made: each JSON it replaced with different content (stamps aside). */
+  kept: string[];
+  /** The pages/ layer files that were on disk before this write (a page walk only), changed or not. */
+  replaced: string[];
+  /** `.prev` files an earlier write left that are still on disk, untouched by this one. */
+  earlier: string[];
+}
+
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
 // next to the bridge's own source. FIGMA_EXPORT_DIR is the same env var snapshot-meta.ts already
@@ -595,7 +606,9 @@ const REF_DIR = "assets";
 //
 // `png`: the reference PNG's own pixel size, read from its bytes — absent when no reference asset
 // carried PNG bytes.
-function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined }): { outDir: string; reference: string; png?: { w: number; h: number }; wrote: { screenshot: true; assets: number; reference: string } } {
+// `opts.keepPrev`: a change report, like the other writers' — always empty: writeAssets never replaces a file with
+// different bytes, so a screenshot has nothing to keep.
+function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined }): { outDir: string; reference: string; png?: { w: number; h: number }; wrote: { screenshot: true; assets: number; reference: string }; changes?: ChangeReport } {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   const scale = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : undefined;
@@ -609,7 +622,7 @@ function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, 
   // here from the file actually written is what keeps the message and the file in agreement.
   const first = r.assets.find((a) => a && a.file);
   const reference = first ? REF_DIR + "/" + path.basename(first.file) : r.reference;
-  return { outDir: dir, reference, ...(png ? { png } : {}), wrote: { screenshot: true as const, assets, reference } };
+  return { outDir: dir, reference, ...(png ? { png } : {}), wrote: { screenshot: true as const, assets, reference }, ...(opts && opts.keepPrev ? { changes: { kept: [], replaced: [], earlier: [] } } : {}) };
 }
 
 // The whole-export write, shared by the CLI's default path and the MCP export tools' writeToDisk
@@ -622,12 +635,19 @@ function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, 
 // `<file>.prev` — one level, the next such spill replaces it — and `wrote.prevKept` lists those .prev
 // paths (absolute), present only when non-empty. The CLI and an explicit writeToDisk keep nothing.
 // Assets need nothing: writeAssets never overwrites a file with different bytes.
-// `opts.replaced` (the MCP server's implicit spill only): receives every pages/ layer file this write replaced —
-// each one that was on disk before it (absolute paths) — for the spill's note. Nothing is added to the result.
-function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined; replaced?: string[] | undefined }) {
+// Under keepPrev the result also carries `changes` (ChangeReport): those .prev paths, every pages/ layer file that was
+// on disk before this write, and the .prev files earlier spills left (prevFilesUnder) — for the spill's note.
+function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
   const dir = resolveOutDir(outDir);
   const keep: string[] | undefined = opts && opts.keepPrev ? [] : undefined;
+  const replaced: string[] = [];
   const kept = (): { prevKept?: string[] } => (keep && keep.length ? { prevKept: keep } : {});
+  // Read once the write is done: the .prev files on disk that this write did not make.
+  const changes = (): { changes?: ChangeReport } => {
+    if (!keep) return {};
+    const made = new Set(keep);
+    return { changes: { kept: [...keep], replaced: [...replaced], earlier: prevFilesUnder(dir).filter((f) => !made.has(f)) } };
+  };
   fs.mkdirSync(dir, { recursive: true });
   writeSchemaDoc(dir, log);
   // A library catalog is routed by the PRODUCER's own flag (`source.role`), not by a CLI-side guess:
@@ -636,7 +656,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
   const isLib = !!(r.designSystem.source && r.designSystem.source.role === "library");
   if (isLib) {
     const lib = writeLibrary(dir, r.designSystem, log, keep);
-    return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans, ...kept() } };
+    return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans, ...kept() }, ...changes() };
   }
   const ds = writeDesignSystem(dir, r.designSystem, log, keep);
   // On a file that CONSUMES a library, the variables flagged `remote` are only the library ones something
@@ -668,7 +688,7 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     const hn = hiddenNodesLine(full.layersDoc.manifest);
     if (log && hn) log(hn);
   }
-  const pages = full ? writePages(dir, full.layersDoc, log, keep, opts && opts.replaced) : null;
+  const pages = full ? writePages(dir, full.layersDoc, log, keep, keep ? replaced : undefined) : null;
   if (full && log) { const d = danglingPointers(dir, full.layersDoc); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   return {
     outDir: dir,
@@ -682,7 +702,29 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
       ...kept(),
     },
     index: pages ? pages.meta : undefined,
+    ...changes(),
   };
+}
+
+// Every `*.prev` an implicit full/design-system spill can keep: under pages/, design-system/ and libraries/, plus the
+// export ROOT's own (design-system.json.prev — the manifest sits at the root, not in a tree). A screen spill's
+// <screen>.json.prev sits under pages/ too, so it is among them.
+function prevFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    let ents: fs.Dirent[] = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.name.endsWith(".prev")) out.push(f);
+    }
+  };
+  for (const sub of ["pages", "design-system", "libraries"]) walk(path.join(dir, sub));
+  let root: fs.Dirent[] = [];
+  try { root = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* no export dir yet */ }
+  for (const e of root) if (e.isFile() && e.name.endsWith(".prev")) out.push(path.join(dir, e.name));
+  return out;
 }
 
 // The `reuseKey`s of a <base>.assets.json's rows whose owner carries no paint override — all otherScreenTrees
@@ -757,7 +799,8 @@ function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<stri
 // `opts.keepPrev`: when set and the screen JSON already exists with a DIFFERENT design (the top-level
 // `exportedAt` stamp aside), the old file is
 // kept as `<screen>.json.prev` (one level, replaced by the next one) and `wrote.prev` names it. The MCP server
-// sets it only on an implicit spill — an explicit pull overwriting its own file is the point of the pull.
+// sets it only on an implicit spill — an explicit pull overwriting its own file is the point of the pull. Under it the
+// result also carries `changes` (ChangeReport): that .prev, or — when this write kept none — the one an earlier spill left.
 function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>, log?: Log, opts?: { keepPrev?: boolean | undefined }) {
   const dir = resolveOutDir(outDir);
   const paths = screenPaths(r, "/");
@@ -874,6 +917,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
       assetIndex: assetIndex || undefined,
       assetsSkipped: Array.isArray(r.assets) ? r.assets.length - assets : 0,
     },
+    ...(keep ? { changes: { kept: [...keep], replaced: [], earlier: !prev && fs.existsSync(path.join(dir, paths.screen) + ".prev") ? [path.join(dir, paths.screen) + ".prev"] : [] } } : {}),
   };
 }
 
@@ -1152,13 +1196,13 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 // or without a page walk — so `in` narrows the union to the writer's own reply type.
 // Overloaded so a caller that knows its reply's kind gets that writer's own result back (the CLI prints a
 // screenshot's path and pixel size from it); a caller holding the union gets the union.
-type WriteAnyOpts = { scale?: number | undefined; keepPrev?: boolean | undefined; replaced?: string[] | undefined };
+type WriteAnyOpts = { scale?: number | undefined; keepPrev?: boolean | undefined };
 function writeAny(outDir: string | null | undefined, r: Stamped<ScreenshotReply>, log?: Log, opts?: WriteAnyOpts): ReturnType<typeof writeScreenshot>;
 function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: WriteAnyOpts): ReturnType<typeof writeScreen> | ReturnType<typeof writeScreenshot> | ReturnType<typeof writeExport>;
 function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: WriteAnyOpts) {
   if ("screen" in r) return writeScreen(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
   if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
-  return writeExport(outDir, r, log, opts && (opts.keepPrev !== undefined || opts.replaced) ? { keepPrev: opts.keepPrev, replaced: opts.replaced } : undefined);
+  return writeExport(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
 }
 
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps

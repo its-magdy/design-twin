@@ -161,7 +161,13 @@ bun test/read-plan-e2e.test.ts # expect: all checks pass, exit 0 — what BOTH f
                                  # real dtwin process and the real MCP server through a recording daemon (FIGMA_BRIDGE_PORT=8789's
                                  # socket — run it after cli-pull, never beside it), each MCP tool's declared read options, and
                                  # the CLI's files equal to writeAny's for the same reply
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun test/mcp-delivery.test.ts  # expect: all checks pass, exit 0 — how an MCP export is delivered (delivery.ts): inline,
+                                 # an explicit write, an implicit spill or a refusal, and the note from write-out's change
+                                 # report (.prev kept / layer files replaced / earlier .prev still on disk); then the real
+                                 # tools IN PROCESS (figma-mcp.ts loaded as a module — it starts nothing on import — over an
+                                 # in-memory transport) through a recording daemon on FIGMA_BRIDGE_PORT=8789's socket, every
+                                 # writeToDisk / outDir / reply-kind path; and that `bun figma-mcp.ts` and `dtwin mcp` both serve
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed

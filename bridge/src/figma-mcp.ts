@@ -47,7 +47,7 @@ import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // the CLI sends; each tool's declared read options come from the scopes in the same registry rows.
 import { planRead, readOptsFor } from "./read-plan.ts";
 import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScopeKind } from "./read-plan.ts";
-import { ifDefined, isStringArray } from "./json-util.ts";
+import { ifDefined } from "./json-util.ts";
 import type { ReadOptNameFor } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
 import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
@@ -74,7 +74,7 @@ let closeOwn: (() => void) | null = null;
 // The "not sharing" note (daemon.DAEMON_UNSUPPORTED) has been logged: once per process.
 let unsharedSaid = false;
 // The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
-// arriving while main() is still resolving at startup) each saw no daemon and each called
+// arriving while startServer() is still resolving at startup) each saw no daemon and each called
 // createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
 // dropped after a daemon route or a failure, so the next call re-resolves (that session may have gone).
 let holding: Promise<Upstream> | null = null;
@@ -206,6 +206,7 @@ function stripAssets(r: ExportReply): object {
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
+import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findExportDir, findMapFile } from "./project-layout.ts";
 import type { Stamped } from "./write-out.ts";
@@ -265,14 +266,14 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
 // The signal every bridge request of a tool call carries. The SDK aborts `extra.signal` when the client
 // sends notifications/cancelled for that call; but its stdio transport never notices stdin ENDING (it
 // listens for data/error only), so a client that exits mid-export would leave the plugin walking for
-// nobody. `clientGone` is that half: main() aborts it on stdin end/close, which aborts every call in flight.
+// nobody. `clientGone` is that half: startServer() aborts it on stdin end/close, which aborts every call in flight.
 const clientGone = new AbortController();
 // The client has gone: stdin ended/closed, or a write to stdout found the client's read end closed.
 // When the client is killed both pipes break at once, and a progress tick can reach stdout before stdin's
 // 'end' is handled — whichever is seen first decides; the rest are no-ops.
 let goneHandled = false;
 function clientWentAway(how: string): void {
-  // stdout is guarded from startup (main()); this call is the belt for any path that runs earlier.
+  // stdout is guarded from startup (startServer()); this call is the belt for any path that runs earlier.
   guardStdio();
   if (!clientGone.signal.aborted) clientGone.abort(new Error(`the MCP client went away (${how}) — request abandoned`));
   // 'end' and 'close' both fire (and with fd 0 closed only 'end' does): decide once.
@@ -347,7 +348,7 @@ function leave(msg: string): void {
 // the result of a call the abort just settled, a progress notification — raises EPIPE as an 'error'
 // event. The SDK's StdioServerTransport has no stdout 'error' listener, so that event is an uncaught
 // exception and would kill the process that may now be serving other sessions. Installed at STARTUP
-// (main()), not when the client is seen to go: a killed client breaks both pipes at once, and a progress
+// (startServer()), not when the client is seen to go: a killed client breaks both pipes at once, and a progress
 // tick written before stdin's 'end' is handled must not be the thing that kills the orphan. A stdout
 // error IS the client going away (EPIPE: its read end is closed; ERR_STREAM_DESTROYED: a write after that);
 // a stderr one is swallowed — there is nobody left to tell.
@@ -414,93 +415,32 @@ function preflightOut(a: WriteArgs): void {
   if (a.writeToDisk === true || (a.writeToDisk !== false && !!a.outDir)) assertInsideCwd(a.outDir);
 }
 
-// Every `*.prev` an implicit full/design-system spill can keep: under pages/, design-system/ and libraries/,
-// plus the export ROOT's own (design-system.json.prev — the manifest sits at the root, not in a tree).
-function prevFilesUnder(dir: string): string[] {
-  const out: string[] = [];
-  const walk = (d: string): void => {
-    let ents: fs.Dirent[] = [];
-    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const f = path.join(d, e.name);
-      if (e.isDirectory()) walk(f);
-      else if (e.name.endsWith(".prev")) out.push(f);
-    }
-  };
-  for (const sub of ["pages", "design-system", "libraries"]) walk(path.join(dir, sub));
-  let root: fs.Dirent[] = [];
-  try { root = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* no export dir yet */ }
-  for (const e of root) if (e.isFile() && e.name.endsWith(".prev")) out.push(path.join(dir, e.name));
-  return out;
-}
-
+// One export, delivered: the pure step (delivery.ts) decides inline / written / refused and words the note, from the
+// change report write-out returns for an implicit spill; this does the measuring, the writing and the bookkeeping.
 function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: number | undefined }) {
   const { r, t0, requestMs } = p;
-  let spilled = "";
-  if (!a || !a.writeToDisk) {
-    // The clock rides along inline too (top level); `write` is 0 — nothing was written.
-    const payload = { ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } };
-    const limit = inlineLimitChars();
-    // The text only when it fits: a real export is tens of megabytes, so the size is measured without serialising it.
-    const text = prettyJsonWithin(payload, limit);
-    if (text !== null) return textResult(text);
-    const why = `this export is past the ${limit.toLocaleString("en-US")} characters (~${Math.round(limit / 4000)}k tokens) the client accepts inline (Claude Code keeps larger results out of the conversation, and MAX_MCP_OUTPUT_TOKENS can only lower this)`;
-    if (a && a.writeToDisk === false) throw new Error(`${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).`);
-    spilled = `Written to disk WITHOUT being asked: ${why}, so returning it inline would have been cut off mid-JSON. `;
-  }
-  const implicit = spilled !== "";
+  // The clock rides along inline too (top level); `write` is 0 — nothing was written. The text only when it fits: a
+  // real export is tens of megabytes, so the size is measured without serialising it.
+  const d = decideDelivery(a.writeToDisk, (limit) => prettyJsonWithin({ ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } }, limit), inlineLimitChars());
+  if (d.kind === "refuse") throw new Error(d.message);
+  if (d.kind === "inline") return textResult(d.text);
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
   // guarded() turns the throw into an isError result naming the offending path.
   const dir = assertInsideCwd(a.outDir);
-  // An IMPLICIT spill must not silently replace what is on disk. A screen keeps `<screen>.json.prev`
-  // (when the old file differs); a full/design-system export keeps `<file>.prev` beside every JSON
-  // under pages/, design-system/ or libraries/ it replaces with different content (`wrote.prevKept`), and
-  // the pages/ layer files it replaced are counted (writeExport lists each one that was on disk before it).
-  const replacedFiles: string[] | null = implicit && !("screen" in r) && !("reference" in r) ? [] : null;
+  // An IMPLICIT spill must not silently replace what is on disk: it keeps `.prev` copies (keepPrev), and the change
+  // report says which — kept, replaced, and the earlier ones still there. An explicit write keeps nothing.
   const w0 = Date.now();
-  const written = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: implicit, replaced: replacedFiles ?? undefined });
+  const { changes, ...written } = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: d.implicit });
   const writeMs = Date.now() - w0;
   const wrote = written.wrote;
-  const newPrev = "prev" in wrote && typeof wrote.prev === "string" ? wrote.prev : undefined;
-  // A re-spill of an unchanged design keeps no NEW .prev, but the one the first spill wrote still holds the
-  // user's original: point at it (an agent that never saw that first result has no other pointer to it).
-  const earlierPrev = implicit && !newPrev && "screen" in wrote && typeof wrote.screen === "string" && fs.existsSync(wrote.screen + ".prev") ? wrote.screen + ".prev" : undefined;
-  const prev = newPrev ?? earlierPrev;
-  let replacedNote = "";
-  let prevKept: number | undefined;
-  if (newPrev && "screen" in wrote) {
-    replacedNote = `It replaced ${wrote.screen}; the previous version is kept at ${newPrev} (one level — the next implicit spill replaces it). `;
-  } else if (earlierPrev) {
-    replacedNote = `An earlier version is still at ${earlierPrev} (this export matched what was on disk). `;
-  } else if (replacedFiles) {
-    const n = replacedFiles.length;
-    // write-out.ts's writeExport lists the .prev copies it made (absolute paths), only when there are any.
-    const keptRaw: unknown = "prevKept" in wrote ? wrote.prevKept : undefined;
-    const kept = isStringArray(keptRaw) ? keptRaw : [];
-    prevKept = kept.length;
-    const replaced = n ? `It replaced ${n} existing screen file(s) under ${path.join(dir, "pages")}` : "";
-    if (kept.length) {
-      replacedNote = `${replaced ? replaced + ". The" : "The"} previous version of each changed file — ${kept.length} file(s) under pages/ or design-system/ (or design-system.json), e.g. ${kept[0]} — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). `;
-    } else {
-      // Same idea: nothing new kept, but an earlier spill's .prev files still hold what was replaced then.
-      const k = prevFilesUnder(dir).length;
-      if (k) replacedNote = `${replaced ? replaced + ". " : ""}Earlier versions are still kept as ${k} .prev file(s) beside their files (this export matched what was on disk). `;
-      else if (replaced) replacedNote = `${replaced} (none differed from what was on disk, so no .prev was kept). `;
-    }
-  }
-  const file = "screen" in wrote && typeof wrote.screen === "string" ? wrote.screen
-    : "reference" in wrote ? path.join(dir, wrote.reference)
-    : dir;
-  lastWrite = { tool, at: new Date().toISOString(), implicit, file, ...ifDefined("prev", prev), ...ifDefined("prevKept", prevKept) };
+  const said = describeWrite(d, "screen" in wrote ? { kind: "screen", dir, screen: wrote.screen, changes }
+    : "reference" in wrote ? { kind: "screenshot", dir, reference: wrote.reference, changes }
+    : { kind: "export", dir, changes });
+  lastWrite = { tool, at: new Date().toISOString(), implicit: d.implicit, file: said.file, ...ifDefined("prev", said.prev), ...ifDefined("prevKept", said.prevKept) };
   // A screenshot's node size and render scale (from the plugin; absent from an older one) beside the
   // PNG's own pixel size (writeScreenshot reads it from the bytes).
   const shot = "reference" in r ? { ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale) } : {};
-  return textResult({
-    ...shot,
-    ...written,
-    durationMs: { total: Date.now() - t0, request: requestMs, write: writeMs },
-    note: spilled + replacedNote + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
-  });
+  return textResult({ ...shot, ...written, durationMs: { total: Date.now() - t0, request: requestMs, write: writeMs }, note: said.note });
 }
 
 // Shared by every export tool, so the pair cannot end up declared on some and not others — the exact
@@ -562,9 +502,7 @@ const READ_ONLY = { readOnlyHint: true } as const;
 // an agent can see how stale its LAST EXPORT is without shelling out — this is snapshot age, distinct
 // from bridge connectivity, so a missing/unreadable file is not an error, just `snapshot: null`.
 // Lives in its own dependency-free module (snapshot-meta.ts, same pattern as node-id.ts /
-// errmsg.ts) so the test suite can read it directly without importing this file — this file's
-// top-level `createBridge()`/`main()` open a real WebSocket server and stdio transport, unsafe to
-// trigger from a test.
+// errmsg.ts) so the test suite can read it directly, without loading the MCP server.
 import { readSnapshotInfo, lastScreenExport } from "./snapshot-meta.ts";
 
 // The version the server reports in its MCP `initialize` answer: the package's own, never a literal that
@@ -1212,7 +1150,10 @@ server.registerTool(
   })
 );
 
-async function main() {
+// The server, started: stdio guards, signal handlers, the stdio transport, then the bridge. NOT run at import — only
+// when this file is the process entry (`bun figma-mcp.ts`, the .mcp.json entry) or `dtwin mcp` calls runServer() once
+// it has loaded this module — so a suite can load it and drive `server` in process.
+async function startServer() {
   // This process IS the user's MCP session: a stray rejection is logged and the session stays up; an
   // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). Before that exit waits on
   // stderr, the cleanup lets go of what this process holds — the daemon socket it serves (unlinked) and the bridge's
@@ -1247,7 +1188,13 @@ async function main() {
     : "Sharing the bridge already running at " + h.address + "."));
 }
 
-main().catch((e) => {
-  console.error("[figma-mcp] fatal:", errMsg(e));
-  exitFlushed(1);
-});
+/** Start the server as the process's MCP session: a startup failure is fatal (logged, exit 1). */
+export function runServer(): void {
+  startServer().catch((e) => {
+    console.error("[figma-mcp] fatal:", errMsg(e));
+    exitFlushed(1);
+  });
+}
+export { server };
+
+if (import.meta.main) runServer();

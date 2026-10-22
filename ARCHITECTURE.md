@@ -95,7 +95,11 @@ one-shot CLI bridge only), and where `listClients` / the socket stats come from.
 pure step above the route (`bridge/src/read-plan.ts`): a scope (a node, the selection, pages, the design
 system, a library, a screenshot) and its read options become the command, its arguments and its time budget
 — or the options that scope does not take, as each `read-opts.ts` row declares — for both front-ends, and
-both write the reply through the one `writeAny`.
+both write the reply through the one `writeAny`. How the MCP server hands a read BACK is another pure step
+(`bridge/src/delivery.ts`): inline when it fits the client's limit, written when asked, written on its own
+(an implicit spill, keeping `<file>.prev` copies) when it does not fit, refused when `writeToDisk:false`
+forbids that — and the note, worded from the change report `writeAny` returns for a spill (the `.prev`
+files it kept, the layer files it replaced, the earlier `.prev` files still on disk).
 
 This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
 did not merely limit you to one file — it was actively unstable: the displaced plugin's
