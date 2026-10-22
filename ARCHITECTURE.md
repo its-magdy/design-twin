@@ -87,8 +87,11 @@ Only a one-shot pull does not share: a process that finds the port held by one e
 
 **But MANY plugins at once — one per open Figma file.** `server-core.ts` keeps a registry of
 connections (`clients`, keyed by a server-minted `connId`) rather than a single socket, so a design
-file and the library it draws on are both connected and separately addressable. `request()` takes a
-routing target as its optional 4th argument; the CLI passes `--client`, MCP passes `client`.
+file and the library it draws on are both connected and separately addressable. Both front-ends reach
+them through one route (`bridge/src/route.ts`) over two adapters — the bridge this process holds, or the
+daemon socket of the process that does — and the route owns the rules: the routing target (`--client` /
+`client`), the connect window (a named file waits up to `NAMED_CLIENT_WAIT_MS`), the stall check (a
+one-shot CLI bridge only), and where `listClients` / the socket stats come from.
 
 This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
 did not merely limit you to one file — it was actively unstable: the displaced plugin's

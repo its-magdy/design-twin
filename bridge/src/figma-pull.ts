@@ -33,11 +33,11 @@ import * as LAYOUT from "./project-layout.ts";
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout, daemonGuardMs, MAX_TIMER_MS } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { Bridge, ClientRow, ProgressTick } from "./server-core.ts";
 // The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
 // from it, so this file cannot read a reply field the plugin never sends (a hand-mirror once
 // declared a top-level `frames` that did not exist, and two hints silently never printed).
@@ -63,6 +63,8 @@ import type { ReadOptName } from "./read-opts.ts";
 // connection FIRST and falls back to opening its own bridge — so the one-shot behaviour is unchanged
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
+import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import type { Route, Sent, Upstream } from "./route.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
 import { ifDefined, isUnknownArray } from "./json-util.ts";
 // The package's own package.json, imported (not read by a path at run time, so a compiled binary has it
@@ -889,7 +891,7 @@ async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promis
   // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
   await daemon.assertNoDaemon();
   const bridge = createBridge();
-  const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
+  const { sock } = await daemon.serve(servedBridge(bridge), { log: (m) => console.error("[dtwin] " + m) });
   console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
   console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
   console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
@@ -905,14 +907,13 @@ async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promis
 // clients` would — so a screen export can be stamped with its real source without this
 // file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
 // that field.
-type Sent<C extends Cmd> = { reply: Commands[C]["reply"]; client: ClientRow | null };
 type Send = <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
 
 // What every ordinary command runs on: where its requests go (a running daemon, or a bridge of its own),
 // and the timing and shutdown helpers the commands share.
 interface Session {
-  /** This process's own bridge; null when a daemon answers. */
-  bridge: Bridge | null;
+  /** Where requests, the client listing and the socket stats come from (route.ts). */
+  route: Route;
   send: Send;
   /** Runs one write, adding its time to the closing `done in …` line. */
   timedWrite: <T>(write: () => T) => T;
@@ -953,14 +954,6 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
       ? "[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection."
       : "[dtwin] this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection.");
   }
-  // The stall-check window (server-core.ts's request() `stallMs`): if NOTHING at all is heard back
-  // from the plugin (not even a progress frame) within this long of SENDING the command, abort rather
-  // than sit until the full export timeout. It disarms on the first sign of life — a working export
-  // legitimately goes quiet for minutes near its end (measured live, see server-core.ts) — so after
-  // that only --timeout bounds it. Only applied to the one-shot bridge below, and only for export
-  // commands — see the comment on `request()`'s stallMs parameter for why the daemon path opts out.
-  const STALL_MS = Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;
-
   // The plugin sends a `queued` progress frame when this command waits behind another run in the
   // same file (a `start` frame when it begins — never worth a line). Say so once, so a silent wait is
   // not mistaken for a hang; --timeout still bounds it.
@@ -971,53 +964,39 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
   };
 
+  // Where requests go: the running daemon, or a bridge of our own. The route (route.ts) owns the rules either
+  // way — the connect window (`--timeout`; a named --client waits at least NAMED_CLIENT_WAIT_MS), the stall
+  // check (own bridge, export commands: if NOTHING is heard back within FIGMA_BRIDGE_STALL_MS of sending, abort
+  // rather than sit out the full export timeout), the "no plugin ever connected" error, and which commands
+  // hear progress ticks.
   let bridge: Bridge | null = null;
-  let send: Send;
+  let up: Upstream;
   if (d) {
-    // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
-    // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    // An export opts into the daemon's progress frames (daemon.ts): each tick re-arms the outer guard
-    // below, so a long walk that is still reporting is not cut off by a budget sized for silence —
-    // the daemon's own per-command `timeoutMs` still bounds the whole command, as the bridge path's
-    // does. The ticks themselves are not printed (the plugin window shows them); this is liveness only.
-    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, daemonGuardMs(timeoutMs, connectWaitMs), isExportCmd ? onTick : undefined);
+    // The DAEMON does the waiting: the plugin may not have reconnected yet after a Figma restart, and the
+    // daemon is the side holding the socket. Each request carries the connect window, and an export's
+    // progress frames re-arm the outer guard (daemonGuardMs), so a long walk that is still reporting is not
+    // cut off by a budget sized for silence — the daemon's own per-command `timeoutMs` still bounds it.
+    up = daemonUpstream(d, () => daemon.status());
   } else {
     const b = createBridge();
     bridge = b;
     console.error("[dtwin] listening on ws://localhost:" + b.port);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
     if (daemon.daemonSupported()) console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
-    // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" →
-    // "none, open one"), but with no daemon running it is talking to a bridge it JUST opened, and every
-    // plugin window currently open in Figma is mid-reconnect to it (timeouts.ts PLUGIN_REDIAL_MS). Skipping the
-    // wait here would make `list clients` answer `{"clients":[]}` with exit 0 while two files were
-    // connected a second later — the documented `--timeout` window applies to this
-    // command too. The difference from an export is only what happens on a full timeout: no plugin
-    // ever showing up is this command's legitimate "none" answer, not an error, so the wait is capped
-    // at `connectWaitMs` but a timeout falls through to the (possibly still empty) listClients() below
-    // instead of throwing.
-    // One wait (server-core awaitClient) covers the connect window and the target: a name/fileKey target
-    // (not a bare c<N> connId, which never depends on identification) can lose the race against the
-    // plugin's `hello` and, with two files open, against the OTHER file's window — whichever redials
-    // first is the only one connected for a moment (seen live) — so once a plugin is connected a named
-    // target gets min(--timeout, NAMED_CLIENT_WAIT_MS) more to show up before the request resolves it.
-    // With no target (this includes --list-clients) or a file name, whole or partial, the fresh bridge also
-    // settles first (timeouts.ts SETTLE_MS), even past a shorter --timeout, so a second open file a redial
-    // behind is connected — and the command refused as ambiguous, or listed — instead of the first file to
-    // land being taken silently. Either way it also waits out the `hello` of a window whose socket has just
-    // opened (at most the identification grace), so the listing or the refusal names that file.
-    const tConnect = Date.now();
-    await b.awaitClient(client, connectWaitMs);
-    // "No plugin connected" means none ever did: one that connected and has gone again is the request's
-    // own resolveClient to report ("Figma plugin not connected. …").
-    if (b.connectionInfo().connectionsThisRun === 0 && !listClients) {
-      b.close();
-      throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
-    }
-    // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
-    timing.connectMs = Date.now() - tConnect;
-    send = (cmd, args, timeoutMs) => b.requestWithClient(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined, onTick);
+    up = ownUpstream(b);
   }
+  const route = createRoute(async () => up, { connectWaitMs, oneShot: true });
+  // Our own bridge spends the connect window here, once, before anything is sent — timed for the done line.
+  // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" → "none, open
+  // one"), but with no daemon running it is talking to a bridge it JUST opened, and every plugin window
+  // currently open in Figma is mid-reconnect to it (timeouts.ts PLUGIN_REDIAL_MS) — so it waits too, and a
+  // window with no plugin is its legitimate empty answer. A command instead fails on its first request with
+  // the never-connected text (route.ts). The wait (server-core awaitClient) covers the target too: a named
+  // one gets more time once a plugin is connected, and with no target or a file name the fresh bridge
+  // settles first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the
+  // command refused as ambiguous, or listed — instead of the first file to land being taken silently.
+  timing.connectMs = (await route.connect(client)).waitedMs;
+  let send: Send = (cmd, args, timeoutMs) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick });
   // Where the time went, for the closing `done in …` line. The connect wait is measured above
   // (own bridge only — a daemon does its waiting inside the request), the export is the time inside
   // send(), the write is every OUT.write* call. All measured from this side: nothing in server-core.
@@ -1034,15 +1013,15 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — one
   // helper so no exit path below has to know which.
   const finish = () => { if (bridge) bridge.close(); };
-  return { bridge, send, timedWrite, doneLine, finish };
+  return { route, send, timedWrite, doneLine, finish };
 }
 
 // Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
 // a terminal); the connId in the first column is what --client takes. Deliberately does NOT talk to
 // the plugin at all — the answer lives entirely in the bridge, so this works even while every
 // connected file is busy with a long export.
-async function listClientsCmd({ bridge, finish }: Session, json: boolean): Promise<void> {
-  const rows = bridge ? bridge.listClients() : (await daemon.status())?.clients || [];
+async function listClientsCmd({ route, finish }: Session, json: boolean): Promise<void> {
+  const rows = await route.listClients();
   console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
   if (rows.length > 1) {
     console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
@@ -1055,21 +1034,15 @@ async function listClientsCmd({ bridge, finish }: Session, json: boolean): Promi
 // did. Run it in each of two open files (a second terminal, or twice in a row after switching the
 // focused file) and compare — the interpretation notes below are printed with the result so the
 // reading does not depend on remembering what each field means.
-async function whoamiCmd({ bridge, send, finish }: Session, core: typeof ServerCore): Promise<void> {
+async function whoamiCmd({ route, send, finish }: Session): Promise<void> {
   const { reply: r, client: whoamiClient } = await send("whoami", {}, TIMEOUTS.command);
-  // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
-  // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
-  // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
-  // than emitting `connection: null` under a help text that promises socket uptime and takeovers.
-  // The socket described is the ADDRESSED file's (the client send() routed to), not whichever
-  // connection happens to be first — with two files open `--client <name>` would print the other's.
+  // The socket half comes from whoever holds the bridge (route.ts): this process, or — with a daemon in
+  // front — the daemon, rather than emitting `connection: null` under a help text that promises socket
+  // uptime and takeovers. The socket described is the ADDRESSED file's (the client send() routed to), not
+  // whichever connection happens to be first — with two files open `--client <name>` would print the other's.
   const addressed = whoamiClient ? whoamiClient.connId : null;
-  let conn: ConnectionInfo | null = bridge ? bridge.connectionInfo(addressed ?? undefined) : null;
-  let connFrom: string | null = bridge ? "this process" : null;
-  if (!conn) {
-    const st = await daemon.status().catch(() => null);
-    if (st && st.connection) { conn = core.connectionFor(st.connection, addressed); connFrom = `the daemon (pid ${st.pid})`; }
-  }
+  const { connection: conn, owner } = await route.connectionInfo(addressed).catch(() => ({ connection: null, owner: null }));
+  const connFrom = !conn || !owner ? null : owner.kind === "own" ? "this process" : `the daemon (pid ${owner.pid ?? "?"})`;
   console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
   console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
     ", up " + Math.round(r.uptimeMs / 1000) + "s.");
@@ -1252,7 +1225,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
 
   const session = await openSession(parsed, core.createBridge);
   if (listClients) return listClientsCmd(session, json);
-  if (whoami) return whoamiCmd(session, core);
+  if (whoami) return whoamiCmd(session);
   if (listLibraries) return listLibrariesCmd(session, json, listTimeoutMs);
   if (listOnly || childrenId) return listIndexCmd(session, childrenId, listDepth, listTimeoutMs);
   if (screenshotId) return screenshotCmd(session, screenshotId, scale, outDir, exportTimeoutMs);

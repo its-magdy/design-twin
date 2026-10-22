@@ -32,7 +32,8 @@ import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "../bridge/src/staleness.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
-import type { Cmd } from "../bridge/src/commands.ts";
+import type { Cmd, Commands } from "../bridge/src/commands.ts";
+import type { Sent } from "../bridge/src/route.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Check, Report } from "../bridge/src/doctor.ts";
@@ -46,6 +47,9 @@ process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
 // A static `import` is hoisted above this env assignment, and server-core reads FIGMA_BRIDGE_TOKEN at
 // load time — so this stays a dynamic import at the exact point the env var is set.
 const core = await import("../bridge/src/server-core.ts");
+/** A fake DaemonBridge's answer: its reply as given (a fake may answer a shape the command does not have, which
+ *  the daemon client must refuse), and the client it names — null when the fake does not say. */
+const fakeSent = <C extends Cmd>(reply: unknown, client: ClientRow | null = null): Sent<C> => ({ reply: malformed<Commands[C]["reply"]>(reply), client });
 
 // A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
 // cast, so a check reading `.message` still sees a string (and stays truthy, like the raw value).
@@ -1463,19 +1467,23 @@ void (async () => {
   })());
   ok("[mcp-multi] it reads the bridge registry, never the plugin (answers during a long export)", (() => {
     const b = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_clients"'), libMcpSrc.indexOf('"figma_whoami"'));
-    return /bridge\.listClients\(\)/.test(b) && !/bridge\.request/.test(b);
+    return /route\.listClients\(\)/.test(b) && !/route\.request|ask\(/.test(b);
   })());
   ok("[mcp-multi] every plugin-reaching tool accepts a client target", (() => {
-    // One clientShape spread per tool that calls bridge.request, plus the ones that only list.
+    // One clientShape spread per tool that sends a named command through the route, plus the ones that only list.
     const spreads = (libMcpSrc.match(/\.\.\.clientShape/g) || []).length;
-    const requests = (libMcpSrc.match(/bridge\.request\(/g) || []).length;
+    const requests = (libMcpSrc.match(/(?:\bask|route\.request)\("/g) || []).length;
     return spreads >= requests;
   })());
-  ok("[mcp-multi] and every bridge.request forwards it", (() => {
-    // Each call must end with the routing argument; a forgotten one silently ignores `client`.
-    const calls = libMcpSrc.match(/bridge\.request\([^;]*?\);/gs) || [];
-    return calls.length > 0 && calls.every((c) => /a && a\.client/.test(c));
+  ok("[mcp-multi] and every tool's route request forwards it", (() => {
+    // Each call must carry the routing target; a forgotten one silently ignores `client`.
+    const calls = libMcpSrc.match(/(?:\bask|route\.request)\("[^;]*?\);/gs) || [];
+    return calls.length >= 7 && calls.every((c) => /target: a && a\.client/.test(c));
   })());
+  // A named `client` waits up to NAMED_CLIENT_WAIT_MS for its file (the MCP server's connect window is 0, and the
+  // route's named window defaults to it): the server's route must say so. The route's own rule is bridge-route.test.ts's.
+  ok("[mcp-multi] the MCP route gives a named client NAMED_CLIENT_WAIT_MS to land",
+    /createRoute\(holder, \{ connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS \}\)/.test(libMcpSrc));
   ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
     /Several Figma files are connected/.test(libMcpSrc));
   // The whoami description must not claim the bridge holds ONE connection.
@@ -2283,10 +2291,11 @@ void (async () => {
   // can hold port 8787. These drive it against a FAKE bridge — no Figma, no WebSocket — so the
   // queueing, framing and lifecycle are testable offline, which is where the interesting failures are.
   const daemon = await import("../bridge/src/daemon.ts");
+  const { servedBridge } = await import("../bridge/src/route.ts");
   const D_PORT = 19787; // not 8787: a test must never contend with a real bridge the user is running
 
   const calls: string[] = [];
-  const fakeBridge = {
+  const fakeBridge: DaemonBridge = {
     port: D_PORT,
     isConnected: () => true,
     // The daemon forwards the connected-file listing through __status, so the fake has to answer it
@@ -2300,10 +2309,11 @@ void (async () => {
     // reply shape (the daemon client checks replies against commands.ts before handing them back),
     // tagging `file` with the command so a round-trip can be told apart. It blows up on `write` (the
     // plugin-side failure case) and answers `exportFull { allPages }` with a 4 MB hygiene line (the
-    // reassembly case). No requestWithClient: an older/minimal bridge shape, so the daemon's reply
-    // carries no `client` — which requestWithClient() must report as null, never invent.
-    request: async (cmd: Cmd, args: Record<string, unknown> | undefined, _timeoutMs: number | undefined, client: string | null | undefined) => {
-      if (client) calls.push("client:" + client);
+    // reassembly case). It names no client (null), so the daemon's reply carries none — which
+    // requestWithClient() must report as null, never invent.
+    request: async (cmd, args, o) => {
+      if (o.target) calls.push("client:" + o.target);
+      if (o.waitMs) calls.push("waitMs:" + o.waitMs);
       calls.push(cmd);
       if (cmd === "write") throw new Error("plugin exploded");
       const echo = "echo:" + cmd;
@@ -2312,9 +2322,9 @@ void (async () => {
         whoami: () => ({ instanceId: "fig-fake", file: echo }),
         getSelection: () => [],
         listPages: () => ({ exportedAt: "2026-09-24T00:00:00.000Z", file: echo, depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }),
-        exportFull: () => ({ designSystem: { hygiene: ["x".repeat(args && args.allPages === true ? 4e6 : 0)] }, layersDoc: {}, assets: [] }),
+        exportFull: () => ({ designSystem: { hygiene: ["x".repeat(args && "allPages" in args && args.allPages === true ? 4e6 : 0)] }, layersDoc: {}, assets: [] }),
       };
-      return (replies[cmd] ?? (() => ({})))(); // anything else: an empty object, i.e. NOT that command's shape
+      return fakeSent((replies[cmd] ?? (() => ({})))()); // anything else: an empty object, i.e. NOT that command's shape
     },
   };
 
@@ -2418,11 +2428,11 @@ void (async () => {
     ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
     ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
     ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
-    // A connect window on a bridge with no requestWithClient (the wait lives in server-core's): the
-    // request is still forwarded, at once — the window is not the daemon's to spend.
+    // A connect window is the bridge's to spend (server-core awaitClient), not the daemon's: it is forwarded
+    // with the request, at once.
     calls.length = 0;
     const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
-    ok("[daemon] a connect window on a bridge without requestWithClient still forwards the request", calls.includes("whoami") && afterWindow === "answered");
+    ok("[daemon] a connect window is forwarded to the bridge with the request", calls.includes("waitMs:50") && calls.includes("whoami") && afterWindow === "answered");
     // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
     const cstat = await daemon.status(D_PORT);
     ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
@@ -2478,18 +2488,17 @@ void (async () => {
         port: P_PORT,
         isConnected: () => true,
         close: () => {},
-        request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
-        requestWithClient: async (cmd, _args, _timeoutMs, target, _stallMs, onProgress, _signal, opts) => {
+        request: async (cmd, _args, { target, onProgress, waitMs }) => {
           listeners.push(onProgress ? "yes" : "none");
-          waits.push(`${target ?? "-"}:${opts?.waitMs ?? "none"}`);
+          waits.push(`${target ?? "-"}:${waitMs ?? "none"}`);
           // ping: both ticks, then the reply in the same turn (the tightest ordering case).
-          if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
+          if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return fakeSent({ pong: true, page: "P", file: "ticked" }, row); }
           // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
           // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
-          if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
+          if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return fakeSent({ instanceId: "fig-a", file: "slow" }, row); }
           // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
           await sleep(10); onProgress?.(TICK1); await sleep(1500);
-          return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
+          return fakeSent({ exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, row);
         },
       };
       await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
@@ -2524,7 +2533,7 @@ void (async () => {
       const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
       ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
         noOpt.file === "ticked" && listeners.at(-1) === "none");
-      // The frame's connect window reaches the bridge as requestWithClient's `waitMs`, unchanged (the
+      // The frame's connect window reaches the bridge as the request's `waitMs`, unchanged (the
       // bridge's awaitClient caps a named target itself); a frame without one asks for no wait.
       ok("[daemon] a request with no connect window forwards no waitMs", waits.at(-1) === "-:none");
       await pcli.request({ cmd: "ping", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
@@ -2653,7 +2662,7 @@ void (async () => {
     }
     const serveScript = (name: string, port: number): string =>
       `import * as daemon from ${JSON.stringify(daemonUrl)};\n` +
-      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({}), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
+      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({ reply: {}, client: null }), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
       `fs.writeFileSync(${JSON.stringify(path.join(dir, name + ".ready"))}, String(process.pid));`;
     for (const [name, port, twice] of [["sig-once", 8796, false], ["sig-twice", 8797, true]] as const) {
       const s = await start(name, serveScript(name, port));
@@ -3868,7 +3877,7 @@ void (async () => {
       const seen: Array<Seen | "socket-closed"> = [];
       record(ws1, seen);
       const C_PORT = 19791; // a socket name only (the bridge above has its own TCP port)
-      const { shutdown } = await daemon.serve(b, { port: C_PORT, signals: false, crashHandlers: false });
+      const { shutdown } = await daemon.serve(servedBridge(b), { port: C_PORT, signals: false, crashHandlers: false });
       const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
         const c = net.createConnection(daemon.sockPath(C_PORT));
         c.on("error", reject);
@@ -3931,11 +3940,10 @@ void (async () => {
       const row = clientRow({ connId: "c1" });
       const blindBridge: DaemonBridge = {
         port: 0, isConnected: () => true, close: () => {},
-        request: async () => ({}),
-        requestWithClient: (cmd) => {
+        request: (cmd) => {
           seenCmds.push(cmd);
-          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r({ reply: {}, client: row }); });
-          return Promise.resolve({ reply: {}, client: row });
+          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r(fakeSent({}, row)); });
+          return Promise.resolve(fakeSent({}, row));
         },
       };
       const F_PORT = 19793; // a socket name only
@@ -4117,14 +4125,13 @@ void (async () => {
         port: S_PORT,
         isConnected: () => true,
         close: () => {},
-        request: async () => { throw new Error("never asked through request()"); },
-        requestWithClient: (cmd, _args, _timeoutMs, _target, _stallMs, _onProgress, signal) => new Promise((resolve) => {
+        request: (cmd, _args, { signal }) => new Promise((resolve) => {
           bridgeSaw.push("got:" + cmd);
-          const t = setTimeout(() => resolve({ reply: pingReply("answered"), client: row }), 1500);
+          const t = setTimeout(() => resolve(fakeSent(pingReply("answered"), row)), 1500);
           signal?.addEventListener("abort", () => {
             clearTimeout(t);
             bridgeSaw.push("aborted:" + (signal.reason instanceof Error ? signal.reason.message : String(signal.reason)));
-            resolve({ reply: pingReply("aborted"), client: row });
+            resolve(fakeSent(pingReply("aborted"), row));
           }, { once: true });
         }),
       };
