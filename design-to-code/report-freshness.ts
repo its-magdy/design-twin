@@ -22,6 +22,7 @@ import { readRegularFile } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, Plan, VerifyReport } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";
+import { siblingFile } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- the git seam
 
@@ -200,7 +201,7 @@ export function reportFreshness(root: string, o: { git?: Git; cached?: CachedByt
   function expectationChanged(rel: string, inputs: ReportInputs): string | null {
     const want = inputs.expectationSha256;
     if (!want) return null;
-    const expRel = rel.replace(/\.report\.json$/, ".expected.json");
+    const expRel = siblingFile(rel, "report", "expected");
     try { return sha256Hex(fs.readFileSync(path.resolve(root, expRel))) !== want ? expRel : null; } catch { return null; }
   }
 

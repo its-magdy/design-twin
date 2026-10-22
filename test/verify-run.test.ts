@@ -265,18 +265,19 @@ console.log("[tool-owned] --publish and a variant set's files:");
 await block("[tool-owned] --publish and a variant set's files:", async () => {
   const dest = path.join(mk("dt-run-owned-"), "verify");
   fs.mkdirSync(dest);
-  // TOOL_OWNED is anchored at the end: a variant `<stem>.<slug>` set's expected/report/status/prev files are refused like the base set's
-  for (const t of ["expected.json", "report.json", "report.md", "status.json", "expected.prev.json"]) {
+  // a tool-owned file (which ones: verify-sets.test.ts isToolOwned) is refused, whatever its case
+  {
     const stage = mk("dt-run-owned-stage-");
-    fs.writeFileSync(path.join(stage, `Plots__1_1.w320-dialog.${t}`), "{}");
+    fs.writeFileSync(path.join(stage, "Plots__1_1.w320-dialog.Report.json"), "{}");
     const r = VR.prepareStaged(stage, dest);
-    safe(`[tool-owned] a staged Plots__1_1.w320-dialog.${t} → refused, nothing copied`, () => "error" in r && r.error.includes(`Plots__1_1.w320-dialog.${t}`) && !fs.readdirSync(dest).length);
+    safe("[tool-owned] a staged Plots__1_1.w320-dialog.Report.json → refused, nothing copied", () => "error" in r && r.error.includes("Plots__1_1.w320-dialog.Report.json") && !fs.readdirSync(dest).length);
   }
   const stage = mk("dt-run-owned-stage-");
-  const own = ["Plots__1_1.w320-dialog.measured.json", "Plots__1_1.w320-dialog.png", "Plots__1_1.w320-dialog-dialog.png", "Plots__1_1.w320-dialog-diff.png", "Plots__1_1.dark.evidence.json"];
+  const own = ["Plots__1_1.w320-dialog.measured.json", "Plots__1_1.w320-dialog.png", "Plots__1_1.w320-dialog-dialog.png", "Plots__1_1.w320-dialog-diff.png", "Plots__1_1.dark.evidence.json",
+    "Plots__1_1.dark.diff.png", "Plots__1_1.dark.forced-colors.png"];
   for (const f of own) fs.writeFileSync(path.join(stage, f), "x");
   const r = VR.publishStaged(stage, dest);
-  safe(`[tool-owned] its measured file, screenshots, a state's -dialog.png, its -diff.png and evidence → published (got ${JSON.stringify(r)})`, () => "published" in r && JSON.stringify(r.published) === JSON.stringify([...own].sort()));
+  safe(`[tool-owned] its measured file, screenshots, a state's -dialog.png, the probe's diff and forced-colors shots and evidence → published (got ${JSON.stringify(r)})`, () => "published" in r && JSON.stringify(r.published) === JSON.stringify([...own].sort()));
 });
 
 // `--phase measured` is the probe's recovery when its own `measured` write was refused — it records the measured

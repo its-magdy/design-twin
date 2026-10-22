@@ -10,7 +10,7 @@ import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-
 import { readJsonOrNull } from "./read-json.ts";
 import { canonical } from "./run-cache.ts";
 import { nodeArtefacts, planNode } from "./node-artefacts.ts";
-import { setFacts } from "./verify-sets.ts";
+import { setBaseOf, setFacts, setFile } from "./verify-sets.ts";
 import type { IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { reportInputs } from "./report-freshness.ts";
 import type { ReportInputs } from "./report-freshness.ts";
@@ -168,15 +168,15 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
   const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out: ReportRef[] = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
     const abs = path.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
-    const stem = f.replace(/\.report\.json$/, "");
+    const stem = setBaseOf(f, "report") ?? f;
     let by: ReportMatch | null = null;
-    const expFile = path.join(dir, stem + ".expected.json");
+    const expFile = setFile(path.join(dir, stem), "expected");
     // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
-    if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
+    if (!fs.existsSync(expFile) && fs.existsSync(setFile(path.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
     else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";

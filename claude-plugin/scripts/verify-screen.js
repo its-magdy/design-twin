@@ -138,8 +138,8 @@ function hookHashOf(hook, plan) {
 }
 
 // design-to-code/report-freshness.ts
-import fs4 from "node:fs";
-import path4 from "node:path";
+import fs9 from "node:fs";
+import path9 from "node:path";
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -829,6 +829,570 @@ ${usage}`;
   exitCli(exitCode);
 }
 
+// design-to-code/verify-sets.ts
+import fs8 from "node:fs";
+import path8 from "node:path";
+
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
+}
+
+// bridge/src/project-layout.ts
+import fs4 from "node:fs";
+import path4 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path4.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path4.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs4.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs4.existsSync(path4.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path4.join(cwd, EXPORT_DIR);
+  const legacy2 = path4.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
+function listPlans(dir) {
+  if (!fs4.existsSync(dir)) return [];
+  return fs4.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
+
+// design-to-code/verify-status.ts
+import path7 from "node:path";
+import fs7 from "node:fs";
+
+// design-to-code/run-cache.ts
+import fs6 from "node:fs";
+import os3 from "node:os";
+import path6 from "node:path";
+
+// bridge/src/file-lock.ts
+import crypto2 from "node:crypto";
+import fs5 from "node:fs";
+import os2 from "node:os";
+import path5 from "node:path";
+var STALE_MS = 3e4;
+var WAIT_MS = 1e4;
+var POLL_MS = 25;
+var LIVE_STALE_MS = 2 * 6e4;
+var UNWRITTEN_STALE_MS = 2e3;
+var TRANSIENT_MS = 2e3;
+var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var lockFileOf = (file) => file + ".lock";
+var breakGuardOf = (lockFile) => lockFile + ".break";
+var LockBusy = class extends Error {
+  lockFile;
+  constructor(lockFile, message) {
+    super(message);
+    this.name = "LockBusy";
+    this.lockFile = lockFile;
+  }
+};
+var LockLost = class extends LockBusy {
+  constructor(lockFile) {
+    super(lockFile, `${lockFile} was taken over by another writer while this one held it \u2014 nothing more written; retry`);
+    this.name = "LockLost";
+  }
+};
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs5.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
+function holderOf(text) {
+  try {
+    const v = JSON.parse(text);
+    if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
+    const { pid, host, at, token } = v;
+    const ns = "ns" in v ? v.ns : "";
+    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" && typeof ns === "string" ? { pid, host, at, token, ns } : null;
+  } catch {
+    return null;
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return errCode(e) === "EPERM";
+  }
+}
+var sameMachine = (h) => h.host === os2.hostname() && h.ns === PID_NS;
+var thisProcess = () => ({ pid: process.pid, host: os2.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
+function processState(p) {
+  if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
+  return pidAlive(p.pid) ? "alive" : "gone";
+}
+var read = (file) => {
+  try {
+    return fs5.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+var ageOf = (t) => Math.abs(Date.now() - t);
+var describeHolder = (text) => {
+  const h = text === null ? null : holderOf(text);
+  return h ? `process ${h.pid}${h.host !== os2.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
+};
+function isStale(file, text, staleMs) {
+  const h = holderOf(text);
+  if (h === null) {
+    try {
+      return ageOf(fs5.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
+    } catch {
+      return false;
+    }
+  }
+  const state = processState(h);
+  if (state !== "unknown") return state === "gone" || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
+  return ageOf(h.at) > staleMs;
+}
+var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
+function claim(file, token) {
+  const fd = fs5.openSync(file, "wx");
+  const mine = stampOf(token);
+  try {
+    fs5.writeSync(fd, mine);
+  } catch (e) {
+    fs5.closeSync(fd);
+    fs5.rmSync(file, { force: true });
+    throw e;
+  }
+  fs5.closeSync(fd);
+  return read(file) === mine ? mine : null;
+}
+function breakStale(lockFile, seen, staleMs = STALE_MS) {
+  const guard = breakGuardOf(lockFile);
+  let mine;
+  try {
+    mine = claim(guard, crypto2.randomBytes(8).toString("hex"));
+  } catch (e) {
+    if (errCode(e) !== "EEXIST") throw e;
+    const g = read(guard);
+    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
+      fs5.unlinkSync(guard);
+    } catch {
+    }
+    return false;
+  }
+  if (mine === null) return false;
+  try {
+    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
+    if (read(guard) !== mine) return false;
+    try {
+      fs5.unlinkSync(lockFile);
+    } catch (e) {
+      if (errCode(e) === "ENOENT") return false;
+      throw e;
+    }
+    return true;
+  } finally {
+    if (read(guard) === mine) try {
+      fs5.rmSync(guard, { force: true });
+    } catch {
+    }
+  }
+}
+var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleepSync = (ms) => {
+  Atomics.wait(sleeper, 0, 0, ms);
+};
+function acquireFileLock(lockFile, opts = {}) {
+  const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
+  const token = crypto2.randomBytes(8).toString("hex");
+  fs5.mkdirSync(path5.dirname(path5.resolve(lockFile)), { recursive: true });
+  const t0 = Date.now();
+  let firstTransientAt = null;
+  const transientYet = (e) => {
+    if (!maybeTransient(errCode(e))) return false;
+    firstTransientAt ??= Date.now();
+    return Date.now() - firstTransientAt < TRANSIENT_MS;
+  };
+  for (; ; ) {
+    let mine = null, text = null, transient = false;
+    let refused = null;
+    try {
+      mine = claim(lockFile, token);
+    } catch (e) {
+      const code = errCode(e);
+      if (code === "EEXIST") {
+        text = read(lockFile);
+        if (text !== null && isStale(lockFile, text, staleMs)) {
+          try {
+            if (breakStale(lockFile, text, staleMs)) continue;
+          } catch (be) {
+            if (transientYet(be)) transient = true;
+            else refused = be;
+          }
+        }
+      } else if (transientYet(e)) transient = true;
+      else throw e;
+    }
+    if (!transient) firstTransientAt = null;
+    if (mine !== null) {
+      const held = mine;
+      const stillMine = () => read(lockFile) === held;
+      return {
+        // only our own lock: one broken as stale and taken by another holder is theirs now
+        release: () => {
+          if (stillMine()) try {
+            fs5.rmSync(lockFile, { force: true });
+          } catch {
+          }
+        },
+        stillMine,
+        assertMine: () => {
+          if (!stillMine()) throw new LockLost(lockFile);
+        }
+      };
+    }
+    const waited = Date.now() - t0;
+    if (waited >= waitMs) {
+      if (refused !== null) throw refused;
+      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
+      throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
+    }
+    sleepSync(Math.min(POLL_MS, waitMs - waited));
+  }
+}
+
+// design-to-code/run-cache.ts
+var CACHE_NAME = "designtwin-verify";
+var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
+var shortSha = (s) => sha256Hex(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs6.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs6.existsSync(p);
+function realpath(p) {
+  if (typeof fs6.realpathSync.native === "function") {
+    try {
+      return fs6.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs6.realpathSync(p);
+}
+function canonical2(p) {
+  const abs = path6.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path6.dirname(abs);
+    return parent === abs ? abs : path6.join(canonical2(parent), path6.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path6.join(d, ".pnp.cjs")) || exists(path6.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path6.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path6.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path6.dirname(d)) {
+    if (exists(path6.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) return null;
+  }
+  if (isDir(path6.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path6.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path6.join(d, ".git")) || path6.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path6.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical2(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path6.join(root, ...RUN_CACHE_SEGMENTS);
+    const rel = path6.relative(root, v).split(path6.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path6.sep).join("/") ? cache : path6.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path6.join(os3.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+function planLockOf(planFile) {
+  const abs = canonical2(planFile);
+  const root = installRootOf(path6.dirname(abs));
+  if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
+  const rel = path6.relative(root, abs).split(path6.sep).join("/");
+  const dir = path6.join(root, ...RUN_CACHE_SEGMENTS);
+  return { lockFile: path6.join(dir, "plan-locks", `${path6.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
+}
+var planLockFile = (planFile) => planLockOf(planFile).lockFile;
+var PLAN_LOCK_UNWRITABLE = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS"]);
+function planLockRefused(planFile, e) {
+  const code = errCode(e);
+  const { cache } = planLockOf(planFile);
+  return cache !== null && code !== void 0 && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
+}
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT", "ENOTDIR"]);
+var GONE_CODES = /* @__PURE__ */ new Set(["ENOENT", "ENOTDIR"]);
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT / ENOTDIR are
+   *  not a permission: a directory on the way was removed while the run wrote there */
+  constructor(cacheDir, root, code) {
+    super(GONE_CODES.has(code) ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
+
+// design-to-code/verify-status.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var MEASURED_PHASES = ["measured", "done"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var liveStatusFile = (base) => path7.join(runCacheDir(path7.dirname(base)), setFile(path7.basename(base), "status"));
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
+    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
+    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
+    if (isVerifyStatusV2(kept)) return kept;
+  }
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function runCommands(base, open) {
+  const vs = scriptCmd("verify-screen"), S = shellArg(path7.basename(base)), id = shellArg(open.runId), dir = shellArg(path7.resolve(path7.dirname(base)));
+  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
+}
+function openRunSets(verifyDir) {
+  let files;
+  try {
+    files = fs7.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return files.filter((e) => e.isFile() && setBaseOf(e.name, "status") !== null).map((e) => setBaseOf(e.name, "status") ?? e.name).filter((name) => {
+    const st = readStatusFile(liveStatusFile(path7.join(verifyDir, name)));
+    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
+  }).sort();
+}
+
+// design-to-code/verify-sets.ts
+var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
+var MAX_SLUG = 32;
+var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STEM_RE = /^[A-Za-z0-9_]+$/;
+var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
+function variantSlug(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function variantProblem(s) {
+  if (isVariantSlug(s)) return null;
+  if (RESERVED_SLUGS.has(s)) return `variant '${s}' is reserved \u2014 it names a file of the set (${[...RESERVED_SLUGS].join(", ")} are never slugs); pick another`;
+  if (s.length > MAX_SLUG) return `variant '${s}' is ${s.length} characters long \u2014 a slug is at most ${MAX_SLUG}`;
+  const fixed = variantSlug(s);
+  return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` \u2014 use '${fixed}'` : ""}`;
+}
+function variantOverlap(slug, others) {
+  for (const o of others) if (o !== slug && (slug.startsWith(o + "-") || o.startsWith(slug + "-"))) return o;
+  return null;
+}
+function parseSetName(name) {
+  const dot = name.indexOf(".");
+  const stem = dot < 0 ? name : name.slice(0, dot);
+  const variant = dot < 0 ? null : name.slice(dot + 1);
+  if (!STEM_RE.test(stem)) return null;
+  const nodeId = nodeIdFromStem(stem);
+  if (nodeId === null) return null;
+  if (variant !== null && !isVariantSlug(variant)) return null;
+  return { stem, nodeId, variant };
+}
+function formatSetName(stem, variant) {
+  if (variant === void 0 || variant === null) return stem;
+  const why = variantProblem(variant);
+  if (why !== null) throw new Error(why);
+  return `${stem}.${variant}`;
+}
+function nodeIdFromSetName(name) {
+  const dot = name.indexOf(".");
+  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
+}
+var SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired"
+};
+var setFile = (base, kind) => base + SET_FILE[kind];
+var setBaseOf = (file, kind) => file.endsWith(SET_FILE[kind]) ? file.slice(0, -SET_FILE[kind].length) : null;
+var siblingFile = (file, from, to) => {
+  const b = setBaseOf(file, from);
+  return b === null ? file : setFile(b, to);
+};
+var EXPECTED_SUFFIX = SET_FILE.expected;
+var journalFile = (verifyDir, set) => path8.join(verifyDir, `.migrate-${set}.json`);
+var JOURNAL_RE = /^\.migrate-.+\.json$/i;
+var isJournalFile = (fileName) => JOURNAL_RE.test(fileName);
+var TOOL_OWNED_KINDS = ["expected", "expectedPrev", "report", "reportMd", "status"];
+function isToolOwned(fileName) {
+  const f = fileName.toLowerCase();
+  return isJournalFile(f) || TOOL_OWNED_KINDS.some((k) => f.endsWith(SET_FILE[k]));
+}
+function setNameOfFile(file) {
+  const b = path8.basename(file);
+  return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
+}
+function statusBaseOf(expectedFile) {
+  return path8.join(path8.dirname(expectedFile), setNameOfFile(expectedFile));
+}
+var TRAILING_SEP = path8.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var endsInSep = (p) => TRAILING_SEP.test(p);
+var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
+function outBaseOf(out, setName, defaultDir) {
+  if (out === void 0) return { base: path8.join(defaultDir, setName), dir: defaultDir, deprecated: false };
+  const why = `--out takes the verify directory; this set is ${setName}`;
+  let st = null;
+  try {
+    st = fs8.statSync(out);
+  } catch {
+  }
+  if (st?.isDirectory()) return { base: path8.join(out, setName), dir: out, deprecated: false };
+  if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
+  if (endsInSep(out) || path8.resolve(out) === path8.resolve(VERIFY_DIR)) return { base: path8.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (path8.basename(out) === setName) return { base: out, dir: path8.dirname(out), deprecated: true };
+  return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
+}
+function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
+  const name = setNameOfFile(expectedFile);
+  const p = parseSetName(name);
+  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path8.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
+  if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
+  return null;
+}
+var NAMING_KINDS = ["expected", "report", "measured"];
+var namedBy = (f) => {
+  for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length);
+  return null;
+};
+function allSets(verifyDir) {
+  let files;
+  try {
+    files = fs8.readdirSync(verifyDir);
+  } catch {
+    return [];
+  }
+  const have = new Set(files);
+  const names = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const named = namedBy(f);
+    if (named !== null) names.add(named);
+    else if (f.endsWith(SET_FILE.retired)) names.add(f.slice(0, -SET_FILE.retired.length));
+  }
+  return [...names].sort().map((name) => ({ name, retired: !have.has(setFile(name, "expected")) && have.has(setFile(name, "retired")) }));
+}
+function verifySets(verifyDir) {
+  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
+}
+function setFacts(verifyDir, name) {
+  const str2 = (x) => typeof x === "string" && x ? x : null;
+  const exp = readJsonOrNull(setFile(path8.join(verifyDir, name), "expected"), isJsonObject);
+  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
+  const rep = readJsonOrNull(setFile(path8.join(verifyDir, name), "report"), isJsonObject);
+  return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(rep && rep.nodeId), reportScreen: str2(rep && rep.screen) };
+}
+function stemHolders(verifyDir, stems, open) {
+  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
+  return stems.map((stem) => {
+    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path8.join(verifyDir, set))) : null;
+    if (set === void 0 || st === null || st === "v1") return stem;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path8.join(verifyDir, set), st).endIt})`;
+  }).join(", ");
+}
+function variantsOf(verifyDir, stem) {
+  return verifySets(verifyDir).flatMap((name) => {
+    const p = parseSetName(name);
+    return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : [];
+  });
+}
+
 // design-to-code/report-freshness.ts
 var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
 var systemGit = {
@@ -911,8 +1475,8 @@ function measuredText(r, subject = "its run") {
   }
 }
 function reportNamed(report, sha, cwd) {
-  if (!fs4.existsSync(path4.resolve(cwd, report))) return { kind: "missing", report };
-  const bytes = readRegularFile(path4.resolve(cwd, report));
+  if (!fs9.existsSync(path9.resolve(cwd, report))) return { kind: "missing", report };
+  const bytes = readRegularFile(path9.resolve(cwd, report));
   if (!bytes) return { kind: "unreadable", report };
   if (typeof sha !== "string" || sha256Hex(bytes) !== sha) return { kind: "rewritten", report };
   let parsed = null;
@@ -936,9 +1500,9 @@ function reportFreshness(root, o = {}) {
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
-    const expRel = rel.replace(/\.report\.json$/, ".expected.json");
+    const expRel = siblingFile(rel, "report", "expected");
     try {
-      return sha256Hex(fs4.readFileSync(path4.resolve(root, expRel))) !== want ? expRel : null;
+      return sha256Hex(fs9.readFileSync(path9.resolve(root, expRel))) !== want ? expRel : null;
     } catch {
       return null;
     }
@@ -996,273 +1560,77 @@ function bindMeasured(o) {
 }
 
 // design-to-code/plan-record.ts
-import fs10 from "node:fs";
-import path9 from "node:path";
+import fs12 from "node:fs";
+import path11 from "node:path";
 
 // bridge/src/json-file.ts
-import fs7 from "node:fs";
+import fs11 from "node:fs";
 
 // bridge/src/atomic-write.ts
-import crypto2 from "node:crypto";
-import fs5 from "node:fs";
-import path5 from "node:path";
-var tmpSuffix = () => `.tmp-${process.pid}-${crypto2.randomBytes(4).toString("hex")}`;
+import crypto3 from "node:crypto";
+import fs10 from "node:fs";
+import path10 from "node:path";
+var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
 var RENAME_RETRY_MS = 2e3;
 var RENAME_TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
-var sleeper = new Int32Array(new SharedArrayBuffer(4));
+var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
 function renameOver(from, to) {
   const t0 = Date.now();
   for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
     try {
-      fs5.renameSync(from, to);
+      fs10.renameSync(from, to);
       return;
     } catch (e) {
       const code = errCode(e);
       if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
       let dir = false;
       try {
-        dir = fs5.statSync(to).isDirectory();
+        dir = fs10.statSync(to).isDirectory();
       } catch {
       }
       if (dir) throw e;
-      Atomics.wait(sleeper, 0, 0, delay);
+      Atomics.wait(sleeper2, 0, 0, delay);
     }
   }
 }
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs5.openSync(dir, "r");
+    const fd = fs10.openSync(dir, "r");
     try {
-      fs5.fsyncSync(fd);
+      fs10.fsyncSync(fd);
     } finally {
-      fs5.closeSync(fd);
+      fs10.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
-  const dir = path5.dirname(path5.resolve(file));
-  fs5.mkdirSync(dir, { recursive: true });
+  const dir = path10.dirname(path10.resolve(file));
+  fs10.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs5.openSync(tmp, "wx", opts.mode);
+      const fd = fs10.openSync(tmp, "wx", opts.mode);
       try {
-        fs5.writeFileSync(fd, data);
-        fs5.fsyncSync(fd);
+        fs10.writeFileSync(fd, data);
+        fs10.fsyncSync(fd);
       } finally {
-        fs5.closeSync(fd);
+        fs10.closeSync(fd);
       }
     } else {
-      fs5.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs10.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs5.chmodSync(tmp, opts.mode);
+    if (opts.mode !== void 0) fs10.chmodSync(tmp, opts.mode);
     renameOver(tmp, file);
   } catch (e) {
     try {
-      fs5.rmSync(tmp, { force: true });
+      fs10.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
   }
   if (opts.sync) syncDir(dir);
-}
-
-// bridge/src/file-lock.ts
-import crypto3 from "node:crypto";
-import fs6 from "node:fs";
-import os2 from "node:os";
-import path6 from "node:path";
-var STALE_MS = 3e4;
-var WAIT_MS = 1e4;
-var POLL_MS = 25;
-var LIVE_STALE_MS = 2 * 6e4;
-var UNWRITTEN_STALE_MS = 2e3;
-var TRANSIENT_MS = 2e3;
-var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
-var lockFileOf = (file) => file + ".lock";
-var breakGuardOf = (lockFile) => lockFile + ".break";
-var LockBusy = class extends Error {
-  lockFile;
-  constructor(lockFile, message) {
-    super(message);
-    this.name = "LockBusy";
-    this.lockFile = lockFile;
-  }
-};
-var LockLost = class extends LockBusy {
-  constructor(lockFile) {
-    super(lockFile, `${lockFile} was taken over by another writer while this one held it \u2014 nothing more written; retry`);
-    this.name = "LockLost";
-  }
-};
-var PID_NS = (() => {
-  if (process.platform !== "linux") return "";
-  try {
-    return fs6.readlinkSync("/proc/self/ns/pid");
-  } catch {
-    return "";
-  }
-})();
-function holderOf(text) {
-  try {
-    const v = JSON.parse(text);
-    if (v === null || typeof v !== "object" || !("pid" in v) || !("host" in v) || !("at" in v) || !("token" in v)) return null;
-    const { pid, host, at, token } = v;
-    const ns = "ns" in v ? v.ns : "";
-    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && typeof host === "string" && typeof at === "number" && typeof token === "string" && typeof ns === "string" ? { pid, host, at, token, ns } : null;
-  } catch {
-    return null;
-  }
-}
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return errCode(e) === "EPERM";
-  }
-}
-var sameMachine = (h) => h.host === os2.hostname() && h.ns === PID_NS;
-var thisProcess = () => ({ pid: process.pid, host: os2.hostname(), ...PID_NS ? { ns: PID_NS } : {} });
-function processState(p) {
-  if (!Number.isInteger(p.pid) || p.pid <= 0 || !sameMachine({ host: p.host, ns: p.ns ?? "" })) return "unknown";
-  return pidAlive(p.pid) ? "alive" : "gone";
-}
-var read = (file) => {
-  try {
-    return fs6.readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-};
-var ageOf = (t) => Math.abs(Date.now() - t);
-var describeHolder = (text) => {
-  const h = text === null ? null : holderOf(text);
-  return h ? `process ${h.pid}${h.host !== os2.hostname() ? ` on ${h.host}` : ""} since ${new Date(h.at).toISOString()}` : "another process";
-};
-function isStale(file, text, staleMs) {
-  const h = holderOf(text);
-  if (h === null) {
-    try {
-      return ageOf(fs6.statSync(file).mtimeMs) > Math.min(staleMs, UNWRITTEN_STALE_MS);
-    } catch {
-      return false;
-    }
-  }
-  const state = processState(h);
-  if (state !== "unknown") return state === "gone" || ageOf(h.at) > Math.max(staleMs, LIVE_STALE_MS);
-  return ageOf(h.at) > staleMs;
-}
-var stampOf = (token) => JSON.stringify({ ...thisProcess(), at: Date.now(), token });
-function claim(file, token) {
-  const fd = fs6.openSync(file, "wx");
-  const mine = stampOf(token);
-  try {
-    fs6.writeSync(fd, mine);
-  } catch (e) {
-    fs6.closeSync(fd);
-    fs6.rmSync(file, { force: true });
-    throw e;
-  }
-  fs6.closeSync(fd);
-  return read(file) === mine ? mine : null;
-}
-function breakStale(lockFile, seen, staleMs = STALE_MS) {
-  const guard = breakGuardOf(lockFile);
-  let mine;
-  try {
-    mine = claim(guard, crypto3.randomBytes(8).toString("hex"));
-  } catch (e) {
-    if (errCode(e) !== "EEXIST") throw e;
-    const g = read(guard);
-    if (g !== null && isStale(guard, g, staleMs) && read(guard) === g) try {
-      fs6.unlinkSync(guard);
-    } catch {
-    }
-    return false;
-  }
-  if (mine === null) return false;
-  try {
-    if (read(lockFile) !== seen || !isStale(lockFile, seen, staleMs)) return false;
-    if (read(guard) !== mine) return false;
-    try {
-      fs6.unlinkSync(lockFile);
-    } catch (e) {
-      if (errCode(e) === "ENOENT") return false;
-      throw e;
-    }
-    return true;
-  } finally {
-    if (read(guard) === mine) try {
-      fs6.rmSync(guard, { force: true });
-    } catch {
-    }
-  }
-}
-var maybeTransient = (code) => process.platform === "win32" && code !== void 0 && TRANSIENT_CODES.has(code);
-var sleeper2 = new Int32Array(new SharedArrayBuffer(4));
-var sleepSync = (ms) => {
-  Atomics.wait(sleeper2, 0, 0, ms);
-};
-function acquireFileLock(lockFile, opts = {}) {
-  const staleMs = opts.staleMs ?? STALE_MS, waitMs = opts.waitMs ?? WAIT_MS;
-  const token = crypto3.randomBytes(8).toString("hex");
-  fs6.mkdirSync(path6.dirname(path6.resolve(lockFile)), { recursive: true });
-  const t0 = Date.now();
-  let firstTransientAt = null;
-  const transientYet = (e) => {
-    if (!maybeTransient(errCode(e))) return false;
-    firstTransientAt ??= Date.now();
-    return Date.now() - firstTransientAt < TRANSIENT_MS;
-  };
-  for (; ; ) {
-    let mine = null, text = null, transient = false;
-    let refused = null;
-    try {
-      mine = claim(lockFile, token);
-    } catch (e) {
-      const code = errCode(e);
-      if (code === "EEXIST") {
-        text = read(lockFile);
-        if (text !== null && isStale(lockFile, text, staleMs)) {
-          try {
-            if (breakStale(lockFile, text, staleMs)) continue;
-          } catch (be) {
-            if (transientYet(be)) transient = true;
-            else refused = be;
-          }
-        }
-      } else if (transientYet(e)) transient = true;
-      else throw e;
-    }
-    if (!transient) firstTransientAt = null;
-    if (mine !== null) {
-      const held = mine;
-      const stillMine = () => read(lockFile) === held;
-      return {
-        // only our own lock: one broken as stale and taken by another holder is theirs now
-        release: () => {
-          if (stillMine()) try {
-            fs6.rmSync(lockFile, { force: true });
-          } catch {
-          }
-        },
-        stillMine,
-        assertMine: () => {
-          if (!stillMine()) throw new LockLost(lockFile);
-        }
-      };
-    }
-    const waited = Date.now() - t0;
-    if (waited >= waitMs) {
-      if (refused !== null) throw refused;
-      if (transient) throw new LockBusy(lockFile, `${lockFile} could not be created for ${Math.round((Date.now() - (firstTransientAt ?? t0)) / 100) / 10}s (a lock just released is still being removed, or a scan holds it); retry`);
-      throw new LockBusy(lockFile, `${lockFile} is held by ${describeHolder(text)} \u2014 another write was still in progress after ${Math.round(waited / 100) / 10}s; retry once it is done`);
-    }
-    sleepSync(Math.min(POLL_MS, waitMs - waited));
-  }
 }
 
 // bridge/src/json-file.ts
@@ -1277,7 +1645,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs7.readFileSync(file, "utf8");
+    return fs11.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -1309,153 +1677,8 @@ function updateJsonLike(file, fn, opts = {}) {
   }
 }
 
-// design-to-code/run-cache.ts
-import fs9 from "node:fs";
-import os3 from "node:os";
-import path8 from "node:path";
-
-// bridge/src/project-layout.ts
-import fs8 from "node:fs";
-import path7 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path7.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path7.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path7.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path7.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path7.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path7.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path7.join(DESIGN_DIR, ".sync");
-var MERGED_VARIABLES_FILE = "variables.json";
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path7.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
-function looksLikeExportDir(dir) {
-  try {
-    if (!fs8.statSync(dir).isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return EXPORT_MARKERS.some((m) => fs8.existsSync(path7.join(dir, m)));
-}
-function findExportDir(cwd) {
-  const modern = path7.join(cwd, EXPORT_DIR);
-  const legacy2 = path7.join(cwd, DESIGN_DIR);
-  const modernExists = looksLikeExportDir(modern);
-  const legacyExists = looksLikeExportDir(legacy2);
-  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
-  return { dir: modern, layout: "none", rel: EXPORT_DIR };
-}
-function listPlans(dir) {
-  if (!fs8.existsSync(dir)) return [];
-  return fs8.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
-}
-
-// design-to-code/run-cache.ts
-var CACHE_NAME = "designtwin-verify";
-var shortSha = (s) => sha256Hex(s).slice(0, 16);
-var isDir = (p) => {
-  try {
-    return fs9.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-};
-var exists = (p) => fs9.existsSync(p);
-function realpath(p) {
-  if (typeof fs9.realpathSync.native === "function") {
-    try {
-      return fs9.realpathSync.native(p);
-    } catch {
-    }
-  }
-  return fs9.realpathSync(p);
-}
-function canonical2(p) {
-  const abs = path8.resolve(p);
-  try {
-    return realpath(abs);
-  } catch {
-    const parent = path8.dirname(abs);
-    return parent === abs ? abs : path8.join(canonical2(parent), path8.basename(abs));
-  }
-}
-var hasPnp = (d) => exists(path8.join(d, ".pnp.cjs")) || exists(path8.join(d, ".pnp.js"));
-function isWorkspaceRoot(d) {
-  if (exists(path8.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path8.join(d, "package.json"), anyJson);
-  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
-}
-function installRootOf(dir) {
-  let P = null;
-  for (let d = dir; ; d = path8.dirname(d)) {
-    if (exists(path8.join(d, "package.json"))) {
-      P = d;
-      break;
-    }
-    if (exists(path8.join(d, ".git")) || path8.dirname(d) === d) return null;
-  }
-  if (isDir(path8.join(P, "node_modules"))) return P;
-  let ws = null;
-  for (let d = P; ; d = path8.dirname(d)) {
-    if (isWorkspaceRoot(d)) {
-      ws = d;
-      break;
-    }
-    if (exists(path8.join(d, ".git")) || path8.dirname(d) === d) break;
-  }
-  if (ws !== null && isDir(path8.join(ws, "node_modules"))) return ws;
-  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
-  return P;
-}
-function runCacheOf(verifyDir) {
-  const v = canonical2(verifyDir);
-  const root = installRootOf(v);
-  if (root !== null) {
-    const cache = path8.join(root, "node_modules", ".cache", CACHE_NAME);
-    const rel = path8.relative(root, v).split(path8.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path8.sep).join("/") ? cache : path8.join(cache, "dirs", shortSha(rel)), root };
-  }
-  return { dir: path8.join(os3.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
-}
-function runCacheDir(verifyDir) {
-  return runCacheOf(verifyDir).dir;
-}
-function planLockOf(planFile) {
-  const abs = canonical2(planFile);
-  const root = installRootOf(path8.dirname(abs));
-  if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
-  const rel = path8.relative(root, abs).split(path8.sep).join("/");
-  const dir = path8.join(root, "node_modules", ".cache", CACHE_NAME);
-  return { lockFile: path8.join(dir, "plan-locks", `${path8.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
-}
-var planLockFile = (planFile) => planLockOf(planFile).lockFile;
-var PLAN_LOCK_UNWRITABLE = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS"]);
-function planLockRefused(planFile, e) {
-  const code = errCode(e);
-  const { cache } = planLockOf(planFile);
-  return cache !== null && code !== void 0 && PLAN_LOCK_UNWRITABLE.has(code) ? new RunCacheUnwritable(cache.dir, cache.root, code) : e;
-}
-var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT", "ENOTDIR"]);
-var GONE_CODES = /* @__PURE__ */ new Set(["ENOENT", "ENOTDIR"]);
-var RunCacheUnwritable = class extends Error {
-  cacheDir;
-  root;
-  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT / ENOTDIR are
-   *  not a permission: a directory on the way was removed while the run wrote there */
-  constructor(cacheDir, root, code) {
-    super(GONE_CODES.has(code) ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
-    this.name = "RunCacheUnwritable";
-    this.cacheDir = cacheDir;
-    this.root = root;
-  }
-};
-
 // design-to-code/plan-record.ts
-var slash = (p) => p.split(path9.sep).join("/").split("\\").join("/");
+var slash = (p) => p.split(path11.sep).join("/").split("\\").join("/");
 var formatPlan = formatJsonLike;
 var updatePlan = (file, fn, opts = {}) => updateJsonLike(file, fn, { lockFile: planLockFile(file), lockRefused: (e) => planLockRefused(file, e), ...opts });
 var reportFileText = (report) => JSON.stringify(report, null, 2) + "\n";
@@ -1527,31 +1750,31 @@ function verificationFacts(v) {
 }
 function recordPlan(planFile, report, reportRel, opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
-  const abs = path9.resolve(cwd, planFile);
+  const abs = path11.resolve(cwd, planFile);
   let notes = [];
   const written = updatePlan(abs, (raw) => {
     notes = [];
     if (raw === null) throw new Error(`${planFile} does not exist`);
     const plan = parsePlanText(raw, planFile);
-    const inside = (r) => !(r === ".." || r.startsWith("../") || path9.isAbsolute(r) || /^[A-Za-z]:/.test(r));
+    const inside = (r) => !(r === ".." || r.startsWith("../") || path11.isAbsolute(r) || /^[A-Za-z]:/.test(r));
     const realOf = (p) => {
       try {
-        return fs10.realpathSync(p);
+        return fs12.realpathSync(p);
       } catch {
         return p;
       }
     };
     const rel = (p) => {
-      const lex = slash(path9.relative(cwd, path9.resolve(cwd, p)));
+      const lex = slash(path11.relative(cwd, path11.resolve(cwd, p)));
       if (inside(lex)) return lex;
-      const real = slash(path9.relative(realOf(cwd), realOf(path9.resolve(cwd, p))));
+      const real = slash(path11.relative(realOf(cwd), realOf(path11.resolve(cwd, p))));
       return inside(real) ? real : null;
     };
     const reportAt = rel(reportRel);
     if (reportAt === null) throw new Error(`the report ${slash(reportRel)} is outside the project (${slash(cwd)}) \u2014 the plan records project-relative paths only; write the report inside the project (--out design/verify)`);
     const exists3 = (p) => {
       try {
-        return fs10.statSync(path9.resolve(cwd, p)).isFile();
+        return fs12.statSync(path11.resolve(cwd, p)).isFile();
       } catch {
         return false;
       }
@@ -1566,7 +1789,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
       } else if (!artifacts.includes(r)) artifacts.push(r);
     };
     addArtifact(reportAt);
-    addArtifact(reportAt.replace(/\.report\.json$/, ".report.md"));
+    addArtifact(siblingFile(reportAt, "report", "reportMd"));
     for (const a of report.artifacts) {
       if (typeof a === "string") addArtifact(a);
       else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
@@ -1576,7 +1799,7 @@ function recordPlan(planFile, report, reportRel, opts = {}) {
     const reportSha256 = sha256Hex(text);
     let onDisk = null;
     try {
-      onDisk = fs10.readFileSync(path9.resolve(cwd, reportAt));
+      onDisk = fs12.readFileSync(path11.resolve(cwd, reportAt));
     } catch {
     }
     if (onDisk === null) notes.push(`${reportAt} is not on disk \u2014 recorded the sha256 of the report as --compare writes it`);
@@ -1710,24 +1933,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import fs15 from "node:fs";
 import path14 from "node:path";
 
-// bridge/src/pages-layout.ts
-function safe(id) {
-  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-}
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
-function screenStem(name, id) {
-  return safe(name || "layer") + "__" + safe(id);
-}
-
 // bridge/src/node-id.ts
 var ID = "[A-Za-z0-9%:;_-]+";
 var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
@@ -1780,173 +1985,6 @@ function getOrInit(m, k, init) {
 // design-to-code/node-artefacts.ts
 import fs13 from "node:fs";
 import path12 from "node:path";
-
-// design-to-code/verify-sets.ts
-import fs12 from "node:fs";
-import path11 from "node:path";
-
-// design-to-code/verify-status.ts
-import path10 from "node:path";
-import fs11 from "node:fs";
-var STATUS_SCHEMA = "designtwin/verify-status@2";
-var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
-var TERMINAL_PHASES = ["done", "failed", "blocked"];
-var MEASURED_PHASES = ["measured", "done"];
-var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
-var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
-var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
-function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
-}
-isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path10.join(runCacheDir(path10.dirname(base)), path10.basename(base) + ".status.json");
-function readStatusFile(file) {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return null;
-  if (isVerifyStatusV2(r.doc)) return r.doc;
-  if (isJsonObject(r.doc) && (r.doc.ownRun !== void 0 || r.doc.probeFailures !== void 0 || r.doc.replaced !== void 0)) {
-    const { ownRun, probeFailures, replaced, ...rest } = r.doc;
-    const kept = { ...rest, ...isOwnRunStamp(ownRun) ? { ownRun } : {}, ...isFailureCount(probeFailures) ? { probeFailures } : {}, ...isReplacedRun(replaced) ? { replaced } : {} };
-    if (isVerifyStatusV2(kept)) return kept;
-  }
-  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
-}
-function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path10.basename(base)), id = shellArg(open.runId), dir = shellArg(path10.resolve(path10.dirname(base)));
-  return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
-}
-function openRunSets(verifyDir) {
-  const SUFFIX = ".status.json";
-  let files;
-  try {
-    files = fs11.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path10.join(verifyDir, name)));
-    return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
-  }).sort();
-}
-
-// design-to-code/verify-sets.ts
-var RESERVED_SLUGS = /* @__PURE__ */ new Set(["expected", "report", "measured", "status", "evidence", "prev", "retired", "diff", "forced-colors", "json", "md", "png", "tmp"]);
-var MAX_SLUG = 32;
-var VARIANT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-var STEM_RE = /^[A-Za-z0-9_]+$/;
-var isVariantSlug = (s) => s.length <= MAX_SLUG && VARIANT_RE.test(s) && !RESERVED_SLUGS.has(s);
-function variantSlug(text) {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-function variantProblem(s) {
-  if (isVariantSlug(s)) return null;
-  if (RESERVED_SLUGS.has(s)) return `variant '${s}' is reserved \u2014 it names a file of the set (${[...RESERVED_SLUGS].join(", ")} are never slugs); pick another`;
-  if (s.length > MAX_SLUG) return `variant '${s}' is ${s.length} characters long \u2014 a slug is at most ${MAX_SLUG}`;
-  const fixed = variantSlug(s);
-  return `variant '${s}' is not a slug (lower-case letters and digits, words joined by single "-")${fixed !== s && isVariantSlug(fixed) ? ` \u2014 use '${fixed}'` : ""}`;
-}
-function variantOverlap(slug, others) {
-  for (const o of others) if (o !== slug && (slug.startsWith(o + "-") || o.startsWith(slug + "-"))) return o;
-  return null;
-}
-function parseSetName(name) {
-  const dot = name.indexOf(".");
-  const stem = dot < 0 ? name : name.slice(0, dot);
-  const variant = dot < 0 ? null : name.slice(dot + 1);
-  if (!STEM_RE.test(stem)) return null;
-  const nodeId = nodeIdFromStem(stem);
-  if (nodeId === null) return null;
-  if (variant !== null && !isVariantSlug(variant)) return null;
-  return { stem, nodeId, variant };
-}
-function formatSetName(stem, variant) {
-  if (variant === void 0 || variant === null) return stem;
-  const why = variantProblem(variant);
-  if (why !== null) throw new Error(why);
-  return `${stem}.${variant}`;
-}
-function nodeIdFromSetName(name) {
-  const dot = name.indexOf(".");
-  return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
-}
-var EXPECTED_SUFFIX = ".expected.json";
-function setNameOfFile(file) {
-  const b = path11.basename(file);
-  return b.endsWith(EXPECTED_SUFFIX) ? b.slice(0, -EXPECTED_SUFFIX.length) : b.endsWith(".json") ? b.slice(0, -".json".length) : b;
-}
-function statusBaseOf(expectedFile) {
-  return path11.join(path11.dirname(expectedFile), setNameOfFile(expectedFile));
-}
-var TRAILING_SEP = path11.sep === "\\" ? /[\\/]+$/ : /\/+$/;
-var endsInSep = (p) => TRAILING_SEP.test(p);
-var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
-function outBaseOf(out, setName, defaultDir) {
-  if (out === void 0) return { base: path11.join(defaultDir, setName), dir: defaultDir, deprecated: false };
-  const why = `--out takes the verify directory; this set is ${setName}`;
-  let st = null;
-  try {
-    st = fs12.statSync(out);
-  } catch {
-  }
-  if (st?.isDirectory()) return { base: path11.join(out, setName), dir: out, deprecated: false };
-  if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (endsInSep(out) || path11.resolve(out) === path11.resolve(VERIFY_DIR)) return { base: path11.join(out, setName), dir: trimSep(out), deprecated: false };
-  if (path11.basename(out) === setName) return { base: out, dir: path11.dirname(out), deprecated: true };
-  return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
-}
-function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
-  const name = setNameOfFile(expectedFile);
-  const p = parseSetName(name);
-  if (p === null) return `${expectedFile} is a legacy-named verify set \u2014 run verify-screen --migrate --dir ${verifyDir}, then use ${path11.join(verifyDir, "<the new name it prints>")}${EXPECTED_SUFFIX}`;
-  if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
-  return null;
-}
-var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-var RETIRED = ".expected.json.retired";
-function allSets(verifyDir) {
-  let files;
-  try {
-    files = fs12.readdirSync(verifyDir);
-  } catch {
-    return [];
-  }
-  const have = new Set(files);
-  const names = /* @__PURE__ */ new Set();
-  for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
-  }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
-}
-function verifySets(verifyDir) {
-  return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
-}
-function setFacts(verifyDir, name) {
-  const str2 = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path11.join(verifyDir, name + ".expected.json"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path11.join(verifyDir, name + ".report.json"), isJsonObject);
-  return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(rep && rep.nodeId), reportScreen: str2(rep && rep.screen) };
-}
-function stemHolders(verifyDir, stems, open) {
-  const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
-  return stems.map((stem) => {
-    const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
-    const st = set !== void 0 ? readStatusFile(liveStatusFile(path11.join(verifyDir, set))) : null;
-    if (set === void 0 || st === null || st === "v1") return stem;
-    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path11.join(verifyDir, set), st).endIt})`;
-  }).join(", ");
-}
-function variantsOf(verifyDir, stem) {
-  return verifySets(verifyDir).flatMap((name) => {
-    const p = parseSetName(name);
-    return p !== null && p.stem === stem && p.variant !== null ? [p.variant] : [];
-  });
-}
-
-// design-to-code/node-artefacts.ts
 function planNode(plan, file) {
   return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path12.basename(file).replace(/\.json$/i, "")) : null);
 }
@@ -2318,7 +2356,7 @@ function probeAttemptNote(n, exit) {
   return `failed probe attempt ${n} of ${PROBE_ATTEMPTS}: ${next}`;
 }
 var overdue = (o) => Date.parse(o.deadline) < Date.now();
-var statusFile = (base) => base + ".status.json";
+var statusFile = (base) => setFile(base, "status");
 function sha256File(file) {
   try {
     return sha256Hex(fs16.readFileSync(file));
@@ -2486,7 +2524,6 @@ function replacedNote(doc) {
   const r = doc.replaced;
   return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
-var TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected\.json|report\.json|report\.md|status\.json|prev\.json))$/;
 function prepareStaged(stageDir, destDir) {
   let entries;
   try {
@@ -2496,7 +2533,7 @@ function prepareStaged(stageDir, destDir) {
   }
   if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
-  const owned = files.filter((f) => TOOL_OWNED.test(f));
+  const owned = files.filter(isToolOwned);
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files and migration journals are written by verify-screen itself, never copied in` };
   fs16.mkdirSync(destDir, { recursive: true });
   const suffix = tmpSuffix();
@@ -2556,7 +2593,7 @@ function runBase(screen, dir, at) {
   return { base: path15.join(verifyDir, k.name), notes: legacy2 !== null ? [`note  ${legacy2} \u2014 verify-screen --migrate renames them to ${k.stem}`] : [] };
 }
 function checkMeasured(base, measFile, runId, sameRun, prev) {
-  const exp = sha256File(base + ".expected.json");
+  const exp = sha256File(setFile(base, "expected"));
   if (!exp) return { refused: `${base}.expected.json does not exist \u2014 nothing to be done against` };
   const meas = sha256File(measFile);
   if (!meas) return { refused: `${measFile} does not exist \u2014 measure first (the probe on web; on native write it with expectationSha256) (phase stays ${prev ? prev.phase : "unset"})` };
@@ -2654,8 +2691,8 @@ function statusRun(screen, f, usage) {
   });
   const shas = {};
   if (phase === "done" || phase === "measured") {
-    const staged = phase === "done" ? f.publish !== void 0 ? path15.join(f.publish, S + ".measured.json") : null : path15.join(stageDirOf(base, runId), S + ".measured.json");
-    const measFile = staged !== null && fs16.existsSync(staged) ? staged : base + ".measured.json";
+    const staged = phase === "done" ? f.publish !== void 0 ? setFile(path15.join(f.publish, S), "measured") : null : setFile(path15.join(stageDirOf(base, runId), S), "measured");
+    const measFile = staged !== null && fs16.existsSync(staged) ? staged : setFile(base, "measured");
     const checked = checkMeasured(base, measFile, runId, sameRun, prevV2);
     if ("refused" in checked) {
       console.error(`refused  ${checked.refused}`);
@@ -2674,10 +2711,10 @@ function statusRun(screen, f, usage) {
     prep = r;
   }
   if (phase === "done") {
-    const evName = S + ".evidence.json";
-    const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName)) : sameRun?.published?.includes(evName) ? sha256File(base + ".evidence.json") : null;
+    const evName = setFile(S, "evidence");
+    const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName)) : sameRun?.published?.includes(evName) ? sha256File(setFile(base, "evidence")) : null;
     if (ev) shas.evidenceSha256 = ev;
-    else if (fs16.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} \u2014 not recorded as this run's evidence`);
+    else if (fs16.existsSync(setFile(base, "evidence"))) console.error(`note  ${setFile(base, "evidence")} was not published in run ${runId} \u2014 not recorded as this run's evidence`);
   }
   let doc;
   try {
@@ -2746,15 +2783,15 @@ async function waitMain(screen, f, usage) {
         return 1;
       }
       if (st.phase === "done") {
-        const onDisk = sha256File(base + ".measured.json");
-        const evOnDisk = st.evidenceSha256 ? sha256File(base + ".evidence.json") : null;
+        const onDisk = sha256File(setFile(base, "measured"));
+        const evOnDisk = st.evidenceSha256 ? sha256File(setFile(base, "evidence")) : null;
         if (st.measuredSha256 && onDisk === st.measuredSha256 && evOnDisk === (st.evidenceSha256 ?? null)) {
-          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
+          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(setFile(base, "evidence"))}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
-          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(path15.dirname(base))}`);
+          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(setFile(base, "expected"))} ${shellArg(setFile(base, "measured"))}${ev} --out ${shellArg(path15.dirname(base))}`);
           return 0;
         }
-        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];
+        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [SET_FILE.evidence, evOnDisk, st.evidenceSha256] : [SET_FILE.measured, onDisk, st.measuredSha256];
         const why = `run ${st.runId} says done, but ${base}${file} ${sha ? `is not the file it names (sha ${sha.slice(0, 12)}\u2026 vs ${(named || "none").slice(0, 12)}\u2026)` : "does not exist"} \u2014 still waiting`;
         if (why !== noted) {
           console.error(`note  ${why}`);
@@ -6720,14 +6757,14 @@ function locateReports(plan, planFile, cwd, exp) {
   const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs18.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs18.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
     const abs = path18.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
-    const stem = f.replace(/\.report\.json$/, "");
+    const stem = setBaseOf(f, "report") ?? f;
     let by = null;
-    const expFile = path18.join(dir, stem + ".expected.json");
-    if (!fs18.existsSync(expFile) && fs18.existsSync(expFile + ".retired")) continue;
+    const expFile = setFile(path18.join(dir, stem), "expected");
+    if (!fs18.existsSync(expFile) && fs18.existsSync(setFile(path18.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
     else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
@@ -7055,7 +7092,7 @@ function planBlocks(p, names, d) {
 var freshRefs = (d) => (p) => planStatus(d.cwd).reports(p.plan, p.file);
 function plansFinding(plans, set, d, refsOf) {
   if (path19.resolve(d.verifyDir) !== path19.join(d.cwd, VERIFY_DIR)) return [];
-  const rel = slash3(path19.relative(d.cwd, path19.join(d.verifyDir, set + ".report.json")));
+  const rel = slash3(path19.relative(d.cwd, setFile(path19.join(d.verifyDir, set), "report")));
   return plans.flatMap((p) => {
     const ref = refsOf(p).find((r) => r.rel === rel);
     return ref ? [{ p, ref }] : [];
@@ -7071,7 +7108,7 @@ function nameOnlyBlocks(plans, set, id, d, refsOf) {
 }
 function dashFiles(verifyDir, set) {
   const own = /* @__PURE__ */ new Set([`${set}-diff.png`]);
-  for (const tail of [".measured.json", ".report.json"]) {
+  for (const tail of [SET_FILE.measured, SET_FILE.report]) {
     const doc = readJsonOrNull(path19.join(verifyDir, set + tail), isJsonObject);
     const arts = doc && Array.isArray(doc.artifacts) ? doc.artifacts : [];
     for (const a of arts) if (typeof a === "string" && path19.basename(a).startsWith(set + "-")) own.add(path19.basename(a));
@@ -7218,7 +7255,7 @@ function planMigration(d) {
         continue;
       }
       const files = (filesOf.get(name) ?? []).sort();
-      const report = name + ".report.json";
+      const report = setFile(name, "report");
       if (to === T && baseExists) {
         const recording = plans.filter((p) => {
           const r = recordedReport(p.plan);
@@ -7233,12 +7270,12 @@ function planMigration(d) {
           steps.push({ kind: "skip", set: name, why: byName });
           continue;
         }
-        const from = path19.join(d.verifyDir, name + ".expected.json");
+        const from = setFile(path19.join(d.verifyDir, name), "expected");
         if (!exists2(from)) {
           steps.push({ kind: "skip", set: name, why: [`node ${id} already has ${T}, and this set has no expectation to retire \u2014 move its files aside by hand`] });
           continue;
         }
-        const retired = from + ".retired";
+        const retired = setFile(path19.join(d.verifyDir, name), "retired");
         if (exists2(retired) && !sameFile2(from, retired)) {
           steps.push({ kind: "skip", set: name, why: [`${path19.basename(retired)} already exists \u2014 refusing to replace it`] });
           continue;
@@ -7410,11 +7447,9 @@ function settle(plans, moves, link) {
   return { left: all.map((x) => x.why), retry: all.some((x) => !x.final) };
 }
 var JOURNAL_SCHEMA = "designtwin/verify-migrate-journal@1";
-var JOURNAL_RE = /^\.migrate-.+\.json$/;
-var journalFile = (verifyDir, set) => path19.join(verifyDir, `.migrate-${set}.json`);
 function listJournals(verifyDir) {
   try {
-    return fs19.readdirSync(verifyDir).filter((f) => JOURNAL_RE.test(f)).sort().map((f) => path19.join(verifyDir, f));
+    return fs19.readdirSync(verifyDir).filter(isJournalFile).sort().map((f) => path19.join(verifyDir, f));
   } catch {
     return [];
   }
@@ -7473,7 +7508,7 @@ function applyRetire(s, d) {
   try {
     const open = openRunOf(base);
     if (open) return { why: [open], notes: [] };
-    const report = s.set + ".report.json";
+    const report = setFile(s.set, "report");
     const plans = readPlans(d.planDir, d.cwd);
     const recording = plans.filter((p) => {
       const r = recordedReport(p.plan);
@@ -7536,7 +7571,7 @@ function applyRename(s, d) {
     const blocks = [...touched.flatMap((p) => planBlocks(p, nameMap, d)), ...nameOnlyBlocks(plans, s.set, s.nodeId, d, refsOf)];
     if (blocks.length) return { why: blocks, notes };
     const finders = plansFinding(plans, s.set, d, refsOf).map((f) => f.p);
-    const newReportRel = slash3(path19.relative(d.cwd, newBase + ".report.json"));
+    const newReportRel = slash3(path19.relative(d.cwd, setFile(newBase, "report")));
     const hadRecord = new Set(touched.filter((p) => {
       const r = recordedReport(p.plan);
       return r !== null && reportRecordNames(r.report, r.sha, d.cwd) !== null;
@@ -7645,7 +7680,6 @@ function runStatusNote(base, now = Date.now()) {
   if (Number.isFinite(age) && age >= STATUS_STALL_MS) return `the last run of ${name} (run ${st.runId}) never finished \u2014 still at phase ${st.phase}${detail}, ${Math.round(age / 1e3)} s ago; its measured/report files are partial`;
   return `a run of ${name} (run ${st.runId}) is in progress \u2014 phase ${st.phase}${detail}${Number.isFinite(age) ? `, ${Math.round(age / 1e3)} s ago` : ""}; it measures against the expectation it started with`;
 }
-var PREV_EXPECTED_SUFFIX = ".expected.prev.json";
 function expectDirOf(out) {
   if (out === void 0) return VERIFY_DIR;
   let dir = false;
@@ -7909,9 +7943,10 @@ function write(doExpect, base, obj, md) {
     process.stdout.write(reportFileText(obj));
     return;
   }
-  writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), reportFileText(obj));
-  if (md) writeFileAtomic(base + ".report.md", md);
-  console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
+  const written = setFile(base, doExpect ? "expected" : "report");
+  writeFileAtomic(written, reportFileText(obj));
+  if (md) writeFileAtomic(setFile(base, "reportMd"), md);
+  console.error(`wrote ${written}${md ? " and " + setFile(base, "reportMd") : ""}`);
 }
 function expectMain(files, flags, USAGE) {
   const { out, plan: planFlag, variant } = flags;
@@ -8008,7 +8043,7 @@ function expectMain(files, flags, USAGE) {
   if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
   if (k.legacy.length) console.error(`note  legacy-named verify set(s) ${k.legacy.join(", ")} of node ${nodeId} \u2014 verify-screen --migrate renames them to ${k.name}`);
   const outBase = ob.base;
-  const target = outBase + ".expected.json";
+  const target = setFile(outBase, "expected");
   const next = JSON.stringify(exp, null, 2) + "\n";
   const prev = fs20.existsSync(target) ? fs20.readFileSync(target, "utf8") : null;
   let prevContent = null;
@@ -8021,7 +8056,7 @@ function expectMain(files, flags, USAGE) {
   }
   const onlyExportedAt = prev !== null && prev !== next && !!prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "");
   const h = sha256Hex(onlyExportedAt && prev !== null ? prev : next);
-  const prevFile = outBase + PREV_EXPECTED_SUFFIX;
+  const prevFile = setFile(outBase, "expectedPrev");
   if (prev !== null && prev !== next && !onlyExportedAt) writeFileAtomic(prevFile, prev);
   if (!onlyExportedAt) write(true, outBase, exp);
   const runNote = runStatusNote(outBase);
@@ -8032,7 +8067,7 @@ function expectMain(files, flags, USAGE) {
   } else if (prev !== null) {
     const why = typeof prevContent === "string" && prevContent === exp.exportContentSha256 ? "same export content \u2014 the expectation generator changed (verify-screen upgrade)" : typeof prevContent === "string" ? `the export changed (content sha ${prevContent.slice(0, 12)}\u2026 \u2192 ${exp.exportContentSha256.slice(0, 12)}\u2026)` : `the expectation recorded no export hash (exportContentSha256) \u2014 cannot tell whether the export or the expectation generator changed`;
     console.error(`note  REPLACED an existing ${target} that differed (sha256 ${sha256Hex(prev).slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026): ${why}; the previous one is kept as ${prevFile}`);
-    const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs20.existsSync(f));
+    const stale = ["measured", "report", "reportMd"].map((k2) => setFile(outBase, k2)).filter((f) => fs20.existsSync(f));
     if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
   }
   const hc = exp.counts.hidden;
@@ -8180,7 +8215,7 @@ function compareMain(files, flags, USAGE) {
     }
     against = { file: againstFile, report: r.doc };
   } else {
-    const own = compareBase + ".report.json";
+    const own = setFile(compareBase, "report");
     const r = readJson(own, isVerifyReport);
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
@@ -8230,7 +8265,7 @@ function compareMain(files, flags, USAGE) {
         return p;
       }
     };
-    const reportRel = path20.relative(realOf(process.cwd()), realOf(path20.resolve(compareBase + ".report.json"))).split(path20.sep).join("/");
+    const reportRel = path20.relative(realOf(process.cwd()), realOf(path20.resolve(setFile(compareBase, "report")))).split(path20.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -8285,7 +8320,7 @@ function acceptMain(files, flags, USAGE) {
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
   let planFile = flags.plan ?? (recorded && fs20.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
-    const set = path20.basename(reportFile).replace(/\.report\.json$/, "");
+    const set = setBaseOf(path20.basename(reportFile), "report") ?? path20.basename(reportFile);
     const nodeId = nodeArtefacts(process.cwd(), { verifyDir: path20.dirname(reportFile) }).setNode(set);
     if (nodeId === null) {
       console.error(`error  the set ${set} names no node (its expectation and report name different nodes, or neither names one) \u2014 pass --plan <plan.json>`);

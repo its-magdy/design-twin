@@ -1,7 +1,8 @@
 // verify-sets.ts — the verify-set name grammar and the sets a verify dir holds (which stem a node's files take: node-artefacts.ts).
 //
-// A verify set is the files that share one name in the verify dir (`<name>.expected.json`, `.report.json`,
-// `.measured.json`, `.report.md`, `.status.json`, `<name>.png`, `<name>-diff.png`, …). Its name is the stem, or the stem
+// A verify set is the files that share one name in the verify dir (SET_FILE: `<name>.expected.json`, `.report.json`,
+// `.measured.json`, `.report.md`, `.status.json`, `.diff.png`, …, and screenshots: `<name>.png`, a state's `<name>-<state>.png`).
+// Every tool spells a set's files through setFile, and which of them only the tools write through isToolOwned. Its name is the stem, or the stem
 // and a variant: `<stem>.<slug>` (a dark theme, a narrow width), slug = runs of [a-z0-9] joined by single "-", at most
 // MAX_SLUG long, never a RESERVED_SLUGS word. A stem is safe() output and the id after its last "__", so it never holds
 // a "." — the part before the first "." is always the stem. Any other name (a nickname, `<Screen>@320`, `<Screen>-r1`)
@@ -82,7 +83,52 @@ export function nodeIdFromSetName(name: string): string | null {
 
 // ---------------------------------------------------------------- a set's files and where they go
 
-export const EXPECTED_SUFFIX = ".expected.json";
+/** Each file of a set, by kind: its suffix after the set's name (setFile). */
+export const SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired",
+} as const;
+export type SetFileKind = keyof typeof SET_FILE;
+/** File `kind` of the set whose path without suffix is `base` (`<dir>/<set name>`). */
+export const setFile = (base: string, kind: SetFileKind): string => base + SET_FILE[kind];
+/** `file` without the suffix of `kind` (its set's base, or its name for a bare file name), or null when it is no such file. */
+export const setBaseOf = (file: string, kind: SetFileKind): string | null => (file.endsWith(SET_FILE[kind]) ? file.slice(0, -SET_FILE[kind].length) : null);
+/** The same set's file of kind `to`, from `file` of kind `from` (a report → its markdown); `file` as it is when it is not of kind `from`. */
+export const siblingFile = (file: string, from: SetFileKind, to: SetFileKind): string => { const b = setBaseOf(file, from); return b === null ? file : setFile(b, to); };
+export const EXPECTED_SUFFIX = SET_FILE.expected;
+
+/** A --migrate journal: `<verifyDir>/.migrate-<set>.json`, kept from before a rename's first move until its post-check
+ *  passes (verify-migrate.ts). */
+export const journalFile = (verifyDir: string, set: string): string => path.join(verifyDir, `.migrate-${set}.json`);
+const JOURNAL_RE = /^\.migrate-.+\.json$/i;
+export const isJournalFile = (fileName: string): boolean => JOURNAL_RE.test(fileName);
+
+/** The kinds only the verify tools write: verify-screen's expectation (and the one it replaced), report and markdown, the
+ *  run status. Not the measured file, the evidence or the probe's images — the verifier writes or stages those. */
+const TOOL_OWNED_KINDS: readonly SetFileKind[] = ["expected", "expectedPrev", "report", "reportMd", "status"];
+/** Whether file name `fileName` is one only the verify tools write — a tool-owned kind of any set, or a --migrate journal
+ *  — so it is never written by hand (verifier-guard.ts) nor copied in by --publish (verify-run.ts). Case is ignored:
+ *  macOS and Windows file names ignore it. */
+export function isToolOwned(fileName: string): boolean {
+  const f = fileName.toLowerCase();
+  return isJournalFile(f) || TOOL_OWNED_KINDS.some((k) => f.endsWith(SET_FILE[k]));
+}
 
 /** The set name an expectation file gives: its basename without ".expected.json" (else without ".json"). */
 export function setNameOfFile(file: string): string {
@@ -135,9 +181,9 @@ export function expectationSetProblem(expectedFile: string, frameNodeId: string 
 
 // ---------------------------------------------------------------- the verify dir's sets
 
-/** The files whose names give a set its name. */
-const SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-const RETIRED = ".expected.json.retired";
+/** The files whose names give a set its name: its expectation, report and measured file. */
+const NAMING_KINDS: readonly SetFileKind[] = ["expected", "report", "measured"];
+const namedBy = (f: string): string | null => { for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length); return null; };
 
 /** Every set name in `verifyDir` (top level), sorted, with whether it is retired — its expectation moved aside as
  *  `<name>.expected.json.retired` and none in its place: history, never a live set. */
@@ -147,10 +193,11 @@ export function allSets(verifyDir: string): Array<{ name: string; retired: boole
   const have = new Set(files);
   const names = new Set<string>();
   for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+    const named = namedBy(f);
+    if (named !== null) names.add(named);
+    else if (f.endsWith(SET_FILE.retired)) names.add(f.slice(0, -SET_FILE.retired.length));
   }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+  return [...names].sort().map((name) => ({ name, retired: !have.has(setFile(name, "expected")) && have.has(setFile(name, "retired")) }));
 }
 
 /** The live (not retired) set names in `verifyDir`. */
@@ -163,9 +210,9 @@ export function verifySets(verifyDir: string): string[] {
 export interface SetFacts { expectedId: string | null; expectedName: string | null; reportId: string | null; reportScreen: string | null }
 export function setFacts(verifyDir: string, name: string): SetFacts {
   const str = (x: unknown): string | null => (typeof x === "string" && x ? x : null);
-  const exp = readJsonOrNull(path.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(setFile(path.join(verifyDir, name), "expected"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(setFile(path.join(verifyDir, name), "report"), isJsonObject);
   return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
 }
 

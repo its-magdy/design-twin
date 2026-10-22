@@ -1248,6 +1248,7 @@ function acquireFileLock(lockFile, opts = {}) {
 
 // design-to-code/run-cache.ts
 var CACHE_NAME = "designtwin-verify";
+var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
@@ -1307,7 +1308,7 @@ function runCacheOf(verifyDir) {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path5.join(root, "node_modules", ".cache", CACHE_NAME);
+    const cache = path5.join(root, ...RUN_CACHE_SEGMENTS);
     const rel = path5.relative(root, v).split(path5.sep).join("/");
     return { dir: rel === VERIFY_DIR.split(path5.sep).join("/") ? cache : path5.join(cache, "dirs", shortSha(rel)), root };
   }
@@ -1321,7 +1322,7 @@ function planLockOf(planFile) {
   const root = installRootOf(path5.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path5.relative(root, abs).split(path5.sep).join("/");
-  const dir = path5.join(root, "node_modules", ".cache", CACHE_NAME);
+  const dir = path5.join(root, ...RUN_CACHE_SEGMENTS);
   return { lockFile: path5.join(dir, "plan-locks", `${path5.basename(abs)}.${shortSha(rel)}.lock`), cache: { dir, root } };
 }
 var planLockFile = (planFile) => planLockOf(planFile).lockFile;
@@ -1358,7 +1359,7 @@ function isVerifyStatusV2(x) {
   return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), path6.basename(base) + ".status.json");
+var liveStatusFile = (base) => path6.join(runCacheDir(path6.dirname(base)), setFile(path6.basename(base), "status"));
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -1375,14 +1376,13 @@ function runCommands(base, open) {
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 function openRunSets(verifyDir) {
-  const SUFFIX = ".status.json";
   let files;
   try {
     files = fs6.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length)).filter((name) => {
+  return files.filter((e) => e.isFile() && setBaseOf(e.name, "status") !== null).map((e) => setBaseOf(e.name, "status") ?? e.name).filter((name) => {
     const st = readStatusFile(liveStatusFile(path6.join(verifyDir, name)));
     return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
   }).sort();
@@ -1408,9 +1408,39 @@ function nodeIdFromSetName(name) {
   const dot = name.indexOf(".");
   return nodeIdFromStem(dot < 0 ? name : name.slice(0, dot));
 }
+var SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired"
+};
+var setFile = (base, kind) => base + SET_FILE[kind];
+var setBaseOf = (file, kind) => file.endsWith(SET_FILE[kind]) ? file.slice(0, -SET_FILE[kind].length) : null;
+var siblingFile = (file, from, to) => {
+  const b = setBaseOf(file, from);
+  return b === null ? file : setFile(b, to);
+};
+var EXPECTED_SUFFIX = SET_FILE.expected;
 var TRAILING_SEP = path7.sep === "\\" ? /[\\/]+$/ : /\/+$/;
-var SET_FILE_RE = /\.(?:expected|report|measured)\.json$/;
-var RETIRED = ".expected.json.retired";
+var NAMING_KINDS = ["expected", "report", "measured"];
+var namedBy = (f) => {
+  for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length);
+  return null;
+};
 function allSets(verifyDir) {
   let files;
   try {
@@ -1421,19 +1451,20 @@ function allSets(verifyDir) {
   const have = new Set(files);
   const names = /* @__PURE__ */ new Set();
   for (const f of files) {
-    if (SET_FILE_RE.test(f)) names.add(f.replace(SET_FILE_RE, ""));
-    else if (f.endsWith(RETIRED)) names.add(f.slice(0, -RETIRED.length));
+    const named = namedBy(f);
+    if (named !== null) names.add(named);
+    else if (f.endsWith(SET_FILE.retired)) names.add(f.slice(0, -SET_FILE.retired.length));
   }
-  return [...names].sort().map((name) => ({ name, retired: !have.has(name + ".expected.json") && have.has(name + RETIRED) }));
+  return [...names].sort().map((name) => ({ name, retired: !have.has(setFile(name, "expected")) && have.has(setFile(name, "retired")) }));
 }
 function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
   const str2 = (x) => typeof x === "string" && x ? x : null;
-  const exp = readJsonOrNull(path7.join(verifyDir, name + ".expected.json"), isJsonObject);
+  const exp = readJsonOrNull(setFile(path7.join(verifyDir, name), "expected"), isJsonObject);
   const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
-  const rep = readJsonOrNull(path7.join(verifyDir, name + ".report.json"), isJsonObject);
+  const rep = readJsonOrNull(setFile(path7.join(verifyDir, name), "report"), isJsonObject);
   return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(rep && rep.nodeId), reportScreen: str2(rep && rep.screen) };
 }
 function stemHolders(verifyDir, stems, open) {
@@ -1964,7 +1995,7 @@ function reportFreshness(root, o = {}) {
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
-    const expRel = rel.replace(/\.report\.json$/, ".expected.json");
+    const expRel = siblingFile(rel, "report", "expected");
     try {
       return sha256Hex(fs12.readFileSync(path12.resolve(root, expRel))) !== want ? expRel : null;
     } catch {
@@ -2307,14 +2338,14 @@ function locateReports(plan, planFile, cwd, exp) {
   const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs13.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs13.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
     const abs = path13.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
-    const stem = f.replace(/\.report\.json$/, "");
+    const stem = setBaseOf(f, "report") ?? f;
     let by = null;
-    const expFile = path13.join(dir, stem + ".expected.json");
-    if (!fs13.existsSync(expFile) && fs13.existsSync(expFile + ".retired")) continue;
+    const expFile = setFile(path13.join(dir, stem), "expected");
+    if (!fs13.existsSync(expFile) && fs13.existsSync(setFile(path13.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
     else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
@@ -2982,7 +3013,7 @@ function recordedShadowWarnings(plan) {
   const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
-var json = (x) => x.replace(/\.report\.md$/, ".report.json");
+var json = (x) => siblingFile(x, "reportMd", "report");
 var slash2 = (x) => x.split(path15.sep).join("/").split("\\").join("/");
 function recordedReportRel(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
@@ -3587,7 +3618,7 @@ function auditGateWarnings(plan, cwd, exp, planFile) {
 function legacySetWarnings(plan, planFile, reports) {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = path15.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    const set = setBaseOf(path15.posix.basename(r.rel), "report") ?? path15.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
 }
