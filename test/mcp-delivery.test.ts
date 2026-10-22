@@ -101,15 +101,15 @@ console.log("\ndescribeWrite — the note, and the .prev it points at:");
   eq("explicit export: no prevKept, the plain note", D.describeWrite(explicit, { kind: "export", dir: DIR, changes: { kept: [L1 + ".prev"], replaced: [L1], earlier: ["/e.prev"] } }),
     { note: BASE, file: DIR });
   eq("implicit export, kept + replaced", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: { kept: [L1 + ".prev", DIR + "/design-system/tokens.json.prev"], replaced: [L1, L2], earlier: ["/e.prev"] } }),
-    { note: SPILLED + `It replaced 2 existing screen file(s) under ${DIR}/pages. The previous version of each changed file — 2 file(s) under pages/ or design-system/ (or design-system.json), e.g. ${L1}.prev — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). ` + BASE, file: DIR, prevKept: 2 });
+    { note: SPILLED + `It replaced 2 existing screen file(s) under ${path.join(DIR, "pages")}. The previous version of each changed file — 2 file(s) under pages/ or design-system/ (or design-system.json), e.g. ${L1}.prev — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). ` + BASE, file: DIR, prevKept: 2 });
   eq("implicit export, kept, nothing replaced (a design-system spill)", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: { ...none, kept: [DIR + "/design-system/tokens.json.prev"] } }),
     { note: SPILLED + `The previous version of each changed file — 1 file(s) under pages/ or design-system/ (or design-system.json), e.g. ${DIR}/design-system/tokens.json.prev — is kept beside it as <file>.prev (one level — the next implicit spill replaces it). ` + BASE, file: DIR, prevKept: 1 });
   eq("implicit export, nothing kept, earlier .prev files, replaced", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: { kept: [], replaced: [L1], earlier: ["/a.prev", "/b.prev"] } }),
-    { note: SPILLED + `It replaced 1 existing screen file(s) under ${DIR}/pages. Earlier versions are still kept as 2 .prev file(s) beside their files (this export matched what was on disk). ` + BASE, file: DIR, prevKept: 0 });
+    { note: SPILLED + `It replaced 1 existing screen file(s) under ${path.join(DIR, "pages")}. Earlier versions are still kept as 2 .prev file(s) beside their files (this export matched what was on disk). ` + BASE, file: DIR, prevKept: 0 });
   eq("implicit export, nothing kept, earlier .prev files, nothing replaced", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: { ...none, earlier: ["/a.prev"] } }),
     { note: SPILLED + "Earlier versions are still kept as 1 .prev file(s) beside their files (this export matched what was on disk). " + BASE, file: DIR, prevKept: 0 });
   eq("implicit export, nothing kept, none earlier, replaced", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: { ...none, replaced: [L1, L2] } }),
-    { note: SPILLED + `It replaced 2 existing screen file(s) under ${DIR}/pages (none differed from what was on disk, so no .prev was kept). ` + BASE, file: DIR, prevKept: 0 });
+    { note: SPILLED + `It replaced 2 existing screen file(s) under ${path.join(DIR, "pages")} (none differed from what was on disk, so no .prev was kept). ` + BASE, file: DIR, prevKept: 0 });
   eq("implicit export into a fresh dir: the spill line only, prevKept 0", D.describeWrite(implicit, { kind: "export", dir: DIR, changes: none }),
     { note: SPILLED + BASE, file: DIR, prevKept: 0 });
 }
