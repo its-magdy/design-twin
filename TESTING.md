@@ -127,6 +127,12 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
 
+`cli-commands.ts` is the command registry every part of the CLI surface is derived from, and the two
+suites that own it walk its rows rather than listing commands: `test/figma-pull-args.test.ts` parses every
+command alone, refuses every pair of commands (with the owning family's wording), accepts each read
+option exactly where the row's read takes it, and runs every `dtwin <verb>` spelling to its row's command;
+`test/cli-help.test.ts` spawns every verb row's `--help` and checks `dtwin --help` carries every row's
+summary line and documents every flag in the table.
 `verbs.ts` (`dtwin <verb>` → flags) is tested as the pure argv → argv function it is, plus subprocess
 runs proving a verb and its flag are the same command. `doctor.ts` is tested three ways: its pure
 check functions directly; its probes against real sockets on spare ports (a plain HTTP server, a real
@@ -167,7 +173,7 @@ bun test/mcp-delivery.test.ts  # expect: all checks pass, exit 0 — how an MCP 
                                  # tools IN PROCESS (figma-mcp.ts loaded as a module — it starts nothing on import — over an
                                  # in-memory transport) through a recording daemon on FIGMA_BRIDGE_PORT=8789's socket, every
                                  # writeToDisk / outDir / reply-kind path; and that `bun figma-mcp.ts` and `dtwin mcp` both serve
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed

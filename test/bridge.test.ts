@@ -782,7 +782,7 @@ void (async () => {
   const pullSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
   ok("[args] a pull (--node, --selection, a catalog, pages) writes through the shared OUT.writeAny", (() => {
     const i = pullSrc.indexOf("async function exportCmd(");
-    const j = pullSrc.indexOf("// Routes the parsed command line");
+    const j = pullSrc.indexOf("\n}\n", i); // exportCmd's own closing brace
     const body = i !== -1 && j > i ? pullSrc.slice(i, j) : "";
     return (body.match(/OUT\.writeAny\(outDir, r, plog\)/g) || []).length === 1 && !/OUT\.write(Screen|Export|Json|Assets)\(/.test(body);
   })());
@@ -1207,7 +1207,7 @@ void (async () => {
   ok("[args] --no-assets sets skipAssets", parse(["--no-assets"]).readOpts.skipAssets === true);
   ok("[args] --list implies depth 2, --list-pages depth 1", (() => {
     const l = parse(["--list"]), lp = parse(["--list-pages"]);
-    return l.listOnly && l.listDepth === 2 && lp.listOnly && lp.listDepth === 1;
+    return l.command.id === "list" && l.listDepth === 2 && lp.command.id === "listPages" && lp.listDepth === 1;
   })());
 
   // Scope flags are mutually exclusive and the loser was DISCARDED IN SILENCE: collectFull is
@@ -1218,13 +1218,13 @@ void (async () => {
   ok("[args] --selection + --page is an ERROR", /different scopes/.test(usage(["--selection", "--page", "1:2"]) || ""));
   ok("[args] --selection + --all-pages is an ERROR", /different scopes/.test(usage(["--selection", "--all-pages"]) || ""));
   ok("[args] each scope flag ALONE is still fine", (() => {
-    return parse(["--selection"]).selection && parse(["--all-pages"]).allPages && parse(["--page", "1:2"]).pageSel.length === 1;
+    return parse(["--selection"]).command.id === "selection" && parse(["--all-pages"]).allPages && parse(["--page", "1:2"]).pageSel.length === 1;
   })());
 
   // --design-system: the "just the design system, no page walk" scope. Same exclusivity family as
   // --selection/--all-pages/--page, and — like the list commands — no read options apply, since it
   // never walks a node.
-  ok("[args] --design-system alone parses and sets the flag", parse(["--design-system"]).designSystemOnly === true);
+  ok("[args] --design-system alone parses and sets the flag", parse(["--design-system"]).command.id === "designSystem");
   ok("[args] --design-system + --all-pages is an ERROR", /different scopes/.test(usage(["--design-system", "--all-pages"]) || ""));
   ok("[args] --design-system + --selection is an ERROR", /different scopes/.test(usage(["--design-system", "--selection"]) || ""));
   ok("[args] --design-system + --page is an ERROR", /different scopes/.test(usage(["--design-system", "--page", "1:2"]) || ""));
@@ -1233,7 +1233,7 @@ void (async () => {
   // --variant-visuals is the ONE exception: it enriches the component catalog --design-system/
   // --as-library both build, so it must NOT trip the "no node walk" guard the other five do.
   ok("[args] --design-system + --variant-visuals is ACCEPTED, not refused",
-    parse(["--design-system", "--variant-visuals"]).designSystemOnly === true);
+    parse(["--design-system", "--variant-visuals"]).command.id === "designSystem");
   ok("[args] --design-system + --variant-visuals + --css is STILL an error (css is refused, variant-visuals is not)",
     /node\/page walk/.test(usage(["--design-system", "--variant-visuals", "--css"]) || "") &&
     !/--variant-visuals/.test(usage(["--design-system", "--variant-visuals", "--css"]) || ""));
@@ -1270,9 +1270,9 @@ void (async () => {
   // keep composing with them.
   ok("[args] --timeout still composes with --list", (() => {
     const r = parse(["--list", "--timeout", "600"]);
-    return r.listOnly === true && r.listTimeoutMs === 600000;
+    return r.command.id === "list" && r.listTimeoutMs === 600000;
   })());
-  ok("[args] a bare --list is of course still fine", parse(["--list"]).listOnly === true);
+  ok("[args] a bare --list is of course still fine", parse(["--list"]).command.id === "list");
 
   // ---------------------------------------------------------------- figma-pull: --list-libraries
   // The library-discovery member of the cheap-index family. It must join EVERY guard the other two
@@ -1281,11 +1281,11 @@ void (async () => {
   console.log("\nfigma-pull — --list-libraries:");
   ok("[lib] --list-libraries parses as its own command", (() => {
     const r = parse(["--list-libraries"]);
-    return r.listLibraries === true && r.listOnly === false && r.childrenId === null;
+    return r.command.id === "listLibraries" && r.childrenId === null;
   })());
   // The prefix trap: `--list` is matched by exact includes(), so --list-libraries must NOT also read
   // as --list (which would run listPages and print the wrong thing entirely).
-  ok("[lib] --list-libraries is NOT swallowed by --list", parse(["--list-libraries"]).listOnly === false);
+  ok("[lib] --list-libraries is NOT swallowed by --list", parse(["--list-libraries"]).command.id === "listLibraries");
   ok("[lib] it takes the LIST timeout tier, and --timeout raises it", (() => {
     const d = parse(["--list-libraries"]), t = parse(["--list-libraries", "--timeout", "600"]);
     return d.listTimeoutMs === 300000 && t.listTimeoutMs === 600000;
@@ -1316,10 +1316,10 @@ void (async () => {
   // The identity/liveness probe joins the index-command family, so it must inherit every guard that
   // family has — the point of routing it through indexCmds rather than giving it a private branch.
   console.log("\nfigma-pull — --whoami:");
-  ok("[whoami] parses as its own command", parse(["--whoami"]).whoami === true);
-  ok("[whoami] is off by default", parse(["design"]).whoami === false);
+  ok("[whoami] parses as its own command", parse(["--whoami"]).command.id === "whoami");
+  ok("[whoami] is off by default", parse(["design"]).command.id === "pull");
   ok("[whoami] writes no outDir (it prints, like the other index commands)",
-    parse(["--whoami"]).listOnly === false && parse(["--whoami"]).whoami === true);
+    parse(["--whoami"]).command.family === "index" && parse(["--whoami"]).command.id === "whoami");
   ok("[whoami] + an export scope is an ERROR", /cannot be combined/.test(usage(["--whoami", "--all-pages"]) || ""));
   ok("[whoami] + --list is an ERROR (two index commands)", /only one/.test(usage(["--whoami", "--list"]) || ""));
   ok("[whoami] + --list-libraries is an ERROR", /only one/.test(usage(["--whoami", "--list-libraries"]) || ""));
@@ -1355,11 +1355,11 @@ void (async () => {
   })());
   ok("[client] composes with an index command (it addresses WHICH file to list)", (() => {
     const r = parse(["--list", "--client", "c2"]);
-    return r.listOnly === true && r.client === "c2";
+    return r.command.id === "list" && r.client === "c2";
   })());
 
-  ok("[list-clients] parses as its own command", parse(["--list-clients"]).listClients === true);
-  ok("[list-clients] is off by default", parse(["design"]).listClients === false);
+  ok("[list-clients] parses as its own command", parse(["--list-clients"]).command.id === "listClients");
+  ok("[list-clients] is off by default", parse(["design"]).command.id === "pull");
   ok("[list-clients] + an export scope is an ERROR", /cannot be combined/.test(usage(["--list-clients", "--all-pages"]) || ""));
   ok("[list-clients] + --list is an ERROR (two index commands)", /only one/.test(usage(["--list-clients", "--list"]) || ""));
   ok("[list-clients] + --whoami is an ERROR", /only one/.test(usage(["--list-clients", "--whoami"]) || ""));
@@ -1439,9 +1439,8 @@ void (async () => {
   // help naming one that no longer exists).
   {
     const registered = [...libMcpSrc.matchAll(/registerTool\(\s*"([a-z_]+)"/g)].map((m) => must(m[1], "registerTool name capture"));
-    const pullSrcForHelp = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
-    const helpStart = pullSrcForHelp.indexOf('"dtwin mcp\\n\\n"');
-    const helpText = helpStart === -1 ? "" : pullSrcForHelp.slice(helpStart, pullSrcForHelp.indexOf("process.exit(0)", helpStart));
+    // `dtwin mcp --help` prints the mcp verb row's page (cli-commands.ts).
+    const helpText = (await import("../bridge/src/cli-commands.ts")).MCP_HELP;
     const named = (helpText.match(/figma_[a-z_]+\*?/g) || []).filter((t, i, a) => a.indexOf(t) === i);
     // `figma_export_*` is a glob over the export family (prefix match). A bare name that is not itself a
     // tool (the help's `figma_list`) names a family too: it must be the `<name>_` prefix of a real tool.
@@ -2719,9 +2718,9 @@ void (async () => {
     /cannot be combined with --css/.test(parseThrows(["--stop", "--css"]) || ""));
   ok("[daemon] two daemon commands at once are refused",
     /different commands/.test(parseThrows(["--serve", "--stop"]) || ""));
-  ok("[daemon] a daemon command alone parses", pull.parseArgs(["--serve"]).daemonCmd === "--serve");
+  ok("[daemon] a daemon command alone parses", pull.parseArgs(["--serve"]).command.flag === "--serve");
   ok("[daemon] and an ordinary pull still parses with no daemon command",
-    pull.parseArgs(["design", "--all-pages"]).daemonCmd === null);
+    pull.parseArgs(["design", "--all-pages"]).command.family !== "daemon");
 
 
   // ---------------------------------------------------------------- token-store
@@ -2924,12 +2923,12 @@ void (async () => {
   }
 
   console.log("\nfigma-pull — token command guards:");
-  ok("[token] --token-status parses as a command", pull.parseArgs(["--token-status"]).tokenCmd === "--token-status");
-  ok("[token] --show-token parses as a command", pull.parseArgs(["--show-token"]).tokenCmd === "--show-token");
-  ok("[token] --rotate-token parses as a command", pull.parseArgs(["--rotate-token"]).tokenCmd === "--rotate-token");
-  ok("[token] --forget-token parses as a command", pull.parseArgs(["--forget-token"]).tokenCmd === "--forget-token");
+  ok("[token] --token-status parses as a command", pull.parseArgs(["--token-status"]).command.flag === "--token-status");
+  ok("[token] --show-token parses as a command", pull.parseArgs(["--show-token"]).command.flag === "--show-token");
+  ok("[token] --rotate-token parses as a command", pull.parseArgs(["--rotate-token"]).command.flag === "--rotate-token");
+  ok("[token] --forget-token parses as a command", pull.parseArgs(["--forget-token"]).command.flag === "--forget-token");
   ok("[token] --token-file takes a value and is NOT a command",
-    (() => { const p = pull.parseArgs(["--token-file", "/tmp/t"]); return p.tokenFile === "/tmp/t" && p.tokenCmd === null; })());
+    (() => { const p = pull.parseArgs(["--token-file", "/tmp/t"]); return p.tokenFile === "/tmp/t" && p.command.family !== "token"; })());
   ok("[token] --token-file=<path> form works too", pull.parseArgs(["--token-file=/tmp/t"]).tokenFile === "/tmp/t");
   ok("[token] --token-file with no value is refused",
     /needs a path/.test(parseThrows(["--token-file"]) || ""));
@@ -2950,9 +2949,9 @@ void (async () => {
   ok("[token] and with --forget-token",
     /silently ignored/.test(parseThrows(["--forget-token", "--token-file", "/tmp/t"]) || ""));
   ok("[token] but --token-file IS allowed with --show-token",
-    pull.parseArgs(["--show-token", "--token-file", "/tmp/t"]).tokenCmd === "--show-token");
+    pull.parseArgs(["--show-token", "--token-file", "/tmp/t"]).command.flag === "--show-token");
   ok("[token] an ordinary pull still parses with no token command",
-    pull.parseArgs(["design"]).tokenCmd === null);
+    pull.parseArgs(["design"]).command.family !== "token");
 
   console.log("\nfigma-pull — token commands end to end (subprocess):");
   // Driven as a real subprocess: these commands must work with NO bridge, NO daemon and NO plugin,
