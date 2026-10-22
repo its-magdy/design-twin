@@ -187,6 +187,33 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // Origin/Host failures are still refused outright at the HTTP layer.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
 
+// ---- the plugin <-> bridge protocol on the wire: the JSON each side sends. The plugin's side is
+// figma-plugin/ui.html (plain JS, so these types are its contract, not its source); the test suites'
+// fake plugin (test/fake-plugin.ts) sends and reads exactly these.
+
+/** bridge -> plugin: run one command; the plugin answers with a ReplyFrame carrying the same id. */
+export interface CommandFrame<C extends Cmd = Cmd> { id: string; cmd: C; args: Commands[C]["args"] }
+/** bridge -> plugin: the bridge gave up on request `id` (timed out, stalled out, or its caller left). */
+export interface CancelFrame { type: "cancel"; id: string }
+export type BridgeFrame = CommandFrame | CancelFrame;
+/** plugin -> bridge: who this plugin is, sent on every socket open. ui.html sends null for what it does not
+ *  know; a plugin older than version reporting omits pluginVersion. */
+export interface HelloFrame {
+  type: "hello";
+  instanceId?: string | null; file?: string | null; fileKey?: string | null; page?: string | null; pluginVersion?: string | null;
+}
+/** plugin -> bridge: an unsolicited progress tick (figma-plugin/src/progress.ts), for the run serving `requestId`. */
+export interface ProgressFrame {
+  type: "progress";
+  requestId?: string | null; phase?: string; page?: { index: number; of: number; name?: string | null } | null;
+  nodes?: number | null; assets?: number | null;
+  /** a `queued` frame: who the waiting run is for */
+  source?: "ui" | "bridge"; label?: string;
+}
+/** plugin -> bridge: the answer to command `id`. */
+export type ReplyFrame = { [C in Cmd]: { id: string; ok: true; result: Commands[C]["reply"] } }[Cmd] | { id: string; ok: false; error: string };
+export type PluginWireFrame = HelloFrame | ProgressFrame | ReplyFrame;
+
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
 /** A plugin progress tick as ui.html relays it: `{type:"progress", phase, page, nodes, assets}` — the
@@ -985,7 +1012,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // drain), 0 (DROPPED: the socket is closed, or its buffer is past backpressureLimit) or the bytes
   // written. Only a drop is a failure: false, so the caller can say so instead of waiting on a reply to
   // a frame that never left.
-  const sendFrame = (ws: BridgeSocket, frame: object): boolean => ws.send(JSON.stringify(frame)) !== 0;
+  const sendFrame = (ws: BridgeSocket, frame: BridgeFrame): boolean => ws.send(JSON.stringify(frame)) !== 0;
 
   const liveClients = registry.live;
   const describe = registry.describe;

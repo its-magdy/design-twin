@@ -139,6 +139,15 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
 
+Every suite that plays the Figma plugin (bridge, bridge-route, cli-pull, mcp-smoke, mcp-lifecycle) does it
+through `test/fake-plugin.ts`: it dials with the token and the `null` Origin, sends a typed `hello`, answers
+each command through a handler typed by that command's reply (`bridge/src/commands.ts`), records what the
+bridge sent, and hangs (`HANG`), fails (`fail()`), redials or closes on cue. The frames on the wire are
+declared once, in `bridge/src/server-core.ts` (`CommandFrame`, `CancelFrame`, `HelloFrame`, `ProgressFrame`,
+`ReplyFrame`); `figma-plugin/ui.html` is plain JS, so those types are its contract. A socket whose point is
+the handshake itself (a refused token, Origin or Host; the dead peer that never pongs) stays on
+`test/ws-client.ts`.
+
 `cli-commands.ts` is the command registry every part of the CLI surface is derived from, and the two
 suites that own it walk its rows rather than listing commands: `test/figma-pull-args.test.ts` parses every
 command alone, refuses every pair of commands (with the owning family's wording), accepts each read
