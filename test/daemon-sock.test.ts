@@ -43,7 +43,7 @@ const TMP_ROOT = process.platform === "win32" ? os.tmpdir() : fs.realpathSync.na
   check("win32: assertNoDaemon() (what `dtwin serve` asks first) rejects with the reason", await rejectsWithWhy(daemon.assertNoDaemon(8790, win(fresh))));
   check("…and neither created anything", fs.readdirSync(fresh).length === 0);
   let closes = 0;
-  const bridge: DaemonBridge = { port: 8790, isConnected: () => false, request: async () => ({}), close: () => { closes++; } };
+  const bridge: DaemonBridge = { port: 8790, isConnected: () => false, request: async () => { throw new Error("never asked: serve() refuses first"); }, close: () => { closes++; } };
   check("win32: serve() rejects with the reason", await rejectsWithWhy(daemon.serve(bridge, { port: 8790, signals: false, crashHandlers: false, platform: "win32" })));
   check("…without listening (no daemon answers for that port) and without touching the bridge",
     (await daemon.connect(8790)) === null && closes === 0);

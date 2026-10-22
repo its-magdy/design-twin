@@ -25,14 +25,16 @@ import path from "node:path";
 // connected Figma file the command goes to — a connId, a fileKey, or part of the file name. Omitted
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
-import { createBridge, connectionFor, isConnId } from "./server-core.ts";
-import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS, daemonGuardMs } from "./timeouts.ts";
+import { createBridge } from "./server-core.ts";
+import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import type { RouteRequest, Upstream } from "./route.ts";
+import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
-import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { Bridge, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-// The command/reply contract shared with the plugin (commands.ts): every `bridge.request` below is
+// The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
 import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
@@ -57,9 +59,10 @@ import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
 // Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
 import * as daemon from "./daemon.ts";
 import { exitFlushed, installQueuedConsole } from "./stdio.ts";
-import type { DaemonBridge, DaemonConnection, ServeHandle } from "./daemon.ts";
-type Holder = { own: Bridge } | { via: DaemonConnection };
+import type { ServeHandle } from "./daemon.ts";
+// The bridge this process holds (null while a daemon holds it, or before the first call), and its adapter.
 let own: Bridge | null = null;
+let ownUp: Upstream | null = null;
 // The daemon socket this process serves while it holds the bridge (null until serve() has bound it, and
 // again after `dtwin stop` / an idle shutdown). Its activity() is how this process learns, once its own
 // client has gone, whether any OTHER process uses the shared bridge (afterClientGone below).
@@ -73,14 +76,14 @@ let unsharedSaid = false;
 // arriving while main() is still resolving at startup) each saw no daemon and each called
 // createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
 // dropped after a daemon route or a failure, so the next call re-resolves (that session may have gone).
-let holding: Promise<Holder> | null = null;
-function holder(): Promise<Holder> {
+let holding: Promise<Upstream> | null = null;
+function holder(): Promise<Upstream> {
   return (holding ??= resolveHolder().finally(() => { if (!own) holding = null; }));
 }
-async function resolveHolder(): Promise<Holder> {
-  if (own) return { own };
+async function resolveHolder(): Promise<Upstream> {
+  if (own && ownUp) return ownUp;
   const via = await daemon.connect();
-  if (via) return { via };
+  if (via) return daemonUpstream(via, () => daemon.status());
   // A held port is a TOOL error here, never process.exit: this process is the user's stdio MCP
   // session, and dying took every tool down with it. `listening` settles the success side.
   let failed: (e: Error) => void = () => {};
@@ -98,31 +101,30 @@ async function resolveHolder(): Promise<Holder> {
     throw new Error("the MCP client went away before the bridge was up");
   }
   own = mine;
+  const up = ownUpstream(mine);
+  ownUp = up;
   // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
   // talking to a closed server — which means the memo goes with it. Once the client has gone, a
   // close from outside (`dtwin stop`, the idle shutdown afterClientGone armed) is also this
   // process's cue to exit: nothing is left for it to do.
-  // A spread copy is exact: createBridge() returns a plain object literal whose members (methods, `port`,
-  // `listening`) are all own data properties — no getters, no prototype. Only close is overridden.
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
-    own = null; holding = null; served = null; closeOwn = null;
+    own = null; ownUp = null; holding = null; served = null; closeOwn = null;
     mine.close();
     if (clientGone.signal.aborted) leave("the shared bridge was stopped after the MCP client went away — exiting");
   };
   closeOwn = close;
-  const shared: DaemonBridge = { ...mine, close };
   // No daemon socket where daemon.ts says none can run (Windows): this session holds the bridge alone,
   // and says why once instead of trying a listen that cannot work.
   if (!daemon.daemonSupported()) {
     if (!unsharedSaid) { unsharedSaid = true; wlog("not sharing the bridge with other sessions: " + daemon.DAEMON_UNSUPPORTED); }
-    return { own: mine };
+    return up;
   }
   // idleMin 0 while the client is here: this server lives as long as its session (afterClientGone
   // re-arms the window once the session has gone and others still use the socket).
-  daemon.serve(shared, { idleMin: 0, signals: false, log: wlog }).then(
+  daemon.serve(servedBridge(mine, close), { idleMin: 0, signals: false, log: wlog }).then(
     (h) => {
       // Gone (or this bridge stopped) while the socket was binding: take it down again at once.
       if (closed || leaving) { h.shutdown(); return; }
@@ -130,64 +132,34 @@ async function resolveHolder(): Promise<Holder> {
     },
     (e) => wlog("not sharing the bridge with other sessions: " + errMsg(e)),
   );
-  return { own: mine };
+  return up;
 }
-const bridge = {
-  // Typed per command (commands.ts): the reply is what the plugin sends for `cmd`, checked on arrival
-  // by server-core — whether this process holds the bridge or a daemon does.
-  // `onProgress` is honoured either way. Holding the bridge, server-core calls it per plugin tick.
-  // Routed through a daemon, the listener opts the socket request into progress frames (daemon.ts
-  // protocol note): the daemon relays each tick ahead of its reply, so withProgress still sends every
-  // notifications/progress (MCP spec 2025-06-18, basic/utilities/progress) before the tool result. A
-  // daemon from before progress frames sends none — that export simply reports no progress. Each
-  // relayed tick also re-arms the socket's outer timeout, so a long export that keeps ticking is not
-  // cut off by the daemonGuardMs guard; the daemon's own `timeoutMs` still bounds the command.
-  // A NAMED `client` (file name / fileKey — not a bare c<N> connId) gets the same bounded wait the
-  // CLI (figma-pull.ts) and the daemon (daemon.ts) give `--client <name>`: every open plugin window
-  // redials on its own clock (timeouts.ts PLUGIN_REDIAL_MS), so right after this process opened the bridge
-  // only one of two open files may have landed yet, and resolving the name at once failed on the
-  // other file (seen live). Either way the bridge's own awaitClient (server-core) does the waiting, with
-  // NAMED_CLIENT_WAIT_MS as the connect window — holding the bridge it is requestWithClient's `waitMs`;
-  // routed through a daemon it is the frame's `waitForConnection`, the field the CLI sends for the same
-  // purpose. It waits for a first plugin connection and then, at most NAMED_CLIENT_WAIT_MS more, for the
-  // name; then resolveClient reports whatever IS connected — its error text is unchanged. So a name that
-  // never lands fails after the window instead of at once; a bare connId never waits (it does not depend
-  // on identification), and neither does a call with no `client`.
-  //
-  // `requestWithClient` also hands back WHICH connected file answered (null from a daemon too old to relay
-  // it) — what the export tools stamp as `sourceFile` and whoami describes. `signal` is
-  // the tool call's own: the SDK aborts `extra.signal` on notifications/cancelled, and stdin closing aborts
-  // every in-flight call (callSignal below). Holding the bridge, server-core then sends the plugin a cancel
-  // frame for the request.
-  async requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }> {
-    const h = await holder();
-    const named = target !== undefined && target !== "" && !isConnId(target);
-    if ("own" in h) return h.own.requestWithClient(cmd, args, timeoutMs, target, undefined, onProgress, signal, named ? { waitMs: NAMED_CLIENT_WAIT_MS } : {});
-    // Through a daemon the signal closes this request's socket; the daemon then abandons the request and
-    // its bridge sends the plugin the same cancel frame.
-    const waitForConnection = named ? NAMED_CLIENT_WAIT_MS : 0;
-    return h.via.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection } : {}) }, daemonGuardMs(timeoutMs, waitForConnection), onProgress, signal);
-  },
-  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]> {
-    return (await bridge.requestWithClient(cmd, args, timeoutMs, target, onProgress, signal)).reply;
-  },
-  async listClients(): Promise<ClientRow[]> {
-    const h = await holder();
-    return "own" in h ? h.own.listClients() : (await daemon.status())?.clients || [];
-  },
-  // `connId`: describe THAT connection — the one a request was answered by — not the first live one.
-  // Through a daemon, its status().connection is the same ConnectionInfo (server-core's), narrowed the same
-  // way; `via` names the shared bridge. Only a daemon too old to send `connection` gets the 3-field stub.
-  async connectionInfo(connId?: string | null): Promise<ConnectionInfo | (ConnectionInfo & { via: string }) | { via: string; port: number | undefined; pluginConnected: boolean | undefined }> {
-    const h = await holder();
-    if ("own" in h) return h.own.connectionInfo(connId ?? undefined);
-    // An older daemon may omit fields (daemon.ts DaemonStatusView) — reported as undefined, never guessed.
-    const st = await daemon.status();
-    const via = "shared bridge (pid " + (st?.pid ?? "?") + ")";
-    if (st && st.connection) return { via, ...connectionFor(st.connection, connId) };
-    return { via, port: st?.port, pluginConnected: st?.pluginConnected };
-  },
-};
+// Every tool reaches the plugin through ONE route (route.ts), over whichever side holds the bridge — this
+// process or a daemon (holder above, re-resolved per call). The route owns the rules, the same ones the CLI
+// gets: a call with no `client`, or a bare c<N> connId, is resolved against what is connected now; a NAMED
+// client (file name / fileKey) waits up to NAMED_CLIENT_WAIT_MS for that file — every open plugin window
+// redials on its own clock (timeouts.ts PLUGIN_REDIAL_MS), so right after this process opened the bridge only
+// one of two open files may have landed yet (seen live) — and then resolveClient reports whatever IS connected.
+// Only an export hears progress ticks (withProgress relays them as notifications/progress, MCP spec 2025-06-18,
+// basic/utilities/progress; through a daemon they come as progress frames, which also re-arm the socket's outer
+// guard). No stall check: a long-lived server's connection is warm. Every reply is checked against commands.ts
+// on arrival, and says WHICH connected file answered (null from a daemon too old to relay it) — what the export
+// tools stamp as `sourceFile` and whoami describes. `signal` is the tool call's own: the SDK aborts
+// `extra.signal` on notifications/cancelled, and stdin closing aborts every in-flight call (callSignal below);
+// the plugin then gets a cancel frame for the request, whichever side holds the bridge.
+const route = createRoute(holder, { connectWaitMs: 0, oneShot: false });
+/** A request's reply alone. */
+const ask = async <C extends Cmd>(cmd: C, args: Commands[C]["args"], o: RouteRequest): Promise<Commands[C]["reply"]> => (await route.request(cmd, args, o)).reply;
+// The socket half of whoami for `connId` — the connection a request was answered by, not the first live one.
+// Through a daemon `via` names the shared bridge; only a daemon too old to send its connection gets the 3-field
+// stub, its missing fields reported as undefined, never guessed.
+async function connectionInfo(connId: string | null): Promise<ConnectionInfo | (ConnectionInfo & { via: string }) | { via: string; port: number | undefined; pluginConnected: boolean | undefined } | null> {
+  const { connection, owner } = await route.connectionInfo(connId);
+  if (owner.kind === "own") return connection;
+  const via = "shared bridge (pid " + (owner.pid ?? "?") + ")";
+  if (connection) return { via, ...connection };
+  return { via, port: owner.port ?? undefined, pluginConnected: owner.pluginConnected ?? undefined };
+}
 
 // ---- result helpers ----
 function textResult(obj: unknown): { content: [{ type: "text"; text: string }] } {
@@ -419,8 +391,8 @@ async function pull<C extends "exportFull" | "exportDesignSystem" | "exportSelec
 ): Promise<Pulled> {
   const t0 = Date.now();
   const sent = progress
-    ? await withProgress(extra, (onTick) => bridge.requestWithClient(cmd, args, timeoutMs, client, onTick, callSignal(extra)))
-    : await bridge.requestWithClient(cmd, args, timeoutMs, client, undefined, callSignal(extra));
+    ? await withProgress(extra, (onTick) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick, signal: callSignal(extra) }))
+    : await route.request(cmd, args, { timeoutMs, target: client, signal: callSignal(extra) });
   const reply: ExportReply = sent.reply;
   return { r: stampSource({ reply, client: sent.client }), t0, requestMs: Date.now() - t0 };
 }
@@ -611,7 +583,7 @@ server.registerTool(
     // The newest screen row of pages/index.json (disk) and this server's own last write (session).
     const ledger = { lastScreenExport: lastScreenExport(), lastWrite };
     if (!(a && a.client)) {
-      const clients = await bridge.listClients();
+      const clients = await route.listClients();
       if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });
       // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
       // failing. "Which files can I talk to?" is exactly what this tool is for.
@@ -632,8 +604,8 @@ server.registerTool(
     // `client` the early returns are skipped, so the wait applies; listing after the ping also means the
     // roster shows the window the ping reached, identified. A bare connId never waits (resolveClient's
     // own refusal, as for every other tool).
-    const pong = await bridge.request("ping", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra));
-    return textResult({ connected: true, clients: await bridge.listClients(), ...pong, snapshot, ...ledger });
+    const pong = await ask("ping", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client, signal: callSignal(extra) });
+    return textResult({ connected: true, clients: await route.listClients(), ...pong, snapshot, ...ledger });
   })
 );
 
@@ -655,7 +627,7 @@ server.registerTool(
     annotations: READ_ONLY,
   },
   guarded(async () => {
-    const clients = await bridge.listClients();
+    const clients = await route.listClients();
     return textResult({
       clients,
       count: clients.length,
@@ -689,8 +661,8 @@ server.registerTool(
   },
   // `connection` describes the socket that ANSWERED, not whichever file connected first.
   guarded(async (a, extra) => {
-    const sent = await bridge.requestWithClient("whoami", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra));
-    return textResult({ plugin: sent.reply, connection: await bridge.connectionInfo(sent.client ? sent.client.connId : null) });
+    const sent = await route.request("whoami", {}, { target: a && a.client, signal: callSignal(extra) });
+    return textResult({ plugin: sent.reply, connection: await connectionInfo(sent.client ? sent.client.connId : null) });
   })
 );
 
@@ -701,7 +673,7 @@ server.registerTool(
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a, extra) => textResult(await bridge.request("getSelection", {}, TIMEOUTS.command, a && a.client, undefined, callSignal(extra))))
+  guarded(async (a, extra) => textResult(await ask("getSelection", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client, signal: callSignal(extra) })))
 );
 
 // The cheap map. This is the tool an agent should reach for FIRST: every other read here
@@ -724,7 +696,7 @@ server.registerTool(
   },
   // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
   // tier there doesn't need a matching edit here.
-  guarded(async (a, extra) => textResult(await bridge.request("listPages", ifDefined("depth", a && a.depth), TIMEOUTS.list, a && a.client, undefined, callSignal(extra))))
+  guarded(async (a, extra) => textResult(await ask("listPages", ifDefined("depth", a && a.depth), { timeoutMs: TIMEOUTS.list, target: a && a.client, signal: callSignal(extra) })))
 );
 
 // The library-scoped discovery call, and the other half of "look before you pull": figma_list_pages
@@ -752,7 +724,7 @@ server.registerTool(
   // reads this tool's result in full, so collapse each library's collections to name+count and keep
   // `warnings` (the field that explains an empty list) intact. Same spirit as stripAssets.
   guarded(async (a, extra) => {
-    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list, a && a.client, undefined, callSignal(extra));
+    const r = await ask("listLibraries", {}, { timeoutMs: TIMEOUTS.list, target: a && a.client, signal: callSignal(extra) });
     const libraries = r.libraries.map((l) => ({
       key: l.key,
       name: l.name,
@@ -797,7 +769,7 @@ server.registerTool(
   guarded(async (a, extra) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list, a && a.client, undefined, callSignal(extra)));
+    return textResult(await ask("listChildren", { nodeId }, { timeoutMs: TIMEOUTS.list, target: a && a.client, signal: callSignal(extra) }));
   })
 );
 
@@ -1023,7 +995,7 @@ server.registerTool(
     if (a.dryRun) return textResult(previewWrites(a.ops || []));
     // No cancel signal here (unlike the reads): a write cannot be un-applied, and aborting the wait would
     // only lose the `applied` ids below.
-    const r = await bridge.request("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
+    const r = await ask("write", { ops: a.ops || [] }, { target: a && a.client });
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo.
     if (!r.ok) {
@@ -1264,16 +1236,16 @@ async function main() {
   // Resolve the bridge up front, so a port problem is reported at startup — but only REPORTED: the
   // stdio session stays up, every tool call retries the resolution, and a held port comes back as that
   // call's error (the port may be free by then). Exiting here killed the whole MCP server.
-  let h: Holder;
+  let h: Upstream;
   try {
     h = await holder();
   } catch (e) {
     console.error("[figma-mcp] MCP server up (stdio), but no bridge yet: " + errMsg(e) + " Tool calls will retry.");
     return;
   }
-  console.error("[figma-mcp] MCP server up (stdio). " + ("own" in h
-    ? "Bridge listening on ws://localhost:" + h.own.port + "."
-    : "Sharing the bridge already running at " + h.via.sock + "."));
+  console.error("[figma-mcp] MCP server up (stdio). " + (h.kind === "own"
+    ? "Bridge listening on " + h.address + "."
+    : "Sharing the bridge already running at " + h.address + "."));
 }
 
 main().catch((e) => {

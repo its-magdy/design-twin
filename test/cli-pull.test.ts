@@ -1,4 +1,4 @@
-// The CLI against a FAKE plugin (timing line, screenshot size, whoami addressing).
+// The CLI against a FAKE plugin (timing line, screenshot size, the port held, a daemon end to end).
 //   bun test/cli-pull.test.ts
 // The real `dtwin` process is spawned (it opens its own bridge on FIGMA_BRIDGE_PORT=8789, like a user's
 // direct pull with no daemon running); the plugin side is a plain `ws` client that dials in, says hello and
@@ -167,43 +167,9 @@ try {
     check("an older plugin (no w/h/scale): those keys are absent, png is still there", !!j && !("w" in j) && !("h" in j) && !("scale" in j) && JSON.stringify(j.png) === JSON.stringify({ w: 4, h: 3 }));
   }
 
-  // whoami describes the ADDRESSED file's socket.
-  console.log("\ncli pull — whoami addresses the right connection:");
-  {
-    const dir = path.join(tmp, "who");
-    fs.mkdirSync(dir);
-    // The CLI is started first (the plugins dial IT). A dials first so it is c1; B dials only once A is
-    // connected, so it is c2. The CLI is already waiting for a file named "Bravo" by then.
-    const ran = dtwin(dir, ["whoami", "--client", "Bravo", "--timeout", "30"]);
-    const a = fakePlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA") });
-    await a.opened;
-    const b = fakePlugin({ instanceId: "fig-b", file: "App Bravo", fileKey: "KEYB" }, { whoami: () => whoamiReply("fig-b", "App Bravo", "KEYB") });
-    const r = await ran;
-    a.stop(); b.stop();
-    const j = json(r.stdout);
-    const conn = j && j.connection && typeof j.connection === "object" ? Object.fromEntries(Object.entries(j.connection)) : null;
-    const plug = j && j.plugin && typeof j.plugin === "object" ? Object.fromEntries(Object.entries(j.plugin)) : null;
-    check("the command succeeds and addresses the second file's plugin", r.code === 0 && !!plug && plug.instanceId === "fig-b");
-    check("`--client <c2's name>` → connection.connId is c2, not the first client's c1", !!conn && conn.connId === "c2");
-    check("the socket line on stderr names c2", /\[dtwin\] socket c2 up /.test(r.stderr));
-  }
-  // A plugin that connected and then left (no redial) is not "no plugin connected": the request's own
-  // resolveClient text says so, not the CLI's connect-window error.
-  console.log("\ncli pull — a plugin that connected and left:");
-  {
-    const dir = path.join(tmp, "left");
-    fs.mkdirSync(dir);
-    const ran = dtwin(dir, ["pull", "out", "--node", "1:2", "--timeout", "3"]);
-    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: () => nodeReply() });
-    await plugin.opened;
-    await sleep(300);
-    plugin.stop();
-    const r = await ran;
-    check("it exits 1 with resolveClient's not-connected text", r.code === 1 && /Figma plugin not connected\. Open the file in Figma and run the plugin\./.test(r.stderr));
-    check("…not the never-connected text", !/no Figma plugin connected within/.test(r.stderr));
-  }
-  // The same through a running daemon (`dtwin serve`): the connection comes from the daemon's status, narrowed
-  // to the addressed file by connectionFor; the timing line says it went via the daemon.
+  // Which file a command is routed to, what whoami's socket half describes, and a plugin that connected and
+  // left are the route's rules, checked against both adapters in bridge-route.test.ts; this suite keeps the
+  // CLI's own surface (the lines it prints, its exit codes) and one whoami through a daemon end to end.
   // A second command while a one-shot command holds the port (no daemon to route through) exits 1 with
   // the port-in-use text — on Windows the one that says sharing is not supported there.
   console.log("\ncli pull — the port held by another one-shot command:");
@@ -266,6 +232,7 @@ try {
       const r = await dtwin(dir, ["whoami", "--client", "Bravo", "--timeout", "30"]);
       const j = json(r.stdout);
       const conn = j && j.connection && typeof j.connection === "object" ? Object.fromEntries(Object.entries(j.connection)) : null;
+      // The connection comes from the daemon's status, narrowed to the addressed file; the timing line says it went via the daemon.
       check("through the daemon, `--client Bravo` → connection.connId is c2", r.code === 0 && !!conn && conn.connId === "c2" && /the daemon/.test(String(j?.connectionFrom)));
       const p = await dtwin(dir, ["pull", "out", "--node", "1:2", "--client", "Alpha", "--timeout", "30"]);
       // the daemon waits for a not-yet-connected plugin inside the request, so the line claims no

@@ -25,6 +25,9 @@ import type { RawData } from "./ws-client.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
+import type { Cmd, Commands } from "../bridge/src/commands.ts";
+import type { Sent } from "../bridge/src/route.ts";
+import { malformed } from "./fixtures.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -255,7 +258,7 @@ function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; r
   const waiters: Array<() => void> = [];
   const b: DaemonBridge = {
     port: 0, isConnected: () => true,
-    request: (cmd) => { requests++; return cmd === "listPages" ? new Promise((r) => { waiters.push(() => r({})); }) : Promise.resolve({}); },
+    request: <C extends Cmd>(cmd: C) => { requests++; const sent: Sent<C> = { reply: malformed<Commands[C]["reply"]>({}), client: null }; return cmd === "listPages" ? new Promise<Sent<C>>((r) => { waiters.push(() => r(sent)); }) : Promise.resolve(sent); },
     close: () => { closes++; },
   };
   return { b, closes: () => closes, pending: () => waiters.length, requests: () => requests, release: () => { for (const w of waiters.splice(0)) w(); } };

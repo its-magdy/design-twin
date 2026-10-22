@@ -149,7 +149,12 @@ bun test/bridge.test.ts        # expect: all checks pass, exit 0 — determinist
 bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
                                  # a Figma client every front-end uses (awaitClient: named target, connId, no target,
                                  # leave/abort/close, listeners and timers released), on plain objects — binds no port
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun test/bridge-route.test.ts  # expect: all checks pass, exit 0 — the route every front-end reaches the plugin through
+                                 # (route.ts), one contract run against both adapters: a real bridge, and the same bridge
+                                 # behind a real daemon socket (fake WS plugins, ephemeral ports, a private XDG_RUNTIME_DIR);
+                                 # then the rules it owns: the connect window spent once, the stall check, the never-connected
+                                 # guard, and which commands hear progress ticks
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed
