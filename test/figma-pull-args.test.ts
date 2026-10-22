@@ -36,7 +36,7 @@ check("--scale without --screenshot is refused while reading", /^--scale only ap
 {
   const r = readArgs(["out", "--page", "A", "--page=B", "--timeout", "5", "--client", "c1"]);
   check("repeated --page values are collected in order (space and = forms)", JSON.stringify(r.pageSel) === JSON.stringify(["A", "B"]));
-  check("values taken by flags are never the positional outDir", r.outDir === "out" && r.userOutDir === "out" && r.client === "c1" && r.exportTimeoutMs === 5000);
+  check("values taken by flags are never the positional outDir", r.outDir === "out" && r.userOutDir === "out" && r.client === "c1" && r.timeoutOverrideMs === 5000);
   const t = readArgs(["--timeout", "7"]);
   check("with no positional, userOutDir is undefined (the flag value 7 is not it)", t.userOutDir === undefined && t.listTimeoutMs === 7000);
 }
@@ -90,6 +90,6 @@ console.log("\nfigma-pull args — command ownership guards:");
 console.log("\nfigma-pull args — --timeout bounds:");
 check("--timeout Infinity is refused, naming the bound", /^--timeout expects a positive number of seconds \(at most 2147483, about 24 days\), got 'Infinity'$/.test(usageError(() => readArgs(["--timeout", "Infinity"])) ?? ""));
 check("--timeout above the bound is refused", /got '2147484'$/.test(usageError(() => readArgs(["--timeout", "2147484"])) ?? ""));
-check("--timeout at the bound is taken, for the connect window too", (() => { const r = readArgs(["--timeout", "2147483"]); return r.connectWaitMs === 2147483000 && r.exportTimeoutMs === 2147483000; })());
+check("--timeout at the bound is taken, for the connect window too", (() => { const r = readArgs(["--timeout", "2147483"]); return r.connectWaitMs === 2147483000 && r.timeoutOverrideMs === 2147483000; })());
 
 report();

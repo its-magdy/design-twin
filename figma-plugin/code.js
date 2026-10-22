@@ -665,11 +665,13 @@
   }
 
   // ../bridge/src/read-opts.ts
+  var WALK = ["node", "selection", "pages"];
   var READ_OPTS = [
     {
       name: "css",
       flag: "--css",
-      describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."
+      describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing.",
+      scopes: WALK
     },
     {
       // NOT "Dev Mode only": per developers.figma.com only addMeasurement/editMeasurement/
@@ -677,27 +679,32 @@
       // longer "current page": collect.ts reads measurements from the page(s) actually exported.
       name: "measurements",
       flag: "--measurements",
-      describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode."
+      describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode.",
+      scopes: WALK
     },
     {
       name: "pluginData",
       flag: "--plugin-data",
-      describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."
+      describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it.",
+      scopes: WALK
     },
     {
       name: "motion",
       flag: "--motion",
-      describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."
+      describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose.",
+      scopes: WALK
     },
     {
       name: "sharedData",
       flag: "--shared-data",
-      describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
+      describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node.",
+      scopes: WALK
     },
     {
       name: "variantVisuals",
       flag: "--variant-visuals",
-      describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems."
+      describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems.",
+      scopes: [...WALK, "designSystem", "library"]
     },
     {
       // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
@@ -707,7 +714,8 @@
       // frame limit. Opt-IN to skipping, so the default stays exactly as it was.
       name: "skipAssets",
       flag: "--no-assets",
-      describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here."
+      describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here.",
+      scopes: WALK
     }
   ];
   function readOptDefaults() {

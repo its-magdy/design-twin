@@ -28,7 +28,7 @@ import path from "node:path";
 import { createBridge } from "./server-core.ts";
 import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
-import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
+import { TIMEOUTS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
 import type { Bridge, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -41,13 +41,14 @@ import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
 // work, and inheriting the small default would make figma_export_url die at 120s on exactly the
-// screen you most wanted. Reading the tiers from server-core is what keeps the two front-ends aligned.
-// `exportTimeout` carries the scope -> tier RULE alongside the table, so this front-end cannot
-// restate (or omit) a tier the CLI has.
-// The ONE registry of read options (shared with the dtwin CLI and the plugin's runOpts).
-import { READ_OPTS, readOptDefaults } from "./read-opts.ts";
+// screen you most wanted. An export's tier is the read plan's (read-plan.ts, below), so this front-end
+// cannot restate (or omit) a tier the CLI has.
+// What an export tool SENDS — command, arguments, budget — is the read plan's (read-plan.ts), the same one
+// the CLI sends; each tool's declared read options come from the scopes in the same registry rows.
+import { planRead, readOptsFor } from "./read-plan.ts";
+import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScopeKind } from "./read-plan.ts";
 import { ifDefined, isStringArray } from "./json-util.ts";
-import type { ReadOptName } from "./read-opts.ts";
+import type { ReadOptNameFor } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
 import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
 
@@ -386,10 +387,10 @@ type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
 interface Pulled { r: Stamped<ExportReply>; t0: number; requestMs: number }
 // One export request: timed, progress-relaying, cancellable, and stamped with WHICH connected file
 // answered — the same `sourceFile` the CLI writes (figma-pull.ts), on written and inline results alike.
-async function pull<C extends "exportFull" | "exportDesignSystem" | "exportSelection" | "exportNode" | "screenshot">(
-  extra: ToolExtra | undefined, cmd: C, args: Commands[C]["args"], timeoutMs: number, client: string | undefined, progress = true,
-): Promise<Pulled> {
+// What is sent, and its budget, are the read plan's (read-plan.ts).
+async function pull<C extends ReadCmd>(extra: ToolExtra | undefined, plan: PlanOf<C>, client: string | undefined, progress = true): Promise<Pulled> {
   const t0 = Date.now();
+  const { cmd, args, timeout: timeoutMs } = plan;
   const sent = progress
     ? await withProgress(extra, (onTick) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick, signal: callSignal(extra) }))
     : await route.request(cmd, args, { timeoutMs, target: client, signal: callSignal(extra) });
@@ -535,24 +536,24 @@ const writeShape = {
   outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design/export'."),
 };
 
-// ---- read options, shared across the export tools (opt-in; each costs extra Plugin-API work) ----
+// ---- read options, per export tool (opt-in; each costs extra Plugin-API work) ----
 // DERIVED from bridge/src/read-opts.ts — the ONE registry the CLI flag table and the plugin's own runOpts
 // come from too — rather than a fifth hand-written list of the same names and help text. A restated
 // literal is how skipAssets went missing on two of the three export tools: the MCP SDK validates args
 // with z.object(inputSchema) and hands the callback `parseResult.data`, and Zod's default object mode
-// STRIPS unknown keys — so an option that readOpts() maps but a tool's schema does not declare is
-// silently dropped before the handler ever sees it. Deriving the schema is what actually makes "every
-// export tool forwards every read option" true, rather than merely intended.
-const readOptsShape = Object.fromEntries(
-  READ_OPTS.map((o) => [o.name, z.boolean().optional().describe(o.describe)]),
-) as Record<ReadOptName, z.ZodOptional<z.ZodBoolean>>;
+// STRIPS unknown keys — so an option a tool's schema does not declare is silently dropped before the
+// handler ever sees it. Each tool declares exactly the options its read scope takes (the rows' `scopes`),
+// so what reaches the handler is what the read plan forwards.
+function readOptsShapeFor<K extends ReadScopeKind>(kind: K): Record<ReadOptNameFor<K>, z.ZodOptional<z.ZodBoolean>> {
+  return Object.fromEntries(readOptsFor(kind).map((o) => [o.name, z.boolean().optional().describe(o.describe)])) as Record<ReadOptNameFor<K>, z.ZodOptional<z.ZodBoolean>>;
+}
 
-// Every option, in registry order, set to whether the tool call asked for it.
-const readOpts = (a: z.output<z.ZodObject<typeof readOptsShape>>): Record<ReadOptName, boolean> => {
-  const o = readOptDefaults();
-  for (const { name } of READ_OPTS) o[name] = !!a[name];
-  return o;
-};
+// The read plan, or a refusal: unreachable while each tool declares only its scope's options (the SDK strips
+// the rest first), and an error naming them if a schema ever declares more than its scope takes.
+function planned<P extends ReadPlan>(p: P | ReadRefusal): P {
+  if ("refused" in p) throw new Error(`${p.refused.join(", ")} ${p.refused.length > 1 ? "are read options" : "is a read option"} that a ${p.scope} export does not read`);
+  return p;
+}
 
 const READ_ONLY = { readOnlyHint: true } as const;
 
@@ -787,26 +788,23 @@ server.registerTool(
       ...clientShape,
       allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) — prefer `page` with ids from figma_list_pages, or the dtwin CLI."),
       page: tolerantStringArray().optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages — passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
-      ...readOptsShape,
+      ...readOptsShapeFor("pages"),
       ...writeShape,
     },
     annotations: READ_ONLY,
   },
-  // The budget follows the SCOPE, exactly as the dtwin CLI's does: exportAll (15 min) only for
+  // The budget follows the SCOPE, exactly as the dtwin CLI's does (one read plan for both): exportAll (15 min) only for
   // the whole-file walk, export (5 min) for the current page or a bounded page:[ids] pull. Handing
   // every scope the whole-file budget made the bounded pull — the one this tool's own description
   // tells you to prefer — wait 15 minutes to report a hang that a 5-minute limit would have caught,
   // and quietly undid the point of having tiers in the shared TIMEOUTS table at all.
-  // `page` is forwarded only when non-empty — an empty array must not read as a selector (collect.ts
-  // would warn and fall back to the current page).
+  // An empty `page` is the current page (the plan sends no selector for it). The allPages+page conflict is
+  // refused by collectFull itself (one guard, every caller) — no copy of the rule here. This path always
+  // needs a connected plugin anyway, so there is nothing to answer faster.
   guarded(async (a, extra) => {
     preflightOut(a);
-    const page = Array.isArray(a.page) && a.page.length ? a.page : undefined;
-    const allPages = !!a.allPages;
-    // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
-    // of the rule here. This path always needs a connected plugin anyway, so there is nothing to
-    // answer faster.
-    return exportResult("figma_export_full", a, await pull(extra, "exportFull", { allPages, ...ifDefined("page", page), ...readOpts(a) }, exportTimeout({ allPages }), a && a.client));
+    const plan = planned(planRead({ kind: "pages", allPages: !!a.allPages, pages: a.page ?? [] }, a));
+    return exportResult("figma_export_full", a, await pull(extra, plan, a && a.client));
   })
 );
 
@@ -829,14 +827,14 @@ server.registerTool(
       "— the master-component source of truth, not the set wrapper's own selection-chrome visuals. It is the " +
       "ONE read option this tool accepts (the others need a node/page walk this tool skips); one extra node " +
       "walk per variant, so it is slower on a large design system.",
-    inputSchema: { ...clientShape, variantVisuals: readOptsShape.variantVisuals, ...writeShape },
+    inputSchema: { ...clientShape, ...readOptsShapeFor("designSystem"), ...writeShape },
     annotations: READ_ONLY,
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
   guarded(async (a, extra) => {
     preflightOut(a);
-    return exportResult("figma_export_design_system", a, await pull(extra, "exportDesignSystem", ifDefined("variantVisuals", a && a.variantVisuals), TIMEOUTS.export, a && a.client));
+    return exportResult("figma_export_design_system", a, await pull(extra, planned(planRead({ kind: "designSystem" }, a)), a && a.client));
   })
 );
 
@@ -844,12 +842,12 @@ server.registerTool(
   "figma_export_selection",
   {
     description: "Export the current selection as compacted node JSON + variables + assets.",
-    inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
+    inputSchema: { ...clientShape, ...readOptsShapeFor("selection"), ...writeShape },
     annotations: READ_ONLY,
   },
   guarded(async (a, extra) => {
     preflightOut(a);
-    return exportResult("figma_export_selection", a, await pull(extra, "exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client));
+    return exportResult("figma_export_selection", a, await pull(extra, planned(planRead({ kind: "selection" }, a)), a && a.client));
   })
 );
 
@@ -864,7 +862,7 @@ server.registerTool(
     inputSchema: {
       ...clientShape,
       url: z.string().describe("A figma.com design/file URL with ?node-id=..., or a bare node id like '123:456' / '123-456'."),
-      ...readOptsShape,
+      ...readOptsShapeFor("node"),
       ...writeShape,
     },
     annotations: READ_ONLY,
@@ -873,7 +871,7 @@ server.registerTool(
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
     preflightOut(a);
-    return exportResult("figma_export_url", a, await pull(extra, "exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
+    return exportResult("figma_export_url", a, await pull(extra, planned(planRead({ kind: "node", nodeId }, a)), a && a.client));
   })
 );
 
@@ -892,6 +890,7 @@ server.registerTool(
       ...clientShape,
       nodeId: z.string().describe("A node id like '123:456' / '123-456', or a figma.com design URL containing ?node-id=..."),
       scale: z.number().positive().optional().describe("Override the default render scale (auto, capped at 2048px on the longest side)."),
+      ...readOptsShapeFor("screenshot"), // none: a screenshot renders a PNG and walks nothing
       ...writeShape,
     },
     annotations: READ_ONLY,
@@ -900,7 +899,7 @@ server.registerTool(
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
     preflightOut(a);
-    return exportResult("figma_screenshot", a, await pull(extra, "screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client, false), { scale: a.scale });
+    return exportResult("figma_screenshot", a, await pull(extra, planned(planRead({ kind: "screenshot", nodeId, scale: a.scale })), a && a.client, false), { scale: a.scale });
   })
 );
 

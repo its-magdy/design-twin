@@ -91,7 +91,11 @@ file and the library it draws on are both connected and separately addressable. 
 them through one route (`bridge/src/route.ts`) over two adapters — the bridge this process holds, or the
 daemon socket of the process that does — and the route owns the rules: the routing target (`--client` /
 `client`), the connect window (a named file waits up to `NAMED_CLIENT_WAIT_MS`), the stall check (a
-one-shot CLI bridge only), and where `listClients` / the socket stats come from.
+one-shot CLI bridge only), and where `listClients` / the socket stats come from. What a read SENDS is one
+pure step above the route (`bridge/src/read-plan.ts`): a scope (a node, the selection, pages, the design
+system, a library, a screenshot) and its read options become the command, its arguments and its time budget
+— or the options that scope does not take, as each `read-opts.ts` row declares — for both front-ends, and
+both write the reply through the one `writeAny`.
 
 This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
 did not merely limit you to one file — it was actively unstable: the displaced plugin's

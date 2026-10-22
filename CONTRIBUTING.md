@@ -38,7 +38,8 @@ request; CI runs the same suites, split across several runners.
 - **No real names.** Fixtures, docs and comments use invented file, company and layer names; a test guards this.
   Never paste a real client design, a token or an export from a private file into an issue or a fixture.
 - **Strict TypeScript.** No `any` and no `as unknown as` (the `lint:any` suite lists the rules).
-- **New `dtwin` flags are registered** in the argument parser and read options in `bridge/src/read-opts.ts`;
+- **New `dtwin` flags are registered** in the argument parser and read options in `bridge/src/read-opts.ts`
+  (with the read scopes that take them — `read-plan.ts` and each MCP tool's schema follow from that row);
   new runtime modules of the bridge go in `bridge/package.json` `files`.
 - **Dependencies.** `bun.lock` is the lockfile (`bun install --frozen-lockfile` in CI); `bunfig.toml` holds back any
   version published less than 7 days ago, as Dependabot's cooldown does.
