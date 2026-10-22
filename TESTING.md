@@ -31,7 +31,8 @@ token, scroll frame, multi-mode variables). The plugin keeps its run state at mo
 (`figma-plugin/src/state.ts`), so the fresh VM is what keeps a case's result independent of the cases
 before it. The bundle is built once per run, in memory, from the current `figma-plugin/src`
 (`figma-plugin/build-options.ts`, the same options `build.ts` writes `code.js` with), so the harness never
-tests a stale `code.js`; it prints a note when the committed one differs, and CI fails on that diff.
+tests a stale `code.js`. One check fails while the committed `code.js` is not what `src/` builds to (a run
+of any area included): run `bun figma-plugin/build.ts` after editing `src/`.
 
 ```
 cd figma-plugin && bun install && bun run typecheck && bun run build && cd ..   # after editing src/

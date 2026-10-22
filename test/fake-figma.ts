@@ -307,10 +307,7 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     ...(file.editorType !== undefined ? { editorType: file.editorType } : {}),
     ...(teamLibrary ? { teamLibrary } : {}),
   };
-  if (scene.localStyles.animation !== null) {
-    const { localStyles } = scene;
-    figma.getLocalCustomAnimationStylesAsync = async () => localStyles.animation ?? [];
-  }
+  if (scene.localStyles.animation !== null) figma.getLocalCustomAnimationStylesAsync = async () => scene.localStyles.animation ?? [];
   const { variables: varOverrides, ...rest } = overrides;
   Object.assign(figma, rest);
   if (varOverrides) Object.assign(figma.variables, varOverrides);
