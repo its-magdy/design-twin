@@ -246,15 +246,28 @@
   var DIR = "design-system";
   var COMPONENTS_DIR = "components";
   var TOKENS = "tokens.json";
-  var STYLES_PAINT = "styles.paint.json";
-  var STYLES_TEXT = "styles.text.json";
-  var STYLES_EFFECT = "styles.effect.json";
-  var STYLES_GRID = "styles.grid.json";
-  var STYLES_ANIMATION = "styles.animation.json";
   var COMPONENTS_LOCAL = "components.local.json";
   var COMPONENTS_LIBRARY = "components.library.json";
   var HYGIENE = "hygiene.json";
   var MANIFEST = "design-system.json";
+  var STYLE_KIND_ROWS = {
+    paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+    text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+    effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+    grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+    animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+    // local custom animation styles
+  };
+  var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+  function stylesOf(styles, kind) {
+    const list = styles ? styles[kind] : void 0;
+    return Array.isArray(list) ? list : [];
+  }
+  function byStyleKey(value) {
+    const out = {};
+    for (const row of STYLE_KINDS) out[row.key] = value(row);
+    return out;
+  }
   function isLibraryEntry(c) {
     return !!(c && c.remote === true);
   }
@@ -306,19 +319,9 @@
       });
       return { ...c, variants: slimVariants, variantsFile: detailPath };
     });
-    const styles = d.styles || {};
-    const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-    const stylesText = Array.isArray(styles.text) ? styles.text : [];
-    const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-    const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-    const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
     const files = [
       { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
-      { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-      { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-      { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-      { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-      { path: join(STYLES_ANIMATION), data: { ...stamp, styles: stylesAnimation } },
+      ...STYLE_KINDS.map((row) => ({ path: join(row.file), data: { ...stamp, styles: stylesOf(d.styles, row.kind) } })),
       { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
       { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
       { path: join(HYGIENE), data: { ...stamp, hygiene } },
@@ -327,11 +330,7 @@
     const counts = {
       collections: (d.collections || []).length,
       variables: (d.variables || []).length,
-      stylesPaint: stylesPaint.length,
-      stylesText: stylesText.length,
-      stylesEffect: stylesEffect.length,
-      stylesGrid: stylesGrid.length,
-      stylesAnimation: stylesAnimation.length,
+      ...byStyleKey((row) => stylesOf(d.styles, row.kind).length),
       components: local.length,
       libraryComponents: library.length,
       hygiene: hygiene.length
@@ -340,11 +339,7 @@
       ...stamp,
       files: {
         tokens: join(TOKENS),
-        stylesPaint: join(STYLES_PAINT),
-        stylesText: join(STYLES_TEXT),
-        stylesEffect: join(STYLES_EFFECT),
-        stylesGrid: join(STYLES_GRID),
-        stylesAnimation: join(STYLES_ANIMATION),
+        ...byStyleKey((row) => join(row.file)),
         componentsLocal: join(COMPONENTS_LOCAL),
         componentsLibrary: join(COMPONENTS_LIBRARY),
         hygiene: join(HYGIENE)
@@ -358,6 +353,7 @@
     files.push({ path: MANIFEST, data: manifest2 });
     return { files, manifest: manifest2, counts, dir: DIR };
   }
+  var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
   // src/progress.ts
   var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";

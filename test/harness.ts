@@ -13,6 +13,7 @@ import type {
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, Cmd } from "../bridge/src/commands.ts";
 import { argsShapeError } from "../bridge/src/commands.ts";
 import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
+import { STYLE_KINDS } from "../bridge/src/design-system-layout.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { must } from "./fixtures.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -699,6 +700,8 @@ const sandbox: Sandbox = context;
   // tier regression: a raw (non-alias) variable whose only scope is the ALL_SCOPES default is a
   // primitive, not semantic — ALL_SCOPES must not be treated as a meaningful scope.
   ok("tier: raw + ALL_SCOPES-only => primitive", (ds.variables.find((v) => v.name === "misc/bad") || {}).tier === "primitive");
+  ok("the plugin reads exactly the style kinds the design-system layout files (STYLE_KINDS), in its order",
+    JSON.stringify(Object.keys(ds.styles)) === JSON.stringify(STYLE_KINDS.map((k) => k.kind)));
   const paintStyle0Paint0 = ds.styles.paint[0]?.paints?.[0];
   ok("paint style carries color value", paintStyle0Paint0 !== undefined && flatPaint(paintStyle0Paint0).color === "#1a4de6");
   const gridStyle0Grid0 = ds.styles.grid[0]?.grids?.[0];
