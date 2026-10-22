@@ -100,7 +100,7 @@ export const flushStdio = (): Promise<void> => Promise.all([process.stdout, proc
 // suite calling main() in-process, the MCP server importing a module) it exits the process at once, as before.
 // "Inside" is until main() SETTLES: a long-lived server is not a CLI run. `dtwin mcp` awaits the MCP server's module (so
 // an exitCli while it LOADS — a bad FIGMA_BRIDGE_PORT at server-core's load — is still that CLI's exit code, its line out
-// first), then returns; from there the server runs exactly as `bun figma-mcp.ts` does, where an exitCli exits at once.
+// first), starts it (runServer), then returns; from there the server runs exactly as `bun figma-mcp.ts` does, where an exitCli exits at once.
 // One rule for both launches — the server never depends on how it was started.
 /** What exitCli throws inside runCli. Not an error: runCli turns it into the exit code, silently. */
 export class CliExit extends Error {

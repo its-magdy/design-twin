@@ -1,5 +1,5 @@
 // What bridge/src/write-out.ts tells a long-running caller without re-walking the export: writeExport's
-// `opts.replaced` (the pages/ layer files a write replaced — the MCP server's implicit-spill note counts them),
+// change report's `replaced` (the pages/ layer files a write replaced — the MCP server's implicit-spill note counts them),
 // and the per-file memo of other screens' reuse keys that a screen pull's cross-screen hidden reuse reads
 // through (stale entries must never change which twin is found).
 // Pure functions and temp dirs only — binds no port.
@@ -24,7 +24,7 @@ const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwi
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
 
 // ------------------------------------------------------------------ writeExport's replaced list
-console.log("writeExport lists the pages/ layer files it replaced:");
+console.log("writeExport's change report lists the pages/ layer files it replaced:");
 {
   interface L { id: string; name: string; page: string }
   // A full reply built fresh per call (writeExport stamps sourceFile onto layersDoc in place).
@@ -37,10 +37,10 @@ console.log("writeExport lists the pages/ layer files it replaced:");
     },
     assets: [],
   });
+  const replacedOf = (res: object): string[] => ("changes" in res && res.changes ? (res.changes as writeOut.ChangeReport).replaced : []);
   const spill = (dir: string, layers: readonly L[], stamp?: string): { replaced: string[]; res: object } => {
-    const replaced: string[] = [];
-    const res = writeOut.writeExport(dir, full(layers, stamp), undefined, { keepPrev: true, replaced });
-    return { replaced, res };
+    const res = writeOut.writeExport(dir, full(layers, stamp), undefined, { keepPrev: true });
+    return { replaced: replacedOf(res), res };
   };
   const layerFile = (dir: string, l: L): string => path.join(dir, "pages", l.page.replace(/[^A-Za-z0-9]/g, "_"), `${l.name}__${l.id.replace(/:/g, "_")}.json`);
   const A: L = { id: "1:2", name: "Panel", page: "Page A" }, B: L = { id: "1:5", name: "Sheet", page: "Page A" }, C: L = { id: "2:1", name: "Card", page: "Page B" };
@@ -67,19 +67,13 @@ console.log("writeExport lists the pages/ layer files it replaced:");
   const twinAgain = spill(dup, [A, { ...A }], "2026-10-02T00:00:00.000Z");
   t("…and over its earlier export it is listed once", () => sameSet(twinAgain.replaced, [layerFile(dup, A)]));
 
-  t("the result itself carries no replaced list (the CLI and MCP output are unchanged)", () =>
+  t("the list rides in the change report only — never in `wrote` (the CLI and MCP output are unchanged)", () =>
     !("replaced" in again.res) && "wrote" in again.res && typeof again.res.wrote === "object" && again.res.wrote !== null && !("replaced" in again.res.wrote));
-  const dsOnly: string[] = [];
-  writeOut.writeExport(dir, { designSystem: full([]).designSystem }, undefined, { keepPrev: true, replaced: dsOnly });
-  const libOnly: string[] = [];
-  writeOut.writeExport(dir, { designSystem: { ...full([]).designSystem, source: { role: "library", libraryName: "Kit", fileKey: "abcd1234efgh" } } }, undefined, { keepPrev: true, replaced: libOnly });
+  const dsOnly = replacedOf(writeOut.writeExport(dir, { designSystem: full([]).designSystem }, undefined, { keepPrev: true }));
+  const libOnly = replacedOf(writeOut.writeExport(dir, { designSystem: { ...full([]).designSystem, source: { role: "library", libraryName: "Kit", fileKey: "abcd1234efgh" } } }, undefined, { keepPrev: true }));
   t("a design-system-only or library export replaces no layer file", () => dsOnly.length === 0 && libOnly.length === 0);
-  const viaAny: string[] = [];
-  writeOut.writeAny(dir, full([A]), undefined, { keepPrev: true, replaced: viaAny });
-  t("writeAny forwards `replaced` to writeExport", () => sameSet(viaAny, [layerFile(dir, A)]));
-  const viaAnyNoPrev: string[] = [];
-  writeOut.writeAny(dir, full([A]), undefined, { replaced: viaAnyNoPrev });
-  t("…with or without keepPrev", () => sameSet(viaAnyNoPrev, [layerFile(dir, A)]));
+  t("writeAny forwards keepPrev to writeExport, and returns its report", () => sameSet(replacedOf(writeOut.writeAny(dir, full([A]), undefined, { keepPrev: true })), [layerFile(dir, A)]));
+  t("…and without keepPrev (the CLI, an explicit write) there is no report to fill", () => !("changes" in writeOut.writeAny(dir, full([A]))));
 }
 
 // ------------------------------------------------------------------ the memo of other screens' reuse keys
