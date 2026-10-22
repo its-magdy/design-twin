@@ -4,5 +4,5 @@
   // falls back to this ancestor config for a file its nearest tsconfig does not include, and
   // `bun run typecheck` checks it with `tsc -p tsconfig.json`.
   "extends": "./test/tsconfig.json",
-  "include": ["figma-plugin/build.ts", "claude-plugin/build-scripts.ts"]
+  "include": ["figma-plugin/build.ts", "figma-plugin/build-options.ts", "claude-plugin/build-scripts.ts"]
 }
