@@ -1480,6 +1480,10 @@ void (async () => {
     const calls = libMcpSrc.match(/(?:\bask|route\.request)\("[^;]*?\);/gs) || [];
     return calls.length >= 7 && calls.every((c) => /target: a && a\.client/.test(c));
   })());
+  // A named `client` waits up to NAMED_CLIENT_WAIT_MS for its file (the MCP server's connect window is 0, and the
+  // route's named window defaults to it): the server's route must say so. The route's own rule is bridge-route.test.ts's.
+  ok("[mcp-multi] the MCP route gives a named client NAMED_CLIENT_WAIT_MS to land",
+    /createRoute\(holder, \{ connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS \}\)/.test(libMcpSrc));
   ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
     /Several Figma files are connected/.test(libMcpSrc));
   // The whoami description must not claim the bridge holds ONE connection.

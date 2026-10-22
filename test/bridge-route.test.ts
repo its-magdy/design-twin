@@ -188,6 +188,30 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
       rig.stop();
     }
   }
+  {
+    // The CLI's explicit window (`--timeout 1`) is the window for a NAMED target too, through either adapter:
+    // the policy is the CLI's own (no namedWaitMs), so a named file is not stretched to NAMED_CLIENT_WAIT_MS.
+    const rig = await make();
+    const t = `[${rig.name} one-shot, --timeout 1]`;
+    try {
+      const route = rig.route({ connectWaitMs: 1000, oneShot: true });
+      let t0 = Date.now();
+      const none = await failure(route.request("ping", {}, { target: "Bravo" }));
+      let took = Date.now() - t0;
+      check(`${t} a named file, no plugin ever connected: fails after the 1 s window, not 15 s (${took} ms)`,
+        none !== "resolved" && took >= 800 && took < 3000);
+      // A second command: a fresh one-shot route (one per CLI process), now with another file connected.
+      const a = await plugin(rig.port, "Alpha");
+      t0 = Date.now();
+      const other = await failure(rig.route({ connectWaitMs: 1000, oneShot: true }).request("ping", {}, { target: "Bravo" }));
+      took = Date.now() - t0;
+      check(`${t} a named file while another is connected: resolveClient's no-match text within the window (${took} ms)`,
+        /^no connected Figma file matches 'Bravo'\. Connected:\n {2}c1 {2}"Alpha"/.test(other) && took < 3000);
+      a.leave();
+    } finally {
+      rig.stop();
+    }
+  }
 }
 
 // ---------------------------------------------------------------- the rules a route owns, per policy

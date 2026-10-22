@@ -8,10 +8,10 @@
 // The adapters only translate shapes. The RULES sit above them, in the Route, so the CLI and the MCP server
 // cannot drift apart again (they had: a named-client wait done two ways, a stall check only one of them ran,
 // the listClients/connectionInfo fallbacks copied). A route owns:
-//   - the connect window: how long a request waits for a plugin, and for a named file (`namedWaitMs`, at
-//     least that long) before it is resolved against whatever is connected. A one-shot route over its own
-//     bridge spends it once, up front (connect()); every other route spends it per request (the daemon
-//     waits inside each one);
+//   - the connect window: how long a request waits for a plugin (and for a named file, `namedWaitMs`, which is
+//     the same window unless the policy says otherwise) before it is resolved against whatever is connected.
+//     A one-shot route over its own bridge spends it once, up front (connect()); every other route spends it
+//     per request (the daemon waits inside each one);
 //   - the never-connected guard: a one-shot route whose window ran out with no plugin EVER connected says so
 //     in its own words, rather than resolveClient's "not connected" (which is right for one that left);
 //   - the stall check (server-core requestWithClient `stallMs`): one-shot, own bridge, export-class commands
@@ -24,7 +24,7 @@
 //
 // Side-effect free, like daemon.ts: figma-pull.ts imports it at module level, and only types come from
 // server-core (which resolves the token and may exit at load).
-import { TIMEOUTS, NAMED_CLIENT_WAIT_MS, daemonGuardMs } from "./timeouts.ts";
+import { TIMEOUTS, daemonGuardMs } from "./timeouts.ts";
 import { ifDefined } from "./json-util.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -150,8 +150,11 @@ export interface RoutePolicy {
   oneShot: boolean;
   /** The stall window (one-shot, own bridge, export-class only); FIGMA_BRIDGE_STALL_MS, else 20 s. */
   stallMs?: number;
-  /** The least a NAMED target (not a connId) waits: every open window redials on its own clock, so the file
-   *  asked for may land a moment after another. NAMED_CLIENT_WAIT_MS; the test suite shortens it. */
+  /** The connect window for a NAMED target (a file name or fileKey, not a connId); `connectWaitMs` when absent.
+   *  The CLI passes none: its `--timeout` is the window for every target, named or not (and server-core's
+   *  awaitClient already caps a name at NAMED_CLIENT_WAIT_MS once a plugin is connected). The MCP server, whose
+   *  connectWaitMs is 0, passes NAMED_CLIENT_WAIT_MS: every open window redials on its own clock, so the file
+   *  asked for may land a moment after another. */
   namedWaitMs?: number;
 }
 
@@ -183,14 +186,14 @@ const stallFromEnv = (): number => Number(process.env.FIGMA_BRIDGE_STALL_MS) || 
 
 /** A route over whatever `upstream` answers (called per use: MCP's sharing layer re-resolves the holder). */
 export function createRoute(upstream: () => Promise<Upstream>, policy: RoutePolicy): Route {
-  const namedWaitMs = policy.namedWaitMs ?? NAMED_CLIENT_WAIT_MS;
+  const namedWaitMs = policy.namedWaitMs ?? policy.connectWaitMs;
   const stallMs = policy.stallMs ?? stallFromEnv();
   let connected: Promise<{ waitedMs: number; everConnected: boolean | null }> | null = null;
 
-  // The connect window a request carries: the policy's, and at least namedWaitMs for a named file.
+  // The connect window a request carries: namedWaitMs for a named file, the policy's own for anything else.
   const windowFor = (target: string | null | undefined): number => {
     const named = !!target && !isConnId(target);
-    return named ? Math.max(policy.connectWaitMs, namedWaitMs) : policy.connectWaitMs;
+    return named ? namedWaitMs : policy.connectWaitMs;
   };
 
   function spend(up: Upstream, target: string | null | undefined) {

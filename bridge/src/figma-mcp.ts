@@ -28,7 +28,7 @@ import path from "node:path";
 import { createBridge } from "./server-core.ts";
 import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
-import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
 import type { Bridge, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -147,7 +147,7 @@ async function resolveHolder(): Promise<Upstream> {
 // tools stamp as `sourceFile` and whoami describes. `signal` is the tool call's own: the SDK aborts
 // `extra.signal` on notifications/cancelled, and stdin closing aborts every in-flight call (callSignal below);
 // the plugin then gets a cancel frame for the request, whichever side holds the bridge.
-const route = createRoute(holder, { connectWaitMs: 0, oneShot: false });
+const route = createRoute(holder, { connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS });
 /** A request's reply alone. */
 const ask = async <C extends Cmd>(cmd: C, args: Commands[C]["args"], o: RouteRequest): Promise<Commands[C]["reply"]> => (await route.request(cmd, args, o)).reply;
 // The socket half of whoami for `connId` — the connection a request was answered by, not the first live one.
