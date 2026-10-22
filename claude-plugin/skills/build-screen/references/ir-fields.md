@@ -117,6 +117,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   `"mixed"` appears only when Figma could not split the text into runs. **`font.family`**, **`font.weight`** = the style
   string verbatim (`"Semibold Italic"` → weight 600 + italic), **`font.weightValue`** numeric when
   available, **`font.fontStyle:"italic"`** when Figma reports the text italic (absent = regular).
+  **`font.variationSettings`** `{axis: value}` — the variable-font axis values applied (`{wght: 600, slnt: -10}`)
+  → the stack's font-variation settings; absent for a static font.
 - **`font.lineHeight`** — `{unit:"auto"}` (the font's natural leading) | `{value, unit:"px"}` |
   `{value, unit:"percent"}` (**percent of font size**: 150 → 1.5×). Figma distributes the extra leading
   half above, half below each line.
@@ -124,7 +126,9 @@ Read these before writing ANY script against an export JSON (field names guessed
   Absent = 0.
 - **`font.color`** — first solid fill, hex (8-digit when alpha < 1).
 - **`font.case`** (`upper`/`lower`/`title`/`small_caps`…) → a text transform, not rewritten characters.
-  **`font.decoration`** + `decorationStyle/Color/Thickness/Offset/SkipInk`. **`font.openType[]`** —
+  **`font.decoration`** (`underline`/`strikethrough`) + `decorationStyle`, `decorationColor`, `decorationThickness` /
+  `decorationOffset` (`{value, unit}`, like `letterSpacing`) and `decorationSkipInk:false` (the line crosses
+  descenders instead of skipping them). **`font.openType[]`** —
   enabled features (`TNUM` tabular numbers, `SMCP`, `LIGA`…).
 - **`font.paragraphSpacing`**, `paragraphIndent`, `listSpacing` (px); **`font.align`** (map to
   start/end for RTL), **`font.valign`** (only when not top); **`font.leadingTrim:"cap_height"`** →
@@ -228,7 +232,8 @@ Read these before writing ANY script against an export JSON (field names guessed
     `filters` (`exposure`/`contrast`/`saturation`/`temperature`/`tint`/`highlights`/`shadows`, −1..1).
   - `video`, `pattern` (`sourceNodeId`, `tileType`, `spacing`), `shader` (use the asset).
     A shader paint/effect carries `shaderId` + **`properties`** `{defId: value}` — its inputs keyed by
-    Figma's opaque property id (colours `{color:"#hex"}`, points `{x,y,…}`, gradients `{stops}`; bound
+    Figma's opaque property id (colours `{color:"#hex"}`, points `{x,y}`, lines `{x,y,x2,y2}`, circles
+    `{x,y,radius,angle}`, gradients `{stops}`; bound
     inputs named in `tokens` instead). **`propertyDefs`** `{defId: {name, type, default?, description?,
     tokens?}}` names those inputs — read `propertyDefs[defId].name` to name a shader input (the
     identifier the shader's source declares, e.g. `rotationSpeed`; Figma's properties panel can show a
@@ -243,9 +248,10 @@ Read these before writing ANY script against an export JSON (field names guessed
   `weight` or per-side `weights{top,right,bottom,left}` (a one-sided stroke = divider/underline),
   **`align`** `inside` | `outside` | `center` (inside ≈ a border within the box; outside/center extend
   past it and don't take layout space unless the stack draws them that way), `dash[]`, `cap`, `join`,
-  `miter`, `variableWidth` (tapered — SVG only), **`complex`** — a brush (`{type:"brush", brushType:
-  "scatter"|"stretch", brushName, …}`) or `dynamic` (`frequency`/`wiggle`/`smoothen`) hand-drawn stroke:
-  no code equivalent, use the exported asset.
+  `miter`, `variableWidth` `{profile, points}` (tapered: a named `profile`, `points[{pos, width}]` only for `custom` —
+  SVG only), **`complex`** — a brush (`{type:"brush", brushType, brushName}`; a `scatter` brush adds `gap`, `wiggle`,
+  `sizeJitter`, `angularJitter`, `rotation`, a `stretch` brush `direction`) or `dynamic`
+  (`frequency`/`wiggle`/`smoothen`) hand-drawn stroke: no code equivalent, use the exported asset.
 
 ## Effects, blend, masks and transforms
 
@@ -257,14 +263,18 @@ Read these before writing ANY script against an export JSON (field names guessed
     `startRadius` (a ramped blur).
   - `noise` / `glass` / `texture` / `shader` — no code equivalent. Approximate a subtle `noise` as a
     grain overlay; otherwise **use the exported asset** when the effect is load-bearing. Don't invent a
-    shader.
+    shader. Their fields are context for that choice: `noise` — `noiseType`, `color` / `secondaryColor`,
+    `density`, `noiseSize` (or `noiseSizeVector {x,y}`), `opacity`, `blendMode`; `glass` — `lightIntensity`,
+    `lightAngle`, `refraction`, `depth`, `dispersion`, `radius`; `texture` — `noiseSize` / `noiseSizeVector`,
+    `radius`, `clipToShape`.
 - **`blendMode`** (node) / paint `blend` → the stack's blend mode (lowercased CSS names).
 - **`mask:true`** + **`maskType`** (`vector` clip | `luminance`; alpha default).
 - **`rotation`** — **DEGREES**, −180..180, Figma positive = **counter-clockwise** (clockwise-positive
   stacks negate it).
 - **`flipped`** — mirrored (check the axis against the `.png`). **`skew`** — degrees.
-- **`radius`** — number, or per-corner `{tl,tr,br,bl}`. **`cornerSmoothing`** 0..1 — squircle (iOS
-  continuous corners ≈ 0.6).
+- **`radius`** — number, or per-corner `{tl,tr,br,bl}`. **`radiusFull:true`** — the corner is Figma's
+  "fully rounded" setting: `radius` holds what renders at this size (half the shorter side); emit the stack's
+  full-round idiom (CSS `9999px`, a capsule / circle shape) so a pill stays a pill when its height changes. **`cornerSmoothing`** 0..1 — squircle (iOS continuous corners ≈ 0.6).
 - **`arc`** `{start,end,innerRadius}` (radians; donut/pie), **`shape`** `{points, innerRadius}`
   (star/polygon), **`booleanOp`** (`union`/`subtract`/`intersect`/`exclude`).
 
@@ -301,10 +311,11 @@ Undesigned states use the audit's default (derived from tokens) and are reported
   `mouse_up`/`mouse_down` (+`delay`), `on_key_down` (+`keyCodes`), `on_media_hit`/`on_media_end`.
 - **`actions[]`** — `navigation`: `navigate` (route change) / `overlay` (modal/sheet/popover, with
   `overlayOffset`) / `swap` (replace overlay) / `scroll_to` / `change_to` (variant swap), with
-  `destinationId`/`destination`. Or `type`: `back` / `close` / `url` (+`url`) / `set_variable`
+  `destinationId`/`destination`. Or `type`: `back` / `close` / `url` (+`url`, `openInNewTab`) / `set_variable`
   (`variable`, `value`) / `set_variable_mode` (`collection`, `mode` — a theme toggle) / `conditional`
-  (`conditionalBlocks[{condition, actions}]`) / `update_media_runtime`. `preserveScroll`/`resetScroll`
-  flags when set.
+  (`conditionalBlocks[{condition, actions}]`) / `update_media_runtime` (`mediaAction`, with `amountToSkip` for a
+  skip or `newTimestamp` for a seek). `preserveScroll`/`resetScroll`, `resetVideo` (reset the video position) and
+  `resetInteractive` (reset interactive components) flags when set.
 - **`transition`** — `type` (`dissolve`, `smart_animate`, `move_in`/`move_out`/`push`/`slide_in`/
   `slide_out` + `direction`), **`duration` in SECONDS**, `easing` (`ease_in`, `ease_out`,
   `ease_in_and_out`, `linear`, `ease_in_back`/`ease_out_back`/`ease_in_and_out_back`, `gentle`, `quick`,
@@ -314,7 +325,11 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`overlay`** on a frame — `{position, closeOnClickOutside, background}` (scrim color).
 - **`flows[]`** (top level) — `{page, pageId, nodeId, name}` prototype entry points → candidate routes.
 - Ignore triggers with no code meaning (`mediaHitTime` scrub points) rather than guessing.
-- **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API. A
+- **`motion`** (opt-in `--motion`) — keyframe timelines/animations; map to the stack's keyframe API.
+  `timelines[] {id, duration}`; `manualTracks` (manually keyframed fields, each `{base, keyframes[{t, value,
+  easing}]}`) and `animations` (timeline-animated fields, each `{base, duration, tracks[{op, keyframes}]}`, `op`
+  `offset`/`scale`) are keyed by Figma's field name (`TRANSLATION_X`, `OPACITY`, …), plus `fills` / `strokes` /
+  `effects` keyed by paint or effect index. A
   `styles[]` row is an applied animation style: `{id, name, styleId, description, duration, timelineOffset, props}`,
   `duration` and `timelineOffset` in SECONDS (`timelineOffset` absent = 0; `description` only when the style has
   one). One with `custom: true` is a custom animation style:
@@ -356,7 +371,8 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`measurements`** (Dev Mode redlines `start`/`end`/`offset`/`text`) → cross-check spacing.
 - **`css`** — Figma's computed CSS for the node. A strong hint and a verification oracle; reconcile
   against tokens rather than pasting verbatim.
-- **`devResources`** (root, `{name, url, nodeId}`) — linked Jira/Storybook/GitHub URLs; handoff context.
+- **`devResources`** (root, `{name, url, nodeId, inheritedNodeId}`; `inheritedNodeId` on an instance whose link is
+  inherited from its main component or component set) — linked Jira/Storybook/GitHub URLs; handoff context.
 - **`sharedData.tokens`** — Tokens Studio applied tokens (property → token name) on files that don't
   use native variables.
 
