@@ -721,7 +721,7 @@ console.log("build-screen docs (quick keys + export docs):");
     && /A symlinked `design\/export` is found by its path through `design\/`/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
   const extract21 = extractDocs;
-  const verbs21 = read("bridge/src/verbs.ts");
+  const verbs21 = read("bridge/src/cli-commands.ts"); // the verb help pages (VERB_ROWS)
   const mcp21 = read("bridge/src/figma-mcp.ts");
   const mcpAt = mcp21.indexOf('"figma_list_children",');
   const mcpDesc = mcpAt < 0 ? "" : mcp21.slice(mcpAt, mcp21.indexOf("inputSchema", mcpAt));
