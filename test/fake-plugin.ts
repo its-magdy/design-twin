@@ -17,7 +17,7 @@
 // listens and after it drops the socket. It adds no waits of its own: a suite's timing is its own.
 import type { Cmd, Commands } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame } from "../bridge/src/server-core.ts";
-import { WsClient, type RawData } from "./ws-client.ts";
+import { WsClient, type HandshakeRefusal, type RawData } from "./ws-client.ts";
 
 /** A handler's answer that never answers: the command hangs until the bridge gives up on it. */
 export const HANG: unique symbol = Symbol("hang");
@@ -95,8 +95,10 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
   let resolveOpened: () => void = () => {};
   let rejectOpened: (e: unknown) => void = () => {};
   const opened = new Promise<void>((res, rej) => { resolveOpened = res; rejectOpened = rej; });
-  // A redialling plugin keeps retrying; a dial error is "not listening yet", never a failure.
-  if (opts.redial) opened.catch(() => {});
+  // A plugin meant to be refused need not await `opened`: its rejection must not crash the suite as an unhandled one.
+  // A caller that does await it still sees the rejection. (A redialling plugin never rejects it: a dial error there is
+  // "not listening yet".)
+  opened.catch(() => {});
 
   const sendOn = (c: WsClient, frame: unknown): void => { c.send(JSON.stringify(frame)); };
   const reply = (c: WsClient, id: string, a: Answer<Cmd>): void => {
@@ -116,16 +118,25 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
       if (opts.unhandled !== HANG) sendOn(c, { id: cmd.id, ok: false, error: `fake plugin has no ${cmd.cmd}` });
       return;
     }
-    const a = h(cmd.args, ctx);
+    // A handler that throws answers ok:false with its message, as the real plugin answers a collector that throws.
+    const failed = (e: unknown): void => sendOn(c, { id: cmd.id, ok: false, error: e instanceof Error ? e.message : String(e) });
+    let a: ReturnType<Handler<Cmd>>;
+    try { a = h(cmd.args, ctx); } catch (e) { failed(e); return; }
     // A plain answer goes out in the same tick the command arrived in, as a hand-written fake's did.
-    if (a instanceof Promise) void a.then((v) => reply(c, cmd.id, v));
+    if (a instanceof Promise) a.then((v) => reply(c, cmd.id, v), failed);
     else reply(c, cmd.id, a);
   };
 
   const dial = (): WsClient => {
     const c = new WsClient(url, { ...(origin !== null ? { origin } : {}), ...(opts.headers ? { headers: opts.headers } : {}), ...(opts.raw ? { raw: true } : {}) });
+    // Without redial, a socket that never opens settles `opened`: a dial error, a refused handshake (the raw client
+    // reports it as `unexpected-response`, then closes, with no `error`), or any close before open.
+    let wasOpen = false;
     c.on("error", (e: unknown) => { if (!opts.redial) rejectOpened(e); });
+    c.on("unexpected-response", (r: HandshakeRefusal) => { if (!opts.redial) rejectOpened(new Error(`handshake refused: HTTP ${r.statusCode} ${r.body}`)); });
+    c.on("close", (code: number) => { if (!opts.redial && !wasOpen) rejectOpened(new Error(`closed before it opened (code ${code})`)); });
     c.on("open", () => {
+      wasOpen = true;
       if (opts.hello !== false && opts.hello !== undefined) sendOn(c, { type: "hello", ...opts.hello } satisfies HelloFrame);
       resolveOpened();
     });
