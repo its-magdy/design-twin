@@ -8,13 +8,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { WsClient } from "./ws-client.ts";
-import type { RawData } from "./ws-client.ts";
+import { fakePlugin, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply } from "./fixtures.ts";
 import { formatDone } from "../bridge/src/figma-pull.ts";
 import { DAEMON_UNSUPPORTED, daemonSupported } from "../bridge/src/daemon.ts";
 import type { Asset } from "../bridge/src/doc-types.ts";
+import type { ScreenReply, ScreenshotReply, WhoamiReply } from "../bridge/src/commands.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const PORT = 8789;
@@ -23,32 +23,12 @@ const CLI = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts
 
 // ---------------------------------------------------------------- the fake plugin
 
-type Handler = (args: unknown, emit: (frame: Record<string, unknown>) => void) => unknown;
-interface FakePlugin { opened: Promise<void>; stop(): void }
-
 /** Dials the bridge (retrying until it listens — the CLI is still starting), announces itself, answers commands. */
-function fakePlugin(hello: { instanceId: string; file: string; fileKey: string }, handlers: Record<string, Handler>, opts: { startAfterMs?: number } = {}): FakePlugin {
-  let stopped = false;
-  let ws: WsClient | null = null;
-  let resolveOpened: () => void = () => {};
-  const opened = new Promise<void>((r) => { resolveOpened = r; });
-  const dial = () => {
-    if (stopped) return;
-    const c = new WsClient(`ws://127.0.0.1:${PORT}/?token=${TOKEN}`, { origin: "null" });
-    ws = c;
-    c.on("error", () => { /* not listening yet — the close handler redials */ });
-    c.on("open", () => { c.send(JSON.stringify({ type: "hello", ...hello, page: "Home", pluginVersion: "0.0.0" })); resolveOpened(); });
-    c.on("message", (b: RawData) => {
-      const m = JSON.parse(b.toString()) as { id?: string; cmd?: string; args?: unknown };
-      if (!m.id || !m.cmd) return;
-      const h = handlers[m.cmd];
-      if (!h) { c.send(JSON.stringify({ id: m.id, ok: false, error: `fake plugin has no ${m.cmd}` })); return; }
-      c.send(JSON.stringify({ id: m.id, ok: true, result: h(m.args, (f) => c.send(JSON.stringify(f))) }));
-    });
-    c.on("close", () => { if (!stopped) setTimeout(dial, 100); });
-  };
-  setTimeout(dial, opts.startAfterMs ?? 0);
-  return { opened, stop: () => { stopped = true; if (ws) ws.terminate(); } };
+function dialPlugin(hello: { instanceId: string; file: string; fileKey: string }, handlers: Handlers, opts: { startAfterMs?: number } = {}): FakePlugin {
+  return fakePlugin(PORT, {
+    token: TOKEN, hello: { ...hello, page: "Home", pluginVersion: "0.0.0" }, on: handlers,
+    redial: { ...(opts.startAfterMs !== undefined ? { startAfterMs: opts.startAfterMs } : {}), everyMs: 100 },
+  });
 }
 
 // ---------------------------------------------------------------- the CLI
@@ -77,9 +57,9 @@ const png = (() => {
   return b.toString("base64");
 })();
 const refAsset: Asset = { id: "1:2", name: "Sample Frame", format: "png", file: "1_2_ref.png", base64: png, kind: "reference" };
-const shotReply = (extra: Record<string, unknown>) => ({ id: "1:2", name: "Sample Frame", type: "FRAME", reference: "assets/1_2_ref.png", manifest: manifest(), assets: [refAsset], ...extra });
-const nodeReply = () => screenReply({ screenName: "Sample Frame", nodeId: "1:2", page: "Home", pageId: "0:1", screen: { screen: "Sample Frame", exportedAt: "2026-10-01T00:00:00.000Z", nodes: [{ type: "FRAME", id: "1:2", name: "Sample Frame", box: { w: 10, h: 10, x: 0, y: 0 } }] } });
-const whoamiReply = (instanceId: string, file: string, fileKey: string) => ({ instanceId, startedAt: 1, uptimeMs: 5000, file, page: "Home", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey, fileKeyAvailable: true });
+const shotReply = (extra: Pick<ScreenshotReply, "w" | "h" | "scale">): ScreenshotReply => ({ id: "1:2", name: "Sample Frame", type: "FRAME", reference: "assets/1_2_ref.png", manifest: manifest(), assets: [refAsset], ...extra });
+const nodeReply = (): ScreenReply => screenReply({ screenName: "Sample Frame", nodeId: "1:2", page: "Home", pageId: "0:1", screen: { screen: "Sample Frame", exportedAt: "2026-10-01T00:00:00.000Z", nodes: [{ type: "FRAME", id: "1:2", name: "Sample Frame", box: { w: 10, h: 10, x: 0, y: 0 } }] } });
+const whoamiReply = (instanceId: string, file: string, fileKey: string): WhoamiReply => ({ instanceId, startedAt: 1, uptimeMs: 5000, file, page: "Home", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey, fileKeyAvailable: true });
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cli-pull-"));
 try {
@@ -88,7 +68,7 @@ try {
   {
     const dir = path.join(tmp, "time");
     fs.mkdirSync(dir);
-    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: () => nodeReply() }, { startAfterMs: 400 });
+    const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: () => nodeReply() }, { startAfterMs: 400 });
     const r = await dtwin(dir, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     plugin.stop();
     check("the pull succeeds against the fake plugin and writes the screen", r.code === 0 && fs.existsSync(path.join(dir, "out", "pages", "index.json")));
@@ -103,11 +83,11 @@ try {
   {
     const dir = path.join(tmp, "queued");
     fs.mkdirSync(dir);
-    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, {
-      exportNode: (_a, emit) => {
-        emit({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" });
-        emit({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" });
-        emit({ type: "progress", phase: "start" });
+    const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, {
+      exportNode: (_a, ctx) => {
+        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
+        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
+        ctx.progress({ phase: "start" });
         return nodeReply();
       },
     });
@@ -118,7 +98,7 @@ try {
     check("stderr has the queued line exactly once (two frames sent)", said.length === 1 && /^\[dtwin\] queued behind another export in that file — waiting \(up to --timeout\)/.test(said[0] ?? ""));
     const dir2 = path.join(tmp, "started");
     fs.mkdirSync(dir2);
-    const p2 = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: (_a, emit) => { emit({ type: "progress", phase: "start" }); return nodeReply(); } });
+    const p2 = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { exportNode: (_a, ctx) => { ctx.progress({ phase: "start" }); return nodeReply(); } });
     const r2 = await dtwin(dir2, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     p2.stop();
     check("a `start` frame alone prints no queued line", r2.code === 0 && !/queued/.test(r2.stderr));
@@ -146,7 +126,7 @@ try {
   {
     const dir = path.join(tmp, "shot");
     fs.mkdirSync(dir);
-    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { screenshot: () => shotReply({ w: 1440, h: 1236, scale: 1.4222 }) });
+    const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { screenshot: () => shotReply({ w: 1440, h: 1236, scale: 1.4222 }) });
     const r = await dtwin(dir, ["screenshot", "1:2", "shots", "--timeout", "30"]);
     plugin.stop();
     const j = json(r.stdout);
@@ -160,7 +140,7 @@ try {
     // An older plugin sends no w/h/scale: the keys are omitted (never null), png still comes from the bytes.
     const dir = path.join(tmp, "shot-old");
     fs.mkdirSync(dir);
-    const plugin = fakePlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { screenshot: () => shotReply({}) });
+    const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, { screenshot: () => shotReply({}) });
     const r = await dtwin(dir, ["screenshot", "1:2", "shots", "--timeout", "30"]);
     plugin.stop();
     const j = json(r.stdout);
@@ -224,9 +204,9 @@ try {
       let up = false;
       for (let i = 0; i < 60 && !up; i++) { await sleep(250); up = /"pid"/.test((await dtwin(dir, ["status"])).stdout); }
       check("the daemon came up on 8789", up);
-      const a = fakePlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA"), exportNode: (_a, emit) => { emit({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" }); return nodeReply(); } });
+      const a = dialPlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA"), exportNode: (_a, ctx) => { ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" }); return nodeReply(); } });
       await a.opened;
-      const b = fakePlugin({ instanceId: "fig-b", file: "App Bravo", fileKey: "KEYB" }, { whoami: () => whoamiReply("fig-b", "App Bravo", "KEYB") });
+      const b = dialPlugin({ instanceId: "fig-b", file: "App Bravo", fileKey: "KEYB" }, { whoami: () => whoamiReply("fig-b", "App Bravo", "KEYB") });
       await b.opened;
       await sleep(300);
       const r = await dtwin(dir, ["whoami", "--client", "Bravo", "--timeout", "30"]);

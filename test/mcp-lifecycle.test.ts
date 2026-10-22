@@ -20,12 +20,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { WsClient } from "./ws-client.ts";
-import type { RawData } from "./ws-client.ts";
+import { fakePlugin as dialPlugin, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
-import type { Cmd, Commands } from "../bridge/src/commands.ts";
+import type { Cmd, Commands, FullExportReply, ScreenReply } from "../bridge/src/commands.ts";
 import type { Sent } from "../bridge/src/route.ts";
 import { malformed } from "./fixtures.ts";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -186,44 +185,42 @@ async function initialize(s: Server): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------- a fake plugin
-interface Frame { m: Record<string, unknown>; at: number }
-interface Plugin { ws: WsClient; frames: Frame[]; hang: boolean; full: (() => object) | null; close(): void }
-const screenReply = () => ({
+// `hang` and `full` are read by the handlers on every command, so a section flips them mid-run.
+interface Plugin { fake: FakePlugin; hang: boolean; full: (() => FullExportReply) | null; close(): void }
+// not a full ScreenReply on purpose: its screen manifest carries only `nodes`
+const screenReply = (): ScreenReply => malformed<ScreenReply>({
   screenName: "Sample",
   screen: { exportedAt: "2026-10-01T00:00:00.000Z", screen: "Sample", manifest: { nodes: 1 }, nodes: [{ id: "9:1", name: "Sample", type: "FRAME", box: { x: 0, y: 0, w: 100, h: 100 } }] },
   variables: { collections: [], variables: [], hygiene: [] },
   assets: [],
 });
 async function fakePlugin(port: number): Promise<Plugin> {
-  const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-  await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
-  ws.on("error", () => { /* the server went away */ });
-  const pl: Plugin = { ws, frames: [], hang: false, full: null, close: () => { try { ws.terminate(); } catch { /* gone */ } } };
-  ws.on("message", (raw: RawData) => {
-    let v: unknown;
-    try { v = JSON.parse(String(raw)) as unknown; } catch { return; }
-    const m = rec(v);
-    pl.frames.push({ m, at: Date.now() });
-    const id = m.id;
-    if (typeof m.cmd !== "string" || typeof id !== "string") return;
-    const answer = (result: object) => ws.send(JSON.stringify({ id, ok: true, result }));
-    if (m.cmd === "ping") return answer({ pong: true, page: "Page A", file: "Sample File" });
-    if (pl.hang) return;
-    if (m.cmd === "exportNode" || m.cmd === "exportSelection") return answer(screenReply());
-    if (m.cmd === "exportFull" && pl.full) return answer(pl.full());
-  });
-  ws.send(JSON.stringify({ type: "hello", instanceId: "fig-1", file: "Sample File", page: "Page A" }));
+  const pl: Plugin = {
+    fake: dialPlugin(port, {
+      token: TOKEN, hello: { instanceId: "fig-1", file: "Sample File", page: "Page A" }, unhandled: HANG,
+      on: {
+        ping: () => ({ pong: true, page: "Page A", file: "Sample File" }),
+        exportNode: () => (pl.hang ? HANG : screenReply()),
+        exportSelection: () => (pl.hang ? HANG : screenReply()),
+        exportFull: () => (pl.hang || !pl.full ? HANG : pl.full()),
+      },
+    }),
+    hang: false, full: null,
+    close: () => { try { pl.fake.terminate(); } catch { /* gone */ } },
+  };
+  await pl.fake.opened;
   await sleep(150);
   return pl;
 }
-const cmdFrames = (pl: Plugin, cmd: string) => pl.frames.filter((f) => f.m.cmd === cmd);
-const cancelFor = (pl: Plugin, id: unknown) => pl.frames.find((f) => f.m.type === "cancel" && f.m.id === id);
+const cmdFrames = (pl: Plugin, cmd: Cmd) => pl.fake.commands(cmd);
+const cancelFor = (pl: Plugin, id: unknown) => pl.fake.frames.find((f) => "type" in f.frame && f.frame.type === "cancel" && f.frame.id === id);
 
 // A full export (exportFull reply) whose inline JSON is far past the 48k-char cap: one big layer + one small.
-function fullReply(): object {
+function fullReply(): FullExportReply {
   const stamp = new Date().toISOString();
+  // not a full FullExportReply on purpose: a hand-written design system (collections/variables in a looser shape)
   const rows = Array.from({ length: 500 }, (_, i) => ({ id: `1:${100 + i}`, name: `Row ${i}`, type: "TEXT", box: { x: 0, y: i * 40, w: 390, h: 40 }, characters: `Row label ${i}` }));
-  return {
+  return malformed<FullExportReply>({
     designSystem: {
       file: "Sample File", exportedAt: stamp, colorProfile: "srgb",
       collections: [{ id: "c:1", name: "Core", modes: ["Light"] }],
@@ -241,7 +238,7 @@ function fullReply(): object {
       ],
     },
     assets: [],
-  };
+  });
 }
 const walk = (d: string): string[] => {
   let ents: fs.Dirent[] = [];
@@ -410,7 +407,7 @@ void (async () => {
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
         s.p.stdin.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
@@ -432,7 +429,7 @@ void (async () => {
         const other = await openRaw(s.sock, { cmd: "exportNode", args: { nodeId: "9:1" }, timeoutMs: 20000 });
         other.on("error", () => { /* the server went away */ });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
         s.p.kill("SIGTERM");
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
@@ -456,7 +453,7 @@ void (async () => {
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
         const t0 = Date.now();
         s.p.kill("SIGINT");
         await sleep(100);
@@ -504,13 +501,13 @@ void (async () => {
         // With a progressToken, so every plugin tick becomes a notifications/progress write to stdout.
         void s.rpc("tools/call", { name: "figma_export_url", arguments: { url: "9:1" }, _meta: { progressToken: "life-7" } });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const reqId = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const reqId = cmdFrames(pl, "exportNode")[0]?.id;
         s.p.stdout.destroy();
         // the client is killed — both pipes break, but the plugin's progress ticks reach stdout BEFORE
         // stdin's end is seen. The first such write hits EPIPE; with no stdout 'error' listener yet, that
         // would be an uncaught exception that kills the orphan.
         let n = 0;
-        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.ws.send(JSON.stringify({ type: "progress", requestId: reqId, phase: "walk", nodes: ++n })); } catch { /* gone */ } } }, 5);
+        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.fake.progress({ ...(reqId !== undefined ? { requestId: reqId } : {}), phase: "walk", nodes: ++n }); } catch { /* gone */ } } }, 5);
         await until(() => s.exit() !== null || /went away \(stdout closed\)/.test(s.err()), 3000);
         await sleep(100);
         clearInterval(ticks);
@@ -600,7 +597,7 @@ void (async () => {
         const escSel = await s.call("figma_export_selection", { writeToDisk: true, outDir: "../escape" });
         ok("…the same for figma_screenshot / figma_export_full / figma_export_design_system / figma_export_selection (no frame sent)",
           [escShot, escFull, escDs, escSel].every((r) => !!r && r.isError && /outDir must stay inside/.test(r.text)) &&
-          pl.frames.filter((f) => typeof f.m.cmd === "string" && f.m.cmd !== "ping").length === n0);
+          pl.fake.commands().filter((c) => c.cmd !== "ping").length === n0);
         const inline = await s.call("figma_export_url", { url: "9:1", writeToDisk: false, outDir: "../escape" });
         ok("writeToDisk:false + a bad outDir → the inline result (nothing is written, so nothing is refused)",
           !!inline && !inline.isError && rec(inline.json.screen).screen === "Sample" && asks() === n0 + 1);

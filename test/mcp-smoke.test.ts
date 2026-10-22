@@ -13,10 +13,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.js";
-// The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
-import { WsClient } from "./ws-client.ts";
-import type { RawData } from "./ws-client.ts";
-import type { Cmd, ScreenReply } from "../bridge/src/commands.ts";
+// The plugin stand-in — see fake-plugin.ts.
+import { fakePlugin, fail, HANG, type FakePlugin } from "./fake-plugin.ts";
+import { malformed } from "./fixtures.ts";
+import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply } from "../bridge/src/commands.ts";
+import type { BridgeFrame, CommandFrame } from "../bridge/src/server-core.ts";
 // Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
 import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
@@ -47,8 +48,6 @@ function firstText(r: JsonRpcReply): string {
   if (typeof c !== "object" || c === null || !("type" in c) || c.type !== "text" || !("text" in c) || typeof c.text !== "string") throw new Error("tool reply has no text content");
   return c.text;
 }
-// The one bridge -> plugin frame this fake plugin reads: `{ id, cmd, args }` (server-core does not export it).
-interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
 interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }> }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
@@ -214,28 +213,28 @@ void (async () => {
     }
 
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
-    const plugin = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
-    await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });
+    // It never identifies (no hello), and answers exportSelection only: every other command is left unanswered.
     let kids = 3;
     let ticks = 0; // progress frames to send before the reply, as ui.html relays a bridge-triggered run's
     let burst = false;
-    plugin.on("message", (raw: RawData) => {
-      const m = JSON.parse(String(raw)) as CommandFrame;
-      if (m.cmd !== "exportSelection") return;
-      for (let i = 1; i <= ticks; i++) plugin.send(JSON.stringify({ type: "progress", phase: "pages", page: { index: i, of: ticks, name: "P" + i }, nodes: i * 10 }));
+    const plugin = fakePlugin(8789, { token: "smoke-test-token", hello: false, unhandled: HANG, on: { exportSelection: (_args, ctx) => {
+      for (let i = 1; i <= ticks; i++) ctx.progress({ phase: "pages", page: { index: i, of: ticks, name: "P" + i }, nodes: i * 10 });
       const children = Array.from({ length: kids }, (_, i) => ({ id: "9:" + i, name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
       // The REAL exportSelection shape (figma-plugin/src/collect.ts screenResult) — the bridge now
       // checks every reply against commands.ts before a tool sees it.
+      // Not a full ScreenReply on purpose: its screen manifest carries only `nodes`.
       const screen = { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] };
-      const answer = () => plugin.send(JSON.stringify({ id: m.id, ok: true, result: { screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] } }));
+      const result = malformed<ScreenReply>({ screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] });
       // `burst` = the WORST timing: every tick and the reply in the same event-loop turn. Otherwise
       // the reply trails the ticks by 50 ms (a real run's ticks are >=250 ms apart and long before
       // its reply). The SDK CLIENT (1.30: Protocol._onnotification dispatches on a microtask,
       // _onresponse deletes the progress handler synchronously) drops a notification that shares a
       // stdout read chunk with the response, so `onprogress` delivery is only asserted with the
       // delay; the burst case asserts what the SERVER owns — the order on the wire.
-      if (ticks && !burst) setTimeout(answer, 50); else answer();
-    });
+      if (ticks && !burst) return new Promise<ScreenReply>((res) => { setTimeout(() => res(result), 50); });
+      return result;
+    } } });
+    await plugin.opened;
     const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
     ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0]?.children?.length === 3);
     kids = 1500; // ~200 KB of indented JSON — far past the 25k-token default
@@ -331,24 +330,18 @@ void (async () => {
     // <name>` in the CLI and the daemon): the fake plugin above never identified, so "Late File"
     // matches nothing when the call starts; a second window that says hello 400 ms later must be
     // routed to, not refused. A bare connId never waits: an unknown `c9` fails at once.
-    const late = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
-    const pinged: string[] = [];
-    late.on("message", (raw: RawData) => {
-      const m = JSON.parse(String(raw)) as CommandFrame;
-      pinged.push(m.cmd);
-      if (m.cmd === "ping") late.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "Cover", file: "Late File" } }));
-    });
-    await new Promise((res, rej) => { late.on("open", res); late.on("error", rej); });
+    const late = fakePlugin(8789, { token: "smoke-test-token", hello: false, unhandled: HANG, on: { ping: (): PingReply => ({ pong: true, page: "Cover", file: "Late File" }) } });
+    await late.opened;
     const t0 = Date.now();
     const pending = client.callTool({ name: "figma_status", arguments: { client: "Late File" } });
-    setTimeout(() => late.send(JSON.stringify({ type: "hello", instanceId: "fig-late", file: "Late File" })), 400);
+    setTimeout(() => late.hello({ instanceId: "fig-late", file: "Late File" }), 400);
     const routed = await pending;
     const routedMs = Date.now() - t0;
     // With a `client`, figma_status pings first and lists the roster after (so the roster shows the
     // window the ping reached, identified); the ping's own `file` is the proof it was routed by name.
     const statusOf = (r: JsonRpcReply): { pong?: boolean; file?: string } => JSON.parse(firstText(r)) as { pong?: boolean; file?: string };
     ok("a NAMED client that lands after the call started is waited for and routed to (not refused on the first file that connected)",
-      !routed.isError && pinged.includes("ping") && statusOf(routed).pong === true && statusOf(routed).file === "Late File");
+      !routed.isError && late.commands("ping").length > 0 && statusOf(routed).pong === true && statusOf(routed).file === "Late File");
     ok("…and the wait ends as soon as the name matches, not at the 15 s window (took " + routedMs + " ms)", routedMs >= 300 && routedMs < 5000);
     const t1 = Date.now();
     const bare = await client.callTool({ name: "figma_status", arguments: { client: "c9" } });
@@ -366,13 +359,9 @@ void (async () => {
     // tool gives, not `connected:false`).
     const t2 = Date.now();
     const pending0 = client.callTool({ name: "figma_status", arguments: { client: "Late File 2" } });
-    const late2 = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
-    late2.on("message", (raw: RawData) => {
-      const m = JSON.parse(String(raw)) as CommandFrame;
-      if (m.cmd === "ping") late2.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "Cover", file: "Late File 2" } }));
-    });
-    await new Promise((res, rej) => { late2.on("open", res); late2.on("error", rej); });
-    setTimeout(() => late2.send(JSON.stringify({ type: "hello", instanceId: "fig-late-2", file: "Late File 2" })), 400);
+    const late2 = fakePlugin(8789, { token: "smoke-test-token", hello: false, unhandled: HANG, on: { ping: (): PingReply => ({ pong: true, page: "Cover", file: "Late File 2" }) } });
+    await late2.opened;
+    setTimeout(() => late2.hello({ instanceId: "fig-late-2", file: "Late File 2" }), 400);
     const routed0 = await pending0;
     const s0 = JSON.parse(firstText(routed0)) as { connected?: boolean; pong?: boolean; file?: string; clients?: Array<{ file?: string | null }> };
     ok("figma_status with a NAMED client and NOTHING yet connected waits for that window and answers connected:true with its pong and roster (took " + (Date.now() - t2) + " ms)",
@@ -391,37 +380,42 @@ void (async () => {
     {
       const rec = (x: unknown): Record<string, unknown> => (x && typeof x === "object" && !Array.isArray(x) ? { ...x } : {});
       const parse = (r: JsonRpcReply): Record<string, unknown> => { try { return rec(JSON.parse(firstText(r)) as unknown); } catch { return {}; } };
-      const frames: Array<{ who: string; m: Record<string, unknown> }> = [];
+      // What the bridge sent the two plugins: mark() is how many frames each has had so far, sentSince(n)
+      // every frame either has had since (each plugin's own frames past its own count).
+      const plugins: FakePlugin[] = [];
+      const mark = (): number[] => plugins.map((p) => p.frames.length);
+      const sentSince = (n: number[]): BridgeFrame[] => plugins.flatMap((p, i) => p.frames.slice(n[i] ?? 0).map((f) => f.frame));
+      const isCmd = (f: BridgeFrame, cmd: string): f is CommandFrame => "cmd" in f && f.cmd === cmd;
+      const isCancelOf = (f: BridgeFrame, id: unknown): boolean => "type" in f && f.type === "cancel" && f.id === id;
       let rows = 3;
       let hang = false;
       // A 4×3 PNG's signature + IHDR: all pngSize reads.
       const png = Buffer.alloc(33);
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
       png.writeUInt32BE(13, 8); png.write("IHDR", 12, "ascii"); png.writeUInt32BE(4, 16); png.writeUInt32BE(3, 20); png[24] = 8; png[25] = 6;
-      const fake = async (file: string, instanceId: string): Promise<WsClient> => {
-        const ws = new WsClient("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
-        ws.on("message", (raw: RawData) => {
-          const m = rec(JSON.parse(String(raw)) as unknown);
-          frames.push({ who: file, m });
-          const id = m.id, cmd = m.cmd;
-          if (typeof cmd !== "string") return;
-          const answer = (result: unknown) => ws.send(JSON.stringify({ id, ok: true, result }));
-          if (cmd === "whoami") return answer({ instanceId, file, fileKey: null, page: "Page", pluginVersion: null });
-          if (cmd === "ping") return answer({ pong: true, page: "Page", file });
-          if (cmd === "exportFull") return ws.send(JSON.stringify({ id, ok: false, error: "smoke: page args captured" }));
-          if (cmd === "screenshot") {
-            return answer({ id: "9:1", name: "Shot", type: "FRAME", reference: "refs/Shot_ref.png", manifest: { nodes: 1 }, w: 1440, h: 1236, scale: 1.4222,
-              assets: [{ id: "9:1", name: "Shot", format: "png", kind: "reference", file: "Shot_ref.png", base64: png.toString("base64") }] });
-          }
-          if (cmd !== "exportNode" || hang) return;
-          const children = Array.from({ length: rows }, (_, i) => ({ id: "9:" + (i + 10), name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
-          answer({ screenName: "Sample", nodeId: "9:1", page: "Page", pageId: "0:1",
-            screen: { exportedAt: "2026-10-07T00:00:00.000Z", screen: "Sample", manifest: { nodes: rows + 1 }, nodes: [{ id: "9:1", name: "Sample", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] },
-            variables: { collections: [], variables: [], hygiene: [] }, assets: [] });
+      // Its replies are thin on purpose (a whoami with only its identity, manifests carrying only `nodes`);
+      // a command it has no answer for — or exportNode while `hang` — is never answered.
+      const fake = async (file: string, instanceId: string): Promise<FakePlugin> => {
+        const p = fakePlugin(8789, {
+          token: "smoke-test-token", hello: { instanceId, file }, unhandled: HANG,
+          on: {
+            whoami: () => malformed<WhoamiReply>({ instanceId, file, fileKey: null, page: "Page", pluginVersion: null }),
+            ping: (): PingReply => ({ pong: true, page: "Page", file }),
+            exportFull: () => fail("smoke: page args captured"),
+            screenshot: () => malformed<ScreenshotReply>({ id: "9:1", name: "Shot", type: "FRAME", reference: "refs/Shot_ref.png", manifest: { nodes: 1 }, w: 1440, h: 1236, scale: 1.4222,
+              assets: [{ id: "9:1", name: "Shot", format: "png", kind: "reference", file: "Shot_ref.png", base64: png.toString("base64") }] }),
+            exportNode: () => {
+              if (hang) return HANG;
+              const children = Array.from({ length: rows }, (_, i) => ({ id: "9:" + (i + 10), name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
+              return malformed<ScreenReply>({ screenName: "Sample", nodeId: "9:1", page: "Page", pageId: "0:1",
+                screen: { exportedAt: "2026-10-07T00:00:00.000Z", screen: "Sample", manifest: { nodes: rows + 1 }, nodes: [{ id: "9:1", name: "Sample", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] },
+                variables: { collections: [], variables: [], hygiene: [] }, assets: [] });
+            },
+          },
         });
-        await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
-        ws.send(JSON.stringify({ type: "hello", instanceId, file }));
-        return ws;
+        plugins.push(p);
+        await p.opened;
+        return p;
       };
       const p1 = await fake("Sample App", "fig-sample");
       const p2 = await fake("Acme Kit", "fig-acme");
@@ -490,10 +484,10 @@ void (async () => {
       // tolerant arrays: `page` as a JSON-encoded string or a bare string reaches the plugin as an array;
       // the advertised schema stays type:array.
       const pageArgs = async (page: unknown): Promise<unknown> => {
-        const n = frames.length;
+        const n = mark();
         await client.callTool({ name: "figma_export_full", arguments: { page, client: "Sample App" } });
-        const f = frames.slice(n).find((x) => x.m.cmd === "exportFull");
-        return f ? rec(f.m.args).page : "not sent";
+        const f = sentSince(n).find((x): x is CommandFrame => isCmd(x, "exportFull"));
+        return f ? rec(f.args).page : "not sent";
       };
       const asJson = await pageArgs('["0:1","0:2"]');
       const bareStr = await pageArgs("0:1");
@@ -528,15 +522,15 @@ void (async () => {
       // extra.signal → server-core's cancel frame).
       hang = true;
       const ac = new AbortController();
-      const n0 = frames.length;
+      const n0 = mark();
       const cancelled = client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }, undefined, { signal: ac.signal }).catch(() => "aborted");
       await sleep(300);
-      const sentId = frames.slice(n0).find((f) => f.m.cmd === "exportNode")?.m.id;
+      const sentId = sentSince(n0).find((f) => isCmd(f, "exportNode"))?.id;
       ac.abort();
       await cancelled;
       await sleep(300);
       ok("an aborted figma_export_url → the plugin receives {type:\"cancel\"} for that request",
-        typeof sentId === "string" && frames.slice(n0).some((f) => f.m.type === "cancel" && f.m.id === sentId));
+        typeof sentId === "string" && sentSince(n0).some((f) => isCancelOf(f, sentId)));
 
       // Via a daemon: a second MCP server shares this one's bridge through the daemon socket;
       // its cancelled call closes that socket, the daemon abandons the request, and the plugin is told.
@@ -553,17 +547,17 @@ void (async () => {
         try {
           await client3.connect(transport3);
           const ac3 = new AbortController();
-          const n3 = frames.length;
+          const n3 = mark();
           const viaCall = client3.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }, undefined, { signal: ac3.signal }).catch(() => "aborted");
           const until = Date.now() + 3000;
-          while (Date.now() < until && !frames.slice(n3).some((f) => f.m.cmd === "exportNode")) await sleep(50);
-          const sentId3 = frames.slice(n3).find((f) => f.m.cmd === "exportNode")?.m.id;
+          while (Date.now() < until && !sentSince(n3).some((f) => isCmd(f, "exportNode"))) await sleep(50);
+          const sentId3 = sentSince(n3).find((f) => isCmd(f, "exportNode"))?.id;
           ac3.abort();
           await viaCall;
           const until2 = Date.now() + 1500;
-          while (Date.now() < until2 && !frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3)) await sleep(50);
+          while (Date.now() < until2 && !sentSince(n3).some((f) => isCancelOf(f, sentId3))) await sleep(50);
           ok("an aborted call on a DAEMON-ROUTED session → the plugin receives {type:\"cancel\"} for that request",
-            typeof sentId3 === "string" && frames.slice(n3).some((f) => f.m.type === "cancel" && f.m.id === sentId3));
+            typeof sentId3 === "string" && sentSince(n3).some((f) => isCancelOf(f, sentId3)));
         } finally {
           await client3.close().catch(() => {});
         }
@@ -572,16 +566,16 @@ void (async () => {
       // The client going away (stdin end) aborts the in-flight request too — the
       // SDK's stdio transport does not notice stdin ending. client.close() ends stdin and waits 2 s before
       // SIGTERM, so a cancel frame inside that window can only come from the stdin watch.
-      const n1 = frames.length;
+      const n1 = mark();
       void client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }).catch(() => {});
       await sleep(300);
-      const sentId2 = frames.slice(n1).find((f) => f.m.cmd === "exportNode")?.m.id;
+      const sentId2 = sentSince(n1).find((f) => isCmd(f, "exportNode"))?.id;
       const tClose = Date.now();
       const closing = client.close().catch(() => {});
       const deadline = Date.now() + 1500;
-      while (Date.now() < deadline && !frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2)) await sleep(50);
+      while (Date.now() < deadline && !sentSince(n1).some((f) => isCancelOf(f, sentId2))) await sleep(50);
       ok("stdin closing (the client exited) → the plugin receives {type:\"cancel\"} for the in-flight request (within " + (Date.now() - tClose) + " ms)",
-        typeof sentId2 === "string" && frames.slice(n1).some((f) => f.m.type === "cancel" && f.m.id === sentId2));
+        typeof sentId2 === "string" && sentSince(n1).some((f) => isCancelOf(f, sentId2)));
       await closing;
       p1.close();
       p2.close();

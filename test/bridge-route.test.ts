@@ -10,13 +10,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { WsClient } from "./ws-client.ts";
-import type { RawData } from "./ws-client.ts";
+import { fakePlugin, HANG, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { screenReply } from "./fixtures.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ProgressTick } from "../bridge/src/server-core.ts";
 import type { Route, RoutePolicy } from "../bridge/src/route.ts";
+import type { ListPagesReply, PingReply } from "../bridge/src/commands.ts";
 
 const TOKEN = "bridge-route-test-token";
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
@@ -31,34 +31,23 @@ const failure = (p: Promise<unknown>): Promise<string> => p.then(() => "resolved
 
 // ---------------------------------------------------------------- the fake plugin
 
-type Handler = (args: unknown, emit: (frame: Record<string, unknown>) => void) => unknown;
-interface Plugin { cmds: string[]; cancels: string[]; leave(): void }
-const ping = (file: string) => ({ pong: true, page: "Home", file });
+const ping = (file: string): PingReply => ({ pong: true, page: "Home", file });
 const node = (file: string) => screenReply({ screenName: file, nodeId: "1:2", page: "Home", pageId: "0:1", screen: { screen: file, exportedAt: "2026-10-01T00:00:00.000Z", nodes: [] } });
-const pages = (file: string) => ({ exportedAt: "2026-10-01T00:00:00.000Z", file, depth: 1, pages: [], manifest: { pages: 0, warnings: [] } });
-const answers = (file: string): Record<string, Handler> => ({ ping: () => ping(file), exportNode: () => node(file), listPages: () => pages(file) });
-const MUTE: Handler = () => undefined; // never answers
+const pages = (file: string): ListPagesReply => ({ exportedAt: "2026-10-01T00:00:00.000Z", file, depth: 1, pages: [], manifest: { pages: 0, warnings: [] } });
+const answers = (file: string): Handlers => ({ ping: () => ping(file), exportNode: () => node(file), listPages: () => pages(file) });
+const MUTE = (): typeof HANG => HANG; // never answers
 
-/** Dials `port`, says hello as `file`, answers with `handlers` (a handler returning undefined never answers). */
-async function plugin(port: number, file: string, handlers: Record<string, Handler> = answers(file)): Promise<Plugin> {
-  const p: Plugin = { cmds: [], cancels: [], leave: () => {} };
-  const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-  await new Promise<void>((resolve, reject) => { ws.on("open", () => resolve()); ws.on("error", reject); });
-  ws.send(JSON.stringify({ type: "hello", instanceId: "fig-" + file, file, fileKey: "KEY" + file.toUpperCase(), page: "Home", pluginVersion: "0.0.0" }));
-  ws.on("message", (b: RawData) => {
-    const m = JSON.parse(b.toString()) as { id?: string; cmd?: string; type?: string; args?: unknown };
-    if (m.type === "cancel" && m.id) { p.cancels.push(m.id); return; }
-    if (!m.id || !m.cmd) return;
-    p.cmds.push(m.cmd);
-    const h = handlers[m.cmd];
-    const id = m.id;
-    const result = h ? h(m.args, (f) => ws.send(JSON.stringify(f))) : undefined;
-    if (result !== undefined) ws.send(JSON.stringify({ id, ok: true, result }));
+/** Dials `port`, says hello as `file`, answers with `handlers` (any other command is never answered). */
+async function plugin(port: number, file: string, handlers: Handlers = answers(file)): Promise<FakePlugin> {
+  const p = fakePlugin(port, {
+    token: TOKEN, hello: { instanceId: "fig-" + file, file, fileKey: "KEY" + file.toUpperCase(), page: "Home", pluginVersion: "0.0.0" },
+    on: handlers, unhandled: HANG,
   });
-  p.leave = () => ws.terminate();
+  await p.opened;
   await sleep(50); // the hello lands before the caller asks anything
   return p;
 }
+const sent = (p: FakePlugin): string[] => p.commands().map((c) => c.cmd);
 
 // ---------------------------------------------------------------- the two adapters
 
@@ -131,7 +120,7 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
       const c = await plugin(rig.port, "Charlie");
       const got = await late;
       check(`${t} a named file that lands inside the named window is waited for`, got === "Charlie");
-      c.leave();
+      c.terminate();
       await sleep(50);
 
       // …and one that never lands fails after the window with resolveClient's text, which lists what IS there.
@@ -143,12 +132,12 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
 
       // Progress: an export-class command hears its ticks, in order; any other command never does.
       const ticks: string[] = [];
-      const pb = { ...answers("Echo"), exportNode: (_: unknown, emit: (f: Record<string, unknown>) => void) => {
-        emit({ type: "progress", phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null });
-        emit({ type: "progress", phase: "assets", page: null, nodes: null, assets: 3 });
+      const pb: Handlers = { ...answers("Echo"), exportNode: (_, ctx) => {
+        ctx.progress({ phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null });
+        ctx.progress({ phase: "assets", page: null, nodes: null, assets: 3 });
         return node("Echo");
-      }, listPages: (_: unknown, emit: (f: Record<string, unknown>) => void) => {
-        emit({ type: "progress", phase: "pages", page: null, nodes: 1, assets: null });
+      }, listPages: (_, ctx) => {
+        ctx.progress({ phase: "pages", page: null, nodes: 1, assets: null });
         return pages("Echo");
       } };
       const e = await plugin(rig.port, "Echo", pb);
@@ -168,9 +157,9 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
       const why = await pending;
       for (let i = 0; i < 40 && m.cancels.length === 0; i++) await sleep(25);
       check(`${t} an aborted request rejects (${why})`, why !== "resolved");
-      check(`${t} …and the plugin gets a cancel frame for it`, m.cmds.includes("exportNode") && m.cancels.length === 1);
+      check(`${t} …and the plugin gets a cancel frame for it`, sent(m).includes("exportNode") && m.cancels.length === 1);
 
-      for (const p of [a, b, e, m]) p.leave();
+      for (const p of [a, b, e, m]) p.terminate();
     } finally {
       rig.stop();
     }
@@ -207,7 +196,7 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
       took = Date.now() - t0;
       check(`${t} a named file while another is connected: resolveClient's no-match text within the window (${took} ms)`,
         /^no connected Figma file matches 'Bravo'\. Connected:\n {2}c1 {2}"Alpha"/.test(other) && took < 3000);
-      a.leave();
+      a.terminate();
     } finally {
       rig.stop();
     }
@@ -237,7 +226,7 @@ async function rules(): Promise<void> {
       const persistent = rig.route(PERSISTENT);
       const timedOut = await failure(persistent.request("exportNode", { nodeId: "1:2" }, { timeoutMs: 1200 }));
       check("[stall] a persistent route never stall-checks: the export runs to its timeout", /did not answer 'exportNode' within 1s/.test(timedOut));
-      m.leave();
+      m.terminate();
     } finally {
       rig.stop();
     }
@@ -249,7 +238,7 @@ async function rules(): Promise<void> {
       const viaDaemon = await failure(rig.route({ connectWaitMs: 1000, oneShot: true, stallMs: 300 }).request("exportNode", { nodeId: "1:2" }, { timeoutMs: 1200 }));
       check("[stall] one-shot through a daemon: no stall check (its connection is warm), the export runs to its timeout",
         /did not answer 'exportNode' within 1s/.test(viaDaemon));
-      m.leave();
+      m.terminate();
     } finally {
       rig.stop();
     }
@@ -284,7 +273,7 @@ async function rules(): Promise<void> {
     const rig = await ownRig();
     try {
       const route = rig.route({ connectWaitMs: 5000, oneShot: true });
-      setTimeout(() => { void plugin(rig.port, "Alpha").then((p) => { setTimeout(() => p.leave(), 300); }); }, 200);
+      setTimeout(() => { void plugin(rig.port, "Alpha").then((p) => { setTimeout(() => p.terminate(), 300); }); }, 200);
       const c = await route.connect();
       check(`[connect] connect() waits for the first file and says how long (${c.waitedMs} ms)`, c.waitedMs >= 150 && c.waitedMs < 3000);
       check("[connect] …and is spent once: a second connect() waits no more", (await route.connect()).waitedMs === c.waitedMs);
