@@ -28,12 +28,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as LAYOUT from "./project-layout.ts";
-// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts) — the tiers below pick
-// from it rather than restating them, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
+// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts); a read's own tier comes from
+// read-plan.ts, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout, MAX_TIMER_MS } from "./timeouts.ts";
+import { TIMEOUTS, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
@@ -41,7 +41,7 @@ import type { Bridge, ClientRow, ProgressTick } from "./server-core.ts";
 // The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
 // from it, so this file cannot read a reply field the plugin never sends (a hand-mirror once
 // declared a top-level `frames` that did not exist, and two hints silently never printed).
-import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary, ScreenReply } from "./commands.ts";
+import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary } from "./commands.ts";
 // Type-only (erased): cli() loads server-core itself, lazily — see above.
 import type * as ServerCore from "./server-core.ts";
 // node-id.ts is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
@@ -54,11 +54,13 @@ import { toNodeId } from "./node-id.ts";
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
-import type { Stamped } from "./write-out.ts";
 import { stampSource } from "./source-stamp.ts";
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
 import type { ReadOptName } from "./read-opts.ts";
+// What a pull SENDS — command, arguments, budget, label — is the read plan's, shared with the MCP export tools.
+import { planRead } from "./read-plan.ts";
+import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScope } from "./read-plan.ts";
 // daemon.ts holds the bridge open across invocations. Every ordinary command below asks it for a
 // connection FIRST and falls back to opening its own bridge — so the one-shot behaviour is unchanged
 // when no daemon is running, and no command needs to know which mode it is in.
@@ -247,7 +249,6 @@ function usageText(): string {
 
 const plog = (m: string) => console.error("[dtwin] " + m);
 const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => OUT.writeJson(dir, name, obj, quiet, plog);
-const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"], scale?: number) => OUT.writeScreenshot(dir, r, plog, { scale });
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
 // COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
@@ -450,9 +451,10 @@ function readArgs(args: string[]) {
   const timeoutSec = Number(timeoutArg);
   if (timeoutArg !== undefined && !(timeoutSec > 0 && timeoutSec <= MAX_TIMEOUT_SEC)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
   // One override, applied to every budget below — spelling the `--timeout` conversion per budget is how
-  // the list ops came to be missed by the flag in the first place.
+  // the list ops came to be missed by the flag in the first place. A read's own budget (by scope) is the
+  // read plan's (read-plan.ts); `timeoutOverrideMs` is what it is handed, and absent without the flag.
   const overrideMs = timeoutSec > 0 ? timeoutSec * 1000 : undefined;
-  const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
+  const timeoutOverrideMs = overrideMs;
   // The list ops get their own budget, and --timeout raises it too — they are cheap RELATIVE to an
   // export, not fast (see TIMEOUTS.list). Without this the command you are told to run FIRST would be
   // the first to fail on the big files where looking before you pull is the whole point, with no flag to
@@ -514,7 +516,7 @@ function readArgs(args: string[]) {
   const daemonCmdsGiven = DAEMON_CMDS.filter((f) => args.includes(f));
   const tokenCmdsGiven = TOKEN_CMDS.filter((f) => args.includes(f));
 
-  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json, listCmd, userOutDir, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven };
+  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, timeoutOverrideMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json, listCmd, userOutDir, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven };
 }
 
 export type ParsedArgs = ReturnType<typeof readArgs>;
@@ -535,6 +537,27 @@ function outDirWarning(userOutDir: string | undefined, exists: (p: string) => bo
     ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
     ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`;
 }
+
+// The read a command line names, as the read plan's scope. Meaningful once the scope guards in argConflict
+// have passed (one scope at most) and for a command that reads; an index command reads nothing (cliReadPlan).
+function readScope(p: ParsedArgs): ReadScope {
+  if (p.screenshotId) return { kind: "screenshot", nodeId: p.screenshotId, scale: p.scale };
+  if (p.asLibrary) return { kind: "library", name: p.asLibrary };
+  if (p.nodeId) return { kind: "node", nodeId: p.nodeId };
+  if (p.selection) return { kind: "selection" };
+  if (p.designSystemOnly) return { kind: "designSystem" };
+  return { kind: "pages", allPages: p.allPages, pages: p.pageSel };
+}
+
+// What this command line SENDS for its read (read-plan.ts — the same plan the MCP export tools send), with
+// --timeout as its budget; null for a command that reads no design (an index, daemon or token command).
+function cliReadPlan(p: ParsedArgs): ReadPlan | ReadRefusal | null {
+  if (p.listCmd || p.childrenId || p.listLibraries || p.whoami || p.listClients || p.daemonCmd || p.tokenCmd) return null;
+  return planRead(readScope(p), p.readOpts, { timeoutMs: p.timeoutOverrideMs });
+}
+
+// A refusal's options, as the flags that gave them.
+const flagsOf = (r: ReadRefusal): string[] => READ_OPTS.filter((o) => r.refused.includes(o.name)).map((o) => o.flag);
 
 // The combination guards: the first refusal's message, or null when the flags make one command.
 function argConflict(p: ParsedArgs): string | null {
@@ -564,12 +587,17 @@ function argConflict(p: ParsedArgs): string | null {
   if (screenshotId && indexCmds.length) {
     return `--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`;
   }
+  // Which read options this read does not take is the read plan's to say (read-opts.ts `scopes`); the
+  // wording, and where in this order it is said, stay here. Asked here, past the scope guards, so the read
+  // the command line names is one scope.
+  const plan = planRead(readScope(p), p.readOpts);
+  const refusedFlags = "refused" in plan ? flagsOf(plan) : [];
   // Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
   // comment above), so any of them here would be silently ignored exactly as they would on a list command.
-  if (screenshotId && readOptFlagsGiven.length) {
-    const many = readOptFlagsGiven.length > 1;
+  if (screenshotId && refusedFlags.length) {
+    const many = refusedFlags.length > 1;
     const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
-    return `${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`;
+    return `${refusedFlags.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`;
   }
 
   // --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
@@ -618,13 +646,12 @@ function argConflict(p: ParsedArgs): string | null {
   // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
   // silent-loss class, same refusal. --variant-visuals is the ONE exception: it enriches the
   // component catalog itself (findAllWithCriteria for COMPONENT_SET/COMPONENT), which --design-system
-  // and --as-library both build, so it is genuinely live here — excluded from the guard below and
-  // forwarded explicitly a few lines down.
-  const dsGuardFlags = readOptFlagsGiven.filter((f) => f !== "--variant-visuals");
-  if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
-    const many = dsGuardFlags.length > 1;
+  // and --as-library both build, so it is genuinely live here — its row lists both scopes, so the plan
+  // forwards it and refuses the rest.
+  if ((designSystemOnly || asLibrary) && refusedFlags.length) {
+    const many = refusedFlags.length > 1;
     const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-    return `${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`;
+    return `${refusedFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`;
   }
 
   // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
@@ -1124,14 +1151,15 @@ async function listIndexCmd({ send, finish }: Session, childrenId: string | null
 // --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
 // see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
 // it sits next to, so it gets its own branch rather than joining their print-only one.
-async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, screenshotId: string, scale: number | undefined, outDir: string, exportTimeoutMs: number): Promise<void> {
+async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, plan: PlanOf<"screenshot">, outDir: string): Promise<void> {
   console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-  const { reply: r } = await send("screenshot", { nodeId: screenshotId, ...ifDefined("scale", scale) }, exportTimeoutMs);
+  const r = stampSource(await sendPlan(send, plan));
   for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
   // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
   // string: those can disagree, and a printed path that
   // finds nothing is worse than no path at all.
-  const shot = timedWrite(() => writeScreenshot(outDir, r, scale));
+  const scale = plan.args.scale;
+  const shot = timedWrite(() => OUT.writeAny(outDir, r, plog, { scale }));
   const ref = shot.reference || r.reference;
   if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
   // The node's size, the render scale and the PNG's own pixel size. Each is omitted when its
@@ -1146,10 +1174,12 @@ async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, sc
   finish();
 }
 
+// A read plan, sent: its command, arguments and budget (read-plan.ts).
+const sendPlan = <C extends ReadCmd>(send: Send, plan: PlanOf<C>): Promise<Sent<C>> => send(plan.cmd, plan.args, plan.timeout);
+
 // A pull: one node, the selection, a library catalog, the design system alone, or pages — written to outDir.
-async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed: ParsedArgs): Promise<void> {
-  const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, pageSel, exportTimeoutMs, outDir } = parsed;
-  const mode = asLibrary ? `library "${asLibrary}"` : nodeId ? `node ${nodeId}` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
+async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: Exclude<ReadPlan, PlanOf<"screenshot">>, parsed: ParsedArgs): Promise<void> {
+  const { allPages, outDir } = parsed;
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
@@ -1157,7 +1187,7 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed
     console.error("[dtwin] note: --all-pages deep-serializes EVERY frame on EVERY page and can exceed 15 min on a large file.");
     console.error("[dtwin]       prefer: --list  then  --page <id>   (repeatable, e.g. --page 1:2 --page 3:4)");
   }
-  console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
+  console.error(`[dtwin] plugin connected — pulling ${plan.label}… (timeout ${Math.round(plan.timeout / 1000)}s)`);
 
   // WHICH connected Figma file this pull talked to — the client the bridge's own
   // resolveClient() picked for --client, handed back with the reply (server-core requestWithClient;
@@ -1166,43 +1196,16 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed
   // only ever report whichever file's export happened to sort first, attributing every screen to it.
   // Stamped onto the result by source-stamp.ts's stampSource before it reaches write-out.ts, which
   // persists it onto the screen JSON and its index row. Unstamped (never guessed) when a daemon too old
-  // to relay the client answered.
-
-  if (nodeId) {
-    // Same writer the MCP figma_export_url tool uses (write-out.ts's writeScreen), so a CLI --node
-    // pull and an MCP pull of the same node land in identical shape.
-    const r: Stamped<ScreenReply> = stampSource(await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
-    timedWrite(() => OUT.writeScreen(outDir, r, plog));
-  } else if (selection) {
-    // Same writer as --node above — routing both through write-out.ts's writeScreen means a
-    // selection pull and a --node pull can never drift into two slightly different write shapes
-    // (writeScreen skips variables.json when the result carries none, and prints a summary).
-    const r: Stamped<ScreenReply> = stampSource(await send("exportSelection", { ...readOpts }, exportTimeoutMs));
-    timedWrite(() => OUT.writeScreen(outDir, r, plog));
-  } else if (asLibrary) {
-    // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
-    // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
-    const { reply: r } = await send("exportLibrary", { asLibrary, ...ifDefined("variantVisuals", readOpts.variantVisuals) }, exportTimeoutMs);
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  } else if (designSystemOnly) {
-    const { reply: r } = await send("exportDesignSystem", ifDefined("variantVisuals", readOpts.variantVisuals), exportTimeoutMs);
-    // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
-    // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
-    // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
-    // writeDesignSystem persists to hygiene.json — not a `manifest.warnings` field that would be
-    // silently dropped by the split, both here and via the MCP writeToDisk path.
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  } else {
-    const r = stampSource(await send("exportFull", { allPages, ...(pageSel.length ? { page: pageSel } : {}), ...readOpts }, exportTimeoutMs));
-    // Route through the SAME split writer the MCP export tools use (write-out.ts's writeExport), so a
-    // CLI pull and an MCP pull land in identical shape — the split described in this file's own header
-    // comment and asserted by the harness's write-out tests, not r.designSystem written flat to
-    // design-system.json.
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  }
+  // to relay the client answered. A catalog's writers never read it.
+  const r = stampSource(await sendPlan(send, plan));
+  // The SAME writer the MCP export tools use (write-out.ts's writeAny), so a CLI pull and an MCP pull of
+  // the same read land in identical shape: a screen (--node / --selection) through writeScreen, a library
+  // catalog (routed on the plugin's own `source.role`, under libraries/<slug>-<fileKey8>/ — it can never
+  // overwrite design-system/), the design system alone or a page walk through writeExport's split. The
+  // limited-library-variables note of a --design-system pull rides in designSystem.hygiene (see collect.ts),
+  // which writeDesignSystem persists to hygiene.json.
+  timedWrite(() => OUT.writeAny(outDir, r, plog));
+  if ("designSystem" in r) printHygiene(r);
 
   for (const l of doneLine()) console.error("[dtwin] " + l);
   finish(); // NOT process.exit — see close() in server-core.ts (a daemon-routed run has nothing to close)
@@ -1210,7 +1213,7 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed
 
 // Routes the parsed command line to the one command it names.
 async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
-  const { listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, listTimeoutMs, exportTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
+  const { listOnly, listDepth, childrenId, listLibraries, whoami, listClients, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
   // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
   // so unlike everything below they need no bridge, no daemon and no plugin. Running them before
   // daemon.connect() also means they still work while a daemon holds the port.
@@ -1228,8 +1231,11 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   if (whoami) return whoamiCmd(session);
   if (listLibraries) return listLibrariesCmd(session, json, listTimeoutMs);
   if (listOnly || childrenId) return listIndexCmd(session, childrenId, listDepth, listTimeoutMs);
-  if (screenshotId) return screenshotCmd(session, screenshotId, scale, outDir, exportTimeoutMs);
-  return exportCmd(session, parsed);
+  const plan = cliReadPlan(parsed);
+  // parseArgs/validateArgs refused a read option this read does not take before anything was opened.
+  if (!plan || "refused" in plan) throw new Error("internal: no read plan for this command line");
+  if (plan.cmd === "screenshot") return screenshotCmd(session, plan, outDir);
+  return exportCmd(session, plan, parsed);
 }
 
 // The CLI entry. Runs ONLY when this file is the process entry (see the guard at the bottom): routing
@@ -1382,4 +1388,4 @@ if (import.meta.main) runCli(async (argv) => { await cli(argv); return Number(pr
 // formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
 // failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
 // needs a live plugin, so the renderer is driven directly.
-export { parseArgs, readArgs, validateArgs, writeJson, formatLibraries, formatClients, formatDone, UsageError };
+export { parseArgs, readArgs, validateArgs, cliReadPlan, writeJson, formatLibraries, formatClients, formatDone, UsageError };

@@ -776,18 +776,15 @@ void (async () => {
   const pull = await import("../bridge/src/figma-pull.ts");
   const parse = (argv: string[]) => pull.parseArgs(argv);
   const usage = (argv: string[]) => { try { parse(argv); return null; } catch (e) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + (e as Error).message; } };
-  // Anti-drift: --node and --selection must both write through write-out.js's shared writeScreen
-  // helper, not an ad hoc trio of writeJson/writeAssets calls each branch could quietly reinvent.
+  // Anti-drift: every pull writes through write-out.ts's writeAny — the writer the MCP export tools use —
+  // never an ad hoc trio of writeJson/writeAssets calls a branch could quietly reinvent. That the files are
+  // what writeAny makes of the same reply is read-plan-e2e.test.ts's, end to end.
   const pullSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
-  ok("[args] --node dispatch routes through the shared OUT.writeScreen writer", (() => {
-    const i = pullSrc.indexOf("if (nodeId) {");
-    const j = pullSrc.indexOf("} else if (selection) {");
-    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
-  })());
-  ok("[args] --selection dispatch ALSO routes through OUT.writeScreen (no more ad hoc write trio)", (() => {
-    const i = pullSrc.indexOf("} else if (selection) {");
-    const j = pullSrc.indexOf("} else if (asLibrary) {");
-    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
+  ok("[args] a pull (--node, --selection, a catalog, pages) writes through the shared OUT.writeAny", (() => {
+    const i = pullSrc.indexOf("async function exportCmd(");
+    const j = pullSrc.indexOf("// Routes the parsed command line");
+    const body = i !== -1 && j > i ? pullSrc.slice(i, j) : "";
+    return (body.match(/OUT\.writeAny\(outDir, r, plog\)/g) || []).length === 1 && !/OUT\.write(Screen|Export|Json|Assets)\(/.test(body);
   })());
   // `dtwin list`'s own "next step" hint must not recommend `dtwin pull design --page/--node
   // <id>` — the outDir trap, printed by the tool itself right after the command that
@@ -816,8 +813,8 @@ void (async () => {
   ok("[args] --timeout= (empty) is an ERROR", /positive number/.test(usage(["--timeout="]) || ""));
   ok("[args] --timeout 0 is rejected", /positive number/.test(usage(["--timeout", "0"]) || ""));
   ok("[args] --timeout abc is rejected", /positive number/.test(usage(["--timeout", "abc"]) || ""));
-  ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).exportTimeoutMs === 600000);
-  ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).exportTimeoutMs === 600000);
+  ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).timeoutOverrideMs === 600000);
+  ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).timeoutOverrideMs === 600000);
   // A near-miss flag must not be read as this one: `startsWith("--timeout")` would swallow it.
   // It is refused outright (unknown flag) — stronger than "parsed, but not as --timeout".
   ok("[args] an unrelated --timeout-ish flag is not consumed as --timeout",
@@ -1121,8 +1118,10 @@ void (async () => {
     return r.status === 0 && /--client/.test(r.stdout) && /list clients/.test(r.stdout);
   })());
   ok("[args] default timeout scales with the work (selection < page < all-pages)", (() => {
-    const s = parse(["--selection"]).exportTimeoutMs, p = parse([]).exportTimeoutMs, a = parse(["--all-pages"]).exportTimeoutMs;
-    return s === 120000 && p === 300000 && a === 900000 && s < p && p < a;
+    // The tier is the read plan's (read-plan.ts); the CLI hands it --timeout only, absent here.
+    const budget = (args: string[]): number => { const p = pull.cliReadPlan(parse(args)); return p && "timeout" in p ? p.timeout : -1; };
+    const s = budget(["--selection"]), p = budget([]), a = budget(["--all-pages"]);
+    return parse([]).timeoutOverrideMs === undefined && s === 120000 && p === 300000 && a === 900000 && s < p && p < a;
   })());
 
   // outDir is positional, so every value-taking flag above must be excluded from the search — the
@@ -1247,7 +1246,7 @@ void (async () => {
   // Read options are ADDITIVE, not scopes — they must keep composing with any one scope flag.
   ok("[args] read options still compose with a scope flag", !!((() => {
     const r = parse(["--page", "1:2", "--no-assets", "--css", "--timeout", "60"]);
-    return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.exportTimeoutMs === 60000;
+    return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.timeoutOverrideMs === 60000;
   })()));
   // …but only with a SCOPE flag. The list ops emit structural fields only — they never serialize a
   // node, so every read option is inert there and must not be discarded without a word. Refused as a

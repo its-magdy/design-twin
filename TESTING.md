@@ -154,7 +154,14 @@ bun test/bridge-route.test.ts  # expect: all checks pass, exit 0 — the route e
                                  # behind a real daemon socket (fake WS plugins, ephemeral ports, a private XDG_RUNTIME_DIR);
                                  # then the rules it owns: the connect window spent once, the stall check, the never-connected
                                  # guard, and which commands hear progress ticks
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun test/read-plan.test.ts     # expect: all checks pass, exit 0 — the read plan (read-plan.ts): each read scope's command,
+                                 # arguments, budget and label, the read options each READ_OPTS row's `scopes` admit (and the
+                                 # refusal of the rest), --timeout through the CLI's parsed command line; no bridge, no port
+bun test/read-plan-e2e.test.ts # expect: all checks pass, exit 0 — what BOTH front-ends send for every read, end to end: the
+                                 # real dtwin process and the real MCP server through a recording daemon (FIGMA_BRIDGE_PORT=8789's
+                                 # socket — run it after cli-pull, never beside it), each MCP tool's declared read options, and
+                                 # the CLI's files equal to writeAny's for the same reply
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed

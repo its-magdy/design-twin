@@ -1150,7 +1150,12 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 // having to know which writer its own command implies. Each member of ExportReply carries a field
 // the others do not — `screen` (a screen pull), `reference` (a screenshot), otherwise a catalog with
 // or without a page walk — so `in` narrows the union to the writer's own reply type.
-function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined; keepPrev?: boolean | undefined; replaced?: string[] | undefined }) {
+// Overloaded so a caller that knows its reply's kind gets that writer's own result back (the CLI prints a
+// screenshot's path and pixel size from it); a caller holding the union gets the union.
+type WriteAnyOpts = { scale?: number | undefined; keepPrev?: boolean | undefined; replaced?: string[] | undefined };
+function writeAny(outDir: string | null | undefined, r: Stamped<ScreenshotReply>, log?: Log, opts?: WriteAnyOpts): ReturnType<typeof writeScreenshot>;
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: WriteAnyOpts): ReturnType<typeof writeScreen> | ReturnType<typeof writeScreenshot> | ReturnType<typeof writeExport>;
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: WriteAnyOpts) {
   if ("screen" in r) return writeScreen(outDir, r, log, opts && opts.keepPrev !== undefined ? { keepPrev: opts.keepPrev } : undefined);
   if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
   return writeExport(outDir, r, log, opts && (opts.keepPrev !== undefined || opts.replaced) ? { keepPrev: opts.keepPrev, replaced: opts.replaced } : undefined);
