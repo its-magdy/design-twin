@@ -59,9 +59,15 @@ const ROWS: Row[] = [
   { name: "Opacity/Disabled", hexes: [], css: "--Opacity-Disabled", tw: "--figma-opacity-disabled", native: "opacityDisabled", twSpellings: ["var(--figma-opacity-disabled)"] },
 ];
 const cssSpellings = (r: Row): string[] => [r.css, `var(${r.css})`, `var(${r.css}, #000)`];
-// a native token is read through its collection's type / instance / theme extension: the member is the token
-const nativeSpellings = (r: Row): string[] => [r.native, `ColorsTokens.${r.native}`, `LocalColorsTokens.current.${r.native}`,
-  `Theme.of(context).extension<ColorsTokens>()!.${r.native}`, `colorsTokens.light.${r.native}`, `SpacingTokens.${r.native}`];
+// A native token is read through what its platform's file declares — a collection's type, instance or theme extension;
+// the member is the token. Each platform's own reading paths:
+const NATIVE_PATHS: Record<"swiftui" | "compose" | "flutter" | "react-native", string[]> = {
+  swiftui: ["ColorsTokens.light", "SpacingTokens"],
+  compose: ["LocalColorsTokens.current", "ColorsTokensDark", "SpacingTokens"],
+  flutter: ["Theme.of(context).extension<ColorsTokens>()!", "ColorsTokens.light", "SpacingTokens"],
+  "react-native": ["colorsTokens.light", "spacingTokens"],
+};
+const nativeSpellingsOf = (platform: keyof typeof NATIVE_PATHS) => (r: Row): string[] => [r.native, ...NATIVE_PATHS[platform].map((p) => `${p}.${r.native}`)];
 
 const tokensCss = toCSS(ds);
 const themeCss = must(toTailwind(ds)).text;
@@ -80,13 +86,17 @@ console.log("round trip — every emitted name is recognised under every builder
 for (const r of ROWS) {
   check(`[css] ${r.css} is the definition of ${cssSpellings(r).join(" | ")}`, cssSpellings(r).every((s) => namesToken(r.css, s, { stylesheet: true })));
   check(`[tailwind] ${r.tw} is the definition of ${r.twSpellings.join(" | ")}`, r.twSpellings.every((s) => namesToken(r.tw, s, { stylesheet: true })));
-  check(`[native] ${r.native} is the definition of its qualified references`, nativeSpellings(r).every((s) => namesToken(r.native, s, { stylesheet: false })));
+  for (const platform of ["swiftui", "compose", "flutter", "react-native"] as const) {
+    const spell = nativeSpellingsOf(platform)(r);
+    check(`[native/${platform}] ${r.native} in the generated file is the definition of ${spell.slice(1).join(" | ")}`,
+      spell.every((s) => namesToken(r.native, s, { stylesheet: false, source: NATIVE[platform].text })));
+  }
 }
 // A colliding variable's key tag is stripped from both sides on every target, so the tagged definition counts for the
 // name it was disambiguated from — as it always did on the web (`-<tag>`), now in native code too (`_<tag>`).
 check("[key] a key-tagged definition is the definition of its untagged name, on the web and in native code",
   namesToken("--spacing-figma-space-4-e26d506e", "p-figma-space-4", { stylesheet: true }) && namesToken("--Space-4-e26d506e", "var(--Space-4)", { stylesheet: true })
-  && namesToken("space4_e26d506e", "SpacingTokens.space4", { stylesheet: false }));
+  && namesToken("space4_e26d506e", "SpacingTokens.space4", { stylesheet: false, source: NATIVE.compose.text }));
 check("[tailwind] a colour utility needs exactly the custom property theme.css declares", (() => {
   const have = new Set([...declared(themeCss)].map((n) => n.toLowerCase()));
   return ROWS.filter((r) => r.hexes.length).every((r) => r.twSpellings.every((s) => requiredCustomProps(s).every((p) => have.has(p))));
@@ -102,9 +112,9 @@ console.log("round trip — the emitted files' colour lines are definitions, not
 const files: Array<{ rel: string; text: string; spell: (r: Row) => string[] }> = [
   { rel: "tokens.css", text: tokensCss, spell: cssSpellings },
   { rel: "theme.css", text: themeCss, spell: (r) => r.twSpellings },
-  { rel: "DesignTokens.kt", text: NATIVE.compose.text, spell: nativeSpellings },
-  { rel: "design_tokens.dart", text: NATIVE.flutter.text, spell: nativeSpellings },
-  { rel: "designTokens.ts", text: NATIVE["react-native"].text, spell: nativeSpellings },
+  { rel: "DesignTokens.kt", text: NATIVE.compose.text, spell: nativeSpellingsOf("compose") },
+  { rel: "design_tokens.dart", text: NATIVE.flutter.text, spell: nativeSpellingsOf("flutter") },
+  { rel: "designTokens.ts", text: NATIVE["react-native"].text, spell: nativeSpellingsOf("react-native") },
 ];
 for (const f of files) {
   const code = [{ rel: f.rel, text: scanText(f.rel, f.text) }];
@@ -125,20 +135,32 @@ check("[near] a key-tagged name is not a different number's", !namesToken("--spa
   && !namesToken("--spacing-figma-space-4", "gap-y-figma-space-40", { stylesheet: true }));
 check("[near] a tag that is not 8 hex digits is part of the name", !namesToken("--spacing-figma-space-4-headline", "space-4", { stylesheet: true })
   && !namesToken("space4_e26d506", "space4", { stylesheet: false }));
-check("[near] a qualified native reference names its LAST member only", !namesToken("brand600", "ColorsTokens.brand6", { stylesheet: false })
-  && !namesToken("colorsTokens", "colorsTokens.light.brand600", { stylesheet: false }) && !namesToken("light", "colorsTokens.light.brand600", { stylesheet: false }));
-check("[near] a member that is a styling property is never a definition by the member rule — a component's own colour argument stays a use",
-  (() => {
-    const obj = literalUses([{ rel: "Card.tsx", text: "const styles = {\n  title: {\n    color: \"#5B5FC7\",\n  },\n};" }], "#5B5FC7", ["ColorsTokens.color"]);
-    const compose = literalUses([{ rel: "Card.kt", text: "Text(\"Hi\", color = Color(0xFF5B5FC7))" }], "0xFF5B5FC7", ["LocalColorsTokens.current.color"]);
-    const swift = literalUses([{ rel: "Card.tsx", text: "<Icon tintColor: \"#5B5FC7\" />" }], "#5B5FC7", ["theme.colors.tintColor"]);
-    return obj.usedIn.join() === "Card.tsx" && compose.usedIn.join() === "Card.kt" && swift.usedIn.join() === "Card.tsx"
-      && !namesToken("background", "AppTheme.background", { stylesheet: false }) && !namesToken("fill", "tokens.fill", { stylesheet: false });
-  })());
-check("[member] a Material colour-scheme slot is still its definition (`primary = Color(…)` for colorScheme.primary)",
-  literalUses([{ rel: "Theme.kt", text: "val Light = lightColorScheme(\n  primary = Color(0xFF5B5FC7),\n)" }], "0xFF5B5FC7", ["MaterialTheme.colorScheme.primary"]).usedIn.length === 0);
+const TOKEN_FILE = "object ColorsTokens {\n  val brand600 = Color(0xFF5B5FC7)\n}";
+check("[near] a qualified native reference names its LAST member only", !namesToken("brand600", "ColorsTokens.brand6", { stylesheet: false, source: TOKEN_FILE })
+  && !namesToken("ColorsTokens", "ColorsTokens.brand600", { stylesheet: false, source: TOKEN_FILE }) && !namesToken("light", "colorsTokens.light.brand600", { stylesheet: false, source: "const colorsTokens = {}" }));
+check("[member] a member counts only in a file that declares the reference's container", namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, source: TOKEN_FILE })
+  && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, source: "Text(\"Hi\")" }) && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false })
+  // a call argument is not a container: a component's own `val context` does not make it a token file
+  && !namesToken("brand600", "Theme.of(context).extension<ColorsTokens>()!.brand600", { stylesheet: false, source: "val context = LocalContext.current" }));
+// A generated token line and a component's styling argument are the same syntax; in a component (no container declared)
+// the member rule never applies, whatever the member is called.
+check("[near] a component's own styling argument stays a use, whatever member the codeToken ends in", (() => {
+  const use = (rel: string, text: string, lit: string, token: string): boolean => literalUses([{ rel, text }], lit, [token]).usedIn.join() === rel;
+  return use("Card.tsx", "const styles = {\n  title: {\n    color: \"#5B5FC7\",\n  },\n};", "#5B5FC7", "ColorsTokens.color")
+    && use("Card.kt", "Text(\"Hi\", color = Color(0xFF5B5FC7))", "0xFF5B5FC7", "LocalColorsTokens.current.color")
+    && use("Card.kt", "Text(\"Hi\", color = Color(0xFF5B5FC7))", "0xFF5B5FC7", "ColorsTokens.color_e26d506e")
+    && use("Card.tsx", "const s = StyleSheet.create({\n  box: {\n    backgroundColor: \"#5B5FC7\",\n  },\n});", "#5B5FC7", "ColorsTokens.backgroundColor_e26d506e")
+    && use("card.dart", "decoration: BoxDecoration(gradient: LinearGradient(\n  colors: [Color(0xFF5B5FC7), Colors.white],\n)),", "0xFF5B5FC7", "ColorsTokens.colors")
+    && use("Card.tsx", "const s = {\n  hero: {\n    backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  },\n};", "#5B5FC7", "ColorsTokens.backgroundImage");
+})());
+check("[near] even in a token file, a styling-property member (key tag stripped) is refused — the bare name still works",
+  !namesToken("color", "ColorsTokens.color", { stylesheet: false, source: TOKEN_FILE }) && !namesToken("color", "ColorsTokens.color_e26d506e", { stylesheet: false, source: TOKEN_FILE })
+  && !namesToken("backgroundColor", "ColorsTokens.backgroundColor", { stylesheet: false, source: TOKEN_FILE }) && namesToken("color", "color", { stylesheet: false }));
+check("[member] a hand-written token object is its own definition (`object AppColors { val primary = … }` for AppColors.primary)",
+  literalUses([{ rel: "Theme.kt", text: "object AppColors {\n  val primary = Color(0xFF5B5FC7)\n}" }], "0xFF5B5FC7", ["AppColors.primary"]).usedIn.length === 0);
 check("[member] a comma-separated list of qualified references names each member",
-  namesToken("brand600", "ColorsTokens.brand600, ColorsTokens.accent", { stylesheet: false }) && namesToken("accent", "ColorsTokens.brand600,ColorsTokens.accent", { stylesheet: false }));
+  namesToken("brand600", "ColorsTokens.brand600, ColorsTokens.accent", { stylesheet: false, source: TOKEN_FILE })
+  && namesToken("accent", "ColorsTokens.brand600,ColorsTokens.accent", { stylesheet: false, source: TOKEN_FILE }));
 check("[near] a decimal in a utility is not a member reference", !namesToken("5", "p-1.5", { stylesheet: false }));
 check("[near] a line with a definition AND a usage of the literal is not a definition line", (() => {
   const code = [{ rel: "theme.css", text: ":root { --color-figma-brand-600: #5b5fc7; } .x { color: #5b5fc7 }" }];

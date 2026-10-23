@@ -2648,21 +2648,38 @@ function tokenParts(codeToken) {
   }
   return out;
 }
-var MEMBER = /[\w)\]>!?]\.([A-Za-z_$][\w$]*)$/;
 var STYLE_PROPERTY = /^(color|background|foreground|fill|stroke|tint|border|outline|shadow|.*color)$/;
-function memberOf(part) {
-  const m = MEMBER.exec(part);
-  const member = m?.[1];
-  if (!member || /(^|[^\w])\d+\.\w+$/.test(part) || STYLE_PROPERTY.test(alnumKey(member))) return null;
-  return member;
+var IDENT = /^[A-Za-z_$][\w$]*$/;
+function memberRefs(codeToken) {
+  const out = [];
+  for (const raw of codeToken.split(/[\s,]+/)) {
+    const part = raw.trim().replace(/!$/, "");
+    const dot = part.lastIndexOf(".");
+    const member = part.slice(dot + 1);
+    if (dot <= 0 || !IDENT.test(member) || /(^|[^\w])\d+\.\w+$/.test(part)) continue;
+    if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
+    const path17 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
+    const containers = [...path17.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3);
+    if (containers.length) out.push({ member, containers });
+  }
+  return out;
+}
+var DECLARES = /\b(?:class|struct|object|interface|enum|protocol|typealias|type|val|var|let|const)\s+([A-Za-z_$][\w$]*)/g;
+var declaredCache = /* @__PURE__ */ new Map();
+function declaredIn(source) {
+  let s = declaredCache.get(source);
+  if (s === void 0) {
+    if (declaredCache.size > 64) declaredCache.clear();
+    s = new Set([...source.matchAll(DECLARES)].map((m) => m[1] ?? ""));
+    declaredCache.set(source, s);
+  }
+  return s;
 }
 function tokenCandidates(codeToken) {
   const out = [codeToken];
   for (const p of tokenParts(codeToken)) {
     out.push(p.text);
     if (p.prop) out.push(p.prop);
-    const m = memberOf(p.text);
-    if (m) out.push(m);
   }
   return [...new Set(out)];
 }
@@ -2670,7 +2687,11 @@ function namesToken(declared, codeToken, opts) {
   if (opts.stylesheet && !declared.startsWith("--")) return false;
   const exact = alnumKey(declared), core = tokenCore(declared);
   if (!exact) return false;
-  return tokenCandidates(codeToken).some((c) => exact === alnumKey(c) || !!core && core === tokenCore(c));
+  const same = (c) => exact === alnumKey(c) || !!core && core === tokenCore(c);
+  if (tokenCandidates(codeToken).some(same)) return true;
+  const source = opts.source;
+  if (source === void 0) return false;
+  return memberRefs(codeToken).some((m) => same(m.member) && m.containers.some((c) => declaredIn(source).has(c)));
 }
 var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 
@@ -2821,15 +2842,15 @@ function arbitraryPx(source) {
   return found;
 }
 var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-function declaresTokenAt(line, at, codeToken, stylesheet) {
+function declaresTokenAt(line, at, codeToken, file) {
   const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet });
+  return !!m && namesToken(m[2] ?? "", codeToken, file);
 }
-function definesAny(line, literal, codeTokens, stylesheet) {
+function definesAny(line, literal, codeTokens, file) {
   let at = line.indexOf(literal);
   if (at === -1) return false;
   while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, file))) return false;
     at = line.indexOf(literal, at + literal.length);
   }
   return true;
@@ -2842,8 +2863,8 @@ function literalUses(code, literal, codeTokens, exempt = []) {
     if (!f.text.includes(literal)) continue;
     found = true;
     if (exempt.includes(f.rel)) continue;
-    const stylesheet = isStylesheet(f.rel);
-    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, stylesheet))) usedIn.push(f.rel);
+    const file = { stylesheet: isStylesheet(f.rel), source: f.text };
+    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, file))) usedIn.push(f.rel);
   }
   return { found, usedIn };
 }

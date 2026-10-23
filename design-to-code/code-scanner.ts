@@ -149,19 +149,19 @@ export function arbitraryPx(source: string): Map<number, PxHit[]> {
 // name must be the TOKEN's (token-naming.ts namesToken) — `color: #5b5fc7` inside a component declares a CSS property.
 const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
 // Is the occurrence of a literal at `at` the value of a declaration of `codeToken`?
-function declaresTokenAt(line: string, at: number, codeToken: string, stylesheet: boolean): boolean {
+function declaresTokenAt(line: string, at: number, codeToken: string, file: { stylesheet: boolean; source: string }): boolean {
   const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet }); // group 2 is not optional: set whenever the regex matched
+  return !!m && namesToken(m[2] ?? "", codeToken, file); // group 2 is not optional: set whenever the regex matched
 }
 // A line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
 // a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the
 // row being checked: `--color-surface: #1d1d1f; --color-canvas: #1d1d1f;` defines two tokens that share
 // a value, and neither definition is a "usage" of the other.
-function definesAny(line: string, literal: string, codeTokens: readonly string[], stylesheet: boolean): boolean {
+function definesAny(line: string, literal: string, codeTokens: readonly string[], file: { stylesheet: boolean; source: string }): boolean {
   let at = line.indexOf(literal);
   if (at === -1) return false;
   while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, file))) return false;
     at = line.indexOf(literal, at + literal.length);
   }
   return true;
@@ -178,8 +178,8 @@ export function literalUses(code: readonly FileText[], literal: string, codeToke
     if (!f.text.includes(literal)) continue;
     found = true;
     if (exempt.includes(f.rel)) continue;
-    const stylesheet = isStylesheet(f.rel);
-    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, stylesheet))) usedIn.push(f.rel);
+    const file = { stylesheet: isStylesheet(f.rel), source: f.text };
+    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, file))) usedIn.push(f.rel);
   }
   return { found, usedIn };
 }
