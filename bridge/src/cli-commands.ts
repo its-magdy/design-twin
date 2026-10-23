@@ -279,8 +279,7 @@ export const MCP_HELP =
   "  Run the Design Twin MCP server on stdio. This is what a .mcp.json entry points at\n" +
   "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
   "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
-  "  route through it rather than starting a second one (not on Windows yet: there they cannot use the\n" +
-  "  port until it exits) — `dtwin doctor` says who holds the port.\n\n" +
+  "  route through it rather than starting a second one — `dtwin doctor` says who holds the port.\n\n" +
   "  Its tools mirror the CLI: figma_list_clients / figma_list / figma_export_* / figma_screenshot /\n" +
   "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
   "  of node payloads inline — asset bytes are never returned inline.";
@@ -377,8 +376,7 @@ export const VERB_ROWS = [
       "  port, so while it (or the MCP server) is up a second bridge refuses to start.\n\n" +
       "  It shuts itself down after FIGMA_DAEMON_IDLE_MIN minutes without a command (default 120;\n" +
       "  0 disables), so an abandoned daemon cannot hold the port forever.\n" +
-      "  Port: 8787 by default; FIGMA_BRIDGE_PORT=8788|8789 picks another (the plugin tries all three).\n" +
-      "  Not on Windows yet: there it refuses, and one MCP session or dtwin command holds the bridge at a time.",
+      "  Port: 8787 by default; FIGMA_BRIDGE_PORT=8788|8789 picks another (the plugin tries all three).",
   },
   {
     word: "stop", to: "commands", usage: "",

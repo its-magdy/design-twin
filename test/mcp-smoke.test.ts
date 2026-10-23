@@ -24,7 +24,6 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 import type * as GetComponentMod from "../design-to-code/get-component.ts";
 import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
-import { daemonSupported } from "../bridge/src/daemon.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
@@ -293,13 +292,7 @@ void (async () => {
     const client2 = new Client({ name: "mcp-smoke-2", version: "0.0.0" });
     try {
       await client2.connect(transport2);
-      if (!daemonSupported()) {
-        // Windows: no daemon, so nothing is shared — the second session's export is a tool error saying why.
-        console.log("  (skipped: the daemon is not supported on Windows — a second session cannot route an export through this one's bridge, so there are no daemon-relayed progress frames)");
-        const held = await client2.callTool({ name: "figma_export_selection", arguments: {} });
-        ok("on Windows a second session's export is a tool error: another session holds the bridge, and sharing it is not supported there",
-          held.isError === true && /another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows/.test(firstText(held)));
-      } else {
+      {
         const seen2: Progress[] = [];
         const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
         const s0b = must(seen2[0], "first daemon-routed progress notification");
@@ -534,8 +527,7 @@ void (async () => {
 
       // Via a daemon: a second MCP server shares this one's bridge through the daemon socket;
       // its cancelled call closes that socket, the daemon abandons the request, and the plugin is told.
-      if (!daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no second session routes a call through this one's bridge to cancel)");
-      else {
+      {
         const transport3 = new StdioClientTransport({
           command: process.execPath,
           args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],

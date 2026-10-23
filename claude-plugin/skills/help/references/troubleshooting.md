@@ -33,10 +33,16 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `dtwin pull` still running, a stale `bun` process, or an MCP server from an older install (current ones
   share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process. If the
   error names a socket from an earlier dtwin version, `dtwin --stop` stops that daemon.
-- **Windows: "port … is already in use — another MCP session or dtwin command holds the bridge"**, or
-  `dtwin serve` says it is not supported → there is no daemon on Windows yet (its socket cannot be made
-  private to you there), so nothing shares the bridge: one MCP session or `dtwin` command at a time. Close the
-  other Claude Code session (or wait for the other command) and retry; the plugin reconnects on its own.
+- **Windows: `dtwin serve` says the pipe "is held by a process that could not prove it knows your bridge
+  token"** → something that is not your daemon holds the daemon's pipe name (the pipe is named from your
+  token, and every connection must prove the token first). Nothing was sent to it; commands still work,
+  one-shot. If it is not a dtwin you started under another token, `dtwin --rotate-token` moves the daemon to
+  a new pipe (then re-paste the token into the plugin).
+- **Windows: "port … is already in use" while `dtwin status` finds no daemon** → a daemon started under a
+  DIFFERENT token (e.g. another `FIGMA_BRIDGE_TOKEN`) holds the port, and its pipe cannot be found by this
+  token, so `dtwin --stop` does not reach it — end that `bun` process (or use the same token).
+- **Windows: `dtwin serve` says "no bridge token is saved yet"** → the pipe is named from the token: run any
+  command that connects (or `dtwin init`) once, so a token is saved, then `dtwin serve`.
 - **"refusing to use … for the dtwin daemon socket"**, or `dtwin status` says no daemon while one is
   running → the daemon socket lives in `$XDG_RUNTIME_DIR`, else `$TMPDIR/designtwin-<uid>/`, so two
   processes with different `XDG_RUNTIME_DIR` / `TMPDIR` see different daemons — start them from the same

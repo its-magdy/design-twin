@@ -68,13 +68,15 @@ async function ownRig(): Promise<Rig> {
   return { name: "own", port, route: (policy) => createRoute(async () => up, policy), stop: () => b.close() };
 }
 
+const DAEMON_TOKEN = "bridge-route-daemon-token";
 async function daemonRig(): Promise<Rig> {
   const { b, port } = await bridge();
   const name = sockPort++;
-  const h = await daemon.serve(servedBridge(b), { port: name, idleMin: 0, signals: false, crashHandlers: false });
-  const conn = await daemon.connect(name);
+  // The token named on both ends, so on Windows the pipe is named from it and never the user's saved one.
+  const h = await daemon.serve(servedBridge(b), { port: name, idleMin: 0, signals: false, crashHandlers: false, token: DAEMON_TOKEN });
+  const conn = await daemon.connect(name, { token: DAEMON_TOKEN });
   if (!conn) throw new Error("daemon.connect() returned null right after serve()");
-  const up = daemonUpstream(conn, () => daemon.status(name));
+  const up = daemonUpstream(conn, () => daemon.status(name, { token: DAEMON_TOKEN }));
   return { name: "daemon", port, route: (policy) => createRoute(async () => up, policy), stop: () => h.shutdown() };
 }
 
@@ -231,7 +233,7 @@ async function rules(): Promise<void> {
       rig.stop();
     }
   }
-  if (daemon.daemonSupported()) {
+  {
     const rig = await daemonRig();
     try {
       const m = await plugin(rig.port, "Mute", { exportNode: MUTE });
@@ -287,7 +289,7 @@ async function rules(): Promise<void> {
       rig.stop();
     }
   }
-  if (daemon.daemonSupported()) {
+  {
     // A daemon route spends no window up front: the daemon waits inside each request.
     const rig = await daemonRig();
     try {
@@ -303,12 +305,8 @@ void (async () => {
   try {
     console.log("contract — own bridge:");
     await contract(ownRig);
-    if (daemon.daemonSupported()) {
-      console.log("contract — daemon socket:");
-      await contract(daemonRig);
-    } else {
-      console.log("  (skipped: the daemon is not supported on Windows — there is no daemon adapter to run the contract against)");
-    }
+    console.log("contract — daemon socket:");
+    await contract(daemonRig);
     console.log("route rules:");
     await rules();
   } catch (e) {

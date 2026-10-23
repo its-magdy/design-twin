@@ -2349,25 +2349,24 @@ void (async () => {
     (await daemon.connect(D_PORT)) === null);
 
   // The port-in-use refusal (server-core portInUseMessage), per platform, on every OS: POSIX keeps its text;
-  // where no daemon can run it says another session or command holds the bridge, that sharing is not
-  // supported there, and to close the other one.
+  // Windows adds that a daemon started under another bridge token cannot be found by this one (its pipe is
+  // named from the token), so `dtwin --stop` does not reach it.
   {
     const posix = core.portInUseMessage(8787, "darwin"), win = core.portInUseMessage(8787, "win32");
     ok("[port-in-use] POSIX: another bridge or MCP server is running, stop it or use one of the other two ports",
       posix.startsWith("[bridge] port 8787 is already in use — another dtwin bridge or MCP server is running. Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports (8788, 8789) — the plugin walks all three."));
-    ok("[port-in-use] Windows: another MCP session or dtwin command holds the bridge, sharing is not supported there — close the other one",
-      /^\[bridge\] port 8787 is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows \(yet\)\. Close the other one first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports \(8788, 8789\) — the plugin walks all three\.$/.test(win));
+    ok("[port-in-use] Windows: the same, plus that a daemon under another token is out of `dtwin --stop`'s reach",
+      win.startsWith("[bridge] port 8787 is already in use — another dtwin bridge or MCP server is running. Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports (8788, 8789) — the plugin walks all three. ")
+      && /started under a different bridge token cannot be found by this one/.test(win) && /`dtwin --stop` does not reach it/.test(win));
   }
 
-  // Everything below needs a daemon to serve. Where none can run (daemon.ts daemonSupported) --serve and
-  // --stop refuse with the reason instead, which is what is checked there; the predicate itself, with an
-  // injected platform, is in daemon-sock.test.ts.
-  if (!daemon.daemonSupported()) {
-    console.log("  (skipped: the daemon is not supported on Windows — serve() and stop() refuse, so there is no socket to drive the lifecycle, queue, framing, routing and progress frames through)");
-    const refusal = async (p: Promise<unknown>): Promise<string> => { try { await p; return "resolved"; } catch (e) { return asErr(e).message; } };
-    ok("[daemon] on Windows --stop refuses with the reason, rather than reporting nothing to stop", (await refusal(daemon.stop(D_PORT))) === daemon.DAEMON_UNSUPPORTED);
-    ok("[daemon] on Windows --serve refuses with the reason, and the bridge is left alone",
-      (await refusal(daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }))) === daemon.DAEMON_UNSUPPORTED && !calls.includes("close"));
+  // Everything below drives the POSIX daemon socket directly: socket FILES (a stale one, the one removed on
+  // shutdown) and raw frames written with no handshake. On Windows the daemon is a pipe that requires the
+  // handshake first (daemon.ts, daemon-auth.ts) — its serve / connect / request / status / stop, the squatter
+  // and the unauthenticated peer are driven end to end in daemon-sock.test.ts, and the CLI and MCP suites run
+  // on it as they are.
+  if (process.platform === "win32") {
+    console.log("  (skipped on Windows: the socket-file and raw-frame checks below are POSIX's; the pipe and its handshake are daemon-sock.test.ts's)");
   } else {
     ok("[daemon] and --stop reports there was nothing to stop", (await daemon.stop(D_PORT)) === false);
 
@@ -3859,7 +3858,7 @@ void (async () => {
     // (e) the daemon. A real server-core bridge + a fake plugin behind a real daemon socket.
     // Pre-change daemon.ts ignored its client's disconnect entirely: the in-flight request ran to its
     // timeout with no cancel, and a queued one was forwarded once the one ahead of it finished.
-    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon socket for a client to leave mid-request)");
+    if (process.platform === "win32") console.log("  (skipped on Windows: drives the POSIX daemon socket with raw frames — the pipe is daemon-sock.test.ts's)");
     else {
       const { bridge: b, client: ws1 } = await connectedBridge();
       const C_PORT = 19791; // a socket name only (the bridge above has its own TCP port)
@@ -3919,7 +3918,7 @@ void (async () => {
     // `signal.aborted` check also stops B, so a daemon that forwarded an abandoned queued request still passed
     // (a daemon.ts `abandoned()` that returns false survived). This fake bridge ignores `signal` entirely:
     // only the daemon can keep B from reaching it. A is held, B's client ends while B is queued, C is the FIFO fence.
-    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon queue to drop an abandoned request from)");
+    if (process.platform === "win32") console.log("  (skipped on Windows: drives the POSIX daemon socket with raw frames — the pipe is daemon-sock.test.ts's)");
     else {
       const seenCmds: string[] = [];
       let releaseA: (() => void) | undefined;
@@ -4088,7 +4087,7 @@ void (async () => {
     // the daemon client's optional trailing `signal` (the MCP cancel via a daemon): an
     // abort closes the request's socket, so the daemon abandons it on the wire. Without it, the client
     // would let the call run to its reply and the bridge's signal would never abort.
-    if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon socket for the client's signal to close)");
+    if (process.platform === "win32") console.log("  (skipped on Windows: drives the POSIX daemon socket at a fixed name — the pipe is daemon-sock.test.ts's)");
     else {
       const S_PORT = 19792; // a socket name only: the fake bridge binds no TCP port
       const row: ClientRow = { connId: "c1", file: "Sample App", fileKey: null, page: "Home", instanceId: "fig-s", connectedAt: 1, uptimeMs: 1, identified: true, pluginVersion: null, pluginStale: null };

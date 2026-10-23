@@ -25,6 +25,7 @@
 
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import http from "node:http";
 import path from "node:path";
 import { z } from "zod";
@@ -191,11 +192,30 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
 // `refused` is daemon.sockProblem(port): the socket location is not private to this user, so no
 // daemon can be started or reached there — every command still works, one-shot. A fail, not a warn:
 // it is someone else's directory (or a loosened one) in the place this user's daemon would listen.
-// `unsupported` is daemon.DAEMON_UNSUPPORTED where daemon.daemonSupported() is false (Windows): no
-// daemon can run, so there is no socket location to check — a note quoting why, not a failure (there
-// is nothing to fix; every command works one-shot).
-function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refused?: string | null, unsupported?: string | null): Check {
-  if (unsupported) return warn("daemon", "Daemon", unsupported);
+// `tokenNote` is sharedTokenNote(): on Windows the daemon's pipe is guarded by the token alone, and the
+// token is read from somewhere other users can usually read — the line is demoted to a warning saying so
+// (a refused location stays the fail it is).
+function checkDaemon(st: DaemonStatusView | null | undefined, port: number, refused?: string | null, tokenNote?: string | null): Check {
+  const base = daemonState(st, port, refused);
+  if (!tokenNote || base.status === "fail") return base;
+  return warn("daemon", "Daemon", `${base.detail} — but ${tokenNote}`,
+    "keep the token under your profile — the default, %APPDATA%\\design-twin\\bridge-token, is — by unsetting FIGMA_BRIDGE_TOKEN_FILE / DESIGNTWIN_CONFIG_DIR (or pointing them inside your profile), then `dtwin --rotate-token`");
+}
+
+// On Windows the daemon's pipe can be opened by other users (its default security descriptor), and what
+// keeps them out is the handshake — so the pipe is exactly as private as the token FILE. %APPDATA% is per-user
+// by ACL; a file elsewhere (a --token-file / FIGMA_BRIDGE_TOKEN_FILE, or DESIGNTWIN_CONFIG_DIR, pointed at a
+// shared folder or a directory under C:\) usually inherits read access for every user. Judged by path, under the
+// profile or not: Bun cannot read a Windows ACL. Null off Windows (the socket's directory is the check there),
+// for a token from the environment (no file), and for a file inside the profile.
+function sharedTokenNote(file: string | null, profile: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== "win32" || !file || !profile) return null;
+  const rel = path.win32.relative(path.win32.resolve(profile).toLowerCase(), path.win32.resolve(file).toLowerCase());
+  if (rel !== "" && !rel.startsWith("..") && !path.win32.isAbsolute(rel)) return null;
+  return `the bridge token is read from ${file}, outside your user profile (${profile}), and on Windows the daemon's pipe is only as private as that file: folders outside the profile are usually readable by other users`;
+}
+
+function daemonState(st: DaemonStatusView | null | undefined, port: number, refused?: string | null): Check {
   if (refused) {
     return fail(
       "daemon", "Daemon", refused,
@@ -541,11 +561,11 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
   } else {
     // A refused socket location is reported, not read as "no daemon" (status() alone would only warn
     // on stderr and return null). Always pass the port: a daemon call without one reads the env itself
-    // and exits on a bad value, where doctor has to report it. Where no daemon can run, neither is looked at.
-    const unsupported = daemon.daemonSupported() ? null : daemon.DAEMON_UNSUPPORTED;
-    const refused = unsupported ? null : daemon.sockProblem(port);
-    const st = unsupported || refused ? null : await daemon.status(port).catch(() => null);
-    add(checkDaemon(st, port, refused, unsupported));
+    // and exits on a bad value, where doctor has to report it.
+    const refused = daemon.sockProblem(port);
+    const st = refused ? null : await daemon.status(port).catch(() => null);
+    const tokenFile = process.env.FIGMA_BRIDGE_TOKEN_FILE || (tok.activeSource === "file" ? tok.path : null);
+    add(checkDaemon(st, port, refused, sharedTokenNote(tokenFile, process.env.USERPROFILE || os.homedir())));
     const probe = await probePort(port);
     add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));
 
@@ -629,4 +649,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkBun, checkToken, checkDaemon, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
