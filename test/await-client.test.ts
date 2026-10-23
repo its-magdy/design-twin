@@ -551,6 +551,11 @@ console.log("\ndaemonGuardMs — the client-side guard outlasts every wait the d
   ok("[guard] never more than one setTimeout holds (a --timeout at its ceiling would otherwise fire the guard at once)",
     daemonGuardMs(MAX_TIMER_MS, MAX_TIMER_MS) === MAX_TIMER_MS && daemonGuardMs(2147483000, 2147483000) === MAX_TIMER_MS);
   ok("[guard] the CLI's 90 s window, and no window at all: the same", daemonGuardMs(300000, 90000) - 300000 >= worst(90000) + 20000 && daemonGuardMs(120000) - 120000 >= worst(0) + 20000);
+  // A request may wait in the plugin's queue for up to one budget (server-core's timer armed at send) and then run for
+  // up to one more (re-armed on its `start`, which a request without progress never relays to the guard): the guard
+  // outlasts both, plus the worst connect wait, with margin.
+  ok("[guard] a full queue wait plus a full run, plus the worst connect wait, with margin",
+    daemonGuardMs(300000) >= 2 * 300000 + worst(0) + 20000 && daemonGuardMs(120000, NAMED_CLIENT_WAIT_MS) >= 2 * 120000 + worst(NAMED_CLIENT_WAIT_MS) + 20000);
   const { PLUGIN_REDIAL_MS } = await import("../bridge/src/timeouts.ts");
   const { ALLOWED_PORTS } = await import("../bridge/src/ports.ts");
   ok("[settle-ms] the settle outlasts one walk of every allowed port at the plugin's redial (3.5 s at 1 s per port)",
