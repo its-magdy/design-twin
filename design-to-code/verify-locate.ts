@@ -5,9 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
+import { isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
 import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
+import { readExportIndex, type ExportIndex } from "./export-index.ts";
 import { canonical } from "./run-cache.ts";
 import { planNode, setNodeOf } from "./node-artefacts.ts";
 import { setBaseOf, setFactsOf, setFile, type SetFacts } from "./verify-sets.ts";
@@ -34,26 +35,16 @@ interface ReportEntry { f: string; abs: string; stem: string; r: VerifyReport; f
  */
 export interface LocateCache {
   readonly reports: Map<string, ReportEntry[] | null>;
-  readonly rows: Map<string, IndexRow[]>;
+  readonly indexes: Map<string, ExportIndex>;
 }
-export const locateCache = (): LocateCache => ({ reports: new Map(), rows: new Map() });
+export const locateCache = (): LocateCache => ({ reports: new Map(), indexes: new Map() });
 
-function indexRows(exportDir: string, cache?: LocateCache): IndexRow[] {
-  if (!cache) return readIndexRows(exportDir);
-  let rows = cache.rows.get(exportDir);
-  if (!rows) { rows = readIndexRows(exportDir); cache.rows.set(exportDir, rows); }
-  return rows;
-}
-function readIndexRows(exportDir: string): IndexRow[] {
-  const root = readJsonOrNull(path.join(exportDir, "pages", "index.json"), isPagesRootIndex);
-  if (!root) return [];
-  if (root.layers) return root.layers;
-  const rows: IndexRow[] = [];
-  for (const pd of root.pageDirs) {
-    const idx = readJsonOrNull(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), isPageIndex);
-    if (idx) rows.push(...idx.layers);
-  }
-  return rows;
+/** The export's index (export-index.ts: every screen row once, the root index's and every page index's), read once per cache. */
+function exportIndexOf(exportDir: string, cache?: LocateCache): ExportIndex {
+  if (!cache) return readExportIndex(exportDir);
+  let ix = cache.indexes.get(exportDir);
+  if (!ix) { ix = readExportIndex(exportDir); cache.indexes.set(exportDir, ix); }
+  return ix;
 }
 
 /** locateExport()'s result: the screen export a plan describes, plus what the index knows about it. `staleFile`: the
@@ -111,7 +102,14 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string, cac
     return null;
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
-  const rows = indexRows(exportDir, cache);
+  const ix = exportIndexOf(exportDir, cache);
+  const rows = ix.rows;
+  // a row's screen file: the index's pointer, read inside the export only
+  const tryRow = (r: IndexRow): { file: string; doc: ScreenDoc } | null => {
+    const f = ix.fileOf(r);
+    const doc = f === null ? null : readJsonOrNull(f, isScreenDoc);
+    return f !== null && doc ? { file: f, doc } : null;
+  };
   // the plan's node (node-artefacts.ts planNode), then — a lookup hint, not its identity — the id in its `screen` stem
   const ids = [planNode(plan, planFile), nodeIdFromStem(plan.screen)].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
@@ -122,7 +120,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string, cac
     const id = docNodeId(hit.doc) || plan.nodeId || null;
     const header = hit;
     // node ids repeat across Figma files: every readable row of the id, and whether one of them is the header's file
-    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => { const now = tryFile(r.file); return now ? [{ r, now }] : []; });
+    const filed = (id ? rows.filter((r) => r.id === id) : []).flatMap((r) => { const now = tryRow(r); return now ? [{ r, now }] : []; });
     const own = filed.find((x) => sameFile(x.now.file, header.file));
     if (own) { if (!row || row.id === id) row = own.r; }
     else {
@@ -138,7 +136,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string, cac
       else { row = null; noRow = true; } // a row of the id may be another Figma file's
     }
   }
-  if (!hit && row) hit = tryFile(row.file);
+  if (!hit && row) hit = tryRow(row);
   if (!hit) return null;
   const root: IrNode | undefined = screenRoots(hit.doc)[0];
   const exp = screenExportOf(hit.doc);
@@ -232,4 +230,4 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
   return out;
 }
 
-export { exportDirOf, indexRows, locateExport, locateReports };
+export { exportDirOf, exportIndexOf, locateExport, locateReports };

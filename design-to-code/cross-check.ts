@@ -34,7 +34,7 @@ import { visibleInstances, matchByNameAndSignature, nameVerdict, isRekeyed } fro
 import { findingIds } from "./finding-id.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
-import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
+import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
 // Every walk here is visible-tree.ts's walkVisible: a layer with `hidden: true` and its whole subtree are skipped,
 // and the contrast checks read the backdrop it works out (the same one the audit reads).
 import { paintedOver, walkVisible } from "./visible-tree.ts";
@@ -50,7 +50,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
   CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, TokenPairRow, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  BlockerCode, IndexRow, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
+  BlockerCode, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
@@ -1040,36 +1040,22 @@ function labelProposals(rekey: MatchResult, visible: ReturnType<typeof visibleIn
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 
-// The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json, rows from
-// <root>/pages/index.json — or each page's own index.json for an older export), minus the files being
-// checked. A thunk: nothing is read until a report has proposals to label. null when a file is not inside
-// such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
+// The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json; every screen its index
+// knows about — export-index.ts), minus the files being checked. A thunk: nothing is read until a report has proposals
+// to label. null when a file is not inside such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
 function exportSiblings(files: readonly string[]): (() => CrossCheckScreen[]) | null {
   const checked = new Set(files.map((f) => path.resolve(f)));
   const roots = new Set<string>();
-  for (const f of checked) {
-    const pages = path.dirname(path.dirname(f));
-    if (path.basename(pages) === "pages" && fs.existsSync(path.join(pages, "index.json"))) roots.add(path.dirname(pages));
-  }
+  for (const f of checked) { const root = exportRootOfScreen(f); if (root !== null) roots.add(root); }
   if (!roots.size) return null;
   return () => {
     const out: CrossCheckScreen[] = [];
     const seen = new Set<string>(checked);
     for (const root of roots) {
-      const index = readJsonOrNull(path.join(root, "pages", "index.json"), isPagesRootIndex);
-      if (!index) continue;
-      let rows: IndexRow[] = index.layers || [];
-      if (!index.layers) {
-        for (const pd of index.pageDirs) {
-          const idx = pd.dir ? readJsonOrNull(path.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
-          if (idx) rows = rows.concat(idx.layers);
-        }
-      }
-      for (const row of rows) {
-        const rel = row.file;
-        if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue; // a path inside the export only
-        const file = path.resolve(root, rel);
-        if (seen.has(file)) continue;
+      const ix = readExportIndex(root);
+      for (const row of ix.rows) {
+        const file = ix.fileOf(row); // a path inside the export only
+        if (file === null || seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
         if (doc) out.push({ doc, label: path.basename(file, ".json") });

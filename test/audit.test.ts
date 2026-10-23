@@ -973,7 +973,7 @@ console.log("audit design-data checks:");
   // a prototype target that was never exported.
   const opener = (dest: string, navigation: string, extra: Partial<NodeInput> = {}): NodeInput => ({ id: "40:2", type: "FRAME", name: "Export button", ...extra,
     reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: dest, destination: "Export Dialog", navigation }] }] });
-  const neighbours = (ids: string[], shots: string[] = []) => ({ layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }], unexportedShots: shots, exportedIds: new Set(ids) });
+  const neighbours = (ids: string[], shots: string[] = []) => ({ layers: ids.map((id) => ({ id, name: id === "40:1" ? "Reports" : "Frame", file: `pages/Main/Frame__${id.replace(":", "_")}.json` })), unexportedShots: shots });
   const run = (kids: NodeInput[], nb: ExportNeighbours | null) => audit(g4([{ id: "40:1", type: "FRAME", name: "Reports", children: kids }], "Reports"), { platform: "web", neighbours: nb });
   const overlay = run([opener("9:9", "overlay")], neighbours(["40:1"]));
   const w = codes(overlay, "prototype-target-not-exported");
@@ -997,7 +997,7 @@ console.log("audit design-data checks:");
   put("design/export/pages/Main/index.json", { page: "Main", layers: [{ id: "40:1", name: "Reports", file: "pages/Main/Reports__40_1.json" }, { id: "9:9", name: "Export Dialog", file: "pages/Main/Export_Dialog__9_9.json" }] });
   put("design/export/pages/Main/Reports__40_1.json", screenExport([{ id: "40:1", type: "FRAME", name: "Reports", children: [opener("9:9", "overlay"), opener("9:8", "overlay", { id: "40:3", name: "Share button" })] }], { screen: "Reports" }));
   const nb = findExportNeighbours(path.join(root, "design/export/pages/Main/Reports__40_1.json"));
-  check("findExportNeighbours: exportedIds = the root index's rows ∪ every page index's; layers stay the root's", !!nb?.exportedIds?.has("9:9") && nb.layers.length === 1);
+  check("findExportNeighbours: layers = the root index's rows ∪ every page index's, each frame once", JSON.stringify(nb?.layers.map((l) => l.id)) === JSON.stringify(["40:1", "9:9"]));
   const cliOut = parseAs(stdoutOf(auditCli(["design/export/pages/Main/Reports__40_1.json", "--platform", "web", "--json"], { cwd: root })), isAuditReport, "audit --json");
   const cw = codes(cliOut, "prototype-target-not-exported");
   check("[CLI] a target only the page index lists is exported; the other is the one warned about", cw.length === 1 && JSON.stringify(cw[0]?.ids) === JSON.stringify(["9:8"]));
@@ -1168,7 +1168,7 @@ console.log("input fields: border on an inner frame:");
   // an unindexed target may be nested in a SECTION — the warning says where to look before pulling.
   const res = audit(g4([{ id: "53:1", type: "FRAME", name: "Reports", children: [{ id: "53:2", type: "FRAME", name: "Export button",
     reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "9:9", destination: "Export Dialog", navigation: "overlay" }] }] }] }], "Reports"),
-  { platform: "web", neighbours: { layers: [{ id: "53:1", name: "Reports", file: "pages/Main/Reports__53_1.json" }], unexportedShots: [], exportedIds: new Set(["53:1"]) } });
+  { platform: "web", neighbours: { layers: [{ id: "53:1", name: "Reports", file: "pages/Main/Reports__53_1.json" }], unexportedShots: [] } });
   check("prototype-target-not-exported says 'in no index' and that a SECTION-nested frame has no index row",
     /are in no index of the export/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? "") && /nested in a SECTION or another frame has no index row/.test(codes(res, "prototype-target-not-exported")[0]?.message ?? ""));
   // audit-design docs

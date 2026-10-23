@@ -2,8 +2,8 @@
 
 
 // design-to-code/cross-check.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
+import fs7 from "node:fs";
+import path7 from "node:path";
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -35,6 +35,13 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
@@ -63,6 +70,51 @@ var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const leg = RGB_LEGACY.exec(t);
+  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
+}
 function clampOpacityPct(n) {
   return Math.min(100, Math.max(0, n));
 }
@@ -179,7 +231,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path6, ancestors, under, beneath) {
+  (function go(node, parentHidden, path8, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -193,7 +245,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path6,
+      path: path8,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -206,9 +258,9 @@ function walk(root, fn, prune, opts) {
     });
     const kids = Array.isArray(node.children) ? node.children : [];
     if (!kids.length) return;
-    const inside = memo(() => paintOver(backdrop(), node));
+    const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), chain, inside, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkVisible(root, fn, opts) {
@@ -790,7 +842,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path6, message) => errors.push({ path: path6, message });
+  const err = (path8, message) => errors.push({ path: path8, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -896,6 +948,72 @@ function isCodeConnectMap(x) {
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 if (false) runCli2(main, { name: "map-validate" });
+
+// design-to-code/export-index.ts
+import fs4 from "node:fs";
+import path4 from "node:path";
+
+// bridge/src/project-layout.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path2.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path2.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs3.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs3.existsSync(path2.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path2.join(cwd, EXPORT_DIR);
+  const legacy2 = path2.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
+function findMapFile(cwd) {
+  const modern = path2.join(cwd, MAP_FILE);
+  if (fs3.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy2 = path2.join(cwd, LEGACY_MAP_FILE);
+  if (fs3.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+
+// bridge/src/pages-layout.ts
+var isObjectLike = (x) => !!x && typeof x === "object";
+var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+var sameFigmaFile = (l, entry) => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
+var notSameRow = (entry) => (l) => {
+  if (!isObjectLike(l)) return !!l;
+  if (l.file === entry.file) return false;
+  if (l.id !== entry.id) return true;
+  return !sameFigmaFile(l, entry);
+};
+var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1107,6 +1225,185 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/verify-shared.ts
+import path3 from "node:path";
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
+}
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+function resolveInside(base, rel, within = base) {
+  const root = path3.resolve(within), file = path3.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path3.sep) ? file : null;
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
+
+// design-to-code/export-index.ts
+var PAGES = "pages";
+var INDEX = "index.json";
+var rootIndexFile = (exportRoot) => path4.join(exportRoot, PAGES, INDEX);
+var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
+function exportRootOfScreen(screenFile) {
+  const pages = path4.dirname(path4.dirname(path4.resolve(screenFile)));
+  if (path4.basename(pages) !== PAGES) return null;
+  const root = path4.dirname(pages);
+  return hasExportIndex(root) ? root : null;
+}
+var inside = (root, rel) => rel && !path4.isAbsolute(rel) ? resolveInside(root, rel) : null;
+function pageIndexFiles(root, pageDirs) {
+  const files = [];
+  const add = (f) => {
+    if (f !== null && !files.includes(f)) files.push(f);
+  };
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path4.join(root, PAGES, dir, INDEX) : null;
+  for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
+  let dirs = [];
+  try {
+    dirs = fs4.readdirSync(path4.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  } catch {
+  }
+  for (const d of dirs) add(ofDir(d));
+  return files;
+}
+function readExportIndex(exportRoot) {
+  const root = exportRoot;
+  const read = readJson(rootIndexFile(root), isPagesRootIndex);
+  const rootDoc = "doc" in read ? read.doc : null;
+  const rows = [];
+  const byId = /* @__PURE__ */ new Map();
+  const files = /* @__PURE__ */ new Set();
+  const take = (row) => {
+    const same = byId.get(row.id);
+    if (files.has(row.file) || same?.some((kept) => sameScreenRow(row, kept))) return;
+    if (same) same.push(row);
+    else byId.set(row.id, [row]);
+    files.add(row.file);
+    rows.push(row);
+  };
+  for (const row of rootDoc?.layers ?? []) take(row);
+  for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
+    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row);
+  }
+  return {
+    root,
+    indexed: rootDoc !== null,
+    rootProblem: "error" in read && !read.missing ? read.error : null,
+    rows,
+    isExported: (id) => byId.has(id),
+    fileOf: (row) => inside(root, row.file)
+  };
+}
+
 // design-to-code/control-kind.ts
 var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
 function controlKind(name) {
@@ -1150,8 +1447,8 @@ function isDisabledLayer(layer) {
 }
 
 // design-to-code/design-system-dir.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs5 from "node:fs";
+import path5 from "node:path";
 
 // bridge/src/design-system-layout.ts
 var DIR = "design-system";
@@ -1175,22 +1472,22 @@ var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPON
 var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
 // bridge/src/library-layout.ts
-var INDEX = "index.json";
+var INDEX2 = "index.json";
 var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
 var COMPONENTS = "components.json";
-var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX];
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
 
 // design-to-code/design-system-dir.ts
 var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
 function readDesignSystemDir(dir) {
-  const local = path2.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs3.existsSync(local) && fs3.existsSync(path2.join(dir, COMPONENTS));
+  const local = path5.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path5.join(dir, COMPONENTS));
   return {
-    tokens: readOptionalDoc(path2.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path2.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path2.join(dir, COMPONENTS_LIBRARY2), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path2.join(dir, STYLES_TEXT), "text styles", isTextStylesDoc),
+    tokens: readOptionalDoc(path5.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path5.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path5.join(dir, COMPONENTS_LIBRARY2), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path5.join(dir, STYLES_TEXT), "text styles", isTextStylesDoc),
     componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
     isLibrary
   };
@@ -1200,54 +1497,8 @@ function readDesignSystemDir(dir) {
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
-import fs5 from "node:fs";
-import path4 from "node:path";
-
-// bridge/src/project-layout.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
-var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
-var MERGED_VARIABLES_FILE = "variables.json";
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path3.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
-function looksLikeExportDir(dir) {
-  try {
-    if (!fs4.statSync(dir).isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return EXPORT_MARKERS.some((m) => fs4.existsSync(path3.join(dir, m)));
-}
-function findExportDir(cwd) {
-  const modern = path3.join(cwd, EXPORT_DIR);
-  const legacy2 = path3.join(cwd, DESIGN_DIR);
-  const modernExists = looksLikeExportDir(modern);
-  const legacyExists = looksLikeExportDir(legacy2);
-  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
-  return { dir: modern, layout: "none", rel: EXPORT_DIR };
-}
-function findMapFile(cwd) {
-  const modern = path3.join(cwd, MAP_FILE);
-  if (fs4.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy2 = path3.join(cwd, LEGACY_MAP_FILE);
-  if (fs4.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
-  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
-}
-
-// design-to-code/slice-sources.ts
+import fs6 from "node:fs";
+import path6 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -1256,12 +1507,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path4.dirname(docPath) : ".";
+  const base = docPath ? path6.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path4.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path6.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -1273,7 +1524,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path4.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path6.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -1291,18 +1542,18 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
-    const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
-    const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
-    if (fs5.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs5.existsSync(sibling)) variablesPath = sibling;
+    const exportRoot = path6.resolve(path6.dirname(firstFile), "..", "..");
+    const rootVars = path6.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path6.join(path6.dirname(firstFile), MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs6.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs5.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
+    const legacy2 = path6.join(path6.resolve(path6.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(legacy2) && path6.resolve(legacy2) !== path6.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
@@ -1965,34 +2216,24 @@ function labelProposals(rekey, visible, map, siblings) {
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path5.resolve(f)));
+  const checked = new Set(files.map((f) => path7.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
-    const pages = path5.dirname(path5.dirname(f));
-    if (path5.basename(pages) === "pages" && fs6.existsSync(path5.join(pages, "index.json"))) roots.add(path5.dirname(pages));
+    const root = exportRootOfScreen(f);
+    if (root !== null) roots.add(root);
   }
   if (!roots.size) return null;
   return () => {
     const out = [];
     const seen = new Set(checked);
     for (const root of roots) {
-      const index = readJsonOrNull(path5.join(root, "pages", "index.json"), isPagesRootIndex);
-      if (!index) continue;
-      let rows = index.layers || [];
-      if (!index.layers) {
-        for (const pd of index.pageDirs) {
-          const idx = pd.dir ? readJsonOrNull(path5.join(root, "pages", pd.dir, "index.json"), isPageIndex) : null;
-          if (idx) rows = rows.concat(idx.layers);
-        }
-      }
-      for (const row of rows) {
-        const rel = row.file;
-        if (!rel || path5.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
-        const file = path5.resolve(root, rel);
-        if (seen.has(file)) continue;
+      const ix = readExportIndex(root);
+      for (const row of ix.rows) {
+        const file = ix.fileOf(row);
+        if (file === null || seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path5.basename(file, ".json") });
+        if (doc) out.push({ doc, label: path7.basename(file, ".json") });
       }
     }
     return out;
@@ -2247,11 +2488,11 @@ function contrastRendered(screens, variables, tokens, push) {
           });
           const frames = [...ctx.ancestors, { node: n, hidden: false, backdrop: ctx.backdrop, beneath: ctx.beneath }];
           const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl(frames.slice(-4).reverse().map((f) => f.node)) : -1;
-          const inside = outer < 0 ? [] : frames.slice(frames.length - 1 - outer);
-          const outside = inside[0]?.backdrop.token ?? null;
+          const inside2 = outer < 0 ? [] : frames.slice(frames.length - 1 - outer);
+          const outside = inside2[0]?.backdrop.token ?? null;
           const bg = outside ? resolve(outside) : null;
           if (typeof st === "string" && outside && bg) {
-            const inner = paintedOver(bg, inside.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node]), resolve);
+            const inner = paintedOver(bg, inside2.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node]), resolve);
             const rescued = !!inner && contrastRatio(inner.color, bg) >= NON_TEXT_CONTRAST;
             if (!rescued && !(inner && inner.complex)) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
           }
@@ -2322,10 +2563,10 @@ function toMarkdown(res) {
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs7 = res.findings.filter((f) => f.severity === sev);
-    if (!fs7.length) continue;
-    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
-    for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}`);
+    const fs8 = res.findings.filter((f) => f.severity === sev);
+    if (!fs8.length) continue;
+    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs8.length})`, "");
+    for (const f of fs8) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
   const pairs = res.findings.find((f) => f.code === "token-pair-contrast")?.tokenPairs || [];
@@ -2369,8 +2610,8 @@ function main(argv) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path5.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const dsBase = dsDir || path5.join(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path7.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
+  const dsBase = dsDir || path7.join(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
   if (ctx.staleLegacy) {
@@ -2405,9 +2646,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {
-    fs6.mkdirSync(path5.dirname(out), { recursive: true });
-    fs6.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs6.writeFileSync(out + ".md", toMarkdown(res));
+    fs7.mkdirSync(path7.dirname(out), { recursive: true });
+    fs7.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs7.writeFileSync(out + ".md", toMarkdown(res));
     console.error(`wrote ${out}.json and ${out}.md`);
   } else {
     process.stdout.write(toMarkdown(res));

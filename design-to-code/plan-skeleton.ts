@@ -44,14 +44,15 @@ import { walkWithHidden } from "./visible-tree.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { isAlias, isComponentsCatalog, isPageIndex, isPagesRootIndex, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import { isAlias, isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
 import type { DocGuard } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { anyJson, readJson } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
-  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
+  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable,
   MatchInstance, VariableType,
 } from "./types.ts";
@@ -647,16 +648,11 @@ function seed(plan: Plan, from: Plan, label: string): SeedCount {
   return n;
 }
 
-const isIndexDoc = (x: unknown): x is PagesRootIndex | PageIndex => isPagesRootIndex(x) || isPageIndex(x);
+// The screen's row in the export index it sits in (export-index.ts: every screen the export indexes), for its title only
+// (best effort: null outside an indexed export).
 function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
-  // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json (best effort: the title only)
-  const dir = path.dirname(path.resolve(screenFile));
-  for (const idx of [path.join(dir, "..", "index.json"), path.join(dir, "index.json")]) {
-    const d = readJsonOrNull(idx, isIndexDoc);
-    const hit = ((d && d.layers) || []).find((r) => r.id === nodeId);
-    if (hit) return hit;
-  }
-  return null;
+  const root = exportRootOfScreen(screenFile);
+  return root === null ? null : readExportIndex(root).rows.find((r) => r.id === nodeId) ?? null;
 }
 
 /** Why a NEW plan (its --out not there yet) cannot be written at `out`, or null. A node has one plan, and it is named by
