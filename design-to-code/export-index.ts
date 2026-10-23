@@ -11,9 +11,11 @@
 //     pages/<dir>/index.json), each screen once. Two rows are one screen by the WRITER's identity (pages-layout.ts
 //     sameScreenRow, the rule mergeScreenIndex replaces a row by: the same file, or the same node of the same Figma
 //     file — the key when both rows carry one, else the file name; an unstamped row and a stamped one by their pageId),
-//     so a reader never keeps a row the next write would replace. The first row read is the newer one and wins: the
-//     root's (the newest write) beats a page index's — a row a re-pull replaced in the root but left in another page's
-//     index (a page renamed in Figma since) is that row's stale copy.
+//     so a reader never keeps a row the next write would replace. The root's row (the newest write) beats a page
+//     index's. Between two page indexes' rows of one screen — a page renamed in Figma between pulls files the screen
+//     under a second dir, and the old dir's index keeps the old row — the row whose screen file was written last wins:
+//     every export rewrites the screen's file, while an index's own write time says nothing of its rows (a
+//     single-screen pull rewrites a page index and carries its other rows over unchanged).
 //   - isExported(id): some index lists the node.
 //   - fileOf(row): the row's screen file, inside the export root only (a hand-edited `file` with `..` reads nothing).
 //
@@ -84,10 +86,8 @@ export interface ExportIndex {
  *  (no writer here makes one). */
 const inside = (root: string, rel: string | undefined): string | null => (rel && !path.isAbsolute(rel) ? resolveInside(root, rel) : null);
 
-// Every page index file, each once (absolute), newest first: each pageDirs entry's `index` pointer (else
-// pages/<dir>/index.json) — the pages the newest write lists — then every other pages/<dir>/index.json on disk, the
-// last written first. A page an earlier walk exported is listed by no pageDirs entry any more, and two of those can hold
-// one screen (a page renamed in Figma between walks files it under a second dir): the later write is the true one.
+// Every page index file, each once (absolute): each pageDirs entry's `index` pointer (else pages/<dir>/index.json), then
+// every other pages/<dir>/index.json on disk — a page an earlier walk exported is listed by no pageDirs entry any more.
 function pageIndexFiles(root: string, pageDirs: ReadonlyArray<{ dir?: string; index?: string }>): string[] {
   const files: string[] = [];
   const add = (f: string | null): void => { if (f !== null && !files.includes(path.resolve(f))) files.push(path.resolve(f)); };
@@ -96,9 +96,7 @@ function pageIndexFiles(root: string, pageDirs: ReadonlyArray<{ dir?: string; in
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(path.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { /* no pages/ */ }
-  const mtime = (f: string): number => { try { return fs.statSync(f).mtimeMs; } catch { return -1; } };
-  const unlisted = dirs.flatMap((d) => { const f = ofDir(d); return f !== null && !files.includes(path.resolve(f)) ? [{ f, t: mtime(f) }] : []; });
-  for (const u of unlisted.sort((a, b) => b.t - a.t)) add(u.f); // a stable sort: one mtime keeps the name order
+  for (const d of dirs) add(ofDir(d));
   return files;
 }
 
@@ -110,21 +108,42 @@ export function readExportIndex(exportRoot: string): ExportIndex {
   const rows: IndexRow[] = [];
   const byId = new Map<string, IndexRow[]>();
   const files = new Set<string>();
-  // a row is read after the rows that replace it (see the top of the file): it is dropped when one kept is its screen.
-  // A row with no `file` (hand-edited; the guards ask only for id and name) shares no file with another such row.
-  const take = (row: IndexRow): void => {
-    const file: unknown = row.file;
-    const hasFile = typeof file === "string" && file !== "";
-    const probe = hasFile ? row : { ...row, file: "\u0000no file " + rows.length };
-    const same = byId.get(row.id);
-    if ((hasFile && files.has(row.file)) || same?.some((kept) => sameScreenRow(probe, kept))) return;
-    if (same) same.push(row); else byId.set(row.id, [row]);
-    if (hasFile) files.add(row.file);
-    rows.push(row);
+  const fromRoot = new Set<IndexRow>();
+  // when the row's screen file was last written; -1 when it cannot be read (it loses to any row whose file is there)
+  const written = new Map<IndexRow, number>();
+  const writtenAt = (row: IndexRow): number => {
+    let t = written.get(row);
+    if (t === undefined) {
+      const f = inside(root, row.file);
+      try { t = f === null ? -1 : fs.statSync(f).mtimeMs; } catch { t = -1; }
+      written.set(row, t);
+    }
+    return t;
   };
-  for (const row of rootDoc?.layers ?? []) take(row);
+  const hasFile = (row: IndexRow): boolean => { const file: unknown = row.file; return typeof file === "string" && file !== ""; };
+  // one screen, one row (see the top of the file). A row with no `file` (hand-edited; the guards ask only for id and
+  // name) shares no file with another such row.
+  const take = (row: IndexRow, isRoot: boolean): void => {
+    const probe = hasFile(row) ? row : { ...row, file: "\u0000no file " + rows.length };
+    const same = byId.get(row.id) ?? [];
+    const kept = same.find((k) => sameScreenRow(probe, k)) ?? (hasFile(row) && files.has(row.file) ? rows.find((k) => k.file === row.file) : undefined);
+    if (kept !== undefined) {
+      // a page index's row replaces another page index's row of the screen when its file was written later
+      if (isRoot || fromRoot.has(kept) || writtenAt(row) <= writtenAt(kept)) return;
+      rows[rows.indexOf(kept)] = row;
+      const bucket = byId.get(kept.id) ?? [];
+      bucket.splice(bucket.indexOf(kept), 1);
+      if (!bucket.length) byId.delete(kept.id);
+      if (hasFile(kept)) files.delete(kept.file);
+    } else rows.push(row);
+    const bucket = byId.get(row.id);
+    if (bucket) bucket.push(row); else byId.set(row.id, [row]);
+    if (hasFile(row)) files.add(row.file);
+    if (isRoot) fromRoot.add(row);
+  };
+  for (const row of rootDoc?.layers ?? []) take(row, true);
   for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
-    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row);
+    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row, false);
   }
   return {
     root,

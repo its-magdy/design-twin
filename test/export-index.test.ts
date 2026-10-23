@@ -129,15 +129,19 @@ console.log("readExportIndex: every indexed row once");
   walk(root, [{ ...OLD, id: "10:1", name: "Tray" }], { sourceFile: "Product" });
   walk(root, [{ ...NEW, id: "10:1", name: "Tray Panel" }], { sourceFile: "Product" });
   walk(root, [{ ...SETTINGS, id: "20:1", name: "Profile" }], { sourceFile: "Product" });
-  // the walks land within one clock tick: date them as they happened (Old first)
-  const at = (dir: string, secs: number): void => { const d = new Date(Date.UTC(2026, 0, 1, 0, 0, secs)); fs.utimesSync(path.join(root, "pages", dir, "index.json"), d, d); };
-  at("Old", 1); at("New", 2); at("Settings", 3);
+  // the walks land within one clock tick: date the files as they happened. Old's index is the NEWEST file — a
+  // single-screen pull of another frame on Old since rewrote it, carrying its stale Tray row over (mergeScreenIndex)
+  const at = (rel: string, secs: number): void => { const d = new Date(Date.UTC(2026, 0, 1, 0, 0, secs)); fs.utimesSync(path.join(root, "pages", rel), d, d); };
+  at("Old/Tray__10_1.json", 1); at("New/Tray_Panel__10_1.json", 2); at("New/index.json", 2); at("Settings/index.json", 3); at("Old/index.json", 9);
   const rows = readExportIndex(root).rows;
-  check(`two unlisted page indexes holding one screen: the later-written one's row (got ${rows.map((r) => r.name).join(",")})`, rows.map((r) => r.name).join(",") === "Profile,Tray Panel");
+  check(`two unlisted page indexes holding one screen: the row whose screen file was written last, whatever the indexes' dates (got ${rows.map((r) => r.name).join(",")})`,
+    rows.map((r) => r.name).join(",") === "Profile,Tray Panel");
   const r = resolveScreen(root, "10:1");
   check("…so resolve-screen gives the frame's current name", r.status === "resolved" && r.row.name === "Tray Panel");
-  at("Old", 9);
-  check("(the order is the write order, not the directory name's)", readExportIndex(root).rows.map((x) => x.name).join(",") === "Profile,Tray");
+  at("Old/Tray__10_1.json", 10);
+  check("(decided by the screen files' write order, not the directory names')", readExportIndex(root).rows.map((x) => x.name).join(",") === "Profile,Tray");
+  fs.rmSync(path.join(root, "pages", "Old", "Tray__10_1.json"));
+  check("(a row whose screen file is gone loses)", readExportIndex(root).rows.map((x) => x.name).join(",") === "Profile,Tray Panel");
 }
 {
   // rows without a `file` (hand-edited: the guards ask for id and name only) are not one screen by their missing file

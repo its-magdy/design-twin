@@ -1410,18 +1410,7 @@ function pageIndexFiles(root, pageDirs) {
     dirs = fs4.readdirSync(path4.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
-  const mtime = (f) => {
-    try {
-      return fs4.statSync(f).mtimeMs;
-    } catch {
-      return -1;
-    }
-  };
-  const unlisted = dirs.flatMap((d) => {
-    const f = ofDir(d);
-    return f !== null && !files.includes(path4.resolve(f)) ? [{ f, t: mtime(f) }] : [];
-  });
-  for (const u of unlisted.sort((a, b) => b.t - a.t)) add(u.f);
+  for (const d of dirs) add(ofDir(d));
   return files;
 }
 function readExportIndex(exportRoot) {
@@ -1431,20 +1420,46 @@ function readExportIndex(exportRoot) {
   const rows = [];
   const byId = /* @__PURE__ */ new Map();
   const files = /* @__PURE__ */ new Set();
-  const take = (row) => {
-    const file = row.file;
-    const hasFile = typeof file === "string" && file !== "";
-    const probe = hasFile ? row : { ...row, file: "\0no file " + rows.length };
-    const same = byId.get(row.id);
-    if (hasFile && files.has(row.file) || same?.some((kept) => sameScreenRow(probe, kept))) return;
-    if (same) same.push(row);
-    else byId.set(row.id, [row]);
-    if (hasFile) files.add(row.file);
-    rows.push(row);
+  const fromRoot = /* @__PURE__ */ new Set();
+  const written = /* @__PURE__ */ new Map();
+  const writtenAt = (row) => {
+    let t = written.get(row);
+    if (t === void 0) {
+      const f = inside(root, row.file);
+      try {
+        t = f === null ? -1 : fs4.statSync(f).mtimeMs;
+      } catch {
+        t = -1;
+      }
+      written.set(row, t);
+    }
+    return t;
   };
-  for (const row of rootDoc?.layers ?? []) take(row);
+  const hasFile = (row) => {
+    const file = row.file;
+    return typeof file === "string" && file !== "";
+  };
+  const take = (row, isRoot) => {
+    const probe = hasFile(row) ? row : { ...row, file: "\0no file " + rows.length };
+    const same = byId.get(row.id) ?? [];
+    const kept = same.find((k) => sameScreenRow(probe, k)) ?? (hasFile(row) && files.has(row.file) ? rows.find((k) => k.file === row.file) : void 0);
+    if (kept !== void 0) {
+      if (isRoot || fromRoot.has(kept) || writtenAt(row) <= writtenAt(kept)) return;
+      rows[rows.indexOf(kept)] = row;
+      const bucket2 = byId.get(kept.id) ?? [];
+      bucket2.splice(bucket2.indexOf(kept), 1);
+      if (!bucket2.length) byId.delete(kept.id);
+      if (hasFile(kept)) files.delete(kept.file);
+    } else rows.push(row);
+    const bucket = byId.get(row.id);
+    if (bucket) bucket.push(row);
+    else byId.set(row.id, [row]);
+    if (hasFile(row)) files.add(row.file);
+    if (isRoot) fromRoot.add(row);
+  };
+  for (const row of rootDoc?.layers ?? []) take(row, true);
   for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
-    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row);
+    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row, false);
   }
   return {
     root,
