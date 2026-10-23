@@ -2649,18 +2649,19 @@ function tokenParts(codeToken) {
   return out;
 }
 var MEMBER = /[\w)\]>!?]\.([A-Za-z_$][\w$]*)$/;
-var memberOf = (raw) => {
-  const m = MEMBER.exec(raw.trim());
-  return m && m[1] && !/(^|[^\w])\d+\.\w+$/.test(raw.trim()) ? m[1] : null;
-};
+var STYLE_PROPERTY = /^(color|background|foreground|fill|stroke|tint|border|outline|shadow|.*color)$/;
+function memberOf(part) {
+  const m = MEMBER.exec(part);
+  const member = m?.[1];
+  if (!member || /(^|[^\w])\d+\.\w+$/.test(part) || STYLE_PROPERTY.test(alnumKey(member))) return null;
+  return member;
+}
 function tokenCandidates(codeToken) {
   const out = [codeToken];
   for (const p of tokenParts(codeToken)) {
     out.push(p.text);
     if (p.prop) out.push(p.prop);
-  }
-  for (const raw of codeToken.split(/\s+/)) {
-    const m = memberOf(raw);
+    const m = memberOf(p.text);
     if (m) out.push(m);
   }
   return [...new Set(out)];

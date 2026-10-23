@@ -123,8 +123,18 @@ function tokenParts(codeToken: string): TokenPart[] {
 // `Theme.of(context).extension<ColorsTokens>()!.brand600` — and the generated file declares the member alone
 // (`brand600 = Color(0xFF…)`): a dotted reference also stands for its last member, when that is an identifier and what
 // precedes the dot is not a number (`p-1.5` is a utility, not a member).
+// A generated token line and a component's styling argument are the same syntax (`color = Color(0xFF…)`,
+// `color: "#…"`), so a member that is a STYLING PROPERTY name (`color`, `background`, `tintColor` …) never stands
+// for the token by this rule: `ColorsTokens.color` would otherwise exempt every component's own colour argument. Such a
+// token still matches when the codeToken names it bare (`color`), exactly as before the rule.
 const MEMBER = /[\w)\]>!?]\.([A-Za-z_$][\w$]*)$/;
-const memberOf = (raw: string): string | null => { const m = MEMBER.exec(raw.trim()); return m && m[1] && !/(^|[^\w])\d+\.\w+$/.test(raw.trim()) ? m[1] : null; };
+const STYLE_PROPERTY = /^(color|background|foreground|fill|stroke|tint|border|outline|shadow|.*color)$/;
+function memberOf(part: string): string | null {
+  const m = MEMBER.exec(part);
+  const member = m?.[1];
+  if (!member || /(^|[^\w])\d+\.\w+$/.test(part) || STYLE_PROPERTY.test(alnumKey(member))) return null;
+  return member;
+}
 // Every spelling a declaration of this token may carry: the whole codeToken, each part, each part's property, each
 // part's member.
 function tokenCandidates(codeToken: string): string[] {
@@ -132,8 +142,9 @@ function tokenCandidates(codeToken: string): string[] {
   for (const p of tokenParts(codeToken)) {
     out.push(p.text);
     if (p.prop) out.push(p.prop);
+    const m = memberOf(p.text);
+    if (m) out.push(m);
   }
-  for (const raw of codeToken.split(/\s+/)) { const m = memberOf(raw); if (m) out.push(m); }
   return [...new Set(out)];
 }
 

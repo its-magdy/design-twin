@@ -127,6 +127,18 @@ check("[near] a tag that is not 8 hex digits is part of the name", !namesToken("
   && !namesToken("space4_e26d506", "space4", { stylesheet: false }));
 check("[near] a qualified native reference names its LAST member only", !namesToken("brand600", "ColorsTokens.brand6", { stylesheet: false })
   && !namesToken("colorsTokens", "colorsTokens.light.brand600", { stylesheet: false }) && !namesToken("light", "colorsTokens.light.brand600", { stylesheet: false }));
+check("[near] a member that is a styling property is never a definition by the member rule — a component's own colour argument stays a use",
+  (() => {
+    const obj = literalUses([{ rel: "Card.tsx", text: "const styles = {\n  title: {\n    color: \"#5B5FC7\",\n  },\n};" }], "#5B5FC7", ["ColorsTokens.color"]);
+    const compose = literalUses([{ rel: "Card.kt", text: "Text(\"Hi\", color = Color(0xFF5B5FC7))" }], "0xFF5B5FC7", ["LocalColorsTokens.current.color"]);
+    const swift = literalUses([{ rel: "Card.tsx", text: "<Icon tintColor: \"#5B5FC7\" />" }], "#5B5FC7", ["theme.colors.tintColor"]);
+    return obj.usedIn.join() === "Card.tsx" && compose.usedIn.join() === "Card.kt" && swift.usedIn.join() === "Card.tsx"
+      && !namesToken("background", "AppTheme.background", { stylesheet: false }) && !namesToken("fill", "tokens.fill", { stylesheet: false });
+  })());
+check("[member] a Material colour-scheme slot is still its definition (`primary = Color(…)` for colorScheme.primary)",
+  literalUses([{ rel: "Theme.kt", text: "val Light = lightColorScheme(\n  primary = Color(0xFF5B5FC7),\n)" }], "0xFF5B5FC7", ["MaterialTheme.colorScheme.primary"]).usedIn.length === 0);
+check("[member] a comma-separated list of qualified references names each member",
+  namesToken("brand600", "ColorsTokens.brand600, ColorsTokens.accent", { stylesheet: false }) && namesToken("accent", "ColorsTokens.brand600,ColorsTokens.accent", { stylesheet: false }));
 check("[near] a decimal in a utility is not a member reference", !namesToken("5", "p-1.5", { stylesheet: false }));
 check("[near] a line with a definition AND a usage of the literal is not a definition line", (() => {
   const code = [{ rel: "theme.css", text: ":root { --color-figma-brand-600: #5b5fc7; } .x { color: #5b5fc7 }" }];
