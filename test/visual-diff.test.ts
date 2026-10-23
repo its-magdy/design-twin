@@ -380,4 +380,100 @@ const fin = (refPng: Rgba, shotPng: Rgba, offset = { x: 0, y: 0 }): MeasuredVisu
   safe(`visualLine: '0.5% of pixels differ (0.6% before 1-px shift tolerance)' (${line.slice(0, 110)})`, () => /never the verdict\) 0\.5% of pixels differ \(0\.6% before 1-px shift tolerance\)/.test(line));
 }
 
+// ---------------------------------------------------------------- equivalence: the faster diff / resample / crop yield the same bytes
+// The digests below were recorded from the implementation before the speed-ups (matchedNear with pixel p's colour computed once,
+// byte-equal rows skipped, the row-wise resample intermediate, the identity crop / resample returning the image). Each digest
+// covers everything the evidence carries: the counts, the hot regions, the per-pixel mask and the encoded diff image (diff);
+// the size and every byte (resample, crop). A corpus: antialiased glyph strokes, gradients, translucent pixels, transparent vs
+// white, 1–2 px shifts, re-flowed text, changes at the first / last byte and at row ends, integer and fractional scales, and
+// unaligned views (a byteOffset not a multiple of 4).
+console.log("equivalence corpus (digests from the pre-speed-up implementation):");
+{
+  const lcg = (seed: number): (() => number) => { let s = seed >>> 0; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; };
+  /** a page-like image: a gradient header band, cards with antialiased glyph strokes, a translucent ramp (alpha: a translucent background) */
+  const page = (w: number, h: number, seed: number, alpha = false): Rgba => {
+    const rnd = lcg(seed), d = new Uint8Array(w * h * 4);
+    const set = (x: number, y: number, c: number[]): void => { if (x < 0 || y < 0 || x >= w || y >= h) return; d.set(c, (y * w + x) * 4); };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) set(x, y, y < 12 ? [40 + Math.floor(x * 180 / w), 60, 200, 255] : [244, 246, 250, alpha ? 128 + ((x * 7 + y * 3) & 127) : 255]);
+    for (let cy = 16; cy + 30 < h; cy += 34) for (let cx = 4; cx + 40 < w; cx += 44) {
+      for (let y = cy; y < cy + 30; y++) for (let x = cx; x < cx + 40; x++) set(x, y, [255, 255, 255, 255]);
+      for (let g = 0; g < 10; g++) { // glyphs: a dark core with grey antialiased edges
+        const gx = cx + 3 + Math.floor(rnd() * 32), gy = cy + 3 + Math.floor(rnd() * 22), gw = 1 + Math.floor(rnd() * 3), gh = 3 + Math.floor(rnd() * 4);
+        for (let y = gy - 1; y <= gy + gh; y++) for (let x = gx - 1; x <= gx + gw; x++) {
+          const edge = y === gy - 1 || y === gy + gh || x === gx - 1 || x === gx + gw, v = edge ? 140 + Math.floor(rnd() * 90) : 30;
+          set(x, y, [v, v, v + 10, 255]);
+        }
+      }
+    }
+    for (let y = Math.floor(h * 0.6); y < Math.floor(h * 0.6) + 6; y++) for (let x = 0; x < w; x++) set(x, y, [200, 30, 30, Math.floor(255 * x / w)]);
+    return { w, h, data: d };
+  };
+  const copy = (m: Rgba): Rgba => ({ w: m.w, h: m.h, data: m.data.slice() });
+  const shifted = (m: Rgba, dx: number, dy: number): Rgba => {
+    const o = copy(m);
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) { const sx = Math.min(m.w - 1, Math.max(0, x - dx)), sy = Math.min(m.h - 1, Math.max(0, y - dy)); o.data.set(m.data.subarray((sy * m.w + sx) * 4, (sy * m.w + sx) * 4 + 4), (y * m.w + x) * 4); }
+    return o;
+  };
+  const edit = (m: Rgba, f: (d: Uint8Array, w: number) => void): Rgba => { const o = copy(m); f(o.data, o.w); return o; };
+  /** the same pixels at a byteOffset of `off` */
+  const unaligned = (m: Rgba, off: number): Rgba => { const buf = new Uint8Array(m.data.length + off + 3); buf.set(m.data, off); return { w: m.w, h: m.h, data: buf.subarray(off, off + m.data.length) }; };
+  const digest = (head: unknown, ...parts: Uint8Array[]): string => { const hh = crypto.createHash("sha256").update(JSON.stringify(head)); for (const p of parts) hh.update(p); return hh.digest("hex").slice(0, 16); };
+  const diffDigest = (a: Rgba, b: Rgba, k: number): string => { const d = diffPixels(a, b, diffOptionsFor(k)); return digest([d.compared, d.differing, d.aa, d.shiftTolerant, d.hot, d.hotTotal], d.mask, encodePng(renderDiff(b, d))); };
+
+  const base = page(97, 83, 1), alpha = page(64, 50, 2, true);
+  const sparse = edit(base, (d, w) => { for (let y = 40; y < 46; y++) for (let x = 50; x < 58; x++) d.set([20, 20, 20, 255], (y * w + x) * 4); });
+  const rowEnds = edit(base, (d, w) => { for (let y = 20; y < 30; y++) { d.set([0, 0, 0, 255], (y * w) * 4); d.set([0, 0, 0, 255], (y * w + w - 1) * 4); } });
+  const variants: Array<[string, Rgba, Rgba, string[]]> = [
+    ["identical", base, copy(base), ["08b9b4367319e84f", "08b9b4367319e84f", "08b9b4367319e84f", "08b9b4367319e84f"]],
+    ["changed", base, edit(base, (d) => { for (let i = 0; i < d.length; i += 4) { d[i] = 255 - (d[i] ?? 0); d[i + 1] = 255 - (d[i + 1] ?? 0); } }), ["925936c192b86f4d", "35f11bbe168070e7", "f9411c1e33fae983", "e986d10949f495b3"]],
+    ["sparse", base, sparse, ["79ac2107d00935aa", "9b8806ab97781d66", "6573ba4b7c3e6a4b", "4ab8ca726c48c408"]],
+    ["shift 1 px", base, shifted(base, 1, 0), ["0de3fe7718ffa03d", "0de3fe7718ffa03d", "0de3fe7718ffa03d", "0de3fe7718ffa03d"]],
+    ["shift 2,1 px", base, shifted(base, 2, 1), ["a961b869ad4a4e6a", "6987fe0baf137a01", "0031ea066969a14b", "0031ea066969a14b"]],
+    ["re-flowed text", base, page(97, 83, 3), ["76d9c923a57a0b6c", "3c0990c1d84c10d5", "19425467efee5dc8", "54a9f81bead64510"]],
+    ["first / last byte", base, edit(base, (d) => { d[0] = 0; d[d.length - 1] = 0; d[d.length - 2] = 0; }), ["ecabece2160eff87", "ecabece2160eff87", "ecabece2160eff87", "ecabece2160eff87"]],
+    ["row ends", base, rowEnds, ["234e44fb15ed0fd2", "84220d62ce745caa", "84220d62ce745caa", "84220d62ce745caa"]],
+    ["red channel", base, edit(base, (d) => { for (let i = 0; i < d.length; i += 4) d[i] = 255 - (d[i] ?? 0); }), ["9a698bfe34ee6ed0", "18674dc86d3ed6e3", "b1ad6c5713ae7d85", "361d0b5411c1ade0"]],
+    ["alpha", alpha, edit(alpha, (d) => { for (let i = 3; i < d.length; i += 12) d[i] = 255 - (d[i] ?? 0); }), ["9f2884f73b35837e", "12461eb3b9beab43", "a820a885567f2619", "18b6c036d9ed0f7a"]],
+    ["alpha shift", alpha, shifted(alpha, 1, 1), ["a2249eb22eecf5b5", "a2249eb22eecf5b5", "a2249eb22eecf5b5", "a2249eb22eecf5b5"]],
+    ["transparent vs white", edit(alpha, (d) => { for (let i = 0; i < d.length / 2; i += 4) d.set([17, 99, 3, 0], i); }), edit(alpha, (d) => { for (let i = 0; i < d.length / 2; i += 4) d.set([255, 255, 255, 255], i); }), ["1f3149402b110380", "1f3149402b110380", "1f3149402b110380", "1f3149402b110380"]],
+  ];
+  const ks = [1, 1.4222, 2, 3], bad: string[] = [];
+  for (const [name, a, b, want] of variants) ks.forEach((k, i) => { const got = diffDigest(a, b, k); if (got !== want[i]) bad.push(`${name} k=${k}: ${got}`); });
+  const views: Array<[string, Rgba, Rgba, number, string]> = [
+    ["shift 1 px", unaligned(base, 1), unaligned(shifted(base, 1, 0), 3), 1.4222, "0de3fe7718ffa03d"],
+    ["sparse", unaligned(base, 3), unaligned(sparse, 1), 2, "6573ba4b7c3e6a4b"],
+    ["identical", unaligned(base, 2), unaligned(base, 1), 1, "08b9b4367319e84f"],
+    ["row ends", unaligned(base, 1), unaligned(rowEnds, 2), 1, "234e44fb15ed0fd2"],
+    // read from the buffer's start instead of the view's, white rows would look equal to b's: the first byte must count
+    ["row start", unaligned(img(20, 10), 1), edit(img(20, 10), (d) => { d[0] = 0; }), 1, "8af367e55e28cb44"],
+  ];
+  for (const [name, a, b, k, want] of views) { const got = diffDigest(a, b, k); if (got !== want) bad.push(`unaligned ${name} k=${k}: ${got}`); }
+  check(`[equivalence] diffPixels + renderDiff: ${variants.length * ks.length + views.length} cases, the same counts / regions / mask / diff image${bad.length ? ` — differ: ${bad.join("; ")}` : ""}`, bad.length === 0);
+  const sh = diffPixels(base, shifted(base, 2, 1), diffOptionsFor(1.4222)), ch = diffPixels(base, variants[1]?.[2] ?? base, diffOptionsFor(2));
+  check(`[equivalence] the corpus reaches every mask value and hot regions (shift: ${sh.aa} aa / ${sh.differing - sh.shiftTolerant} absorbed / ${sh.shiftTolerant} differ; changed: ${ch.hotTotal} region(s))`,
+    sh.aa > 0 && sh.differing - sh.shiftTolerant > 0 && sh.shiftTolerant > 0 && ch.hotTotal > 0);
+
+  const p = page(97, 83, 5), al = page(64, 50, 6, true), noise = edit(page(31, 17, 7), (d) => { const r = lcg(9); for (let i = 0; i < d.length; i++) d[i] = Math.floor(r() * 256); });
+  const resamples: Array<[string, Rgba, number, number, string]> = [
+    ["page 1.4222 down", p, 68, 58, "ded7ac305e534a2c"], ["page up", p, 139, 118, "f559dcac0684cb5f"], ["page same width", p, 97, 80, "eb775fee29cbae57"],
+    ["page same height", p, 90, 83, "b40163d988ed4918"], ["page half", p, 48, 41, "45baabe124e878f4"], ["page 1×1", p, 1, 1, "cfa062c9a2976b27"],
+    ["alpha down", al, 45, 35, "9bfdf5b7e2725f30"], ["alpha up", al, 91, 71, "5abf352f753cca93"], ["noise down", noise, 13, 7, "b1b542feb9fdd4c1"],
+    ["noise up", noise, 62, 34, "ba4b3783fe47d67e"], ["noise one row", noise, 31, 1, "713909aa1b39e714"], ["noise 3× odd", noise, 10, 6, "ec4009a9f458c3f5"],
+    ["noise unaligned", unaligned(noise, 1), 22, 12, "fc207b5e99e6a810"], ["page identity", p, 97, 83, "b7b3edfd643f317c"],
+  ];
+  const badR = resamples.flatMap(([name, m, w, h, want]) => { const r = resampleBox(m, w, h), got = digest([r.w, r.h], r.data); return got === want ? [] : [`${name}: ${got}`]; });
+  check(`[equivalence] resampleBox: ${resamples.length} cases (colour, alpha, edges, rounding, up / down / one axis), the same bytes${badR.length ? ` — differ: ${badR.join("; ")}` : ""}`, badR.length === 0);
+
+  const c = page(97, 83, 8);
+  const crops: Array<[string, Rgba, { x: number; y: number; w: number; h: number }, string]> = [
+    ["identity", c, { x: 0, y: 0, w: 97, h: 83 }, "09161e4617d42121"], ["inner", c, { x: 3, y: 5, w: 40, h: 30 }, "c92012ea91b66b1c"],
+    ["fractional", c, { x: 1.4, y: 2.6, w: 50.5, h: 20.2 }, "7067c880907fe69f"], ["clamped", c, { x: 90, y: 80, w: 20, h: 20 }, "1b2fd6ccc45c8278"],
+    ["oversized", c, { x: -5, y: -5, w: 200, h: 200 }, "09161e4617d42121"], ["unaligned identity", unaligned(c, 1), { x: 0, y: 0, w: 97, h: 83 }, "09161e4617d42121"],
+  ];
+  const badC = crops.flatMap(([name, m, r, want]) => { const o = crop(m, r), got = digest([o.w, o.h], o.data); return got === want ? [] : [`${name}: ${got}`]; });
+  check(`[equivalence] crop: ${crops.length} cases, the same bytes${badC.length ? ` — differ: ${badC.join("; ")}` : ""}`, badC.length === 0);
+  check("[identity] a whole-image crop and a same-size resample are the image itself (no copy); a smaller crop is a copy",
+    crop(c, { x: 0, y: 0, w: 97, h: 83 }) === c && crop(c, { x: -5, y: -5, w: 200, h: 200 }) === c && resampleBox(c, 97, 83) === c && crop(c, { x: 0, y: 0, w: 96, h: 83 }).data.buffer !== c.data.buffer);
+}
+
 report();

@@ -28,7 +28,8 @@
 // colorDelta (blend over white below alpha 255 — the 6.x rule, so transparent equals white), the threshold
 // (maxDelta = 35215·t²; t = 0.2, Playwright toHaveScreenshot's default), and the anti-aliasing test (only on a pixel already
 // over the threshold; a pixel that is AA in either image is not counted). Not ported: the identical-image Uint32Array fast path
-// (it throws on a Buffer whose byteOffset is not a multiple of 4), the options object and the drawing.
+// (it throws on a Buffer whose byteOffset is not a multiple of 4 — diffPixels skips byte-equal rows through Buffer views
+// instead), the options object and the drawing.
 //
 // What is ours (NOT pixelmatch): the shift tolerance (a differing pixel whose colour each image has within `shiftPx` device px
 // of it is "absorbed" — a 1-CSS-px layout shift or a glyph placed a pixel over is not a region), the hot cells and regions, the
@@ -156,9 +157,22 @@ export function diffOptionsFor(k: number): DiffOptions {
 /** Is pixel p of `a` matched within `r` px of p by some pixel of `b` (within maxDelta)? */
 function matchedNear(a: Uint8Array, b: Uint8Array, x: number, y: number, w: number, h: number, r: number, maxDelta: number): boolean {
   const p = (y * w + x) * 4;
-  for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) {
-    for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
-      if (Math.abs(colorDelta(a, b, p, (yy * w + xx) * 4)) <= maxDelta) return true;
+  // colorDelta(a, b, p, m) with pixel p's side computed once, not once per neighbour: the same operations in the same order
+  // on the same values, so every |delta| is the same double (the equivalence corpus in test/visual-diff.test.ts checks it)
+  const r0 = a[p] ?? 0, g0 = a[p + 1] ?? 0, b0 = a[p + 2] ?? 0, a0 = a[p + 3] ?? 0;
+  let r1 = r0, g1 = g0, b1 = b0;
+  if (a0 < 255) { const f = a0 / 255; r1 = blend(r1, f); g1 = blend(g1, f); b1 = blend(b1, f); }
+  const y1 = rgb2y(r1, g1, b1), i1 = rgb2i(r1, g1, b1), q1 = rgb2q(r1, g1, b1);
+  const y0 = Math.max(0, y - r), yEnd = Math.min(h - 1, y + r), x0 = Math.max(0, x - r), xEnd = Math.min(w - 1, x + r);
+  for (let yy = y0; yy <= yEnd; yy++) {
+    for (let xx = x0; xx <= xEnd; xx++) {
+      const m = (yy * w + xx) * 4;
+      let r2 = b[m] ?? 0, g2 = b[m + 1] ?? 0, b2 = b[m + 2] ?? 0;
+      const a2 = b[m + 3] ?? 0;
+      if (a0 === a2 && r0 === r2 && g0 === g2 && b0 === b2) return true; // colorDelta's 0
+      if (a2 < 255) { const f = a2 / 255; r2 = blend(r2, f); g2 = blend(g2, f); b2 = blend(b2, f); }
+      const dy = y1 - rgb2y(r2, g2, b2), di = i1 - rgb2i(r2, g2, b2), dq = q1 - rgb2q(r2, g2, b2);
+      if (0.5053 * dy * dy + 0.299 * di * di + 0.1957 * dq * dq <= maxDelta) return true;
     }
   }
   return false;
@@ -172,7 +186,11 @@ export function diffPixels(ref: Rgba, build: Rgba, o: DiffOptions): PixelDiff {
   const maxDelta = maxDeltaOf(o.threshold), r = Math.max(0, Math.round(o.shiftPx));
   const mask = new Uint8Array(w * h);
   let differing = 0, aa = 0, absorbed = 0;
+  // a row whose bytes are equal in both images is all colorDelta 0 (every pixel is skipped below): one memcmp instead. Buffer
+  // views, not a Uint32Array — byte-safe at any byteOffset
+  const ab = Buffer.from(a.buffer, a.byteOffset, a.byteLength), bb = Buffer.from(b.buffer, b.byteOffset, b.byteLength), row = w * 4;
   for (let y = 0; y < h; y++) {
+    if (ab.compare(bb, y * row, (y + 1) * row, y * row, (y + 1) * row) === 0) continue;
     for (let x = 0; x < w; x++) {
       const pos = (y * w + x) * 4;
       const delta = colorDelta(a, b, pos, pos);

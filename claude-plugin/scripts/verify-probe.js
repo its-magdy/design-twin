@@ -2047,13 +2047,14 @@ function encodePng(img) {
 function crop(img, r) {
   const x0 = Math.max(0, Math.min(img.w, Math.round(r.x))), y0 = Math.max(0, Math.min(img.h, Math.round(r.y)));
   const w = Math.max(0, Math.min(img.w - x0, Math.round(r.w))), h = Math.max(0, Math.min(img.h - y0, Math.round(r.h)));
+  if (x0 === 0 && y0 === 0 && w === img.w && h === img.h && img.data.length === w * h * 4) return img;
   const data = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) data.set(img.data.subarray(((y0 + y) * img.w + x0) * 4, ((y0 + y) * img.w + x0 + w) * 4), y * w * 4);
   return { w, h, data };
 }
 function resampleBox(img, w, h) {
   if (w <= 0 || h <= 0) return { w: Math.max(0, w), h: Math.max(0, h), data: new Uint8Array(0) };
-  if (w === img.w && h === img.h) return { w, h, data: img.data.slice() };
+  if (w === img.w && h === img.h) return img.data.length === w * h * 4 ? img : { w, h, data: img.data.slice() };
   const spans = (n, m) => {
     const sc = n / m, out = [];
     for (let o = 0; o < m; o++) {
@@ -2067,8 +2068,11 @@ function resampleBox(img, w, h) {
     return out;
   };
   const xs = spans(img.w, w), ys = spans(img.h, h);
-  const tmp = new Float64Array(w * img.h * 4);
-  for (let y = 0; y < img.h; y++) {
+  const rows = /* @__PURE__ */ new Map(), spare = [];
+  const hRow = (y) => {
+    const have = rows.get(y);
+    if (have) return have;
+    const t = spare.pop() ?? new Float64Array(w * 4);
     for (let x = 0; x < w; x++) {
       let r = 0, g = 0, bl = 0, a = 0, tw = 0;
       for (const [s, wgt] of xs[x] ?? []) {
@@ -2079,23 +2083,33 @@ function resampleBox(img, w, h) {
         a += al * wgt;
         tw += wgt;
       }
-      const o = (y * w + x) * 4;
-      tmp[o] = r / tw;
-      tmp[o + 1] = g / tw;
-      tmp[o + 2] = bl / tw;
-      tmp[o + 3] = a / tw;
+      const o = x * 4;
+      t[o] = r / tw;
+      t[o + 1] = g / tw;
+      t[o + 2] = bl / tw;
+      t[o + 3] = a / tw;
     }
-  }
+    rows.set(y, t);
+    return t;
+  };
   const data = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) {
+    const span = ys[y] ?? [], first = span[0]?.[0];
+    if (first !== void 0) {
+      for (const [s, t] of rows) if (s < first) {
+        rows.delete(s);
+        spare.push(t);
+      }
+    }
+    const src = span.map(([s]) => hRow(s));
     for (let x = 0; x < w; x++) {
       let r = 0, g = 0, bl = 0, a = 0, tw = 0;
-      for (const [s, wgt] of ys[y] ?? []) {
-        const i = (s * w + x) * 4;
-        r += (tmp[i] ?? 0) * wgt;
-        g += (tmp[i + 1] ?? 0) * wgt;
-        bl += (tmp[i + 2] ?? 0) * wgt;
-        a += (tmp[i + 3] ?? 0) * wgt;
+      for (let j = 0; j < span.length; j++) {
+        const t = src[j], wgt = span[j]?.[1] ?? 0, i = x * 4;
+        r += (t?.[i] ?? 0) * wgt;
+        g += (t?.[i + 1] ?? 0) * wgt;
+        bl += (t?.[i + 2] ?? 0) * wgt;
+        a += (t?.[i + 3] ?? 0) * wgt;
         tw += wgt;
       }
       const o = (y * w + x) * 4;
@@ -5684,9 +5698,30 @@ function diffOptionsFor(k) {
 }
 function matchedNear(a, b, x, y, w, h, r, maxDelta) {
   const p = (y * w + x) * 4;
-  for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) {
-    for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
-      if (Math.abs(colorDelta(a, b, p, (yy * w + xx) * 4)) <= maxDelta) return true;
+  const r0 = a[p] ?? 0, g0 = a[p + 1] ?? 0, b0 = a[p + 2] ?? 0, a0 = a[p + 3] ?? 0;
+  let r1 = r0, g1 = g0, b1 = b0;
+  if (a0 < 255) {
+    const f = a0 / 255;
+    r1 = blend(r1, f);
+    g1 = blend(g1, f);
+    b1 = blend(b1, f);
+  }
+  const y1 = rgb2y(r1, g1, b1), i1 = rgb2i(r1, g1, b1), q1 = rgb2q(r1, g1, b1);
+  const y0 = Math.max(0, y - r), yEnd = Math.min(h - 1, y + r), x0 = Math.max(0, x - r), xEnd = Math.min(w - 1, x + r);
+  for (let yy = y0; yy <= yEnd; yy++) {
+    for (let xx = x0; xx <= xEnd; xx++) {
+      const m = (yy * w + xx) * 4;
+      let r2 = b[m] ?? 0, g2 = b[m + 1] ?? 0, b2 = b[m + 2] ?? 0;
+      const a2 = b[m + 3] ?? 0;
+      if (a0 === a2 && r0 === r2 && g0 === g2 && b0 === b2) return true;
+      if (a2 < 255) {
+        const f = a2 / 255;
+        r2 = blend(r2, f);
+        g2 = blend(g2, f);
+        b2 = blend(b2, f);
+      }
+      const dy = y1 - rgb2y(r2, g2, b2), di = i1 - rgb2i(r2, g2, b2), dq = q1 - rgb2q(r2, g2, b2);
+      if (0.5053 * dy * dy + 0.299 * di * di + 0.1957 * dq * dq <= maxDelta) return true;
     }
   }
   return false;
@@ -5698,7 +5733,9 @@ function diffPixels(ref, build, o) {
   const maxDelta = maxDeltaOf(o.threshold), r = Math.max(0, Math.round(o.shiftPx));
   const mask = new Uint8Array(w * h);
   let differing = 0, aa = 0, absorbed = 0;
+  const ab = Buffer.from(a.buffer, a.byteOffset, a.byteLength), bb = Buffer.from(b.buffer, b.byteOffset, b.byteLength), row = w * 4;
   for (let y = 0; y < h; y++) {
+    if (ab.compare(bb, y * row, (y + 1) * row, y * row, (y + 1) * row) === 0) continue;
     for (let x = 0; x < w; x++) {
       const pos = (y * w + x) * 4;
       const delta = colorDelta(a, b, pos, pos);
