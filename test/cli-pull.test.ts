@@ -128,7 +128,9 @@ try {
     check(`one record is appended to the DTWIN_TIMINGS file (got ${lines.length})`, r.status === 0 && rec !== null && rec.schema === "designtwin/timings@1");
     check(`…phases in arrival order with their tick counts (got ${JSON.stringify(phases.map((p) => [p.phase, p.ticks]))})`,
       JSON.stringify(phases.map((p) => [p.phase, p.ticks])) === '[["queued",1],["start",1],["page",1],["assets",2]]');
-    check(`…the queue wait is the time to the first non-queued tick (got ${String(rec?.queueMs)} ms)`, typeof rec?.queueMs === "number" && rec.queueMs >= 50 && rec.queueMs <= Number(rec.exportMs));
+    // exportMs is the done line's Date.now() figure (whole ms), queueMs a performance.now() span: allow that granularity
+    check(`…the queue wait is the time to the first non-queued tick (got ${String(rec?.queueMs)} ms of ${String(rec?.exportMs)} ms)`,
+      typeof rec?.queueMs === "number" && rec.queueMs >= 50 && rec.queueMs <= Number(rec.exportMs) + 2);
     check(`…the payload: 2 assets, their decoded bytes (got ${JSON.stringify(payload)})`,
       payload !== null && payload.assets === 2 && payload.assetBytes === Buffer.from(png, "base64").length + Buffer.byteLength(svgText));
     check("…the connect/export/write split and a peak RSS", typeof rec?.exportMs === "number" && typeof rec.writeMs === "number" && typeof rec.connectMs === "number" && typeof rec.peakRssBytes === "number" && rec.peakRssBytes > 0);
