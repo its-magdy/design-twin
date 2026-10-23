@@ -66,7 +66,7 @@ import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScope } from "./read-p
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
 import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
-import { parsePortEnv } from "./ports.ts";
+import { ALLOWED_PORTS } from "./ports.ts";
 import type { Route, Sent, Upstream } from "./route.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
 // THE command registry (cli-commands.ts): every command's flag, family, read and verb spellings, the
@@ -729,17 +729,18 @@ function showToken(tokenFile: string | null): void {
 // named and found by (daemon.ts winPipe). Replaced or deleted from under it, it would hold the port while no
 // later command could find it any more — each would then fail on the held port. So it is stopped FIRST,
 // while the old token still finds it. Not when an env token or token file is what the bridge actually uses:
-// the stored file changing then changes nothing for it.
+// the stored file changing then changes nothing for it (the env token as token-store reads it: trimmed).
+// Every allowed port, not just FIGMA_BRIDGE_PORT's: the saved token is shared by all three, so a daemon
+// another shell started on 8788 would be stranded the same way.
 async function stopDaemonForTokenChange(): Promise<void> {
-  if (process.env.FIGMA_BRIDGE_TOKEN || process.env.FIGMA_BRIDGE_TOKEN_FILE) return;
-  // A port setting no bridge could have used names no daemon either — and is not this command's to report.
-  const { port } = parsePortEnv(process.env.FIGMA_BRIDGE_PORT);
-  if (port === undefined) return;
-  // Looked up first (status: creates nothing), so a token command never makes a socket directory.
-  if (!(await daemon.status(port).catch(() => null))) return;
-  let stopped = false;
-  try { stopped = await daemon.stop(port); } catch { /* a refused socket location: no daemon of ours is there */ }
-  if (stopped) console.error("[dtwin] stopped the running daemon first — it was using the old token. Start it again with `dtwin serve`.");
+  if ((process.env.FIGMA_BRIDGE_TOKEN || "").trim() || process.env.FIGMA_BRIDGE_TOKEN_FILE) return;
+  for (const port of ALLOWED_PORTS) {
+    // Looked up first (status: creates nothing), so a token command never makes a socket directory.
+    if (!(await daemon.status(port).catch(() => null))) continue;
+    let stopped = false;
+    try { stopped = await daemon.stop(port); } catch { /* a refused socket location: no daemon of ours is there */ }
+    if (stopped) console.error(`[dtwin] stopped the running daemon on port ${port} first — it was using the old token. Start it again with \`dtwin serve\`.`);
+  }
 }
 
 async function rotateToken(): Promise<void> {

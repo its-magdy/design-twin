@@ -153,7 +153,7 @@ for (const verb of ["--rotate-token", "--forget-token"] as const) {
   // dtwin, not dtwinSync: this process serves the fake daemon meanwhile.
   const r = await dtwin([verb], { env });
   check(`${verb} with a daemon running stops it first, under the old token, and says so`,
-    r.status === 0 && seen.includes("__shutdown") && /stopped the running daemon first — it was using the old token/.test(r.stderr));
+    r.status === 0 && seen.includes("__shutdown") && /stopped the running daemon on port 8789 first — it was using the old token/.test(r.stderr));
   const now = (() => { try { return fs.readFileSync(path.join(cfg, "bridge-token"), "utf8").trim(); } catch { return null; } })();
   check(`…and then ${verb === "--rotate-token" ? "replaces" : "deletes"} the token`, verb === "--rotate-token" ? now !== null && now !== T : now === null);
   await new Promise<void>((r2) => fake.close(() => r2()));

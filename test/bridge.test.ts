@@ -2977,7 +2977,10 @@ void (async () => {
   const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-cli-token-"));
   const cli = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
   const runCli = (argv: string[], extraEnv: Record<string, string> = {}) => {
-    const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, ...extraEnv };
+    // TMPDIR too, XDG_RUNTIME_DIR unset: --rotate-token / --forget-token stop a running daemon first, and
+    // the developer's own daemon (at the real socket location) must not be the one they find.
+    const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, TMPDIR: cliDir, TEMP: cliDir, TMP: cliDir, ...extraEnv };
+    delete env.XDG_RUNTIME_DIR;
     delete env.FIGMA_BRIDGE_TOKEN;
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
     if (extraEnv.FIGMA_BRIDGE_TOKEN) env.FIGMA_BRIDGE_TOKEN = extraEnv.FIGMA_BRIDGE_TOKEN;

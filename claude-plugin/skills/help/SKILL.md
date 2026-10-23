@@ -54,9 +54,9 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
   stays up; retry the call). Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
-- **Windows: no sharing (yet).** `dtwin serve` / `dtwin stop` refuse there (the local socket cannot be
-  made private to the user there), so one MCP session or `dtwin` command holds the bridge at a time; the
-  others get a port-in-use error saying so. Close the other session (or wait for the command), then retry.
+- **Windows:** the shared socket is a named pipe named from the bridge token, and both ends prove they
+  hold that token before anything is sent. A daemon started under an earlier token cannot be found by
+  name, so after `dtwin --rotate-token` (which stops a running daemon first) start `dtwin serve` again.
 
 ## What each one lets Claude actually do
 
