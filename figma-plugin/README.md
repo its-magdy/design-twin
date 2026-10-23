@@ -63,8 +63,11 @@ After a rebuild, close & reopen the plugin window (a stale window runs stale `co
 
 ## Progress & cancel
 
-A whole-file (`allPages`) pull can run 10+ minutes, so every **queued** run — manual *and*
-bridge-triggered — is bracketed by `serializeRun` (`src/state.ts`) and reports itself to `ui.html`:
+A whole-file (`allPages`) pull can run 10+ minutes, so every **exclusive** run — manual *and*
+bridge-triggered — is bracketed by `serializeRun` (`src/state.ts`) and reports itself to `ui.html`.
+Every bridge command is scheduled by `scheduleRun` there, from the run kind its contract declares
+(`bridge/src/commands.ts` `runKind`): exclusive runs one at a time; scene reads (the selection, the
+listings) wait on the same chain without being bracketed; identity reads (`ping`, `whoami`) answer at once.
 
 | main → UI | when |
 | --- | --- |

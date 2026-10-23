@@ -186,7 +186,7 @@ figma.ui.onmessage = async (raw: unknown) => {
         error = errMsg(e);
       }
       // No releaseAssets() here: a queued run drops its assets when it settles (state.ts bracket), and
-      // this reply may be an unqueued command answering DURING an export that is still filling them.
+      // this reply may be an identity read (ping, whoami) answering DURING an export that is still filling them.
       post({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
       break;
     }

@@ -16,7 +16,7 @@ const AREAS: readonly string[] = [
   "assets", "library-variables", "pages", "writes",
   "vectors", "manifest-warnings", "geometry", "quick-keys", "page-docs", "library",
   // the bridge side: the run chain, the wire guard, cancel / abandon / liveness
-  "progress-cancel", "wire-args", "args-shape", "unread", "abandon", "live", "screenshot",
+  "progress-cancel", "run-order", "wire-args", "args-shape", "unread", "abandon", "live", "screenshot",
   "hidden-graphics", "same-name-children",
 ];
 const SHARED = ["helpers", "scene"];

@@ -277,10 +277,11 @@
           if (typeof m.requestId === "string") tickFrame.requestId = m.requestId; // a `queued` frame names its run
           ws.send(JSON.stringify(tickFrame));
         }
-        // `queued`: a bridge run waiting behind the run that is executing (state.ts serializeRun). It
+        // `queued`: a bridge run waiting behind the run that is executing (state.ts scheduleRun). It
         // has not begun, so it is relayed (above) and nothing here changes — the window keeps showing
-        // the run that IS walking the file, or stays idle.
-        if (m.phase === "queued") return;
+        // the run that IS walking the file, or stays idle. A `start` here is a scene read that waited
+        // and has now begun: not a run of the window's own (no run-begin), so likewise relayed only.
+        if (m.phase === "queued" || m.phase === "start") return;
         if (!running) runBegin(m); // a frame that outran its run-begin — never show progress with no chrome
         if (cancelSent) return;    // "Cancelling…" must not be overwritten by in-flight frames
         var pg = m.page;

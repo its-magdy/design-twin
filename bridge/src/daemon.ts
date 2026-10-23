@@ -81,21 +81,6 @@ export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
 const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
 const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
 
-// The plugin's UNQUEUED commands that read no scene node (figma-plugin/src/bridge.ts: they skip serializeRun and
-// read only the file and current page — figma.root / figma.currentPage), answered by the plugin DURING an export
-// of the same file. The daemon forwards them without waiting on its queue (serve() below): queued, a `whoami` to
-// file B waited out the whole of file A's export (measured: ~2.8 s of a 3 s export, against ~2 ms idle).
-// Exported for the test that keeps this set inside the plugin's unqueued ones.
-// The plugin's other unqueued commands stay on this queue: an export's catalogue walk holds
-// figma.skipInvisibleInstanceChildren on across its awaits, and inside that window a listing (listPages /
-// listChildren / listLibraries) silently omits hidden layers of instances — listLibraries also toggles the flag
-// itself — and getSelection's reads of a selected hidden instance layer throw (figma-skipinvisibleinstancechildren
-// docs). Serialized here, a daemon client's scene read never overlaps an export. Every export, screenshot and
-// write stays on the queue too, in arrival order.
-export const UNQUEUED_READS: ReadonlySet<string> = new Set<Cmd>(["ping", "whoami"]);
-/** Unqueued in the plugin, but kept on the daemon's queue: they read scene nodes (see UNQUEUED_READS). */
-export const QUEUED_TREE_READS: ReadonlySet<string> = new Set<Cmd>(["getSelection", "listPages", "listChildren", "listLibraries"]);
-
 /** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
  *  is read as the bridge's own describe() wrote it. */
 function isClientRow(x: unknown): x is ClientRow {
@@ -214,8 +199,9 @@ export interface ServeOptions {
  *  progress frames sends none; the request still answers. While ticks arrive, `timeoutMs` is a SILENCE
  *  budget — each tick re-arms it (request() below says why).
  *  `signal` (optional, LAST): the caller giving up. Aborting it closes this request's socket, which the
- *  daemon reads as its client leaving — a queued request is never forwarded, an in-flight one gets the
- *  plugin a cancel frame (serve()'s `abandon`). Any daemon, old or new, treats a closed socket that way. */
+ *  daemon reads as its client leaving — a request still waiting for its plugin is never sent, a sent one gets
+ *  the plugin a cancel frame (serve()'s `abandon`), which drops it from the plugin's queue or stops it at its
+ *  next safe point. Any daemon, old or new, treats a closed socket that way. */
 export interface DaemonConnection {
   sock: string;
   request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]>;
@@ -570,13 +556,12 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
   return forget;
 }
 
-// Requests are SERIALIZED, not multiplexed. server-core's `pending` map is id-keyed and would happily
-// interleave them, but the plugin is single-threaded and its heavy commands mutate shared per-run
-// state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
-// the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
-// existing caller was written against. The one exception is the plugin's own unqueued reads
-// (UNQUEUED_READS): they skip this queue as they skip the plugin's, so a cheap read of one file is not held
-// behind another file's export.
+// Requests are FORWARDED AS THEY ARRIVE, never ordered here. Which commands may run alongside which is a
+// property of the command (commands.ts runKind), and the plugin's run scheduler enforces it for every caller
+// (figma-plugin/src/state.ts scheduleRun) — this socket's clients, the MCP server that holds the bridge, and
+// the plugin window's own buttons alike. A queue here could only see this socket's share of a file's runs, held
+// one file's reads behind another file's export, and moved to the next request when an abandoned one's cancel
+// was SENT, while the plugin was still unwinding it. The plugin's own chain moves when the run has ENDED.
 /** The idle window a daemon uses when its host names none: FIGMA_DAEMON_IDLE_MIN minutes (default 120), in
  *  ms. 0 — and an unparsable value, as it always was — disables the idle shutdown. The ONE spelling of the
  *  rule: serve() reads it, and so does the MCP server once its own client has gone (figma-mcp.ts). */
@@ -593,8 +578,8 @@ export function humanMs(ms: number): string {
 
 /** What the served socket has seen so far — read by a host that has to decide whether OTHER processes
  *  use it (figma-mcp.ts, after its own client went away). `frames` counts every frame received since
- *  serve() started, control frames (`__ping`/`__status`) included; `inFlight` is forwarded requests
- *  queued or running; `lastActivity` is the epoch ms of the last frame or finished request. */
+ *  serve() started, control frames (`__ping`/`__status`) included; `inFlight` is forwarded requests not yet
+ *  answered; `lastActivity` is the epoch ms of the last frame or finished request. */
 export interface DaemonActivity { frames: number; inFlight: number; lastActivity: number }
 
 /** serve()'s handle. `idleOut(ms)` (re)arms the idle shutdown with a window of `ms` (0 disarms it): an
@@ -656,13 +641,13 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     };
     armIdle(idleMs);
 
-    let queue: Promise<void> = Promise.resolve();
-    // CANCEL: every forwarded request, queued or in flight, has an
+    // CANCEL: every forwarded request, waiting for its client or in flight, has an
     // AbortController here AND in its connection's own set. A client that goes away before its reply
     // (Ctrl-C on a CLI, an MCP session ending) aborts its own requests: an in-flight one makes
     // server-core send the plugin `{ type: "cancel", id }` — the daemon's socket to the plugin stays
     // open, so without the frame the plugin would walk the export for nobody and hold every later
-    // command behind it — and a queued one is simply never forwarded. shutdown() aborts all of them.
+    // command behind it (the plugin drops one it still has queued) — and one still waiting for its plugin to
+    // connect is never forwarded. shutdown() aborts all of them.
     const outstanding = new Set<AbortController>();
     const server = net.createServer((conn) => {
       conn.setEncoding("utf8");
@@ -693,24 +678,15 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         // closed — refuse it here instead of forwarding it to a closed bridge.
         if (stopped) return reply(conn, { ok: false, ...ifDefined("id", msg.id), error: "the shared bridge daemon has shut down — run the command again (it starts or finds a bridge of its own)" });
         if (isControl(msg)) return control(conn, msg);
-        // Chain onto the queue so requests run one at a time, in arrival order — all but an unqueued read,
-        // which runs now (UNQUEUED_READS above).
-        inFlight++; // counted OUTSIDE the queue: work that is queued but not yet started still
-                    // counts as activity, so a backlog can't be reaped as idleness.
+        // Forwarded now: the plugin orders it against every other run in its file (see the note above serve()).
+        inFlight++; // work in flight counts as activity, so a long export can't be reaped as idleness.
         const ac = new AbortController();
         mine.add(ac);
         outstanding.add(ac);
-        // Aborted before it reached the plugin: never forwarded. No reply to a departed client (its
-        // socket is gone); a client still connected (the shutdown case) is told why.
-        const abandoned = (): boolean => {
-          if (!ac.signal.aborted) return false;
-          if (!conn.destroyed && conn.writable) reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(ac.signal.reason) });
-          return true;
-        };
-        // Never throws (every path ends in a reply), so a queued one cannot break the chain.
+        // Never throws (every path ends in a reply). An abort before the send (the client left during the
+        // connect wait) is the bridge's to honour: it rejects with the signal's reason and sends nothing.
         const run = async (): Promise<void> => {
           try {
-            if (abandoned()) return;
             // msg.waitForConnection is the caller's connect window (route.ts: the CLI's own window, at least
             // NAMED_CLIENT_WAIT_MS for a named client): the bridge waits for the target first, a named
             // one capped at NAMED_CLIENT_WAIT_MS once a plugin is connected (server-core awaitClient), so
@@ -740,8 +716,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             touch(); // the idle clock starts when work FINISHES, not when it was requested
           }
         };
-        if (UNQUEUED_READS.has(msg.cmd)) void run();
-        else queue = queue.then(run);
+        void run();
       });
       if (!auth) { conn.on("data", onFrames); return; }
       // Handshaking: until the client has proved the token, its bytes go to the handshake (capped, timed),

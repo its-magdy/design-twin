@@ -11,7 +11,10 @@
 //     TypeError three modules later;
 //   - `parseCommandRequest` is its twin on the way IN: the plugin's `handleBridge` narrows the wire's
 //     `{ cmd, args }` to a `CommandRequest` through it, so no collector is handed an args shape that
-//     was only asserted.
+//     was only asserted;
+//   - the run traits (`runKind` / `isExportCmd`): which commands may run alongside which — the plugin's
+//     scheduler orders every run from them, and the bridge side reads `export` for its stall check,
+//     progress ticks and read plans.
 //
 // Dependency-free apart from read-opts.ts (itself dependency-free) and type imports: the plugin bundle imports it too, so it
 // must type-check under figma-plugin/tsconfig.json (ES2019 lib, no Node types). Reply shapes that ARE
@@ -258,30 +261,70 @@ export type Cmd = keyof Commands;
 /** A command with its arguments, as a discriminated union — `switch (req.cmd)` narrows `req.args`. */
 export type CommandRequest = { [C in Cmd]: { cmd: C; args: Commands[C]["args"] } }[Cmd];
 
-// The runtime twin of `Cmd`. A Record keyed by the union is checked both ways by the compiler: a
-// command added to `Commands` without a row here fails to compile, and so does a stray row.
-const COMMAND_SET: Record<Cmd, true> = {
-  ping: true,
-  whoami: true,
-  getSelection: true,
-  listPages: true,
-  listChildren: true,
-  listLibraries: true,
-  exportFull: true,
-  exportDesignSystem: true,
-  exportLibrary: true,
-  exportSelection: true,
-  exportNode: true,
-  screenshot: true,
-  write: true,
-};
+// ---------------------------------------------------------------- run traits
+
+/**
+ * How a command runs in the plugin relative to every other run in that file — the ONE rule, enforced by the
+ * plugin's run scheduler (figma-plugin/src/state.ts scheduleRun) for every caller alike: a CLI or MCP request
+ * through any bridge, and the plugin window's own export buttons.
+ *   - exclusive: mutates the plugin's shared per-run state (assets, stats, warnings, memo caches) or the
+ *     document. Runs alone, in arrival order, bracketed as a run (the window shows it; it can be cancelled).
+ *   - scene: reads scene nodes and mutates nothing, but must not overlap an exclusive run. An export's
+ *     catalogue walk holds figma.skipInvisibleInstanceChildren on across its awaits; a listing inside that
+ *     window silently omits hidden layers of instances (listLibraries also toggles the flag itself), and
+ *     getSelection's reads of a selected hidden instance layer throw (Plugin API docs,
+ *     figma.skipInvisibleInstanceChildren). So it waits its turn on the same chain, but is not bracketed: it
+ *     takes milliseconds, and the window has no export to show for it.
+ *   - identity: reads only figma.root / figma.currentPage — no node walk. Answers at once, DURING an export:
+ *     "is that file still there, and which file is it?" must not wait out a 12-minute pull.
+ */
+export type RunKind = "exclusive" | "scene" | "identity";
+
+export interface CommandTraits {
+  run: RunKind;
+  /** Walks a tree into an export (a reply write-out.ts lands on disk) and can run for minutes: the commands a
+   *  one-shot bridge's stall check and progress ticks are for (route.ts), and a read plan can send (read-plan.ts). */
+  export: boolean;
+}
+
+// The runtime twin of `Cmd`, carrying each command's traits. `satisfies` a Record keyed by the union, so the
+// compiler checks it both ways (a command added to `Commands` without a row here fails to compile, and so does a
+// stray row) while keeping each row's literal types for ExportCmd below.
+const COMMAND_TRAITS = {
+  ping: { run: "identity", export: false },
+  whoami: { run: "identity", export: false },
+  getSelection: { run: "scene", export: false },
+  listPages: { run: "scene", export: false },
+  listChildren: { run: "scene", export: false },
+  listLibraries: { run: "scene", export: false },
+  exportFull: { run: "exclusive", export: true },
+  exportDesignSystem: { run: "exclusive", export: true },
+  exportLibrary: { run: "exclusive", export: true },
+  exportSelection: { run: "exclusive", export: true },
+  exportNode: { run: "exclusive", export: true },
+  screenshot: { run: "exclusive", export: true },
+  write: { run: "exclusive", export: false },
+} as const satisfies Record<Cmd, CommandTraits>;
 
 export function isCmd(x: string): x is Cmd {
-  return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
+  return Object.prototype.hasOwnProperty.call(COMMAND_TRAITS, x);
 }
 
 /** Every command name, in declaration order. */
-export const COMMANDS: readonly Cmd[] = Object.keys(COMMAND_SET).filter(isCmd);
+export const COMMANDS: readonly Cmd[] = Object.keys(COMMAND_TRAITS).filter(isCmd);
+
+/** The commands whose traits say `export: true`. */
+export type ExportCmd = { [C in Cmd]: (typeof COMMAND_TRAITS)[C]["export"] extends true ? C : never }[Cmd];
+
+/** How `cmd` runs relative to other runs in its file (RunKind). */
+export function runKind(cmd: Cmd): RunKind {
+  return COMMAND_TRAITS[cmd].run;
+}
+
+/** Is `cmd` a command whose traits say it is an export (any string: an unknown one is not). */
+export function isExportCmd(cmd: string): cmd is ExportCmd {
+  return isCmd(cmd) && COMMAND_TRAITS[cmd].export;
+}
 
 // ---------------------------------------------------------------- reply shape checks
 

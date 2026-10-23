@@ -63,12 +63,14 @@ export const PLUGIN_REDIAL_MS = 1000;
 // once. A request's own connect window cannot cut the settle short.
 export const SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
 
-// The client-side guard on a request sent through a daemon: the daemon's own command timeout plus every
-// wait the daemon may spend before sending — the connect window, then at most NAMED_CLIENT_WAIT_MS for a
-// named target (server-core awaitClient) — and a margin (it also absorbs the settle, SETTLE_MS), so the
-// daemon's own, clearer error normally lands before the guard does. Not always: the daemon runs requests
-// one at a time and the time a request spends queued behind earlier ones is not counted here, and the
+// The client-side guard on a request sent through a daemon: every phase the daemon's bridge may spend on it — the
+// connect window, then at most NAMED_CLIENT_WAIT_MS for a named target (server-core awaitClient); a wait in the plugin's
+// queue behind an earlier run in that file (figma-plugin state.ts scheduleRun), bounded by the command timeout armed
+// at send; then the run itself, given the whole command timeout again when it starts (server-core re-arms it on the
+// request's `start` frame) — and a margin (it also absorbs the settle, SETTLE_MS), so the daemon's own, clearer error
+// normally lands before the guard does. Two command timeouts, because a request that takes no progress never relays
+// that `start` to the guard (one that does re-arms the guard on every frame instead, as above). Not always first: the
 // MAX_TIMER_MS cap below can cut the sum short.
 // Capped at MAX_TIMER_MS: the guard is one setTimeout, which runs a longer delay after 1 ms.
 export const daemonGuardMs = (timeoutMs: number, connectWaitMs: number = 0): number =>
-  Math.min(timeoutMs + connectWaitMs + Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS) + 30000, MAX_TIMER_MS);
+  Math.min(2 * timeoutMs + connectWaitMs + Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS) + 30000, MAX_TIMER_MS);

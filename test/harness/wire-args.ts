@@ -24,8 +24,8 @@ export const cases: Case[] = [{
       ok(`[WIRE-ARGS] ${cmd} ${JSON.stringify(args)} -> "No node id provided." (unchanged), refused before queueing`,
         r.ok === false && r.error === "No node id provided." && !r.queued);
     }
-    // listChildren is unqueued, so "refused before queueing" is not observable; paired with its
-    // wrong-typed twin instead (without the guard: "Node 5 is not in the open file…").
+    // listChildren is a scene read, never bracketed, so "refused before queueing" is not observable as a run-begin;
+    // paired with its wrong-typed twin instead (without the guard: "Node 5 is not in the open file…").
     const listNoId = await wire("listChildren", {});
     const listBadId = await wire("listChildren", { nodeId: 5 });
     ok("[WIRE-ARGS] listChildren {} -> \"No node id provided.\" (unchanged); nodeId:5 -> named type error",

@@ -26,6 +26,7 @@
 // server-core (which resolves the token and may exit at load).
 import { TIMEOUTS, daemonGuardMs } from "./timeouts.ts";
 import { ifDefined } from "./json-util.ts";
+import { isExportCmd } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { DaemonBridge, DaemonConnection, DaemonStatusView } from "./daemon.ts";
@@ -49,10 +50,6 @@ export function connectionFor(info: ConnectionInfo, connId: string | null | unde
   if (!row) return info;
   return { ...info, connId: row.connId, connectedAt: row.connectedAt, connectionUptimeMs: row.uptimeMs };
 }
-
-/** The commands that walk a tree (and can run for minutes): the ones a stall check and progress ticks are for. */
-const EXPORT_CLASS: ReadonlySet<string> = new Set<Cmd>(["exportNode", "exportSelection", "exportFull", "exportDesignSystem", "exportLibrary", "screenshot"]);
-export const isExportClass = (cmd: string): boolean => EXPORT_CLASS.has(cmd);
 
 /** What a request resolved with, and WHICH connected file answered (null only from a daemon too old to say). */
 export interface Sent<C extends Cmd> { reply: Commands[C]["reply"]; client: ClientRow | null }
@@ -212,7 +209,8 @@ export function createRoute(upstream: () => Promise<Upstream>, policy: RoutePoli
     },
     async request(cmd, args, o = {}) {
       const up = await upstream();
-      const exportClass = isExportClass(cmd);
+      // The `export` run trait (commands.ts): the commands that walk a tree and can run for minutes.
+      const exportClass = isExportCmd(cmd);
       // A one-shot route over its own bridge has spent its window up front: a plugin that connected and has
       // gone since is resolveClient's to report, at once — not another window.
       const spentUpFront = policy.oneShot && up.kind === "own";

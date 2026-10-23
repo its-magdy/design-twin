@@ -161,6 +161,23 @@ check("…and during a UI run a `queued` frame leaves that run's status line alo
   w.msg({ type: "progress", phase: "queued", source: "bridge", label: "exportNode" });
   return w.el("status").textContent === during && /Exporting/.test(during);
 })());
+// A scene read that waited (state.ts scheduleRun) begins without a run of the window's own: the plugin posts a
+// request-scoped `start` progress frame instead of run-begin. Relayed (the bridge re-arms that request's budget on it),
+// with no run chrome — and during a run, that run's status line is left alone.
+check("an unbracketed `start` progress frame is relayed with its requestId but does NOT open the run chrome", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
+  const statusBefore = w.el("status").textContent;
+  w.msg({ type: "progress", phase: "start", source: "bridge", label: "listPages", requestId: "rS-1" });
+  return progressFrames(s).join("|") === '{"type":"progress","phase":"start","requestId":"rS-1"}'
+    && w.el("run-full").disabled === false && w.el("cancel").textContent === "" && w.el("status").textContent === statusBefore;
+})());
+check("…and during a UI run it leaves that run's status line alone", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); openIt(w.last());
+  w.msg({ type: "run-begin", source: "ui", label: "current selection" });
+  const during = w.el("status").textContent;
+  w.msg({ type: "progress", phase: "start", source: "bridge", label: "listPages", requestId: "rS-2" });
+  return w.el("status").textContent === during && /Exporting/.test(during);
+})());
 // the frames name their run's request, so the bridge delivers them to that request only.
 check("run-begin of a bridge run with a requestId → the `start` frame carries it; a `queued` frame keeps its requestId", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);

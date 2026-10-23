@@ -134,7 +134,8 @@ its `--list-libraries` renderer: the CLI/MCP layer is testable without a plugin 
 library reads are the harness's job, not this suite's.
 
 The daemon tests drive a **fake bridge** — no Figma, no WebSocket — so the parts that actually break
-are testable offline: request serialization (the plugin is single-threaded), newline framing across
+are testable offline: forwarding (the daemon keeps no order of its own — the plugin's run order is the
+harness's `run-order` area), newline framing across
 chunks for multi-megabyte replies, stale-socket recovery after a crash, and refusing a second
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
@@ -443,7 +444,7 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
 | `bun test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect all checks to pass |
 | `bun test/cross-check.test.ts` | Screen-vs-design-system join — expect all checks to pass |
 | `bun test/verify-screen.test.ts` | Per-node verification and its verdict — expect all checks to pass |
-| `bun test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
+| `bun test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/forwarding/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect all checks to pass |
 | `bun bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `bun bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
