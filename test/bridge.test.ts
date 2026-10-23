@@ -2409,8 +2409,9 @@ void (async () => {
     await Promise.all(three.map((label) => dcli.request({ cmd: "exportFull", args: {}, timeoutMs: 5000 }, 5000).then(() => order.push(label))));
     ok("[daemon] concurrent client exports run ONE at a time, in arrival order",
       order.join(",") === three.join(",") && calls.filter((c) => c === "exportFull").length === 3);
-    // The daemon's unqueued set IS the plugin's: a command the plugin runs through serializeRun (it mutates
-    // per-run state or the document) must never skip the daemon's queue, and every other one may.
+    // The daemon's unqueued set is the plugin's unqueued commands less the tree-walking listings: a command the
+    // plugin runs through serializeRun (it mutates per-run state or the document) must never skip the daemon's
+    // queue, nor may a listing that could overlap an export's skipInvisibleInstanceChildren window.
     {
       const pluginSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "src", "bridge.ts"), "utf8");
       const queuedInPlugin = (cmd: Cmd): boolean | null => {
@@ -2420,9 +2421,13 @@ void (async () => {
         const next = rest.search(/case "|default:/);
         return /serializeRun\(/.test(next < 0 ? rest : rest.slice(0, next));
       };
-      const mismatched = COMMANDS.filter((c) => queuedInPlugin(c) === null || queuedInPlugin(c) === daemon.UNQUEUED_READS.has(c));
-      ok(`[daemon] the daemon skips its queue for exactly the plugin's unqueued commands (mismatched: ${mismatched.join(",") || "none"})`,
+      const mismatched = COMMANDS.filter((c) => queuedInPlugin(c) === null
+        || (queuedInPlugin(c) === false) !== (daemon.UNQUEUED_READS.has(c) || daemon.QUEUED_TREE_READS.has(c))
+        || (daemon.UNQUEUED_READS.has(c) && daemon.QUEUED_TREE_READS.has(c)));
+      ok(`[daemon] every plugin-unqueued command is either skipped past the daemon's queue or named as a queued tree read, and no queued one is either (mismatched: ${mismatched.join(",") || "none"})`,
         mismatched.length === 0 && daemon.UNQUEUED_READS.size > 0);
+      ok("[daemon] the tree-walking listings stay on the daemon's queue",
+        ["listPages", "listChildren", "listLibraries"].every((c) => daemon.QUEUED_TREE_READS.has(c) && !daemon.UNQUEUED_READS.has(c)));
     }
 
     // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` is not
@@ -3995,7 +4000,7 @@ void (async () => {
         whoami: () => ({ instanceId: "fig-bravo", startedAt: 1, uptimeMs: 5, file: "File Bravo", page: "Home", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: "KEYBRAVO", fileKeyAvailable: true }),
         listPages: () => ({ exportedAt: "2026-10-01T00:00:00.000Z", file: "File Bravo", depth: 1, pages: [], manifest: { pages: 0, warnings: [] } }),
         exportFull: () => fullReply,
-        // listChildren: unhandled → HANG, the in-flight read the cancel check abandons
+        // getSelection: unhandled → HANG, the in-flight read the cancel check abandons
       };
       let bravo = two("fig-bravo", "File Bravo", "KEYBRAVO", bravoOn);
       await alpha.opened;
@@ -4015,8 +4020,10 @@ void (async () => {
       const who = await gcli.requestWithClient({ cmd: "whoami", client: "Bravo", timeoutMs: 5000 }, 5000);
       ok("[two-files] a read of file B answers while file A's export is still running",
         who.reply.file === "File Bravo" && who.client?.file === "File Bravo" && !aSettled);
-      const pagesB = await gcli.request({ cmd: "listPages", client: "KEYBRAVO", args: { depth: 1 }, timeoutMs: 5000 }, 5000);
-      ok("[two-files] …a page list of file B too (routed by fileKey)", pagesB.file === "File Bravo" && !aSettled);
+      // A listing walks node trees: it stays queued (an export's catalogue walk may hold skipInvisibleInstanceChildren on)
+      const pagesB = errOf(gcli.request({ cmd: "listPages", client: "KEYBRAVO", args: { depth: 1 }, timeoutMs: 20000 }, 20000));
+      const pagesForwardedEarly = await until(() => bravo.commands("listPages").length > 0, 400);
+      ok("[two-files] …but a page list of file B is NOT forwarded while file A's export runs (tree reads stay queued)", !pagesForwardedEarly && !aSettled);
       const pingA = await gcli.request({ cmd: "ping", client: "Alpha", timeoutMs: 5000 }, 5000);
       ok("[two-files] …and a ping of file A itself (the plugin answers it during its own export)", pingA.file === "File Alpha" && !aSettled);
       ok("[two-files] an unaddressed read with two files connected is still refused as ambiguous — at once, not after A",
@@ -4039,12 +4046,12 @@ void (async () => {
       ok("[two-files] a read of a file that reconnects mid-export waits for it and answers from the new connection, A still running",
         reWho.reply.file === "File Bravo" && !!reWho.client && reWho.client.connId !== oldBravo && !aSettled);
 
-      // Cancellation: an unqueued read in flight to Bravo (it never answers listChildren) whose client leaves
+      // Cancellation: an unqueued read in flight to Bravo (it never answers getSelection) whose client leaves
       // → Bravo gets the cancel frame for exactly that request; Alpha's export is not touched.
       const ac = new AbortController();
-      const lc = errOf(gcli.request({ cmd: "listChildren", client: "Bravo", args: { nodeId: "1:2" }, timeoutMs: 20000 }, 20000, undefined, ac.signal));
-      await until(() => bravo.commands("listChildren").length === 1);
-      const lcId = bravo.commands("listChildren")[0]?.id;
+      const lc = errOf(gcli.request({ cmd: "getSelection", client: "Bravo", timeoutMs: 20000 }, 20000, undefined, ac.signal));
+      await until(() => bravo.commands("getSelection").length === 1);
+      const lcId = bravo.commands("getSelection")[0]?.id;
       ac.abort();
       await lc;
       await until(() => bravo.cancels.length >= 1);
@@ -4064,8 +4071,9 @@ void (async () => {
       releaseA?.();
       const aOut = await errOf(aDone);
       const bOut = await errOf(bDone);
-      ok("[two-files] once A's export answers, B's queued export is forwarded and answers (arrival order kept)",
-        aOut === "answered" && bOut === "answered" && bravo.commands("exportFull").length === 1);
+      const pagesOut = await pagesB;
+      ok("[two-files] once A's export answers, B's queued page list and export are forwarded and answer (arrival order kept)",
+        aOut === "answered" && bOut === "answered" && pagesOut === "answered" && bravo.commands("exportFull").length === 1);
       await until(() => h.activity().inFlight === 0, 2000);
       ok("[two-files] nothing is left in flight (reads and exports both counted, both released)", h.activity().inFlight === 0);
       h.shutdown();

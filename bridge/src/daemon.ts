@@ -81,12 +81,19 @@ export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
 const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
 const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
 
-// The plugin's UNQUEUED commands (figma-plugin/src/bridge.ts: everything that skips serializeRun): read-only,
-// no per-run state, answered by the plugin DURING an export of the same file. Exported for the test that keeps
-// this set and the plugin's in step. The daemon forwards them without waiting on its queue (serve() below):
-// queued, a `whoami` / `list pages` to file B waited out the whole of file A's export (measured: ~2.8 s of a
-// 3 s export, against ~2 ms idle). Every export, screenshot and write stays on the queue, in arrival order.
-export const UNQUEUED_READS: ReadonlySet<string> = new Set<Cmd>(["ping", "whoami", "getSelection", "listPages", "listChildren", "listLibraries"]);
+// The plugin's UNQUEUED commands that walk no node tree (figma-plugin/src/bridge.ts: they skip serializeRun and
+// read only the file/page/selection identity), answered by the plugin DURING an export of the same file. The
+// daemon forwards them without waiting on its queue (serve() below): queued, a `whoami` to file B waited out the
+// whole of file A's export (measured: ~2.8 s of a 3 s export, against ~2 ms idle). Exported for the test that
+// keeps this set inside the plugin's unqueued ones.
+// listPages / listChildren / listLibraries are unqueued in the plugin too, but stay on this queue: they read
+// node trees, and an export's catalogue walk holds figma.skipInvisibleInstanceChildren on across its awaits —
+// a listing that ran inside that window would silently omit hidden layers of instances (and listLibraries
+// toggles the flag itself). Serialized here, a daemon client's listing never overlaps an export. Every export,
+// screenshot and write stays on the queue too, in arrival order.
+export const UNQUEUED_READS: ReadonlySet<string> = new Set<Cmd>(["ping", "whoami", "getSelection"]);
+/** Unqueued in the plugin, but kept on the daemon's queue (see UNQUEUED_READS). */
+export const QUEUED_TREE_READS: ReadonlySet<string> = new Set<Cmd>(["listPages", "listChildren", "listLibraries"]);
 
 /** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
  *  is read as the bridge's own describe() wrote it. */
