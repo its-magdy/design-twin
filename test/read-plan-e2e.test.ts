@@ -9,10 +9,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { check, report } from "./assert.ts";
+import { dtwin as runDtwin } from "./children.ts";
 import { manifest, screenReply, clientRow } from "./fixtures.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import { writeAny } from "../bridge/src/write-out.ts";
@@ -24,7 +24,6 @@ import type { DaemonBridge } from "../bridge/src/daemon.ts";
 const PORT = 8789;
 const TOKEN = "read-plan-e2e-token";
 const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "bridge", "src", "figma-pull.ts");
 const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
 
 if (!daemon.daemonSupported()) {
@@ -75,14 +74,10 @@ const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "FIGMA_BRIDGE_TOKEN_FILE" && k !== "DTWIN_PORT") env[k] = v;
 Object.assign(env, { FIGMA_BRIDGE_PORT: String(PORT), FIGMA_BRIDGE_TOKEN: TOKEN });
 
-function dtwin(args: string[]): Promise<{ code: number | null; stderr: string }> {
-  return new Promise((resolve) => {
-    const p = spawn(process.execPath, [CLI, ...args], { cwd: work, env });
-    let stderr = "";
-    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-    const kill = setTimeout(() => p.kill("SIGKILL"), 40000);
-    p.on("close", (code) => { clearTimeout(kill); resolve({ code, stderr }); });
-  });
+/** dtwin to completion (test/children.ts), killed with SIGKILL at 40 s. */
+async function dtwin(args: string[]): Promise<{ code: number | null; stderr: string }> {
+  const r = await runDtwin(args, { cwd: work, env, timeoutMs: 40_000 });
+  return { code: r.status, stderr: r.stderr };
 }
 /** The one request a run sent, as `cmd args timeoutMs` — or "none". */
 const sent = (): string => {

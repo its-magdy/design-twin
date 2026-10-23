@@ -4,20 +4,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { check, report } from "./assert.ts";
+import { bunSync, dtwinSync } from "./children.ts";
 import { HELP, OWN_HELP_ROUTED, VERBS, dtwinPortWarning, verbHelp } from "../bridge/src/verbs.ts";
 import { UsageError, parseArgs } from "../bridge/src/figma-pull.ts";
 import { COMMAND_ROWS, COMMAND_SUMMARY, MODIFIERS, VERB_DEFS } from "../bridge/src/cli-commands.ts";
 import { checkPort } from "../bridge/src/doctor.ts";
 
-const CLI = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "cli-help-"));
 // FIGMA_BRIDGE_TOKEN keeps every spawn off the user's saved token; DTWIN_PORT is stripped unless a case sets it.
 const run = (args: string[], extra: Record<string, string> = {}) => {
   const env: Record<string, string | undefined> = { ...process.env, FIGMA_BRIDGE_TOKEN: "t", ...extra };
   if (!("DTWIN_PORT" in extra)) delete env.DTWIN_PORT;
-  return spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8", timeout: 15000, env });
+  return dtwinSync(args, { cwd, timeoutMs: 15000, env });
 };
 const usageError = (fn: () => unknown): string | null => {
   try { fn(); return null; } catch (e) { return e instanceof UsageError ? e.message : "not a UsageError: " + String(e); }
@@ -103,7 +102,7 @@ try {
   // the bundles into ./--help). Run it with a temp cwd so a regression cannot litter the repo.
   console.log("\ncli help — build-scripts --help:");
   const BUILD = path.join(import.meta.dirname, "..", "claude-plugin", "build-scripts.ts");
-  const bs = (arg: string) => spawnSync(process.execPath, [BUILD, arg], { cwd, encoding: "utf8", timeout: 30000 });
+  const bs = (arg: string) => bunSync([BUILD, arg], { cwd, timeoutMs: 30000 });
   const h = bs("--help");
   const bad = bs("--nope");
   check("`build-scripts.ts --help` exits 0, prints usage and creates no `--help` directory; another dash argument is a usage error (exit 2, stderr), also writing nothing",

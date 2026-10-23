@@ -148,6 +148,13 @@ declared once, in `bridge/src/server-core.ts` (`CommandFrame`, `CancelFrame`, `H
 the handshake itself (a refused token, Origin or Host; the dead peer that never pongs) stays on
 `test/ws-client.ts`.
 
+The bridge-side suites start dtwin, the MCP server, seed-components or any `bun <script>` through
+`test/children.ts` (`dtwin` / `dtwinSync`, `startChild` for a long-lived child, `startMcp` with its stdio
+JSON-RPC client, `bridgeEnv` for the child's environment). It runs every child through
+`design-to-code/proc.ts`, the same hardened spawn `cli-runner` and `pool.runNode` use, never detached (so
+run-suites' group kill reaches a server a suite left running). A child whose point is the runtime's own
+pipe or exit behaviour, the thing `proc.ts` works around, is spawned raw.
+
 `cli-commands.ts` is the command registry every part of the CLI surface is derived from, and the two
 suites that own it walk its rows rather than listing commands: `test/figma-pull-args.test.ts` parses every
 command alone, refuses every pair of commands (with the owning family's wording), accepts each read

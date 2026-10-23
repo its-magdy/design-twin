@@ -10,7 +10,7 @@ import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
 import { getEventListeners } from "node:events";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 // The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
@@ -18,6 +18,7 @@ import { WsClient } from "./ws-client.ts";
 import type { ClientOptions, HandshakeRefusal } from "./ws-client.ts";
 import { fakePlugin, HANG, type FakePlugin, type Handler, type Handlers } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
+import { bunSync, dtwinSync, startChild } from "./children.ts";
 import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
 import { screenPaths } from "../bridge/src/pages-layout.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -151,6 +152,11 @@ ok("[auth] safeEqual is length-safe", core.safeEqual("abc", "abcdef") === false 
 // ---------------------------------------------------------------- seed-components CLI
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "seed-test-"));
 const seed = path.join(import.meta.dirname, "..", "bridge", "src", "seed-components.ts");
+/** The seeder run to completion (test/children.ts); a run that fails throws, as execFileSync did. */
+const seedRun = (args: string[]): void => {
+  const r = bunSync([seed, ...args]);
+  if (r.status !== 0) throw new Error(`seed-components ${args.join(" ")} exited ${r.status ?? r.signal ?? "without starting"}\n${r.stderr}`);
+};
 function runSeed(name: string, files: Record<string, string>, existingMap?: object | null, designFiles?: Record<string, unknown>) {
   const root = path.join(tmp, name);
   const design = path.join(root, "design");
@@ -165,7 +171,7 @@ function runSeed(name: string, files: Record<string, string>, existingMap?: obje
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, JSON.stringify(body, null, 2));
   }
-  execFileSync(process.execPath, [seed, root, design], { stdio: "pipe" });
+  seedRun([root, design]);
   const out = path.join(design, "components.json");
   return fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) as Record<string, ComponentsEntry> : null;
 }
@@ -204,7 +210,7 @@ ok("[seed-preserves-human-fields] hand-authored import survives the merge", widg
   // The hand-edited map is rewritten atomically and in its own format (not normalized to LF, 2 spaces)
   const map = path.join(tmp, "poison", "design", "components.json");
   fs.writeFileSync(map, JSON.stringify({ Widget: { component: "Widget", import: "@/ui", props: {} } }, null, 4).split("\n").join("\r\n") + "\r\n");
-  execFileSync(process.execPath, [seed, path.join(tmp, "poison"), path.dirname(map)], { stdio: "pipe" });
+  seedRun([path.join(tmp, "poison"), path.dirname(map)]);
   const text = fs.readFileSync(map, "utf8");
   ok("seed keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     text.includes("\r\n    \"") && !/[^\r]\n/.test(text) && text.endsWith("}\r\n") && !fs.readdirSync(path.dirname(map)).some((f) => f.includes(".tmp-")));
@@ -243,13 +249,12 @@ console.log("\nseed-components — `dtwin seed` (routed by figma-pull.ts before 
   // Driven through the real CLI entry: `dtwin seed` must need no bridge, no token and no plugin, and
   // must be the SAME command as the script run directly. The token env is removed and the config dir
   // pointed at an empty temp dir, so a token minted as a side effect would show up as a file there.
-  const pullCli = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
   const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "seed-cfg-"));
   const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cfgDir };
   delete env.FIGMA_BRIDGE_TOKEN;
   delete env.FIGMA_BRIDGE_TOKEN_FILE;
-  const viaDtwin = (cwd: string, args: string[]) => spawnSync(process.execPath, [pullCli, "seed", ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
-  const direct = (cwd: string, args: string[]) => spawnSync(process.execPath, [seed, ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
+  const viaDtwin = (cwd: string, args: string[]) => dtwinSync(["seed", ...args], { cwd, env, timeoutMs: 10000 });
+  const direct = (cwd: string, args: string[]) => bunSync([seed, ...args], { cwd, env, timeoutMs: 10000 });
   // A project root with ONE Code Connect template under src/.
   const project = (name: string) => {
     const root = path.join(tmp, name);
@@ -529,9 +534,9 @@ void (async () => {
     ok("[bind] a second bridge on a held port reports it through onListenError (after createBridge returned), with the port-in-use text",
       returnedFirst && !!listenErr && (listenErr as Error).message.startsWith(`[bridge] port ${port} is already in use`) && second.boundPort() === null);
     second.close();
-    const child = spawnSync(process.execPath, ["-e",
+    const child = bunSync(["-e",
       `const c = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)}); c.createBridge(${port});`],
-    { encoding: "utf8", timeout: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
+    { timeoutMs: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
     ok("[bind] …and another process (NODE_ENV=production) exits 1 with it instead of sharing the port",
       child.status === 1 && child.stderr.includes(`[bridge] port ${port} is already in use`));
     ok("[bind] the first bridge still answers on the port", bridge.boundPort() === port && await new Promise<number | undefined>((res) => {
@@ -1079,7 +1084,7 @@ void (async () => {
     })());
     ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {
       const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
-      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const run = (args: string[]) => dtwinSync(["init", ...args], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const r = run(["--dry-run", "--mcp"]);
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
     })());
@@ -1088,7 +1093,7 @@ void (async () => {
     // auto-install from the network, no project .env in the server's environment.
     ok("[init] CLI: --mcp registers {command: <this bun>, args: [--no-install, --no-env-file, <abs figma-mcp.ts>]}", (() => {
       const d = mk({});
-      const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--mcp"], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const r = dtwinSync(["init", "--mcp"], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command: string; args: string[] }> }).mcpServers.designtwin;
       const mcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
       return r.status === 0 && !!e && e.command === init.stableBunPath() && path.isAbsolute(e.command) && fs.realpathSync(e.command) === fs.realpathSync(process.execPath)
@@ -1098,7 +1103,7 @@ void (async () => {
     ok("[init] CLI: --mcp on a Node-era entry of ours: --dry-run prints the repair and leaves the file; the run repairs it", (() => {
       const before = JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/gone/bridge/dist/figma-mcp.js"] } } });
       const d = mk({ ".mcp.json": before });
-      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const run = (args: string[]) => dtwinSync(["init", ...args], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const dry = run(["--mcp", "--dry-run"]);
       const dryOk = dry.status === 0 && /would write \.mcp\.json — REPAIRED the "designtwin" MCP server entry — it runs on Node/.test(dry.stderr) && fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before;
       const real = run(["--mcp"]);
@@ -1109,7 +1114,7 @@ void (async () => {
     // `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
     // filesystem diff after a real `init` and cross-check it against the four paths named in --help.
     ok("[init] --help lists exactly what init creates — a filesystem diff after init matches the help text", (() => {
-      const helpRun = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--help"], { encoding: "utf8", timeout: 5000 });
+      const helpRun = dtwinSync(["init", "--help"], { timeoutMs: 5000 });
       const help = helpRun.stdout;
       // Never promise to create the hand-owned files that only get written later, on demand.
       if (/Creates:.*codeconnect\.local\.json/s.test(help) || /Creates:.*plan\//s.test(help) || /Creates:.*audit\//s.test(help) || /Creates:.*verify\//s.test(help)) return false;
@@ -1129,14 +1134,14 @@ void (async () => {
   ok("[args] --json is accepted on the printing commands", parse(["--list-clients", "--json"]).json === true && parse(["--list-libraries", "--json"]).json === true && parse(["--list", "--json"]).json === true && parse(["--list"]).json === false);
   ok("[args] --json on an export is refused (it writes files, prints no result)", /--json applies to the commands that PRINT/.test(usage(["--all-pages", "--json"]) || "") && /--json applies/.test(usage(["--json"]) || ""));
   ok("[args] --help prints the usage header and exits 0 without starting a bridge", (() => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = dtwinSync(["--help"], { timeoutMs: 5000 });
     return r.status === 0 && /Usage:/.test(r.stdout) && /--list-libraries/.test(r.stdout) && !/listening/.test(r.stderr);
   })());
   // `dtwin --help` must mention `--client`, the flag
   // every plugin-reaching command needs once two Figma files are connected — otherwise it appears only in
   // bridge/README.md (a clone-only file) and in `list clients`' own table.
   ok("[args] --help mentions --client, pointing at `dtwin list clients`", (() => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = dtwinSync(["--help"], { timeoutMs: 5000 });
     return r.status === 0 && /--client/.test(r.stdout) && /list clients/.test(r.stdout);
   })());
   ok("[args] default timeout scales with the work (selection < page < all-pages)", (() => {
@@ -2613,10 +2618,10 @@ void (async () => {
   {
     console.log("\ndaemon.ts — installCrashHandlers:");
     const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
-    const run = (body: string) => spawnSync(process.execPath, ["--input-type=module", "-e",
+    const run = (body: string) => bunSync(["--input-type=module", "-e",
       `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
       `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("cleanup ran"));\n` +
-      `installCrashHandlers((m) => console.error("[second] " + m));\n` + body], { encoding: "utf8" });
+      `installCrashHandlers((m) => console.error("[second] " + m));\n` + body]);
     const rej = run(`Promise.reject(new Error("boom"));\nsetTimeout(() => console.log("still alive"), 50);`);
     const rejLines = rej.stderr.split("\n").filter((l) => l.trim() && !/ExperimentalWarning|--trace-warnings/.test(l));
     ok("[crash] an unhandled rejection is logged as ONE line through errMsg", rejLines.length === 1 && rejLines[0] === "[t] unhandled promise rejection (continuing): boom");
@@ -2626,13 +2631,13 @@ void (async () => {
       exc.status === 1 && exc.stderr.includes("[t] uncaught exception — exiting: kaboom") && !exc.stdout.includes("still alive"));
     ok("[crash] its synchronous cleanup runs before the exit", exc.stdout.includes("cleanup ran"));
     ok("[crash] installed once per process — a second install adds no second handler", !rej.stderr.includes("[second]") && !exc.stderr.includes("[second]"));
-    const two = spawnSync(process.execPath, ["-e",
+    const two = bunSync(["-e",
       `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
       `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("first cleanup"));\n` +
       `const forget = installCrashHandlers(() => {}, () => console.log("dropped cleanup"));\n` +
       `installCrashHandlers(() => {}, () => { throw new Error("a failing cleanup"); });\n` +
       `installCrashHandlers(() => {}, () => console.log("last cleanup"));\n` +
-      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`], { encoding: "utf8" });
+      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`]);
     ok("[crash] every install's cleanup runs (the MCP server's and a daemon's), in order, past a failing one — and a forgotten one does not",
       two.status === 1 && /first cleanup\nlast cleanup/.test(two.stdout) && !two.stdout.includes("dropped cleanup"));
   }
@@ -2977,7 +2982,7 @@ void (async () => {
     delete env.FIGMA_BRIDGE_TOKEN;
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
     if (extraEnv.FIGMA_BRIDGE_TOKEN) env.FIGMA_BRIDGE_TOKEN = extraEnv.FIGMA_BRIDGE_TOKEN;
-    return spawnSync(process.execPath, [cli, ...argv], { encoding: "utf8", env });
+    return dtwinSync(argv, { env });
   };
 
   const statusFresh = runCli(["--token-status"]);
@@ -3034,7 +3039,7 @@ void (async () => {
   const bootEnv: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: bootDir };
   delete bootEnv.FIGMA_BRIDGE_TOKEN;
   delete bootEnv.FIGMA_BRIDGE_TOKEN_FILE;
-  const boot = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  const boot = bunSync([bootScript], { env: bootEnv });
   const bootFile = path.join(bootDir, "bridge-token");
   ok("[token-boot] starting a bridge with nothing saved mints and PERSISTS a token", fs.existsSync(bootFile));
   const bootTok = fs.existsSync(bootFile) ? fs.readFileSync(bootFile, "utf8").trim() : "";
@@ -3042,7 +3047,7 @@ void (async () => {
   ok("[token-boot] and says it was saved, so the user knows not to expect it again",
     /saved to/.test(boot.stderr) && /won't be asked to paste it again/.test(boot.stderr));
   // The regression the whole store exists to prevent: the SECOND run must reuse, not re-mint.
-  const boot2 = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  const boot2 = bunSync([bootScript], { env: bootEnv });
   ok("[token-boot] a SECOND bridge start reuses the saved token instead of minting a new one",
     fs.readFileSync(bootFile, "utf8").trim() === bootTok);
   ok("[token-boot] and does NOT reprint the secret into the terminal", !boot2.stderr.includes(bootTok));
@@ -3072,7 +3077,7 @@ void (async () => {
   // The design-to-code scripts an agent probes answer --help with their usage and exit 0 (not
   // "unknown option --help" with exit 1).
   for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = bunSync([path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { timeoutMs: 5000 });
     ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
   }
   ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
@@ -3163,11 +3168,8 @@ void (async () => {
     };
     const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN };
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
-    const child = spawn(process.execPath, [cli, "list", "--timeout", "10"], { env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (b: Buffer) => { stdout += b.toString(); });
-    child.stderr.on("data", (b: Buffer) => { stderr += b.toString(); });
-    const exited = new Promise<number | null>((res) => child.on("exit", (code) => res(code)));
+    const child = startChild([cli, "list", "--timeout", "10"], { env });
+    const exited = child.done.then((r) => r.status);
     // Dial until the CLI's bridge is up (it binds after module load), then say hello and answer every command
     // (listPages with the reply above, anything else with `{}`).
     let plugin: FakePlugin | null = null;
@@ -3179,9 +3181,10 @@ void (async () => {
       });
       plugin = await c.opened.then(() => c, () => null);
     }
-    const timer = setTimeout(() => child.kill(), 20000);
+    const timer = setTimeout(() => child.kill("SIGTERM"), 20000);
     const code = await exited;
     clearTimeout(timer);
+    const stdout = child.stdout(), stderr = child.stderr();
     plugin?.close();
     ok("[list-cli] `dtwin list` against a fake plugin exits 0 and prints the reply", code === 0 && /"Sectioned App"/.test(stdout));
     ok("[list-cli] the per-type breakdown counts layers from pages[].frames (not always empty)",
@@ -3449,7 +3452,7 @@ void (async () => {
     delete env.FIGMA_BRIDGE_TOKEN;
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
     if (!extraEnv.FIGMA_BRIDGE_PORT) delete env.FIGMA_BRIDGE_PORT;
-    return spawnSync(process.execPath, [cli, "doctor", ...argv], { encoding: "utf8", env, cwd: projDir, timeout: 20000 });
+    return dtwinSync(["doctor", ...argv], { env, cwd: projDir, timeoutMs: 20000 });
   };
   // These two assertions need the port to be genuinely free — no daemon, no plugin — which port 8787
   // is NOT when a real dtwin daemon happens to be running on the developer's machine (a live daemon
@@ -3484,7 +3487,7 @@ void (async () => {
     // clients connected. We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
     // --timeout 1: with no plugin to wait for the command fails in ~1 s instead of idling until the 5 s cap kills it
-    spawnSync(process.execPath, [cli, "nonexistent-outdir", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    dtwinSync(["nonexistent-outdir", "--timeout", "1"], { cwd: dir, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
@@ -3496,12 +3499,12 @@ void (async () => {
     fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
     // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
     // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
-    const r = spawnSync(process.execPath, [cli, "design", "--list", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r = dtwinSync(["design", "--list", "--timeout", "1"], { cwd: dir, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] warns when the user-typed outDir already contains export/",
       /warn: design already contains design(\/|\\)export/.test(r.stderr));
     ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
     const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
-    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list", "--timeout", "1"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r2 = dtwinSync(["somewhere-else", "--list", "--timeout", "1"], { cwd: clean, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
@@ -3847,7 +3850,7 @@ void (async () => {
         "bridge.close();",
       ].join("\n"));
       const t0 = Date.now();
-      const r = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 20000 });
+      const r = bunSync([script], { timeoutMs: 20000 });
       ok("[cancel] an aborted request leaves no timer behind — the process exits on its own promptly",
         r.status === 0 && /REJECTED:request aborted by the caller/.test(r.stdout) && Date.now() - t0 < 10000);
       fs.rmSync(dir, { recursive: true, force: true });

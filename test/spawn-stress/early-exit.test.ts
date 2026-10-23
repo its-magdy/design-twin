@@ -7,7 +7,7 @@
 // The child is this bun (`-e "process.exit(2)"`), so it runs the same on every OS.
 import { test, expect } from "bun:test";
 import { spawn } from "node:child_process";
-import { runAsync } from "../spawn-helper.ts";
+import { runAsync } from "../../design-to-code/proc.ts";
 
 const ARGS = ["-e", "process.exit(2)"];
 

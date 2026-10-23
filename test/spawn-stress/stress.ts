@@ -1,5 +1,5 @@
 // Stress the runtime's child-process bug classes on this host, raw next to the hardened helper (design-to-code/proc.ts,
-// which test/spawn-helper.ts re-exports). Not a suite (run-suites does not run it, it prints no checks line): a CI job
+// which the suites import directly). Not a suite (run-suites does not run it, it prints no checks line): a CI job
 // runs it on a loaded box, where these bugs show (.github/workflows/spawn-stress.yml).
 //   bun test/spawn-stress/stress.ts <mode> [N=300] [concurrency=8]
 // Prints one line `bun <version>  <mode>  N=… C=…  fail=<n>  <s>  <ms/run>` and up to five failures. Exit: 1 when a GATED mode
@@ -11,7 +11,7 @@
 // #41782 a piped stream that loses its head under load.
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
-import { runAsync, runSync, type ProcResult } from "../spawn-helper.ts";
+import { runAsync, runSync, type ProcResult } from "../../design-to-code/proc.ts";
 
 const MODES = ["raw-async", "raw-async-late", "helper-async", "bun-spawn", "raw-sync-pipe", "raw-sync-cat", "helper-sync",
   "big-stderr-pipe", "big-stderr-sync-pipe", "helper-big-stderr", "fake-early-exit", "fake-lost-exit"] as const;
