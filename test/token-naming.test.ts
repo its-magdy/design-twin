@@ -234,6 +234,13 @@ check("[enclosing] an opener alone on its line takes its head from the line abov
     && literalUses([{ rel: "tokens.ts", text: array }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.length === 0
     && literalUses([{ rel: "Card.tsx", text: closed }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.tsx";
 })());
+// Review round 9: a value head is a bare key (`light: {`, `"dark": [`), never an expression that ends in `:` or `=`.
+check("[near] a ternary or other expression ending in `:` is not a value head", (() => {
+  const ternary = "export const colorsTokens = {\n  make: (enabled: boolean) => enabled ? defaults : {\n    brand600: \"#5B5FC7\",\n  },\n};";
+  const quoted = "export const ColorsTokens = {\n  \"light\": [{\n    brand600: \"#5B5FC7\",\n  }, {\n    brand600: \"#5B5FC7\",\n  }],\n};";
+  return literalUses([{ rel: "theme.ts", text: ternary }], "#5B5FC7", ["colorsTokens.light.brand600"]).usedIn.join() === "theme.ts"
+    && literalUses([{ rel: "tokens.ts", text: quoted }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.length === 0;
+})());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
   const text = "const colorsTokens = useColorsTokens();\nconst styles = {\n  backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  hero: colorsTokens.light.brand600,\n};";

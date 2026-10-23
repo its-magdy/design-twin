@@ -2700,7 +2700,7 @@ function namesToken(declared, codeToken, opts) {
     return false;
   }));
 }
-var VALUE_HEAD = /(?:^|[:=,([{])\s*$/;
+var VALUE_HEAD = /^\s*(?:(?:[\w$]+|"[^"]*"|'[^']*')\s*[:=]\s*)?[([{,\s]*$/;
 var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 
 // design-to-code/code-scanner.ts

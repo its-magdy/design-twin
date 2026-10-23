@@ -206,9 +206,9 @@ export function namesToken(declared: string, codeToken: string, opts: { styleshe
     return false;
   }));
 }
-// The head of a bracket that opens a value inside a value: nothing before it on its line, or a key, an `=`, a `,` or
-// another bracket.
-const VALUE_HEAD = /(?:^|[:=,([{])\s*$/;
+// The head of a bracket that opens a value inside a value: nothing but a bare key (`light: {`, `"dark": [`, `light = {`),
+// a `,` or other brackets on its line — never an expression that merely ends in one (`cond ? a : {`, `() => ({`).
+const VALUE_HEAD = /^\s*(?:(?:[\w$]+|"[^"]*"|'[^']*')\s*[:=]\s*)?[([{,\s]*$/;
 
 /** The custom properties `codeToken` needs declared (lower-cased): `--x` for `--x` / `var(--x)`, `--color-<name>` for a
  *  colour utility that is not a Tailwind built-in. Anything else (a bare name, `Color.brand`) needs none. */
