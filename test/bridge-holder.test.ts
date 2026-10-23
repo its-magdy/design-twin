@@ -31,7 +31,8 @@ interface FakeBridge extends OwnBridge { closes: number; listenError: boolean }
 
 /** A bridge factory whose bridges bind at once — or, with `held`, report a held port (through onListenError when given
  *  one, as server-core does; without one, the real thing would exit the process, which no case here asks for). */
-function bridges({ held = false, bindMs = 0 }: { held?: boolean; bindMs?: number } = {}) {
+function bridges({ held: heldAt = false, bindMs = 0 }: { held?: boolean | "once"; bindMs?: number } = {}) {
+  let held = heldAt;
   const made: FakeBridge[] = [];
   const given: BridgeSettings[] = [];
   const factory: BridgeFactory = (_settings, opts) => {
@@ -58,6 +59,7 @@ function bridges({ held = false, bindMs = 0 }: { held?: boolean; bindMs?: number
     made.push(b);
     setTimeout(() => {
       if (!held) { ready(); return; }
+      if (held === "once") held = false;
       b.listenError = true;
       opts.onListenError?.(new Error(`[bridge] port ${_settings.port} is already in use`));
     }, bindMs);
@@ -290,6 +292,20 @@ console.log("\nsession:");
   const rebind = b.given[1];
   check("…and a rebind is given it as saved: never minted (and written over a rotated file) or printed again",
     b.given.length === 2 && rebind?.token.ok === true && rebind.token.resolved.source === "file" && !rebind.token.resolved.created);
+  h.release();
+}
+
+{
+  // First run with the port held: the bridge saved the token it minted before its bind failed.
+  const FIRST: BridgeSettings = { ...SETTINGS, token: { ok: true, resolved: { token: "minted", source: "ephemeral", path: null, created: false } } };
+  const b = bridges({ held: "once" });
+  const d = daemonSide();
+  const { h } = holder("session", b, d, FIRST);
+  const err = await errOf(h.upstream());
+  await h.upstream();
+  const retry = b.given[1];
+  check("a token minted by a bridge whose bind then failed is adopted too: the retry is given it as saved",
+    err !== null && b.given.length === 2 && retry?.token.ok === true && retry.token.resolved.source === "file" && retry.token.resolved.token === "minted");
   h.release();
 }
 

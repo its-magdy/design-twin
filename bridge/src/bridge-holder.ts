@@ -117,27 +117,20 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
   // Open a bridge of our own. `survive`: a held port is this call's error (session), not an exit (one-shot, serve
   // — server-core prints the fix and exits 1 when no onListenError is given).
   async function bind(survive: boolean): Promise<OwnBridge> {
-    const b = await bound(survive);
-    if (settings.token.ok) settings = { ...settings, token: { ok: true, resolved: b.tokenInUse() } };
-    // Released while it was binding (the command finished, a signal, the client left): nobody is left to use it.
-    if (done) { b.close(); throw new Error(RELEASED); }
-    return b;
-  }
-  async function bound(survive: boolean): Promise<OwnBridge> {
-    if (!survive) {
-      const b = deps.createBridge(settings, {});
-      await b.listening;
-      return b;
-    }
     let failed: (e: Error) => void = () => {};
     const bindFailed = new Promise<never>((_, reject) => { failed = reject; });
-    const b = deps.createBridge(settings, { onListenError: (e) => failed(e) });
+    const b = deps.createBridge(settings, survive ? { onListenError: (e) => failed(e) } : {});
+    // A token createBridge minted is saved before it binds: adopt it now, so a bind that then fails (a held port)
+    // still leaves the next attempt — and every daemon lookup — with the token as saved.
+    if (settings.token.ok) settings = { ...settings, token: { ok: true, resolved: b.tokenInUse() } };
     try {
-      await Promise.race([b.listening, bindFailed]);
+      await (survive ? Promise.race([b.listening, bindFailed]) : b.listening);
     } catch (e) {
       b.close();
       throw e;
     }
+    // Released while it was binding (the command finished, a signal, the client left): nobody is left to use it.
+    if (done) { b.close(); throw new Error(RELEASED); }
     return b;
   }
 
