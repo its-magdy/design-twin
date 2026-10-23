@@ -81,6 +81,13 @@ export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
 const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
 const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
 
+// The plugin's UNQUEUED commands (figma-plugin/src/bridge.ts: everything that skips serializeRun): read-only,
+// no per-run state, answered by the plugin DURING an export of the same file. Exported for the test that keeps
+// this set and the plugin's in step. The daemon forwards them without waiting on its queue (serve() below):
+// queued, a `whoami` / `list pages` to file B waited out the whole of file A's export (measured: ~2.8 s of a
+// 3 s export, against ~2 ms idle). Every export, screenshot and write stays on the queue, in arrival order.
+export const UNQUEUED_READS: ReadonlySet<string> = new Set<Cmd>(["ping", "whoami", "getSelection", "listPages", "listChildren", "listLibraries"]);
+
 /** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
  *  is read as the bridge's own describe() wrote it. */
 function isClientRow(x: unknown): x is ClientRow {
@@ -559,7 +566,9 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
 // interleave them, but the plugin is single-threaded and its heavy commands mutate shared per-run
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
-// existing caller was written against.
+// existing caller was written against. The one exception is the plugin's own unqueued reads
+// (UNQUEUED_READS): they skip this queue as they skip the plugin's, so a cheap read of one file is not held
+// behind another file's export.
 /** The idle window a daemon uses when its host names none: FIGMA_DAEMON_IDLE_MIN minutes (default 120), in
  *  ms. 0 — and an unparsable value, as it always was — disables the idle shutdown. The ONE spelling of the
  *  rule: serve() reads it, and so does the MCP server once its own client has gone (figma-mcp.ts). */
@@ -676,7 +685,8 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         // closed — refuse it here instead of forwarding it to a closed bridge.
         if (stopped) return reply(conn, { ok: false, ...ifDefined("id", msg.id), error: "the shared bridge daemon has shut down — run the command again (it starts or finds a bridge of its own)" });
         if (isControl(msg)) return control(conn, msg);
-        // Chain onto the queue so requests run one at a time, in arrival order.
+        // Chain onto the queue so requests run one at a time, in arrival order — all but an unqueued read,
+        // which runs now (UNQUEUED_READS above).
         inFlight++; // counted OUTSIDE the queue: work that is queued but not yet started still
                     // counts as activity, so a backlog can't be reaped as idleness.
         const ac = new AbortController();
@@ -689,7 +699,8 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
           if (!conn.destroyed && conn.writable) reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(ac.signal.reason) });
           return true;
         };
-        queue = queue.then(async () => {
+        // Never throws (every path ends in a reply), so a queued one cannot break the chain.
+        const run = async (): Promise<void> => {
           try {
             if (abandoned()) return;
             // msg.waitForConnection is the caller's connect window (route.ts: the CLI's own window, at least
@@ -720,7 +731,9 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             inFlight--;
             touch(); // the idle clock starts when work FINISHES, not when it was requested
           }
-        });
+        };
+        if (UNQUEUED_READS.has(msg.cmd)) void run();
+        else queue = queue.then(run);
       });
       if (!auth) { conn.on("data", onFrames); return; }
       // Handshaking: until the client has proved the token, its bytes go to the handshake (capped, timed),

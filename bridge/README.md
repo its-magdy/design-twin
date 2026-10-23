@@ -737,7 +737,9 @@ stops it too, and a port-in-use error names that socket.
 Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
-  exactly like a sequence of one-shot runs.
+  exactly like a sequence of one-shot runs. The cheap reads the plugin itself answers during an export
+  (`ping`, `whoami`, the selection, `list pages` / `list` / `list children`, `list libraries`) are not
+  held behind that order: a `whoami` to one file answers while another file exports.
 - Every request id is unique per bridge (`r<nonce>-<seq>`) and a reply only settles the request on the
   connection it was sent to, so a late reply from an abandoned earlier request cannot answer the
   next one. When the plugin is connected but sends nothing the stall message says so ("the plugin is
