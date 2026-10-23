@@ -552,7 +552,9 @@ function gitHeadAssetHashes(cwd: string, assets: readonly string[], relOf: (a: s
  *  the request names nothing in HEAD, or undefined when it names something that is not a blob (a directory: the caller
  *  asks `git show`, as before). The whole result is null when the batch cannot answer at all: not a repository, a git
  *  without -Z (2.43+), or a path outside the repository (fatal to the whole batch) — the caller then reads each the old
- *  way. A batch that times out (each read before had the same 60 s) has nothing for any of them. */
+ *  way. A batch that times out is null too: the 60 s limit was each read's own, so a batch of many blobs that runs
+ *  past it says nothing about any one of them — each is read the old way, under its own limit, so no comparison is
+ *  silently skipped. */
 function gitHeadBlobs(cwd: string, rels: readonly string[]): Array<{ oid: string; bytes: Buffer } | null | undefined> | null {
   if (!rels.length) return [];
   // -Z: requests and replies are NUL-terminated, so a path with a newline is one request; every reply is size-framed
@@ -560,8 +562,7 @@ function gitHeadBlobs(cwd: string, rels: readonly string[]): Array<{ oid: string
   const reqs = rels.map((rel) => "HEAD:./" + rel);
   const input = Buffer.from(reqs.map((q) => q + "\0").join(""), "utf8");
   const r = runSync("git", ["cat-file", "--batch", "-Z"], { cwd, input, binary: true, expect: (x) => parseCatFileBatch(x.stdoutBytes, reqs) !== null, quiet: true, timeoutMs: 60_000 });
-  if (r.timedOut) return rels.map(() => null);
-  return r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
+  return !r.timedOut && r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
 }
 function parseCatFileBatch(out: Buffer | undefined, reqs: readonly string[]): Array<{ oid: string; bytes: Buffer } | null | undefined> | null {
   if (!out) return null;

@@ -1305,8 +1305,7 @@ function gitHeadBlobs(cwd, rels) {
   const reqs = rels.map((rel) => "HEAD:./" + rel);
   const input = Buffer.from(reqs.map((q) => q + "\0").join(""), "utf8");
   const r = runSync("git", ["cat-file", "--batch", "-Z"], { cwd, input, binary: true, expect: (x) => parseCatFileBatch(x.stdoutBytes, reqs) !== null, quiet: true, timeoutMs: 6e4 });
-  if (r.timedOut) return rels.map(() => null);
-  return r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
+  return !r.timedOut && r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
 }
 function parseCatFileBatch(out, reqs) {
   if (!out) return null;
