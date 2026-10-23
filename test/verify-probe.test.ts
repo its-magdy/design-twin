@@ -28,6 +28,7 @@ import * as VP from "../design-to-code/verify-probe.ts";
 import type { Match, MatchPool, NoMatch, ResolvedFrame } from "../design-to-code/probe-match.ts";
 import type { Candidate, CollectOutput, ElemFlags, MeasureResult, SizedCandidate } from "../design-to-code/probe-page.ts";
 import { errorKind, installHint, installedInProject, resolvePlaywright } from "../design-to-code/verify-probe.ts";
+import { closeCapped, launchPid } from "../design-to-code/probe-session.ts";
 import type { VerifySpec } from "../design-to-code/types.ts";
 import { must } from "./fixtures.ts";
 import type * as PDT from "../design-to-code/probe-drive.ts";
@@ -1408,7 +1409,7 @@ fs.rmSync(tmp, { recursive: true, force: true });
 
 // ---- which rows the probe drives, its time budget, what it calls an outcome, when it says ok (probe-drive.ts)
 block("probe-drive:", () => {
-  const { drivable, driveBudget, classifyOutcome, judge } = PD;
+  const { drivable, classifyOutcome, judge } = PD;
   const ia = (nodeId: string, extra: Partial<VerifyInteraction>): VerifyInteraction => ({ nodeId, name: nodeId, trigger: "on_click", ...extra });
   const exp: Pick<VerifyExpectation, "interactions" | "hidden"> = {
     hidden: { roots: [], ids: ["9:9"] },
@@ -1433,8 +1434,6 @@ block("probe-drive:", () => {
     () => ids.includes("1:2") && ids.includes("1:3") && ids.includes("1:6") && ids.indexOf("1:1") === ids.length - 1 && !["1:4", "1:5", "9:9", "1:7", "1:8"].some((x) => ids.includes(x)) && ids.filter((x) => x === "1:2").length === 1);
   t("drivable(): a plan dialog row is driven only with an on_click/on_press trigger (not on_hover, not a key)",
     () => JSON.stringify(ids) === JSON.stringify(["1:2", "1:3", "1:6", "1:11", "1:1"]));
-  t("driveBudget(): min(60 s, --max-time left − 15 s), never below 0", () => !!driveBudget
-    && driveBudget(0, 180_000) === 60_000 && driveBudget(130_000, 180_000) === 35_000 && driveBudget(0, 16_000) === 1_000 && driveBudget(10_000, 16_000) === 0);
   const opened = { selector: "html > body > dialog", modal: true, position: "fixed", rect: { x: 0, y: 0, w: 10, h: 10 }, scrollY: 0 };
   t("classifyOutcome(overlay): a contract match → dialog-opened (its selector); only the destination tag → selector-appeared via destination-tag; nothing → none", () => !!classifyOutcome
     && classifyOutcome("overlay", { detectedBy: ":modal", dest: { count: 1, inside: true, newly: true }, opened }).outcome === "dialog-opened"
@@ -1658,10 +1657,6 @@ block("probe-drive:", () => {
 
 // ---- the behaviour checks' pure helpers (probe-behaviour.ts) — the browser half is test/verify-probe-behaviour-e2e.test.ts
 block("behaviour helpers", () => {
-  t("behaviourBudget: min(90 s, deadline − now − 20 s), never < 0", () => {
-    const bb = PB.behaviourBudget;
-    return !!bb && bb(0, 180_000) === 90_000 && bb(0, 50_000) === 30_000 && bb(0, 15_000) === 0 && bb(1000, 1000) === 0;
-  });
   t("the shipped probe-behaviour.ts cites no private working path", () => !/design-twin-g12-work|~\/design-twin/.test(fs.readFileSync(path.join(import.meta.dirname, "..", "design-to-code", "probe-behaviour.ts"), "utf8")));
   // On a fake DOM: markOpener computes the opener's CONTROL once (window.__dtBeh.control) and keyTarget /
   // focusOpener / walkStep use it — a button INSIDE a card opener is never it; the opener button itself, the button around a
@@ -2173,10 +2168,6 @@ block("behaviour helpers", () => {
     if (!ok) console.log(`    ${JSON.stringify({ unmarked, noPair, marked, cpPair, refused, cardNoPair, sole1, dropped, remembered, kept, keptAgain })}`);
     return ok;
   });
-  t("unitCap: an even share of what is left, never under 15 s, never over what is left", () => {
-    const uc = PB.unitCap;
-    return !!uc && uc(60_000, 16) === 15_000 && uc(160_000, 4) === 40_000 && uc(10_000, 3) === 10_000 && uc(90_000, 1) === 90_000 && uc(0, 5) === 0;
-  });
   t("taintedPhases: a blocked write taints every check of the unit from its FIRST action on — a commit deferred > 1 s (Enter at 0, Tabs 300…1200, the write at 1100) still taints keyboard.activation; checks before the first action (reach, a11y.landmarks) never", () => {
     const tp = PB.taintedPhases;
     if (!tp) return false;
@@ -2279,10 +2270,6 @@ block("behaviour helpers", () => {
     return kept.filter(Boolean).length === 20 && kept[19] === true && kept[20] === false && log.list.length === 20 && log.more === 1580
       && blocked.length === 20 && blocked[19]?.more === 1580 && blocked[0]?.more === undefined
       && /^not-run: the page tried to write \(WebSocket \/ws \+1599 more\) — blocked; not judged$/.test(out[0]?.detail ?? "") && ((bw) => Array.isArray(bw) && bw.length <= 5)(out[0]?.evidence?.blockedWrites);
-  });
-  t("the reserve covers the worst teardown: a cut unit's settle + both capped close steps + the kill (its wait and at most one command, within KILL_STEP_CAP_MS) + a write margin (≥ 2 s) — so a wedged browser never turns a finished measurement into exit 4", () => {
-    const { BEHAVIOUR_RESERVE_MS: r, CUT_SETTLE_MS: c, CLOSE_STEP_CAP_MS: k, WRITE_MARGIN_MS: w, KILL_STEP_CAP_MS: kill } = PB;
-    return r !== undefined && c !== undefined && k !== undefined && w !== undefined && kill !== undefined && w >= 2000 && r >= c + 2 * k + kill + w && (PB.behaviourBudget?.(0, 60_000) ?? -1) === 60_000 - r;
   });
   t("nameStatus: a titled iframe passes on its DOM name (`- iframe` never carries one), an untitled one fails; <summary> (`- text: …`) passes on its text; an unnamed group passes (its name is optional); an unnamed button fails", () => {
     const ns = PB.nameStatus;
@@ -2467,7 +2454,7 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once("exit", (_c, sig) => resolve(sig)));
     await new Promise<void>((resolve) => { child.once("spawn", () => resolve()); });
     let threw = false;
-    try { await VP.closeCapped(fake, 200, child.pid, host(process.platform, slow)); } catch { threw = true; }
+    try { await closeCapped(fake, 200, child.pid, host(process.platform, slow)); } catch { threw = true; }
     const sig = await Promise.race([exited, sleep(5_000, undefined, { ref: false }).then(() => "still running" as const)]);
     if (sig === "still running") child.kill("SIGKILL");
     check(`closeCapped: the launched browser still running after the close (the handle already disconnected), every ps/pgrep past its cap → SIGKILLed with its group (${sig ?? "exited"}; commands run ${JSON.stringify(slow)}${threw ? ", closeCapped threw" : ""})`,
@@ -2484,16 +2471,16 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
   const procOf = (platform: NodeJS.Platform, stats: Record<string, string>) => ({ platform, self: SELF,
     readFile: (file: string): string => { const v = stats[/^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? ""]; if (v === undefined) throw new Error(`ENOENT ${file}`); return v; } });
   const stat = (pid: number, ppid: number): string => `${pid} (headless shell) S ${ppid} ${pid} ${pid} 0 -1 4194560`;
-  const reported = await VP.launchPid(cdpOf(answers), 500, procOf("darwin", {}));
-  const linuxChild = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, SELF) }));
-  const linuxOther = await VP.launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, 1) }));
-  const linuxNone = await VP.launchPid(cdpOf(answers), 500, procOf("linux", {}));
+  const reported = await launchPid(cdpOf(answers), 500, procOf("darwin", {}));
+  const linuxChild = await launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, SELF) }));
+  const linuxOther = await launchPid(cdpOf(answers), 500, procOf("linux", { "4242": stat(4242, 1) }));
+  const linuxNone = await launchPid(cdpOf(answers), 500, procOf("linux", {}));
   check(`launchPid: the reported pid as is on macOS; on Linux only when this process is its parent — another parent or no /proc/<pid>/stat → none (saw ${JSON.stringify([reported, linuxChild, linuxOther, linuxNone])})`,
     reported === 4242 && linuxChild === 4242 && linuxOther === undefined && linuxNone === undefined);
-  const failed = await VP.launchPid(cdpOf(() => Promise.reject(new Error("'SystemInfo.getProcessInfo' wasn't found"))), 500, procOf("darwin", {}));
+  const failed = await launchPid(cdpOf(() => Promise.reject(new Error("'SystemInfo.getProcessInfo' wasn't found"))), 500, procOf("darwin", {}));
   const at = Date.now();
   const live = setTimeout(() => undefined, 2_000); // the cap is unref'd: a real browser's pipes keep the process up meanwhile
-  const silent = await VP.launchPid(cdpOf(() => new Promise(() => undefined)), 200, procOf("darwin", {}));
+  const silent = await launchPid(cdpOf(() => new Promise(() => undefined)), 200, procOf("darwin", {}));
   clearTimeout(live);
   check(`launchPid: the "browser" entry's id; none when the call fails or does not answer within the cap (saw ${JSON.stringify([reported, failed, silent])} in ${Date.now() - at} ms)`,
     reported === 4242 && failed === undefined && silent === undefined && Date.now() - at < 2_000);
@@ -2506,11 +2493,11 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
   const stuckGone = { ...stuck, isConnected: () => false };
   const rejects = { ...fake, close: () => Promise.reject(new Error("close failed")), isConnected: () => true };
   const pipes = setTimeout(() => undefined, 5_000); // the close caps are unref'd: a real browser's pipes keep the process up meanwhile
-  await VP.closeCapped(stuck, 200, 4242, { ...host("win32", win), exists: (pid) => pid === 4242 });
-  await VP.closeCapped(stuckGone, 200, 4242, { ...host("win32", winGone), exists: (pid) => pid === 4242 });
+  await closeCapped(stuck, 200, 4242, { ...host("win32", win), exists: (pid) => pid === 4242 });
+  await closeCapped(stuckGone, 200, 4242, { ...host("win32", winGone), exists: (pid) => pid === 4242 });
   clearTimeout(pipes);
-  await VP.closeCapped(fake, 200, 4242, { ...host("win32", winClosed), exists: (pid) => pid === 4242 });
-  await VP.closeCapped(rejects, 200, 4242, { ...host("win32", winRejected), exists: (pid) => pid === 4242 });
+  await closeCapped(fake, 200, 4242, { ...host("win32", winClosed), exists: (pid) => pid === 4242 });
+  await closeCapped(rejects, 200, 4242, { ...host("win32", winRejected), exists: (pid) => pid === 4242 });
   const oneKill = JSON.stringify([["taskkill", "/T", "/F", "/PID", "4242"]]);
   check(`closeCapped on Windows: the close capped, the browser still connected → one taskkill /T /F /PID <its pid>, no other command; the close rejected, still connected → the same; the close capped after the browser disconnected, or resolved → no taskkill though the pid exists (saw ${JSON.stringify([win, winRejected, winGone, winClosed])})`,
     JSON.stringify(win) === oneKill && JSON.stringify(winRejected) === oneKill && winGone.length === 0 && winClosed.length === 0);

@@ -14,366 +14,7 @@ var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex")
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep5 } from "node:timers/promises";
-
-// design-to-code/kill-tree.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-import fs2 from "node:fs";
-
-// design-to-code/proc.ts
-import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-// bridge/src/stdio.ts
-import { format, inspect } from "node:util";
-function installQueuedConsole(o = {}) {
-  trackWrites(process.stdout);
-  trackWrites(process.stderr);
-  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
-  const err = process.stderr;
-  let indent = "";
-  const write = (s, text) => {
-    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
-  };
-  const line = (s) => (...a) => {
-    write(s, format(...a));
-  };
-  console.log = console.info = console.debug = line(out);
-  console.warn = console.error = line(err);
-  console.dir = (item, options) => {
-    write(out, inspect(item, { customInspect: false, ...options }));
-  };
-  console.dirxml = line(out);
-  console.table = (data) => {
-    write(out, inspect(data));
-  };
-  console.write = (...data) => {
-    let n = 0;
-    for (const d of data) {
-      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
-      if (b.length) {
-        out.write(b);
-        n += b.length;
-      }
-    }
-    return n;
-  };
-  console.clear = () => {
-    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
-  };
-  console.trace = (...a) => {
-    const e = new Error(format(...a));
-    e.name = "Trace";
-    Error.captureStackTrace(e, console.trace);
-    write(err, e.stack ?? `Trace: ${e.message}`);
-  };
-  console.assert = (cond, ...a) => {
-    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
-  };
-  console.group = console.groupCollapsed = (...a) => {
-    if (a.length) write(out, format(...a));
-    indent += "  ";
-  };
-  console.groupEnd = () => {
-    indent = indent.slice(0, -2);
-  };
-  const counts = /* @__PURE__ */ new Map();
-  console.count = (label = "default") => {
-    const n = (counts.get(label) ?? 0) + 1;
-    counts.set(label, n);
-    write(out, `${label}: ${n}`);
-  };
-  console.countReset = (label = "default") => {
-    counts.delete(label);
-  };
-  const timers = /* @__PURE__ */ new Map();
-  const elapsed = (label) => {
-    const t = timers.get(label);
-    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
-  };
-  console.time = (label = "default") => {
-    timers.set(label, performance.now());
-  };
-  console.timeLog = (label = "default", ...a) => {
-    const e = elapsed(label);
-    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
-    else write(out, [e, ...a.map((x) => format(x))].join(" "));
-  };
-  console.timeEnd = (label = "default") => {
-    const e = elapsed(label);
-    timers.delete(label);
-    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
-  };
-}
-var inFlight = /* @__PURE__ */ new Map();
-function trackWrites(s) {
-  if (inFlight.has(s)) return;
-  const st = { n: 0, idle: [] };
-  inFlight.set(s, st);
-  const write = s.write.bind(s);
-  const settle2 = () => {
-    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
-  };
-  s.write = (chunk2, encoding, cb) => {
-    const done = typeof encoding === "function" ? encoding : cb;
-    const enc = typeof encoding === "function" ? void 0 : encoding;
-    if (chunk2.length === 0) return write(chunk2, enc, done);
-    st.n++;
-    let called = false;
-    return write(chunk2, enc, (err) => {
-      if (!called) {
-        called = true;
-        settle2();
-      }
-      done?.(err);
-    });
-  };
-}
-var flushStdio = () => Promise.all([process.stdout, process.stderr].map((s) => new Promise((r) => {
-  const st = inFlight.get(s);
-  if (!st || st.n === 0) r();
-  else st.idle.push(r);
-}))).then(() => void 0);
-var CliExit = class extends Error {
-  code;
-  constructor(code) {
-    super(`exit ${code}`);
-    this.name = "CliExit";
-    this.code = code;
-  }
-};
-var cliDepth = 0;
-function exitCli(code) {
-  if (cliDepth > 0) throw new CliExit(code);
-  process.exit(code);
-}
-function runCli(main2, o, argv = process.argv.slice(2)) {
-  installQueuedConsole();
-  const done = o.done ?? ((code) => {
-    process.exitCode = code;
-  });
-  const fail = (e) => {
-    if (e instanceof CliExit) return done(e.code);
-    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
-    done(o.errorCode ?? 1);
-  };
-  cliDepth++;
-  let settled = false;
-  const leave = () => {
-    if (!settled) {
-      settled = true;
-      cliDepth--;
-    }
-  };
-  try {
-    const r = main2(argv);
-    if (typeof r === "number") {
-      leave();
-      done(r);
-    } else r.then((c) => {
-      leave();
-      done(c);
-    }, (e) => {
-      leave();
-      fail(e);
-    });
-  } catch (e) {
-    leave();
-    fail(e);
-  }
-}
-function exitFlushed(code, capMs = 2e3) {
-  const exit = () => process.exit(code);
-  setTimeout(exit, capMs).unref();
-  void flushStdio().then(exit);
-}
-
-// design-to-code/proc.ts
-var readBytes = (f) => {
-  try {
-    return fs.readFileSync(f);
-  } catch {
-    return Buffer.alloc(0);
-  }
-};
-function syncOnce(cmd, args, o, attempt) {
-  const t0 = Date.now();
-  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
-  const stdin = o.input !== void 0 ? "pipe" : "ignore";
-  const done = (s, stdout, stderr) => ({
-    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
-    signal: s.signal ?? null,
-    stdout,
-    stderr,
-    ms: Date.now() - t0,
-    ...s.error ? { error: s.error } : {},
-    ...s.pid ? { pid: s.pid } : {},
-    timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
-    attempts: attempt
-  });
-  const piped = () => {
-    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
-    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
-    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
-  };
-  let dir = null;
-  if (o.capture !== "pipe") try {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
-  } catch {
-  }
-  if (dir === null) return piped();
-  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
-  try {
-    let out = null, err = null;
-    try {
-      out = fs.openSync(outF, "wx+");
-      err = fs.openSync(errF, "wx+");
-    } catch {
-      if (out !== null) fs.closeSync(out);
-      return piped();
-    }
-    let s;
-    try {
-      s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
-    } finally {
-      fs.closeSync(out);
-      fs.closeSync(err);
-    }
-    const bytes = readBytes(outF);
-    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
-  } finally {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-    }
-  }
-}
-function runSync(cmd, args, o = {}) {
-  const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
-  let r = syncOnce(cmd, args, o, 1);
-  if (!valid(r) && r.status === 0 && !r.error) {
-    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
-`);
-    r = syncOnce(cmd, args, o, 2);
-  }
-  if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
-  return r;
-}
-var pause = new Int32Array(new SharedArrayBuffer(4));
-
-// design-to-code/kill-tree.ts
-import { setTimeout as sleep } from "node:timers/promises";
-var taskkillCapped = (capMs) => (args) => spawnSync2("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: capMs });
-var KILL_HOST = {
-  platform: process.platform,
-  taskkill: taskkillCapped(1e4),
-  kill: (pid, s) => {
-    process.kill(pid, s);
-  }
-};
-var killPidTree = (pid, host = KILL_HOST) => {
-  if (!(pid > 1)) return false;
-  if (host.platform === "win32") {
-    const r = host.taskkill(["/T", "/F", "/PID", String(pid)]);
-    return r.error === void 0 && r.status === 0;
-  }
-  try {
-    host.kill(-pid, "SIGKILL");
-    return true;
-  } catch {
-    return false;
-  }
-};
-var PROC_HOST = {
-  ...KILL_HOST,
-  self: process.pid,
-  readdir: (dir) => fs2.readdirSync(dir),
-  readFile: (file) => fs2.readFileSync(file, "utf8"),
-  // pgrep -P / ps -A, captured through a file (proc.ts runSync): exit 0 says it listed something (pgrep's "none matched" is
-  // exit 1), so an exit 0 with no pid in its output (Bun #46142: a lost capture) is run once more, then reported as an
-  // error — never read as "no children", which would leave the browser running
-  run: (cmd, args, timeoutMs) => {
-    const r = runSync(cmd, args, { timeoutMs, expect: (x) => x.status !== 0 || /\d/.test(x.stdout) });
-    const error = r.error ?? (r.lost !== void 0 ? new Error(`${cmd}: ${r.lost}`) : void 0);
-    return { ...error !== void 0 ? { error } : {}, status: r.status, stdout: r.stdout };
-  },
-  exists: (pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-};
-var pidsIn = (text) => text.split(/\s+/).filter((w) => /^\d+$/.test(w)).map(Number);
-function parentPid(pid, host = PROC_HOST) {
-  let stat;
-  try {
-    stat = host.readFile(`/proc/${pid}/stat`);
-  } catch {
-    return void 0;
-  }
-  const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-  return Number.isInteger(ppid) && ppid >= 0 ? ppid : void 0;
-}
-var notFound = (e) => e !== void 0 && "code" in e && e.code === "ENOENT";
-function childPids(host = PROC_HOST, capMs = 3e3) {
-  if (host.platform === "win32") return null;
-  if (host.platform === "linux") {
-    let entries = null;
-    try {
-      entries = host.readdir("/proc");
-    } catch {
-    }
-    if (entries !== null) {
-      const kids2 = [];
-      for (const e of entries) {
-        if (!/^\d+$/.test(e)) continue;
-        if (parentPid(Number(e), host) === host.self) kids2.push(Number(e));
-      }
-      return kids2;
-    }
-  }
-  const pg = host.run("pgrep", ["-P", String(host.self)], capMs);
-  if (pg.error === void 0 && (pg.status === 0 || pg.status === 1)) return pidsIn(pg.stdout);
-  if (!notFound(pg.error)) return null;
-  const ps = host.run("ps", ["-A", "-o", "pid=,ppid="], capMs);
-  if (ps.error !== void 0 || ps.status !== 0) return null;
-  const kids = [];
-  for (const line of ps.stdout.split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
-    if (m && Number(m[2]) === host.self) kids.push(Number(m[1]));
-  }
-  return kids;
-}
-var POLL_MS = 50;
-async function killChildTree(pid, host = PROC_HOST, { capMs = 3e3, graceMs = 0, exited = false } = {}) {
-  const known = pid !== void 0 && pid > 1 ? pid : void 0;
-  if (host.platform === "win32" && (known === void 0 || exited)) return;
-  const targets = known !== void 0 ? [known] : childPids(host, capMs) ?? [];
-  const until = Date.now() + graceMs;
-  while (targets.some((t) => host.exists(t)) && Date.now() < until) await sleep(POLL_MS);
-  if (host.platform === "win32") {
-    if (known !== void 0 && host.exists(known)) killPidTree(known, host);
-    return;
-  }
-  const end = (t) => {
-    if (killPidTree(t, host) || !host.exists(t)) return;
-    try {
-      host.kill(t, "SIGKILL");
-    } catch {
-    }
-  };
-  if (known === void 0) {
-    for (const t of targets) end(t);
-    return;
-  }
-  if (killPidTree(known, host) || !host.exists(known)) return;
-  for (const t of childPids(host, capMs) ?? []) end(t);
-}
+import { setTimeout as sleep6 } from "node:timers/promises";
 
 // design-to-code/probe-page.ts
 function collectCandidates(input) {
@@ -1409,7 +1050,7 @@ function census(nodes, notMeasured) {
 }
 
 // design-to-code/verify-shared.ts
-import path2 from "node:path";
+import path from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1476,8 +1117,8 @@ function normFamily(v) {
 }
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
 function resolveInside(base, rel, within = base) {
-  const root = path2.resolve(within), file = path2.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path2.sep) ? file : null;
+  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path.sep) ? file : null;
 }
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
@@ -1761,7 +1402,7 @@ function isStringRecord(x) {
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/read-json.ts
-import fs3 from "node:fs";
+import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -1780,7 +1421,7 @@ function readFailure(e) {
 function readJson(file, guard) {
   let buf;
   try {
-    buf = fs3.readFileSync(file);
+    buf = fs.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
@@ -1808,6 +1449,251 @@ function readJsonOrNull(file, guard) {
 import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+// design-to-code/proc.ts
+import { spawn, spawnSync } from "node:child_process";
+import fs2 from "node:fs";
+import os from "node:os";
+import path2 from "node:path";
+
+// bridge/src/stdio.ts
+import { format, inspect } from "node:util";
+function installQueuedConsole(o = {}) {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
+  const err = process.stderr;
+  let indent = "";
+  const write = (s, text) => {
+    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
+  };
+  const line = (s) => (...a) => {
+    write(s, format(...a));
+  };
+  console.log = console.info = console.debug = line(out);
+  console.warn = console.error = line(err);
+  console.dir = (item, options) => {
+    write(out, inspect(item, { customInspect: false, ...options }));
+  };
+  console.dirxml = line(out);
+  console.table = (data) => {
+    write(out, inspect(data));
+  };
+  console.write = (...data) => {
+    let n = 0;
+    for (const d of data) {
+      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
+      if (b.length) {
+        out.write(b);
+        n += b.length;
+      }
+    }
+    return n;
+  };
+  console.clear = () => {
+    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
+  };
+  console.trace = (...a) => {
+    const e = new Error(format(...a));
+    e.name = "Trace";
+    Error.captureStackTrace(e, console.trace);
+    write(err, e.stack ?? `Trace: ${e.message}`);
+  };
+  console.assert = (cond, ...a) => {
+    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
+  };
+  console.group = console.groupCollapsed = (...a) => {
+    if (a.length) write(out, format(...a));
+    indent += "  ";
+  };
+  console.groupEnd = () => {
+    indent = indent.slice(0, -2);
+  };
+  const counts = /* @__PURE__ */ new Map();
+  console.count = (label = "default") => {
+    const n = (counts.get(label) ?? 0) + 1;
+    counts.set(label, n);
+    write(out, `${label}: ${n}`);
+  };
+  console.countReset = (label = "default") => {
+    counts.delete(label);
+  };
+  const timers = /* @__PURE__ */ new Map();
+  const elapsed = (label) => {
+    const t = timers.get(label);
+    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
+  };
+  console.time = (label = "default") => {
+    timers.set(label, performance.now());
+  };
+  console.timeLog = (label = "default", ...a) => {
+    const e = elapsed(label);
+    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
+    else write(out, [e, ...a.map((x) => format(x))].join(" "));
+  };
+  console.timeEnd = (label = "default") => {
+    const e = elapsed(label);
+    timers.delete(label);
+    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
+  };
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle2 = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk2, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk2.length === 0) return write(chunk2, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk2, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle2();
+      }
+      done?.(err);
+    });
+  };
+}
+var flushStdio = () => Promise.all([process.stdout, process.stderr].map((s) => new Promise((r) => {
+  const st = inFlight.get(s);
+  if (!st || st.n === 0) r();
+  else st.idle.push(r);
+}))).then(() => void 0);
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  let settled = false;
+  const leave = () => {
+    if (!settled) {
+      settled = true;
+      cliDepth--;
+    }
+  };
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") {
+      leave();
+      done(r);
+    } else r.then((c) => {
+      leave();
+      done(c);
+    }, (e) => {
+      leave();
+      fail(e);
+    });
+  } catch (e) {
+    leave();
+    fail(e);
+  }
+}
+function exitFlushed(code, capMs = 2e3) {
+  const exit = () => process.exit(code);
+  setTimeout(exit, capMs).unref();
+  void flushStdio().then(exit);
+}
+
+// design-to-code/proc.ts
+var readBytes = (f) => {
+  try {
+    return fs2.readFileSync(f);
+  } catch {
+    return Buffer.alloc(0);
+  }
+};
+function syncOnce(cmd, args, o, attempt) {
+  const t0 = Date.now();
+  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
+  const stdin = o.input !== void 0 ? "pipe" : "ignore";
+  const done = (s, stdout, stderr) => ({
+    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
+    signal: s.signal ?? null,
+    stdout,
+    stderr,
+    ms: Date.now() - t0,
+    ...s.error ? { error: s.error } : {},
+    ...s.pid ? { pid: s.pid } : {},
+    timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
+    attempts: attempt
+  });
+  const piped = () => {
+    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
+    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
+    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  };
+  let dir = null;
+  if (o.capture !== "pipe") try {
+    dir = fs2.mkdtempSync(path2.join(os.tmpdir(), "dt-spawn-"));
+  } catch {
+  }
+  if (dir === null) return piped();
+  const outF = path2.join(dir, "out"), errF = path2.join(dir, "err");
+  try {
+    let out = null, err = null;
+    try {
+      out = fs2.openSync(outF, "wx+");
+      err = fs2.openSync(errF, "wx+");
+    } catch {
+      if (out !== null) fs2.closeSync(out);
+      return piped();
+    }
+    let s;
+    try {
+      s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
+    } finally {
+      fs2.closeSync(out);
+      fs2.closeSync(err);
+    }
+    const bytes = readBytes(outF);
+    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  } finally {
+    try {
+      fs2.rmSync(dir, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+function runSync(cmd, args, o = {}) {
+  const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
+  let r = syncOnce(cmd, args, o, 1);
+  if (!valid(r) && r.status === 0 && !r.error) {
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path2.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+`);
+    r = syncOnce(cmd, args, o, 2);
+  }
+  if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
+  return r;
+}
+var pause = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/cli-args.ts
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
@@ -1955,7 +1841,7 @@ function stepsSha256(steps) {
 }
 
 // design-to-code/probe-drive.ts
-import { setTimeout as sleep2 } from "node:timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // design-to-code/pw-errors.ts
 var pwFirstLine = (e) => firstLine(e).trimEnd();
@@ -3036,11 +2922,6 @@ function drivable(exp) {
   });
   return [...rows.filter((r) => r.destinationExported !== false), ...rows.filter((r) => r.destinationExported === false)];
 }
-var DRIVE_CAP_MS = 6e4;
-var DRIVE_RESERVE_MS = 15e3;
-function driveBudget(now, deadline, capMs = DRIVE_CAP_MS, reserveMs = DRIVE_RESERVE_MS) {
-  return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
-}
 function classifyOutcome(action, read2) {
   const destNew = !!(read2.dest && read2.dest.newly);
   if (String(action).toLowerCase() === "swap") {
@@ -3063,39 +2944,7 @@ function judge(action, e) {
   if (e.activation !== "mouse") missing.push("synthetic click (headless) \u2014 not a user activation");
   return { ok: missing.length ? null : true, missing };
 }
-var StepError = class extends Error {
-};
 var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
-var CUT_SETTLE_MS = 5e3;
-var CUT = /* @__PURE__ */ Symbol("cut");
-var UNSETTLED = /* @__PURE__ */ Symbol("unsettled");
-function holdContext(held) {
-  return (c) => {
-    held.ctx = c;
-    if (held.cut) void c.close().catch(() => void 0);
-  };
-}
-async function raceBudget(work, ms, held, onCut) {
-  let timer;
-  let r;
-  try {
-    r = await Promise.race([work, new Promise((resolve) => {
-      timer = setTimeout(() => resolve(CUT), ms);
-    })]);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (r !== CUT) return { cut: false, value: r };
-  onCut?.();
-  held.cut = true;
-  const ctx = held.ctx;
-  const wound = (async () => {
-    if (ctx) await ctx.close().catch(() => void 0);
-    await work;
-  })();
-  const s = await Promise.race([wound, sleep2(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
-  return { cut: true, settled: s !== UNSETTLED };
-}
 var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 function shapeDistance(q, px, py) {
   const hw = (q.right - q.x) / 2, hh = (q.bottom - q.y) / 2, dx = px - (q.x + hw), dy = py - (q.y + hh);
@@ -3206,139 +3055,109 @@ async function restoreSettled(page) {
     held = await page.evaluate(scrollHeld) ? held + 1 : 0;
   }
 }
-async function openReached(browser, o, extra) {
-  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: extra?.dsf ?? 1, reducedMotion: "reduce" });
-  if (extra && extra.onContext) extra.onContext(context);
-  let loads = 0;
-  try {
-    const page = await context.newPage();
-    page.setDefaultTimeout(o.timeout);
-    await page.addInitScript({ content: o.initScript });
-    page.on("load", () => {
-      loads++;
-    });
-    await o.reach(page);
-    return { context, page, loads: () => loads };
-  } catch (e) {
-    await context.close().catch(() => void 0);
-    throw e;
-  }
-}
-async function driveRow(browser, o, row, hooks, onContext) {
+async function driveRow({ page, loads }, row, hooks) {
   const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
   const destId = row.destinationId ?? null;
-  let opened;
-  try {
-    opened = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { onContext });
-  } catch (e) {
-    if (e instanceof StepError) return notRun(row, `the steps failed \u2014 ${e.message}`, { stepsFailed: e.message });
-    return notRun(row, `could not reach the screen \u2014 ${firstLine(e)}`);
-  }
-  const { context, page, loads } = opened;
   const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
-  try {
-    let st = await page.evaluate(openerState, { id: row.nodeId });
-    const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
-    if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog \u2014 not driven` };
-    if (st.disabled) return { ...base, ok: null, detail: "opener is disabled \u2014 not driven" };
-    if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
-    const submits = await page.locator(st.path).first().evaluate(submitGuard);
-    if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
-    await page.evaluate(tipPreMark, null).catch(() => false);
-    let revealedBy;
-    if (!st.visible) {
-      if (st.hoverPath !== null) {
-        revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
-        await page.mouse.move(0, 0);
-        await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
-        await raf2(page);
-        st = await page.evaluate(openerState, { id: row.nodeId });
-      }
-      if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
+  let st = await page.evaluate(openerState, { id: row.nodeId });
+  const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
+  if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog \u2014 not driven` };
+  if (st.disabled) return { ...base, ok: null, detail: "opener is disabled \u2014 not driven" };
+  if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
+  const submits = await page.locator(st.path).first().evaluate(submitGuard);
+  if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
+  await page.evaluate(tipPreMark, null).catch(() => false);
+  let revealedBy;
+  if (!st.visible) {
+    if (st.hoverPath !== null) {
+      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
+      await page.mouse.move(0, 0);
+      await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+      await raf2(page);
+      st = await page.evaluate(openerState, { id: row.nodeId });
     }
-    const openerPath = st.path;
-    await page.locator(openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
-    await raf2(page);
-    const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
-    if (submitsHovered !== null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener would submit a form (${submitsHovered}) \u2014 not driven` };
-    const notOwn = (ctl, why) => ({
-      ...base,
-      ok: null,
-      ...revealedBy !== void 0 ? { revealedBy } : {},
-      detail: `the opener's click point is another control inside it (${ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${why !== void 0 ? ` (${why})` : ""}`
-    });
-    const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
-    if (inner !== null) return notOwn(inner, await page.evaluate(ownWhy, null).catch(() => null) ?? void 0);
-    const px = await ownPixels(page, { park: revealedBy === void 0 });
-    if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
-    const contract = [...DIALOG_CONTRACT];
-    await page.evaluate(armDetector, { destId, contract });
-    const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
-    const loadsBefore = loads();
-    let activation = "mouse", clickWhy = "";
-    await page.locator(openerPath).first().evaluate(saveScroll);
-    try {
-      await page.locator(openerPath).first().click({ timeout: 2e3 });
-    } catch (e) {
-      const m = errMsg(e);
-      const kind = pwErrorKind(e, page);
-      if (kind === "gone") throw e;
-      if (kind !== "navigated") {
-        clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
-        activation = "synthetic";
-        await restoreSettled(page);
-        await page.evaluate(syntheticClick, openerPath);
-      }
-    }
-    const t0 = Date.now();
-    let read2 = { lost: false, detectedBy: null, opened: null, dest: null };
-    let detectedAt = null;
-    for (; ; ) {
-      try {
-        read2 = await page.evaluate(pollDetector, { destId, contract });
-      } catch (e) {
-        if (pwErrorKind(e, page) !== "navigated") throw e;
-        read2 = { lost: true, detectedBy: null, opened: null, dest: null };
-      }
-      if (read2.lost) break;
-      if (read2.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-      const destDone = destId === null || read2.dest !== null && read2.dest.inside;
-      if (read2.opened && destDone) break;
-      if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
-      if (Date.now() - t0 >= 2e3) break;
-      await sleep2(100);
-    }
-    if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
-    let tokenAfter = "";
-    try {
-      tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''"));
-    } catch {
-      tokenAfter = "";
-    }
-    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read2.lost ? 1 : 0);
-    const { outcome, detectedBy } = read2.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read2);
-    const ev = {
-      ...base,
-      outcome,
-      navEvents,
-      activation,
-      ...detectedBy !== void 0 ? { detectedBy } : {},
-      ...revealedBy !== void 0 ? { revealedBy } : {},
-      ...destId !== null ? { destination: { nodeId: destId, inside: !read2.lost && !!read2.dest && read2.dest.inside, count: read2.dest ? read2.dest.count : 0 } } : {},
-      ...read2.opened && !read2.lost ? { opened: read2.opened } : {}
-    };
-    const j = judge(action, ev);
-    const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
-    const saw = read2.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
-    ev.ok = j.ok;
-    ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
-    if (hooks && hooks.afterOpen && read2.opened && !read2.lost) await hooks.afterOpen(page, row, read2.opened);
-    return ev;
-  } finally {
-    await context.close().catch(() => void 0);
+    if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
   }
+  const openerPath = st.path;
+  await page.locator(openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
+  await raf2(page);
+  const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
+  if (submitsHovered !== null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener would submit a form (${submitsHovered}) \u2014 not driven` };
+  const notOwn = (ctl, why) => ({
+    ...base,
+    ok: null,
+    ...revealedBy !== void 0 ? { revealedBy } : {},
+    detail: `the opener's click point is another control inside it (${ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${why !== void 0 ? ` (${why})` : ""}`
+  });
+  const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
+  if (inner !== null) return notOwn(inner, await page.evaluate(ownWhy, null).catch(() => null) ?? void 0);
+  const px = await ownPixels(page, { park: revealedBy === void 0 });
+  if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
+  const contract = [...DIALOG_CONTRACT];
+  await page.evaluate(armDetector, { destId, contract });
+  const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
+  const loadsBefore = loads();
+  let activation = "mouse", clickWhy = "";
+  await page.locator(openerPath).first().evaluate(saveScroll);
+  try {
+    await page.locator(openerPath).first().click({ timeout: 2e3 });
+  } catch (e) {
+    const m = errMsg(e);
+    const kind = pwErrorKind(e, page);
+    if (kind === "gone") throw e;
+    if (kind !== "navigated") {
+      clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
+      activation = "synthetic";
+      await restoreSettled(page);
+      await page.evaluate(syntheticClick, openerPath);
+    }
+  }
+  const t0 = Date.now();
+  let read2 = { lost: false, detectedBy: null, opened: null, dest: null };
+  let detectedAt = null;
+  for (; ; ) {
+    try {
+      read2 = await page.evaluate(pollDetector, { destId, contract });
+    } catch (e) {
+      if (pwErrorKind(e, page) !== "navigated") throw e;
+      read2 = { lost: true, detectedBy: null, opened: null, dest: null };
+    }
+    if (read2.lost) break;
+    if (read2.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
+    const destDone = destId === null || read2.dest !== null && read2.dest.inside;
+    if (read2.opened && destDone) break;
+    if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
+    if (Date.now() - t0 >= 2e3) break;
+    await sleep(100);
+  }
+  if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
+  let tokenAfter = "";
+  try {
+    tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''"));
+  } catch {
+    tokenAfter = "";
+  }
+  const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read2.lost ? 1 : 0);
+  const { outcome, detectedBy } = read2.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read2);
+  const ev = {
+    ...base,
+    outcome,
+    navEvents,
+    activation,
+    ...detectedBy !== void 0 ? { detectedBy } : {},
+    ...revealedBy !== void 0 ? { revealedBy } : {},
+    ...destId !== null ? { destination: { nodeId: destId, inside: !read2.lost && !!read2.dest && read2.dest.inside, count: read2.dest ? read2.dest.count : 0 } } : {},
+    ...read2.opened && !read2.lost ? { opened: read2.opened } : {}
+  };
+  const j = judge(action, ev);
+  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
+  const saw = read2.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
+  ev.ok = j.ok;
+  ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
+  if (hooks && hooks.afterOpen && read2.opened && !read2.lost) await hooks.afterOpen(page, row, read2.opened);
+  return ev;
 }
-async function driveInteractions(browser, o, hooks) {
+async function driveInteractions(session, o, hooks) {
   const out = [];
   const end = Date.now() + o.budgetMs;
   let wedged = false;
@@ -3352,12 +3171,15 @@ async function driveInteractions(browser, o, hooks) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
       continue;
     }
-    const held = {};
-    const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e) => {
-      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving \u2014 ${pwFirstLine(e)}`);
-      return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
+    const r = await session.unit({
+      ms: left,
+      act: (reached) => driveRow(reached, row, hooks),
+      unreached: (f) => notRun(row, f.why, f.steps !== void 0 ? { stepsFailed: f.steps } : void 0),
+      failed: (e) => {
+        if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving \u2014 ${pwFirstLine(e)}`);
+        return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
+      }
     });
-    const r = await raceBudget(work, left, held);
     if (r.cut) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
       if (!r.settled) wedged = true;
@@ -3369,19 +3191,264 @@ async function driveInteractions(browser, o, hooks) {
 }
 
 // design-to-code/probe-behaviour.ts
+import { setTimeout as sleep4 } from "node:timers/promises";
+
+// design-to-code/probe-session.ts
 import { setTimeout as sleep3 } from "node:timers/promises";
+
+// design-to-code/kill-tree.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import fs3 from "node:fs";
+import { setTimeout as sleep2 } from "node:timers/promises";
+var taskkillCapped = (capMs) => (args) => spawnSync2("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: capMs });
+var KILL_HOST = {
+  platform: process.platform,
+  taskkill: taskkillCapped(1e4),
+  kill: (pid, s) => {
+    process.kill(pid, s);
+  }
+};
+var killPidTree = (pid, host = KILL_HOST) => {
+  if (!(pid > 1)) return false;
+  if (host.platform === "win32") {
+    const r = host.taskkill(["/T", "/F", "/PID", String(pid)]);
+    return r.error === void 0 && r.status === 0;
+  }
+  try {
+    host.kill(-pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+};
+var PROC_HOST = {
+  ...KILL_HOST,
+  self: process.pid,
+  readdir: (dir) => fs3.readdirSync(dir),
+  readFile: (file) => fs3.readFileSync(file, "utf8"),
+  // pgrep -P / ps -A, captured through a file (proc.ts runSync): exit 0 says it listed something (pgrep's "none matched" is
+  // exit 1), so an exit 0 with no pid in its output (Bun #46142: a lost capture) is run once more, then reported as an
+  // error — never read as "no children", which would leave the browser running
+  run: (cmd, args, timeoutMs) => {
+    const r = runSync(cmd, args, { timeoutMs, expect: (x) => x.status !== 0 || /\d/.test(x.stdout) });
+    const error = r.error ?? (r.lost !== void 0 ? new Error(`${cmd}: ${r.lost}`) : void 0);
+    return { ...error !== void 0 ? { error } : {}, status: r.status, stdout: r.stdout };
+  },
+  exists: (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+var pidsIn = (text) => text.split(/\s+/).filter((w) => /^\d+$/.test(w)).map(Number);
+function parentPid(pid, host = PROC_HOST) {
+  let stat;
+  try {
+    stat = host.readFile(`/proc/${pid}/stat`);
+  } catch {
+    return void 0;
+  }
+  const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  return Number.isInteger(ppid) && ppid >= 0 ? ppid : void 0;
+}
+var notFound = (e) => e !== void 0 && "code" in e && e.code === "ENOENT";
+function childPids(host = PROC_HOST, capMs = 3e3) {
+  if (host.platform === "win32") return null;
+  if (host.platform === "linux") {
+    let entries = null;
+    try {
+      entries = host.readdir("/proc");
+    } catch {
+    }
+    if (entries !== null) {
+      const kids2 = [];
+      for (const e of entries) {
+        if (!/^\d+$/.test(e)) continue;
+        if (parentPid(Number(e), host) === host.self) kids2.push(Number(e));
+      }
+      return kids2;
+    }
+  }
+  const pg = host.run("pgrep", ["-P", String(host.self)], capMs);
+  if (pg.error === void 0 && (pg.status === 0 || pg.status === 1)) return pidsIn(pg.stdout);
+  if (!notFound(pg.error)) return null;
+  const ps = host.run("ps", ["-A", "-o", "pid=,ppid="], capMs);
+  if (ps.error !== void 0 || ps.status !== 0) return null;
+  const kids = [];
+  for (const line of ps.stdout.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (m && Number(m[2]) === host.self) kids.push(Number(m[1]));
+  }
+  return kids;
+}
+var POLL_MS = 50;
+async function killChildTree(pid, host = PROC_HOST, { capMs = 3e3, graceMs = 0, exited = false } = {}) {
+  const known = pid !== void 0 && pid > 1 ? pid : void 0;
+  if (host.platform === "win32" && (known === void 0 || exited)) return;
+  const targets = known !== void 0 ? [known] : childPids(host, capMs) ?? [];
+  const until = Date.now() + graceMs;
+  while (targets.some((t) => host.exists(t)) && Date.now() < until) await sleep2(POLL_MS);
+  if (host.platform === "win32") {
+    if (known !== void 0 && host.exists(known)) killPidTree(known, host);
+    return;
+  }
+  const end = (t) => {
+    if (killPidTree(t, host) || !host.exists(t)) return;
+    try {
+      host.kill(t, "SIGKILL");
+    } catch {
+    }
+  };
+  if (known === void 0) {
+    for (const t of targets) end(t);
+    return;
+  }
+  if (killPidTree(known, host) || !host.exists(known)) return;
+  for (const t of childPids(host, capMs) ?? []) end(t);
+}
+
+// design-to-code/probe-session.ts
+var StepError = class extends Error {
+};
+var CUT_SETTLE_MS = 5e3;
 var CLOSE_STEP_CAP_MS = 5e3;
 var KILL_STEP_CAP_MS = 3e3;
 var WRITE_MARGIN_MS = 2e3;
-var BEHAVIOUR_CAP_MS = 9e4;
-var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + KILL_STEP_CAP_MS + WRITE_MARGIN_MS;
-function behaviourBudget(now, deadline, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS) {
+var TEARDOWN_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + KILL_STEP_CAP_MS + WRITE_MARGIN_MS;
+var PHASE_PLAN = {
+  drive: { capMs: 6e4, reserveMs: 15e3 },
+  visual: { capMs: 3e4, reserveMs: TEARDOWN_RESERVE_MS },
+  behaviour: { capMs: 9e4, reserveMs: TEARDOWN_RESERVE_MS }
+};
+function phaseBudget(phase, now, deadline) {
+  const { capMs, reserveMs } = PHASE_PLAN[phase];
   return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
 }
 var UNIT_FLOOR_MS = 15e3;
 function unitCap(leftMs, unitsLeft, floorMs = UNIT_FLOOR_MS) {
   return Math.max(0, Math.min(leftMs, Math.max(floorMs, leftMs / Math.max(1, unitsLeft))));
 }
+function contextOptions(viewport, dsf = 1) {
+  return { viewport: { width: viewport.w, height: viewport.h }, deviceScaleFactor: dsf, reducedMotion: "reduce" };
+}
+var CUT = /* @__PURE__ */ Symbol("cut");
+var UNSETTLED = /* @__PURE__ */ Symbol("unsettled");
+function holdContext(held, c) {
+  held.ctx = c;
+  if (held.cut) void c.close().catch(() => void 0);
+}
+async function raceBudget(work, ms, held, onCut) {
+  let timer;
+  let r;
+  try {
+    r = await Promise.race([work, new Promise((resolve) => {
+      timer = setTimeout(() => resolve(CUT), ms);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (r !== CUT) return { cut: false, value: r };
+  onCut?.();
+  held.cut = true;
+  const ctx = held.ctx;
+  const wound = (async () => {
+    if (ctx) await ctx.close().catch(() => void 0);
+    await work;
+  })();
+  const s = await Promise.race([wound, sleep3(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
+  return { cut: true, settled: s !== UNSETTLED };
+}
+function openSession(browser, o) {
+  const now = o.now ?? Date.now;
+  const open = async (spec, held) => {
+    const context = await browser.newContext(contextOptions(o.viewport, spec.dsf));
+    holdContext(held, context);
+    let loads = 0;
+    try {
+      if (spec.prepare) await spec.prepare(context);
+      const page = await context.newPage();
+      page.setDefaultTimeout(o.timeout);
+      await page.addInitScript({ content: o.initScript });
+      page.on("load", () => {
+        loads++;
+      });
+      if (spec.onPage) spec.onPage(page);
+      await o.reach(page);
+      return { context, reached: { page, loads: () => loads } };
+    } catch (e) {
+      await context.close().catch(() => void 0);
+      throw e;
+    }
+  };
+  return {
+    browser,
+    viewport: o.viewport,
+    timeout: o.timeout,
+    budget: (phase) => phaseBudget(phase, now(), o.deadline),
+    unit: async (spec) => {
+      const held = {};
+      const work = (async () => {
+        let opened;
+        try {
+          opened = await open(spec, held);
+        } catch (e) {
+          return spec.unreached(e instanceof StepError ? { why: `the steps failed \u2014 ${e.message}`, steps: e.message } : { why: `could not reach the screen \u2014 ${firstLine(e)}` });
+        }
+        try {
+          return await spec.act(opened.reached);
+        } finally {
+          if (spec.beforeClose) await spec.beforeClose();
+          await opened.context.close().catch(() => void 0);
+        }
+      })().catch((e) => spec.failed(e));
+      return raceBudget(work, spec.ms, held, spec.onCut);
+    }
+  };
+}
+var launchPids = /* @__PURE__ */ new WeakMap();
+async function recordLaunchPid(browser) {
+  const pid = await launchPid(browser);
+  if (pid !== void 0) launchPids.set(browser, pid);
+}
+var LAUNCH_PID_CAP_MS = 2e3;
+var KILL_GRACE_MS = 1e3;
+var KILL_CMD_CAP_MS = KILL_STEP_CAP_MS - KILL_GRACE_MS;
+var PROBE_HOST = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CMD_CAP_MS) };
+async function launchPid(b, capMs = LAUNCH_PID_CAP_MS, host = PROBE_HOST) {
+  const ask = (async () => {
+    const cdp = await b.newBrowserCDPSession();
+    try {
+      const id = (await cdp.send("SystemInfo.getProcessInfo")).processInfo.find((p) => p.type === "browser")?.id;
+      if (id === void 0 || !Number.isInteger(id) || id <= 1) return void 0;
+      return host.platform !== "linux" || parentPid(id, host) === host.self ? id : void 0;
+    } finally {
+      cdp.detach().catch(() => void 0);
+    }
+  })().catch(() => void 0);
+  return Promise.race([ask, sleep3(capMs, void 0, { ref: false })]);
+}
+async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS, pid = launchPids.get(b), host = PROBE_HOST) {
+  const cap = () => sleep3(capMs, false, { ref: false });
+  await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
+  const closed = await Promise.race([b.close().then(() => true, () => false), cap()]);
+  await killBrowser(pid, host, KILL_GRACE_MS, closed || !b.isConnected());
+}
+async function endBrowser(b, o) {
+  if (!o.wedged) {
+    await closeCapped(b);
+    return;
+  }
+  await killBrowser(launchPids.get(b), PROBE_HOST, 0);
+  await Promise.race([b.close().catch(() => void 0), sleep3(1e3, void 0, { ref: false })]);
+}
+async function killBrowser(pid, host = PROBE_HOST, graceMs = KILL_GRACE_MS, exited = false) {
+  await killChildTree(pid, host, { capMs: KILL_CMD_CAP_MS, graceMs, exited }).catch(() => void 0);
+}
+
+// design-to-code/probe-behaviour.ts
 var WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scroll, hover or resize on, no request but GET/HEAD/OPTIONS leaves the browser (the page, its frames, workers, shared workers and service workers alike), no WebSocket message leaves the page and a WebSocket the page opens then never reaches the server \u2014 a blocked write makes every check of that unit from its first action on not-run; not blocked: the page's load and --steps, a GET with a side effect, a WebSocket opened inside a worker, and the drive of the interactions (no write block there: it never clicks an opener that would submit, nor one whose click point is another activating control (also under a focusable glyph or editable label inside it), a label's control or a nested page (an iframe, object or embed) \u2014 open shadow roots included \u2014 unless it is the sole button-like control of a container showing nothing of its own (no text, image, icon, CSS mask, generated content, filled block, progress bar, meter or list marker; a label at opacity 0 in flow counts, an out-of-flow tooltip at opacity 0 does not) by its DOM nor by its pixels (the container with only that control hidden against it with all its content hidden \u2014 the content of its open shadow roots, its own marker and its other pseudo-elements (a first letter, a placeholder, a file button, a details' content, scroll buttons and markers) too \u2014 everything outside it, its ancestors included, hidden in both, the opener hovered first so a control shown on hover is at its click point \u2014 any painted difference counts, a stripe or a 1-px divider too; decoration: its own background colour, a border in one colour (a 1-px divider on one side too) and its shadow, and a fill over all of it or a wrapper within 8 px of the control only when, alone (ancestor and own filters, clip-paths and masks off), they paint one plain colour (pixel-verified against their real rounded outline, a 1.5-px anti-aliased edge allowed; a progress ring, a wrapper with its own shadow or a frame in another colour is not plain, so refused); content too: its own background image (a gradient, a url), a border in two colours or a stripe, a scroll button, and a label, image or generated label laid at least half over it from outside its element (a sibling, an ancestor's ::after) unless fixed or sticky (a toast, a banner: ignored) or proven to lie under its opaque background; an ancestor's own paint (a row's gradient behind a transparent cell) is not its own; a page rule keeping something showing against the probe's (an inline or cascade-layer !important) refuses; not seen: the inside of an iframe, a closed shadow root, foreign content inside an ancestor's shadow root, a shadow root attached after the check starts, a part of the container still outside the viewport once scrolled in, content revealed after a delay, a generated label of an element lying elsewhere; the probe's init CSS is lost when a page replaces document.adoptedStyleSheets after load under a strict style CSP; an sr-only label at right:-9999px in a right-to-left page counts, so that cell is refused; the hover runs on every opener, so a mouseenter side effect also fires on one it then refuses); the same exemption, content too \u2014 its own inset box-shadow offset 2 px or more or blurred (a stripe, a fill, a glow), sharp box-shadow ring layers in more than one colour (not its border, not a layer in its own background colour where that cannot show \u2014 an outer one, a ring-offset, or an inset one over an opaque border-box / padding-box background) and its own paint under a mask or a clip-path other than a rounded inset(0); never foreign \u2014 a tooltip revealed by the probe's hover (a [role=tooltip] element, or the control's aria-describedby target, not shown before the hover; one already on screen is its own label and refuses) and a label at effective opacity 0; under it only with no opacity below 1 or blend mode on it or above it; an element the page mounts in it during the screenshots refuses; refused by rule: a page of more than 500,000 elements, an opener whose content is re-created while it is compared (an empty spacer a framework re-creates, marks a morphdom-style patch strips, a placeholder mounted on mouseleave; it can differ between runs), an opener inside a shadow root, a role-less tooltip or other popover laid over it (with a show delay the result can differ between runs), a cell whose sole control has a tooltip pre-mounted but hidden by transform scale(0) or moved off-screen (it counts as shown before the hover), a label under an oklch() / lab() / color() background (never proven opaque); not seen (known misses, the drive can write): a sibling's relative ::before shifted over it from elsewhere, text overflowing a 0-height wrapper beside it, a display: contents [role=tooltip] or aria-describedby target laid over it, a label the page re-creates as a new element on the hover with tooltip semantics (role=tooltip, or the control's aria-describedby target), and a page that defines window.__dtTipPre itself first turns the record of what was shown before the hover off (an adversarial page); the focused element outside it stays shown in both shots; a refusal names its reason; it does not see a control in a closed shadow root or one that is only a click listener with no role (a bare svg onclick), and clicks those); not seen: a write the page defers past the unit's end (an undo window over about 1 s) \u2014 it never leaves (the unit's context is closed first), but the check that caused it is judged as if nothing was written and the scroll unit may press that key again";
 var WRITE_SETTLE_MS = 500;
 function taintedPhases(trace) {
@@ -4682,46 +4749,35 @@ async function openWriteBlock(browser) {
     cdp.detach().catch(() => void 0);
   } };
 }
-async function openUnitPage(browser, o, onContext, net) {
-  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
-  onContext(context);
-  let loads = 0;
-  const failed = [];
-  try {
-    await context.routeWebSocket(/.*/, (ws) => {
-      const url = originPath(ws.url());
-      if (net.armed) {
-        const kept = net.write("WebSocket", url);
-        ws.onMessage(() => {
-          net.write("WebSocket", url);
+function unitPageHooks(net, failed) {
+  return {
+    prepare: async (context) => {
+      await context.routeWebSocket(/.*/, (ws) => {
+        const url = originPath(ws.url());
+        if (net.armed) {
+          const kept = net.write("WebSocket", url);
+          ws.onMessage(() => {
+            net.write("WebSocket", url);
+          });
+          if (kept) ws.close().catch(() => void 0);
+          return;
+        }
+        const server = ws.connectToServer();
+        ws.onMessage((m) => {
+          if (net.armed) net.write("WebSocket", url);
+          else server.send(m);
         });
-        if (kept) ws.close().catch(() => void 0);
-        return;
-      }
-      const server = ws.connectToServer();
-      ws.onMessage((m) => {
-        if (net.armed) net.write("WebSocket", url);
-        else server.send(m);
+        server.onMessage((m) => {
+          ws.send(m);
+        });
       });
-      server.onMessage((m) => {
-        ws.send(m);
+    },
+    onPage: (page) => {
+      page.on("requestfailed", (r) => {
+        if (!net.armed && failed.length < 5) failed.push(`${r.method()} ${new URL(originPath(r.url()), "http://x").pathname} (${r.failure()?.errorText ?? "failed"})`);
       });
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(o.timeout);
-    await page.addInitScript({ content: o.initScript });
-    page.on("load", () => {
-      loads++;
-    });
-    page.on("requestfailed", (r) => {
-      if (!net.armed && failed.length < 5) failed.push(`${r.method()} ${new URL(originPath(r.url()), "http://x").pathname} (${r.failure()?.errorText ?? "failed"})`);
-    });
-    await o.reach(page);
-    return { context, page, loads: () => loads, failed };
-  } catch (e) {
-    await context.close().catch(() => void 0);
-    throw e;
-  }
+    }
+  };
 }
 var sameKey = (d, p) => d.id === p.id && (d.nodeId === void 0 || d.nodeId === p.nodeId) && (d.trigger === void 0 || d.trigger === p.trigger) && (d.variant === void 0 || d.variant === p.variant);
 function fill(out, produced, declared, why) {
@@ -4730,11 +4786,11 @@ function fill(out, produced, declared, why) {
     out.push({ id: d.id, status: "not-run", ...d.nodeId !== void 0 ? { nodeId: d.nodeId } : {}, ...d.trigger !== void 0 ? { trigger: d.trigger } : {}, ...d.variant !== void 0 ? { variant: d.variant } : {}, detail: `not-run: ${why}` });
   }
 }
-async function runBehaviour(browser, o) {
+async function runBehaviour(session, o) {
   const t0 = Date.now();
-  const opening = openWriteBlock(browser);
+  const opening = openWriteBlock(session.browser);
   const late = /* @__PURE__ */ Symbol("no answer");
-  const block = await Promise.race([opening, sleep3(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
+  const block = await Promise.race([opening, sleep4(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
   if (block === late) {
     opening.then((b) => {
       b.close();
@@ -4742,15 +4798,15 @@ async function runBehaviour(browser, o) {
     throw new Error(`the write block could not be set up (the browser did not answer within ${Math.round(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs) / 1e3)} s)`);
   }
   try {
-    return await runUnits(browser, o, block, t0);
+    return await runUnits(session, o, block, t0);
   } finally {
     block.close();
   }
 }
 var WRITE_BLOCK_SETUP_MS = 5e3;
-async function runUnits(browser, o, block, t0) {
+async function runUnits(session, o, block, t0) {
   const ctx = {
-    browser,
+    session,
     o,
     block,
     end: t0 + o.budgetMs,
@@ -4771,7 +4827,7 @@ async function runUnits(browser, o, block, t0) {
     behaviour: {
       version: 1,
       ran: true,
-      browser: { name: o.browserName ?? "chromium", version: browser.version() },
+      browser: { name: o.browserName ?? "chromium", version: session.browser.version() },
       namesComputedBy: NAMES_COMPUTED_BY,
       budgetMs: o.budgetMs,
       elapsedMs: Date.now() - t0,
@@ -4795,7 +4851,7 @@ async function runUnit(ctx, unit) {
   }
 }
 async function runUnitInner(ctx, unit) {
-  const { browser, o, block, end, checks } = ctx;
+  const { session, o, block, end, checks } = ctx;
   const produced = [];
   const budgetLeft = end - Date.now();
   const left = unit.battery ? unitCap(budgetLeft, ctx.batteryLeft) : budgetLeft;
@@ -4807,7 +4863,6 @@ async function runUnitInner(ctx, unit) {
   }
   const unitEnd = Date.now() + left;
   let closed = false;
-  const held = {};
   let loadsAt = 0;
   let loadsNow = () => 0;
   const trace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
@@ -4835,33 +4890,34 @@ async function runUnitInner(ctx, unit) {
   });
   const blocked = () => blockedOf(tried, taintedPhases(trace));
   block.unit(net);
-  const work = (async () => {
-    let reached;
-    try {
-      reached = await openUnitPage(browser, o, holdContext(held), net);
-    } catch (e) {
-      return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}`;
-    }
-    try {
-      loadsAt = reached.loads();
-      loadsNow = reached.loads;
+  const loadFailures = [];
+  const raced = await session.unit({
+    ms: left,
+    ...unitPageHooks(net, loadFailures),
+    act: async ({ page, loads }) => {
+      loadsAt = loads();
+      loadsNow = loads;
       if (o.measuredTags && o.measuredTags.length) {
-        const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
-        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
+        const diff = fingerprintDiff(o.measuredTags, await page.evaluate(visibleTags, null), unit.uses);
+        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${loadFailures.length ? `; failed while loading: ${loadFailures.slice(0, 3).join(", ")}` : ""})`);
       }
-      await reached.page.evaluate(tipPreMark, null).catch(() => false);
-      await unit.run(api(reached.page));
+      await page.evaluate(tipPreMark, null).catch(() => false);
+      await unit.run(api(page));
       return null;
-    } finally {
+    },
+    // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
+    // the unit's own time
+    beforeClose: async () => {
       const last = trace.actions.at(-1);
       const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
-      if (wait > 0) await sleep3(wait, void 0, { ref: false });
-      await reached.context.close().catch(() => void 0);
+      if (wait > 0) await sleep4(wait, void 0, { ref: false });
+    },
+    unreached: (f) => f.why,
+    failed: unitEndWhy,
+    onCut: () => {
+      closed = true;
+      ctx.cut = true;
     }
-  })().catch(unitEndWhy);
-  const raced = await raceBudget(work, left, held, () => {
-    closed = true;
-    ctx.cut = true;
   });
   if (raced.cut) {
     block.unit(null);
@@ -4890,7 +4946,7 @@ function a11yUnit(ctx) {
       u.phase("a11y.landmarks");
       let yaml = null;
       try {
-        yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 1e4) });
+        yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(ctx.session.timeout, 1e4) });
       } catch (e) {
         if (endsUnit(e, page)) throw e;
       }
@@ -4906,7 +4962,7 @@ function a11yUnit(ctx) {
           const axeCap = Math.max(1e3, Math.min(AXE_CAP_MS, end - Date.now()));
           const res = await Promise.race([
             page.evaluate(`(async () => { const r = await axe.run(document, { resultTypes: ["violations"], iframes: false }); return { version: axe.version, violations: r.violations.map((v) => ({ id: v.id, impact: v.impact == null ? null : String(v.impact), nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => Array.isArray(n.target) ? n.target.map(String).join(" ") : String(n.target)) })) }; })()`),
-            sleep3(axeCap, AXE_TIMED_OUT, { ref: false })
+            sleep4(axeCap, AXE_TIMED_OUT, { ref: false })
           ]);
           if (res === AXE_TIMED_OUT) throw new AxeTimeout(`axe timed out after ${Math.round(axeCap / 1e3)} s`);
           const parsed = readAxeResult(res, o.axe.version);
@@ -5079,7 +5135,7 @@ function a11yUnit(ctx) {
 }
 function renderUnit(ctx) {
   const { o, widths } = ctx;
-  const designW = o.viewport.w, designH = o.viewport.h;
+  const designW = ctx.session.viewport.w, designH = ctx.session.viewport.h;
   const mid = designW >= 1280, narrow = designW > 320;
   return {
     name: "render",
@@ -5170,7 +5226,7 @@ function renderUnit(ctx) {
         const t = Date.now();
         let last = "", stable = 0;
         for (; ; ) {
-          await sleep3(100);
+          await sleep4(100);
           const s = await page.evaluate(docSize, null);
           const sig = `${s.sw}x${s.sh}`;
           stable = sig === last ? stable + 1 : 0;
@@ -5248,7 +5304,7 @@ function keyUnit(ctx, b) {
           if (r.lost) throw new UnitNavigated("the page loaded a new document");
           if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
           if (Date.now() - t >= 2e3) return r.opened;
-          await sleep3(100);
+          await sleep4(100);
         }
       };
       const keyOpen = async (key2) => {
@@ -5371,7 +5427,7 @@ function keyUnit(ctx, b) {
           await raf2(page);
           if (!await page.evaluate(dialogOpenNow, null)) return true;
           if (Date.now() - t >= 1e3) return false;
-          await sleep3(100);
+          await sleep4(100);
         }
       };
       const escClosed = await closedAfter();
@@ -5429,14 +5485,14 @@ function keyUnit(ctx, b) {
               expanded = true;
               break;
             }
-            await sleep3(100);
+            await sleep4(100);
           }
           if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
           else {
             u.act();
             await page.keyboard.press("Escape");
             await raf2(page);
-            await sleep3(150);
+            await sleep4(150);
             await raf2(page);
             const dlgOpen = await page.evaluate(dialogOpenNow, null);
             const ctl = await page.evaluate(expanderState, null);
@@ -5488,7 +5544,7 @@ function scrollUnit(ctx, b) {
           if (r.lost) throw new UnitNavigated("the page loaded a new document");
           if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
           if (Date.now() - t >= 2e3) return r.opened;
-          await sleep3(100);
+          await sleep4(100);
         }
       };
       const openStill = async () => {
@@ -5522,7 +5578,7 @@ function scrollUnit(ctx, b) {
           await raf2(page);
           if (!await page.evaluate(dialogOpenNow, null)) return true;
           if (Date.now() - t >= 1e3) return false;
-          await sleep3(100);
+          await sleep4(100);
         }
       };
       const closeAny = async () => (await safeCloseOn(page, closedAfter, u.act)).closed;
@@ -5645,7 +5701,7 @@ function readAxeResult(x, fallbackVersion) {
 // design-to-code/probe-visual.ts
 import fs4 from "node:fs";
 import path5 from "node:path";
-import { setTimeout as sleep4 } from "node:timers/promises";
+import { setTimeout as sleep5 } from "node:timers/promises";
 
 // design-to-code/visual-diff.ts
 var rgb2y = (r, g, b) => r * 0.29889531 + g * 0.58662247 + b * 0.11448223;
@@ -5913,10 +5969,6 @@ var slashed = (p) => p.split(path4.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
 
 // design-to-code/probe-visual.ts
-var VISUAL_CAP_MS = 3e4;
-function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RESERVE_MS) {
-  return Math.max(0, Math.min(cap, deadline - now - reserve));
-}
 var FONTS_CAP_MS = 5e3;
 var BUILT_CAP = 2e3;
 function referenceRoot(expected, project) {
@@ -5978,20 +6030,14 @@ function readBuilt(arg) {
   }
   return out;
 }
-async function captureVisual(browser, o) {
+async function captureVisual(session, o) {
   if (o.budgetMs <= 0) return { why: "no time left within --max-time after measuring and driving" };
-  const held = {};
-  const work = (async () => {
-    let reached;
-    try {
-      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: holdContext(held) });
-    } catch (e) {
-      return { why: e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine(e)}` };
-    }
-    const { context, page, loads } = reached;
-    try {
+  const r = await session.unit({
+    ms: o.budgetMs,
+    dsf: o.ref.scale,
+    act: async ({ page, loads }) => {
       const loads0 = loads();
-      await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep4(FONTS_CAP_MS, void 0, { ref: false })]);
+      await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep5(FONTS_CAP_MS, void 0, { ref: false })]);
       await raf2(page);
       const notes = [];
       const fr = o.frame;
@@ -6022,16 +6068,15 @@ async function captureVisual(browser, o) {
       const after = await page.evaluate(readFrame, { selector: null });
       if (loads() !== loads0 || after.token !== read2.token) return { why: "the page loaded a new document during the visual capture" };
       return { png, dsf: o.ref.scale, clip, shot, frame: fr ? { nodeId: fr.nodeId, via: fr.via, selector: fr.selector } : { nodeId: "", via: "none", selector: null }, built, notes };
-    } finally {
-      await context.close().catch(() => void 0);
+    },
+    unreached: (f) => ({ why: f.why }),
+    failed: (e) => {
+      const kind = pwErrorKind(e);
+      if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
+      if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture \u2014 ${pwFirstLine(e)}` };
+      return { why: `the visual capture failed \u2014 ${firstLine(e)}` };
     }
-  })().catch((e) => {
-    const kind = pwErrorKind(e);
-    if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
-    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture \u2014 ${pwFirstLine(e)}` };
-    return { why: `the visual capture failed \u2014 ${firstLine(e)}` };
   });
-  const r = await raceBudget(work, o.budgetMs, held);
   if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
 }
@@ -6926,25 +6971,6 @@ async function launch(r, dir, executablePath) {
     };
   }
 }
-var launchPids = /* @__PURE__ */ new WeakMap();
-async function recordLaunchPid(browser) {
-  const pid = await launchPid(browser);
-  if (pid !== void 0) launchPids.set(browser, pid);
-}
-var LAUNCH_PID_CAP_MS = 2e3;
-async function launchPid(b, capMs = LAUNCH_PID_CAP_MS, host = PROBE_HOST) {
-  const ask = (async () => {
-    const cdp = await b.newBrowserCDPSession();
-    try {
-      const id = (await cdp.send("SystemInfo.getProcessInfo")).processInfo.find((p) => p.type === "browser")?.id;
-      if (id === void 0 || !Number.isInteger(id) || id <= 1) return void 0;
-      return host.platform !== "linux" || parentPid(id, host) === host.self ? id : void 0;
-    } finally {
-      cdp.detach().catch(() => void 0);
-    }
-  })().catch(() => void 0);
-  return Promise.race([ask, sleep5(capMs, void 0, { ref: false })]);
-}
 function browserPathError(p) {
   let ok = false;
   try {
@@ -7027,7 +7053,7 @@ async function docTokenOrNull(page) {
 async function docTokenWithin(page, capMs) {
   const read2 = docTokenOrNull(page);
   read2.catch(() => void 0);
-  return Promise.race([read2, sleep5(Math.max(1, capMs), void 0, { ref: false })]);
+  return Promise.race([read2, sleep6(Math.max(1, capMs), void 0, { ref: false })]);
 }
 var visibleOnly = (sel) => `${sel} >> visible=true`;
 var takesForScreen = (shown, total) => total > 0 && shown * 2 >= total;
@@ -7043,7 +7069,7 @@ async function screenTagsNow(page, root, capMs) {
     }
   })();
   look.catch(() => void 0);
-  return Promise.race([look, sleep5(Math.max(1, capMs), null, { ref: false })]);
+  return Promise.race([look, sleep6(Math.max(1, capMs), null, { ref: false })]);
 }
 var WaitTimeoutError = class extends Error {
   constructor(what, ms) {
@@ -7058,7 +7084,7 @@ async function waitForScreenTags(page, root, timeout) {
     if (look !== null && screenTagsMet(look, root.ids.length)) return;
     const left = end - Date.now();
     if (left <= 0) throw new WaitTimeoutError("waiting for at least half of the expectation's own tags", timeout);
-    await sleep5(Math.min(POLL_MS3, left));
+    await sleep6(Math.min(POLL_MS3, left));
   }
 }
 var refusingRoot = (s, total) => takesForScreen(s.shown, total) ? s.foreign : null;
@@ -7158,7 +7184,7 @@ async function settle(page, log, ready, timeout, root) {
       if (token === null && !unanswered && now !== null) token = now;
       const next = settleMiss({ readyWait, navigated: errorKind(e) === "navigated", sameDocument, moved: moved(), pastDocDeadline: Date.now() >= docDeadline });
       if (next === "retry") {
-        await sleep5(POLL_MS3);
+        await sleep6(POLL_MS3);
         continue;
       }
       if (next === "kept") throw kept();
@@ -7175,7 +7201,7 @@ async function settle(page, log, ready, timeout, root) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep5(POLL_MS3);
+      await sleep6(POLL_MS3);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -7228,7 +7254,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep5(POLL_MS3);
+    await sleep6(POLL_MS3);
   }
 }
 function linkHref(el) {
@@ -7606,7 +7632,7 @@ function hoverTarget(c, byTag) {
 }
 var BODY_WAIT_MS = 2e3;
 async function bodiesRead(reads, served) {
-  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep5(BODY_WAIT_MS, void 0, { ref: false })]);
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep6(BODY_WAIT_MS, void 0, { ref: false })]);
   const missed = /* @__PURE__ */ new Map();
   for (const r of reads) {
     if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
@@ -7620,7 +7646,7 @@ async function bodiesRead(reads, served) {
   };
 }
 async function runProbe(browser, o) {
-  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
+  const context = await browser.newContext(contextOptions(o.viewport));
   const page = await context.newPage();
   page.setDefaultTimeout(o.timeout);
   await page.addInitScript({ content: INIT_SCRIPT });
@@ -7782,18 +7808,6 @@ exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the p
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
-async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS, pid = launchPids.get(b), host = PROBE_HOST) {
-  const cap = () => sleep5(capMs, false, { ref: false });
-  await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
-  const closed = await Promise.race([b.close().then(() => true, () => false), cap()]);
-  await killBrowser(pid, host, KILL_GRACE_MS, closed || !b.isConnected());
-}
-var KILL_GRACE_MS = 1e3;
-var KILL_CMD_CAP_MS = KILL_STEP_CAP_MS - KILL_GRACE_MS;
-var PROBE_HOST = { ...PROC_HOST, taskkill: taskkillCapped(KILL_CMD_CAP_MS) };
-async function killBrowser(pid, host = PROBE_HOST, graceMs = KILL_GRACE_MS, exited = false) {
-  await killChildTree(pid, host, { capMs: KILL_CMD_CAP_MS, graceMs, exited }).catch(() => void 0);
-}
 var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
 function measuredRefusedWhy(by, runId, phase = "measured") {
   if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`${phase}\` status write held it, so that write was not made`;
@@ -8202,21 +8216,21 @@ ${USAGE}`);
       const note = untaggedRootNote(ready, untaggedRoot.waitedMs ?? timeout, run2.kind === "ok" ? run2.result.frames[0]?.via : void 0);
       if (note !== null) notes.push(note);
     }
+    const session = openSession(browser, {
+      viewport,
+      timeout,
+      initScript: INIT_SCRIPT,
+      deadline: runDeadline,
+      reach: async (page) => {
+        await reachPage(page, attachNavLog(page), probeOpts);
+      }
+    });
     let driven2 = null, driveNote2 = null;
     let wedged = false;
     const rows = run2.kind === "ok" ? drivable(expectation) : [];
     if (rows.length) {
       try {
-        ({ driven: driven2, driveNote: driveNote2, wedged } = driveOutcome(await driveInteractions(browser, {
-          rows,
-          viewport,
-          timeout,
-          initScript: INIT_SCRIPT,
-          budgetMs: driveBudget(Date.now(), runDeadline),
-          reach: async (page) => {
-            await reachPage(page, attachNavLog(page), probeOpts);
-          }
-        })));
+        ({ driven: driven2, driveNote: driveNote2, wedged } = driveOutcome(await driveInteractions(session, { rows, budgetMs: session.budget("drive") })));
       } catch (e) {
         driveNote2 = `driving the interactions failed (${firstLine(e)}) \u2014 none recorded`;
       }
@@ -8235,18 +8249,12 @@ ${USAGE}`);
       const fr0 = run2.result.frames[0];
       if (wedged) visualCap2 = { why: "the browser stopped answering while the interactions were driven" };
       else {
-        visualCap2 = await captureVisual(browser, {
+        visualCap2 = await captureVisual(session, {
           ref: prep2.ref,
           frame: fr0 ? { nodeId: fr0.nodeId, selector: fr0.selector, via: fr0.via, rect: fr0.rect } : null,
           frameSize: prep2.frameSize,
           nodes: run2.result.nodes,
-          viewport,
-          timeout,
-          initScript: INIT_SCRIPT,
-          reach: async (page) => {
-            await reachPage(page, attachNavLog(page), probeOpts);
-          },
-          budgetMs: visualBudget(Date.now(), runDeadline)
+          budgetMs: session.budget("visual")
         });
       }
     }
@@ -8255,22 +8263,16 @@ ${USAGE}`);
     let forcedPng2 = null;
     if (wedged && behaviourOn) behaviour2 = { version: 1, ran: false, why: "the browser stopped answering while the interactions were driven" };
     else if (run2.kind === "ok" && behaviourOn) {
-      const budgetMs = behaviourBudget(Date.now(), runDeadline);
+      const budgetMs = session.budget("behaviour");
       if (budgetMs <= 0) behaviour2 = { version: 1, ran: false, why: "no time left within --max-time after measuring and driving" };
       else {
         try {
           const axe = resolveAxe(project);
-          const r2 = await runBehaviour(browser, {
+          const r2 = await runBehaviour(session, {
             expectation,
             driven: driven2,
-            viewport,
-            timeout,
-            initScript: INIT_SCRIPT,
             budgetMs,
             measuredTags: run2.result.visibleTags,
-            reach: async (page) => {
-              await reachPage(page, attachNavLog(page), probeOpts);
-            },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
             forcedPng: setFile(outBase, "forcedColors").split(path12.sep).join("/")
           });
@@ -8281,10 +8283,7 @@ ${USAGE}`);
         }
       }
     }
-    if (wedged) {
-      await killBrowser(launchPids.get(browser), PROBE_HOST, 0);
-      await Promise.race([browser.close().catch(() => void 0), sleep5(1e3, void 0, { ref: false })]);
-    } else await closeCapped(browser);
+    await endBrowser(browser, { wedged });
     if (held.timedOut) return 4;
     if (run2.kind === "browser-gone") {
       console.error(`verify-probe: ${run2.why} \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
@@ -8453,7 +8452,6 @@ export {
   behaviourLine,
   browserPathError,
   buildFrom,
-  closeCapped,
   defaultReadyMissed,
   docTokenWithin,
   driveOutcome,
@@ -8464,7 +8462,6 @@ export {
   installedInProject,
   isNavigationAway,
   isPlaywrightModule,
-  launchPid,
   linkHref,
   loadFailureWhy,
   main,

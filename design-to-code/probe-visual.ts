@@ -3,9 +3,10 @@
 // image. Informational only: never the fidelity verdict, never an exit 4, never a reason to lose measured.json — every
 // failure is measured.visual = {ran:false, why}.
 //
-// Order in verify-probe: measurement → the interaction drive → THIS capture → the behaviour checks → closeCapped →
+// Order in verify-probe: measurement → the interaction drive → THIS capture → the behaviour checks → endBrowser →
 // finishVisual. After the drive so it can never cut verdict-affecting rows; before behaviour so a big screen does not
-// starve it (it is one load, capped at VISUAL_CAP_MS; behaviour's budget is computed afterwards from what is left). It never
+// starve it (it is one load, capped by its share in probe-session's PHASE_PLAN; behaviour's share is taken afterwards from
+// what is left). It runs as one session unit (probe-session.ts). It never
 // touches the measurement page, and it acts on nothing: no click, no key, the mouse never moves (no hover state).
 //
 // The capture (captureVisual): a fresh context at deviceScaleFactor = the reference's scale (PNG px per design px — the index's
@@ -25,10 +26,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, Page } from "playwright";
-import { StepError, holdContext, openReached, raceBudget, raf2 } from "./probe-drive.ts";
-import type { Held } from "./probe-drive.ts";
-import { BEHAVIOUR_RESERVE_MS } from "./probe-behaviour.ts";
+import { raf2 } from "./probe-drive.ts";
+import type { ProbeSession } from "./probe-session.ts";
 import { PngError, crop, decodePng, encodePng, resampleBox } from "../bridge/src/png.ts";
 import type { Rgba } from "../bridge/src/png.ts";
 import { attribute, diffOptionsFor, diffPixels, planGrid, referenceCrop, renderDiff } from "./visual-diff.ts";
@@ -40,13 +39,7 @@ import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import type { PageDocument, PageWindow } from "./page-dom.ts";
 
-// ---------------------------------------------------------------- budget
-/** The capture's own cap; what --max-time leaves is shared with behaviour, whose reserve (settle, capped close, write) it keeps. */
-export const VISUAL_CAP_MS = 30_000;
-/** min(30 s, what is left of --max-time less the behaviour reserve) — never < 0. */
-export function visualBudget(now: number, deadline: number, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RESERVE_MS): number {
-  return Math.max(0, Math.min(cap, deadline - now - reserve));
-}
+// ---------------------------------------------------------------- caps
 const FONTS_CAP_MS = 5_000;
 /** built rects measured for attribution, at most */
 const BUILT_CAP = 2_000;
@@ -138,26 +131,17 @@ export interface CaptureOptions {
   frameSize: { w: number; h: number };
   /** the measured nodes (selector + count from the measurement pass) */
   nodes: Array<{ nodeId: string; selector?: string; selectorCount?: number }>;
-  viewport: { w: number; h: number };
-  timeout: number;
-  initScript: string;
-  reach(page: Page): Promise<void>;
+  /** the capture's share (session.budget("visual")), in ms from now */
   budgetMs: number;
 }
 
-/** One capped capture on a fresh page at the reference's scale. Never throws: a failure, a load or the budget is {why}. */
-export async function captureVisual(browser: Browser, o: CaptureOptions): Promise<VisualCapture | { why: string }> {
+/** One capped capture, as a session unit: a fresh page at the reference's scale. Never throws: a failure, a load or the
+ *  budget is {why}. */
+export async function captureVisual(session: ProbeSession<unknown>, o: CaptureOptions): Promise<VisualCapture | { why: string }> {
   if (o.budgetMs <= 0) return { why: "no time left within --max-time after measuring and driving" };
-  const held: Held = {};
-  const work = (async (): Promise<VisualCapture | { why: string }> => {
-    let reached: Awaited<ReturnType<typeof openReached>>;
-    try {
-      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: holdContext(held) });
-    } catch (e) {
-      return { why: e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}` };
-    }
-    const { context, page, loads } = reached;
-    try {
+  const r = await session.unit<VisualCapture | { why: string }>({
+    ms: o.budgetMs, dsf: o.ref.scale,
+    act: async ({ page, loads }) => {
       const loads0 = loads();
       await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep(FONTS_CAP_MS, undefined, { ref: false })]);
       await raf2(page);
@@ -186,18 +170,16 @@ export async function captureVisual(browser: Browser, o: CaptureOptions): Promis
       const after = await page.evaluate(readFrame, { selector: null });
       if (loads() !== loads0 || after.token !== read.token) return { why: "the page loaded a new document during the visual capture" };
       return { png, dsf: o.ref.scale, clip, shot, frame: fr ? { nodeId: fr.nodeId, via: fr.via, selector: fr.selector } : { nodeId: "", via: "none", selector: null }, built, notes };
-    } finally {
-      await context.close().catch(() => undefined);
-    }
-  })().catch((e: unknown): { why: string } => {
-    // no page to ask: the context is closed by now, so the error alone says what happened
-    const kind = pwErrorKind(e);
-    if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
-    if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture — ${pwFirstLine(e)}` };
-    return { why: `the visual capture failed — ${firstLine(e)}` };
+    },
+    unreached: (f) => ({ why: f.why }),
+    failed: (e) => {
+      // no page to ask: the context is closed by now, so the error alone says what happened
+      const kind = pwErrorKind(e);
+      if (kind === "navigated") return { why: "the page loaded a new document during the visual capture" };
+      if (kind === "gone") return { why: `the page or browser closed or crashed during the visual capture — ${pwFirstLine(e)}` };
+      return { why: `the visual capture failed — ${firstLine(e)}` };
+    },
   });
-  // the context exists from before the screen was reached: closing it ends whatever the capture waits on — ≤ CUT_SETTLE_MS
-  const r = await raceBudget(work, o.budgetMs, held);
   if (!r.cut) return r.value;
   return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1000)} s)` };
 }
