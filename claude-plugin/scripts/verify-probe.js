@@ -380,18 +380,41 @@ function collectCandidates(input) {
   const SKIP = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   const pageRect = (r) => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      const idx = Array.from(parent.children).indexOf(cur) + 1;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${idx})`);
-      cur = parent;
+  const paths = /* @__PURE__ */ new Map();
+  const childIndex = /* @__PURE__ */ new Map();
+  const indexIn = (parent, el) => {
+    let idx = childIndex.get(parent);
+    if (!idx) {
+      const m = /* @__PURE__ */ new Map();
+      Array.from(parent.children).forEach((c, i) => m.set(c, i + 1));
+      childIndex.set(parent, m);
+      idx = m;
     }
-    parts.unshift("html");
-    return parts.join(" > ");
+    return idx.get(el) ?? 0;
+  };
+  const pathOf = (el) => {
+    const up = [];
+    let cur = el;
+    let base = paths.get(cur);
+    while (base === void 0) {
+      const parent = cur.parentElement;
+      if (cur === document.documentElement || !parent) {
+        base = "html";
+        paths.set(cur, base);
+        break;
+      }
+      up.push(cur);
+      cur = parent;
+      base = paths.get(cur);
+    }
+    for (let i = up.length - 1; i >= 0; i--) {
+      const e = up[i];
+      const parent = e?.parentElement;
+      if (!e || !parent) break;
+      base = `${base} > ${e.tagName.toLowerCase()}:nth-child(${indexIn(parent, e)})`;
+      paths.set(e, base);
+    }
+    return base;
   };
   const all = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
   const orderOf = /* @__PURE__ */ new Map();
