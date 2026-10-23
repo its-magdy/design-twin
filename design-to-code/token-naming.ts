@@ -122,12 +122,14 @@ function tokenParts(codeToken: string): TokenPart[] {
 // A native token is read through its collection — `ColorsTokens.brand600`, `LocalColorsTokens.current.brand600`,
 // `Theme.of(context).extension<ColorsTokens>()!.brand600` — and the generated file declares the member alone
 // (`brand600 = Color(0xFF…)`). A generated token line and a component's styling argument are the same syntax
-// (`color = Color(0xFF…)`, `colors: [Color(0xFF…)]`, `backgroundImage: "…"`), so the syntax cannot tell them apart; the
-// FILE can. A dotted reference stands for its last member only in a file that DECLARES one of the reference's
-// containers (`class ColorsTokens`, `val LocalColorsTokens`, `const colorsTokens` — as every generated token file does),
-// never in a component that merely uses a styling argument of that name. A member that is a styling property name
-// (`color`, `background`, `tintColor`, … — key tag stripped) is refused even there. Either way the token still matches
-// when the codeToken names it bare, exactly as before the rule.
+// (`color = Color(0xFF…)`, `colors: [Color(0xFF…)]`, `backgroundImage: "…"`), so the line cannot tell them apart; its
+// SCOPE can. A dotted reference stands for its last member only when the declaration sits inside a block whose head
+// names one of the reference's containers — the container's own body (`class ColorsTokens {`, `object SpacingTokens {`),
+// an instance of it (`val ColorsTokensLight = ColorsTokens(`, `static const light = ColorsTokens(`) or its initialiser
+// (`export const colorsTokens = {`), as in every generated token file. A component that merely binds the name
+// (`const colorsTokens = useColorsTokens()`) opens no block around its own styles. A member that is a styling property
+// name (`color`, `background`, `tintColor`, … — key tag stripped) is refused even there. Either way the token still
+// matches when the codeToken names it bare, exactly as before the rule.
 interface MemberRef { member: string; containers: string[] }
 const STYLE_PROPERTY = /^(color|background|foreground|fill|stroke|tint|border|outline|shadow|.*color)$/;
 const IDENT = /^[A-Za-z_$][\w$]*$/;
@@ -141,22 +143,21 @@ function memberRefs(codeToken: string): MemberRef[] {
     if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
     // the path's own segments (`Theme`, `of`, `extension`) and generic arguments (`ColorsTokens`) — not call arguments
     const path = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
-    const containers = [...path.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3);
+    // (a container names a type or a collection — it has a capital: `ColorsTokens`, `colorsTokens`; never `light`, `current`)
+    const containers = [...path.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
     if (containers.length) out.push({ member, containers });
   }
   return out;
 }
-// The identifiers a file declares as a type or a binding, memoised per text (literalUses asks once per occurrence).
-const DECLARES = /\b(?:class|struct|object|interface|enum|protocol|typealias|type|val|var|let|const)\s+([A-Za-z_$][\w$]*)/g;
-const declaredCache = new Map<string, Set<string>>();
-function declaredIn(source: string): Set<string> {
-  let s = declaredCache.get(source);
-  if (s === undefined) {
-    if (declaredCache.size > 64) declaredCache.clear();
-    s = new Set([...source.matchAll(DECLARES)].map((m) => m[1] ?? ""));
-    declaredCache.set(source, s);
+// Does a block head name `container`? Exactly, or as the tail of a longer container name in the reference
+// (`LocalColorsTokens` → the `ColorsTokens(` instances it provides).
+const IDENTS = /[A-Za-z_$][\w$]*/g;
+function headNames(head: string, container: string): boolean {
+  for (const m of head.matchAll(IDENTS)) {
+    const id = m[0];
+    if (id === container || (id.length >= 6 && /^[A-Z]/.test(id) && container.endsWith(id))) return true;
   }
-  return s;
+  return false;
 }
 // Every spelling a declaration of this token may carry, whatever file it is in: the whole codeToken, each part, each
 // part's property.
@@ -172,17 +173,19 @@ function tokenCandidates(codeToken: string): string[] {
 /** Is `declared` (a name a line of code declares) the definition of the token `codeToken` names? Exactly — after
  *  normalising both sides (`--color-x`, `var(--x)`, `bg-x`, the `figma-` prefix, a key tag all reduce to the same core) —
  *  never by substring: with tokens `input` and `border`, `border-color:` is a CSS property, not either token's
- *  definition. In a stylesheet only a custom property (`--x:`) declares a token. `source` is the text of the file the
- *  declaration is in: a qualified native reference's member counts only where that file declares its container. */
-export function namesToken(declared: string, codeToken: string, opts: { stylesheet: boolean; source?: string }): boolean {
+ *  definition. In a stylesheet only a custom property (`--x:`) declares a token. `enclosing` gives the heads of the
+ *  blocks around the declaration (code-scanner.ts enclosingHeads): a qualified native reference's member counts only
+ *  inside a block that names its container. */
+export function namesToken(declared: string, codeToken: string, opts: { stylesheet: boolean; enclosing?: () => readonly string[] }): boolean {
   if (opts.stylesheet && !declared.startsWith("--")) return false;
   const exact = alnumKey(declared), core = tokenCore(declared);
   if (!exact) return false;
   const same = (c: string): boolean => exact === alnumKey(c) || (!!core && core === tokenCore(c));
   if (tokenCandidates(codeToken).some(same)) return true;
-  const source = opts.source;
-  if (source === undefined) return false;
-  return memberRefs(codeToken).some((m) => same(m.member) && m.containers.some((c) => declaredIn(source).has(c)));
+  const refs = opts.enclosing ? memberRefs(codeToken).filter((m) => same(m.member)) : [];
+  if (!refs.length || !opts.enclosing) return false;
+  const heads = opts.enclosing();
+  return refs.some((m) => m.containers.some((c) => heads.some((h) => headNames(h, c))));
 }
 
 /** The custom properties `codeToken` needs declared (lower-cased): `--x` for `--x` / `var(--x)`, `--color-<name>` for a

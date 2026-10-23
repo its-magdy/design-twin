@@ -2659,21 +2659,18 @@ function memberRefs(codeToken) {
     if (dot <= 0 || !IDENT.test(member) || /(^|[^\w])\d+\.\w+$/.test(part)) continue;
     if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
     const path17 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
-    const containers = [...path17.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3);
+    const containers = [...path17.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
     if (containers.length) out.push({ member, containers });
   }
   return out;
 }
-var DECLARES = /\b(?:class|struct|object|interface|enum|protocol|typealias|type|val|var|let|const)\s+([A-Za-z_$][\w$]*)/g;
-var declaredCache = /* @__PURE__ */ new Map();
-function declaredIn(source) {
-  let s = declaredCache.get(source);
-  if (s === void 0) {
-    if (declaredCache.size > 64) declaredCache.clear();
-    s = new Set([...source.matchAll(DECLARES)].map((m) => m[1] ?? ""));
-    declaredCache.set(source, s);
+var IDENTS = /[A-Za-z_$][\w$]*/g;
+function headNames(head, container) {
+  for (const m of head.matchAll(IDENTS)) {
+    const id = m[0];
+    if (id === container || id.length >= 6 && /^[A-Z]/.test(id) && container.endsWith(id)) return true;
   }
-  return s;
+  return false;
 }
 function tokenCandidates(codeToken) {
   const out = [codeToken];
@@ -2689,9 +2686,10 @@ function namesToken(declared, codeToken, opts) {
   if (!exact) return false;
   const same = (c) => exact === alnumKey(c) || !!core && core === tokenCore(c);
   if (tokenCandidates(codeToken).some(same)) return true;
-  const source = opts.source;
-  if (source === void 0) return false;
-  return memberRefs(codeToken).some((m) => same(m.member) && m.containers.some((c) => declaredIn(source).has(c)));
+  const refs = opts.enclosing ? memberRefs(codeToken).filter((m) => same(m.member)) : [];
+  if (!refs.length || !opts.enclosing) return false;
+  const heads = opts.enclosing();
+  return refs.some((m) => m.containers.some((c) => heads.some((h) => headNames(h, c))));
 }
 var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 
@@ -2842,15 +2840,42 @@ function arbitraryPx(source) {
   return found;
 }
 var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-function declaresTokenAt(line, at, codeToken, file) {
-  const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, file);
+var CLOSER = { "(": ")", "[": "]", "{": "}" };
+var blockCache = /* @__PURE__ */ new Map();
+function blocksOf(text) {
+  const have = blockCache.get(text);
+  if (have) return have;
+  const out = [], stack = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charAt(i);
+    const want = CLOSER[c];
+    if (want !== void 0) {
+      stack.push({ open: i, want });
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (top && c === top.want) {
+      stack.pop();
+      out.push({ open: top.open, close: i, head: text.slice(text.lastIndexOf("\n", top.open) + 1, top.open) });
+    }
+  }
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: text.slice(text.lastIndexOf("\n", s.open) + 1, s.open) });
+  if (blockCache.size > 64) blockCache.clear();
+  blockCache.set(text, out);
+  return out;
 }
-function definesAny(line, literal, codeTokens, file) {
+var enclosingHeads = (text, index) => blocksOf(text).filter((b) => b.open < index && index <= b.close).sort((a, b) => a.open - b.open).map((b) => b.head);
+function isDefinitionAt(file, index, codeToken) {
+  const lineStart = file.text.lastIndexOf("\n", index - 1) + 1;
+  const m = DECLARATION.exec(file.text.slice(lineStart, index));
+  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, index) });
+}
+function definesAny(file, lineStart, line, literal, codeTokens) {
   let at = line.indexOf(literal);
   if (at === -1) return false;
   while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, file))) return false;
+    const index = lineStart + at;
+    if (!codeTokens.some((t) => isDefinitionAt(file, index, t))) return false;
     at = line.indexOf(literal, at + literal.length);
   }
   return true;
@@ -2863,8 +2888,14 @@ function literalUses(code, literal, codeTokens, exempt = []) {
     if (!f.text.includes(literal)) continue;
     found = true;
     if (exempt.includes(f.rel)) continue;
-    const file = { stylesheet: isStylesheet(f.rel), source: f.text };
-    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, file))) usedIn.push(f.rel);
+    let lineStart = 0;
+    for (const line of f.text.split("\n")) {
+      if (line.includes(literal) && !definesAny(f, lineStart, line, literal, codeTokens)) {
+        usedIn.push(f.rel);
+        break;
+      }
+      lineStart += line.length + 1;
+    }
   }
   return { found, usedIn };
 }

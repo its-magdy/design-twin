@@ -148,20 +148,50 @@ export function arbitraryPx(source: string): Map<number, PxHit[]> {
 // `--brand-600: #5b5fc7`, `brand600: "#5b5fc7"`, `val brand600 = Color(0xFF5B5FC7)`. The declared
 // name must be the TOKEN's (token-naming.ts namesToken) — `color: #5b5fc7` inside a component declares a CSS property.
 const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-// Is the occurrence of a literal at `at` the value of a declaration of `codeToken`?
-function declaresTokenAt(line: string, at: number, codeToken: string, file: { stylesheet: boolean; source: string }): boolean {
-  const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, file); // group 2 is not optional: set whenever the regex matched
+
+// The bracketed blocks of a text — `{…}`, `(…)`, `[…]` — each with its HEAD: the text of its opening line up to the
+// bracket (`data class ColorsTokens(`, `export const colorsTokens = {`, `val ColorsTokensLight = ColorsTokens(`).
+// Memoised per text: literalUses asks once per occurrence. An unclosed block runs to the end of the text.
+interface Block { open: number; close: number; head: string }
+const CLOSER: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+const blockCache = new Map<string, Block[]>();
+function blocksOf(text: string): Block[] {
+  const have = blockCache.get(text);
+  if (have) return have;
+  const out: Block[] = [], stack: Array<{ open: number; want: string }> = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charAt(i);
+    const want = CLOSER[c];
+    if (want !== undefined) { stack.push({ open: i, want }); continue; }
+    const top = stack[stack.length - 1];
+    if (top && c === top.want) { stack.pop(); out.push({ open: top.open, close: i, head: text.slice(text.lastIndexOf("\n", top.open) + 1, top.open) }); }
+  }
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: text.slice(text.lastIndexOf("\n", s.open) + 1, s.open) });
+  if (blockCache.size > 64) blockCache.clear();
+  blockCache.set(text, out);
+  return out;
+}
+/** The heads of every block that encloses position `index` of `text`, innermost last. */
+export const enclosingHeads = (text: string, index: number): string[] =>
+  blocksOf(text).filter((b) => b.open < index && index <= b.close).sort((a, b) => a.open - b.open).map((b) => b.head);
+
+/** Is the value at `index` of `file` (scanText'd) — the start of a literal — the value of a declaration of `codeToken`? */
+export function isDefinitionAt(file: FileText, index: number, codeToken: string): boolean {
+  const lineStart = file.text.lastIndexOf("\n", index - 1) + 1;
+  const m = DECLARATION.exec(file.text.slice(lineStart, index));
+  // group 2 is not optional: set whenever the regex matched
+  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, index) });
 }
 // A line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
 // a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the
 // row being checked: `--color-surface: #1d1d1f; --color-canvas: #1d1d1f;` defines two tokens that share
 // a value, and neither definition is a "usage" of the other.
-function definesAny(line: string, literal: string, codeTokens: readonly string[], file: { stylesheet: boolean; source: string }): boolean {
+function definesAny(file: FileText, lineStart: number, line: string, literal: string, codeTokens: readonly string[]): boolean {
   let at = line.indexOf(literal);
   if (at === -1) return false;
   while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, file))) return false;
+    const index = lineStart + at;
+    if (!codeTokens.some((t) => isDefinitionAt(file, index, t))) return false;
     at = line.indexOf(literal, at + literal.length);
   }
   return true;
@@ -178,8 +208,11 @@ export function literalUses(code: readonly FileText[], literal: string, codeToke
     if (!f.text.includes(literal)) continue;
     found = true;
     if (exempt.includes(f.rel)) continue;
-    const file = { stylesheet: isStylesheet(f.rel), source: f.text };
-    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, file))) usedIn.push(f.rel);
+    let lineStart = 0;
+    for (const line of f.text.split("\n")) {
+      if (line.includes(literal) && !definesAny(f, lineStart, line, literal, codeTokens)) { usedIn.push(f.rel); break; }
+      lineStart += line.length + 1;
+    }
   }
   return { found, usedIn };
 }

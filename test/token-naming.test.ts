@@ -6,7 +6,7 @@
 import { toCSS, toTailwind } from "../design-to-code/tokens.ts";
 import { toNative } from "../design-to-code/tokens-native.ts";
 import { TW_PREFIX, cssVarName, disambiguated, keyTag, namesToken, nativeIdentifier, requiredCustomProps, tailwindVarName } from "../design-to-code/token-naming.ts";
-import { colorLiterals, literalUses, scanText } from "../design-to-code/code-scanner.ts";
+import { colorLiterals, enclosingHeads, isDefinitionAt, literalUses, scanText } from "../design-to-code/code-scanner.ts";
 import { colorKey } from "../design-to-code/color.ts";
 import { tokens } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
@@ -59,15 +59,18 @@ const ROWS: Row[] = [
   { name: "Opacity/Disabled", hexes: [], css: "--Opacity-Disabled", tw: "--figma-opacity-disabled", native: "opacityDisabled", twSpellings: ["var(--figma-opacity-disabled)"] },
 ];
 const cssSpellings = (r: Row): string[] => [r.css, `var(${r.css})`, `var(${r.css}, #000)`];
-// A native token is read through what its platform's file declares — a collection's type, instance or theme extension;
-// the member is the token. Each platform's own reading paths:
-const NATIVE_PATHS: Record<"swiftui" | "compose" | "flutter" | "react-native", string[]> = {
-  swiftui: ["ColorsTokens.light", "SpacingTokens"],
-  compose: ["LocalColorsTokens.current", "ColorsTokensDark", "SpacingTokens"],
-  flutter: ["Theme.of(context).extension<ColorsTokens>()!", "ColorsTokens.light", "SpacingTokens"],
-  "react-native": ["colorsTokens.light", "spacingTokens"],
+// A native token is read through what its platform's file declares for its collection — the collection's type,
+// instance or theme extension; the member is the token. Each platform's own reading paths, per collection:
+type Platform = "swiftui" | "compose" | "flutter" | "react-native";
+const NATIVE_PATHS: Record<Platform, { colors: string[]; spacing: string[] }> = {
+  swiftui: { colors: ["ColorsTokens.light"], spacing: ["SpacingTokens"] },
+  compose: { colors: ["LocalColorsTokens.current"], spacing: ["SpacingTokens"] },
+  flutter: { colors: ["Theme.of(context).extension<ColorsTokens>()!", "ColorsTokens.light"], spacing: ["SpacingTokens"] },
+  "react-native": { colors: ["colorsTokens.light"], spacing: ["spacingTokens"] },
 };
-const nativeSpellingsOf = (platform: keyof typeof NATIVE_PATHS) => (r: Row): string[] => [r.native, ...NATIVE_PATHS[platform].map((p) => `${p}.${r.native}`)];
+// the colour rows are the Colors collection, every other row the Spacing one
+const nativeSpellingsOf = (platform: Platform) => (r: Row): string[] =>
+  [r.native, ...NATIVE_PATHS[platform][r.hexes.length ? "colors" : "spacing"].map((p) => `${p}.${r.native}`)];
 
 const tokensCss = toCSS(ds);
 const themeCss = must(toTailwind(ds)).text;
@@ -86,17 +89,20 @@ console.log("round trip — every emitted name is recognised under every builder
 for (const r of ROWS) {
   check(`[css] ${r.css} is the definition of ${cssSpellings(r).join(" | ")}`, cssSpellings(r).every((s) => namesToken(r.css, s, { stylesheet: true })));
   check(`[tailwind] ${r.tw} is the definition of ${r.twSpellings.join(" | ")}`, r.twSpellings.every((s) => namesToken(r.tw, s, { stylesheet: true })));
-  for (const platform of ["swiftui", "compose", "flutter", "react-native"] as const) {
+  for (const platform of ["swiftui", "compose", "flutter", "react-native"] satisfies Platform[]) {
     const spell = nativeSpellingsOf(platform)(r);
+    // through the gate's own reading of the generated file: some declaration of the identifier there defines the token
+    const file = { rel: NATIVE[platform].file, text: NATIVE[platform].text };
+    const values = [...file.text.matchAll(new RegExp(`\\b${r.native}\\b\\s*[:=]\\s*`, "g"))].map((m) => (m.index ?? 0) + m[0].length);
     check(`[native/${platform}] ${r.native} in the generated file is the definition of ${spell.slice(1).join(" | ")}`,
-      spell.every((s) => namesToken(r.native, s, { stylesheet: false, source: NATIVE[platform].text })));
+      values.length > 0 && spell.every((s) => values.some((at) => isDefinitionAt(file, at, s))));
   }
 }
 // A colliding variable's key tag is stripped from both sides on every target, so the tagged definition counts for the
 // name it was disambiguated from — as it always did on the web (`-<tag>`), now in native code too (`_<tag>`).
 check("[key] a key-tagged definition is the definition of its untagged name, on the web and in native code",
   namesToken("--spacing-figma-space-4-e26d506e", "p-figma-space-4", { stylesheet: true }) && namesToken("--Space-4-e26d506e", "var(--Space-4)", { stylesheet: true })
-  && namesToken("space4_e26d506e", "SpacingTokens.space4", { stylesheet: false, source: NATIVE.compose.text }));
+  && namesToken("space4_e26d506e", "SpacingTokens.space4", { stylesheet: false, enclosing: () => ["object SpacingTokens "] }));
 check("[tailwind] a colour utility needs exactly the custom property theme.css declares", (() => {
   const have = new Set([...declared(themeCss)].map((n) => n.toLowerCase()));
   return ROWS.filter((r) => r.hexes.length).every((r) => r.twSpellings.every((s) => requiredCustomProps(s).every((p) => have.has(p))));
@@ -135,13 +141,25 @@ check("[near] a key-tagged name is not a different number's", !namesToken("--spa
   && !namesToken("--spacing-figma-space-4", "gap-y-figma-space-40", { stylesheet: true }));
 check("[near] a tag that is not 8 hex digits is part of the name", !namesToken("--spacing-figma-space-4-headline", "space-4", { stylesheet: true })
   && !namesToken("space4_e26d506", "space4", { stylesheet: false }));
-const TOKEN_FILE = "object ColorsTokens {\n  val brand600 = Color(0xFF5B5FC7)\n}";
-check("[near] a qualified native reference names its LAST member only", !namesToken("brand600", "ColorsTokens.brand6", { stylesheet: false, source: TOKEN_FILE })
-  && !namesToken("ColorsTokens", "ColorsTokens.brand600", { stylesheet: false, source: TOKEN_FILE }) && !namesToken("light", "colorsTokens.light.brand600", { stylesheet: false, source: "const colorsTokens = {}" }));
-check("[member] a member counts only in a file that declares the reference's container", namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, source: TOKEN_FILE })
-  && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, source: "Text(\"Hi\")" }) && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false })
-  // a call argument is not a container: a component's own `val context` does not make it a token file
-  && !namesToken("brand600", "Theme.of(context).extension<ColorsTokens>()!.brand600", { stylesheet: false, source: "val context = LocalContext.current" }));
+const IN_TOKENS = (): string[] => ["object ColorsTokens "];
+check("[near] a qualified native reference names its LAST member only", !namesToken("brand600", "ColorsTokens.brand6", { stylesheet: false, enclosing: IN_TOKENS })
+  && !namesToken("ColorsTokens", "ColorsTokens.brand600", { stylesheet: false, enclosing: IN_TOKENS }) && !namesToken("light", "colorsTokens.light.brand600", { stylesheet: false, enclosing: () => ["export const colorsTokens = "] }));
+check("[member] a member counts only inside a block that names the reference's container", namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, enclosing: IN_TOKENS })
+  && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false, enclosing: () => ["fun Card() ", "  Column("] }) && !namesToken("brand600", "ColorsTokens.brand600", { stylesheet: false })
+  // a path word or a call argument is not a container: a block named `light` or `context` does not count
+  && !namesToken("brand600", "Theme.of(context).extension<ColorsTokens>()!.brand600", { stylesheet: false, enclosing: () => ["val context = "] })
+  && !namesToken("brand600", "colorsTokens.light.brand600", { stylesheet: false, enclosing: () => ["const light = "] }));
+check("[enclosing] the heads of the blocks around a position, outermost first; a closed block is not around it", (() => {
+  const text = "object ColorsTokens {\n  val a = Color(0xFF000000)\n}\nfun Card() {\n  Text(color = Color(0xFF5B5FC7))\n}";
+  const around = enclosingHeads(text, text.indexOf("0xFF5B5FC7"));
+  return JSON.stringify(around) === JSON.stringify(["fun Card() ", "  Text", "  Text(color = Color"]) && enclosingHeads(text, text.indexOf("0xFF000000"))[0] === "object ColorsTokens ";
+})());
+// Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
+check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
+  const text = "const colorsTokens = useColorsTokens();\nconst styles = {\n  backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  hero: colorsTokens.light.brand600,\n};";
+  return literalUses([{ rel: "Card.tsx", text }], "#5B5FC7", ["colorsTokens.light.backgroundImage"]).usedIn.join() === "Card.tsx"
+    && literalUses([{ rel: "Card.kt", text: "val ColorsTokens = LocalColorsTokens.current\nText(\"Hi\", tint = Color(0xFF5B5FC7))" }], "0xFF5B5FC7", ["ColorsTokens.tint"]).usedIn.join() === "Card.kt";
+})());
 // A generated token line and a component's styling argument are the same syntax; in a component (no container declared)
 // the member rule never applies, whatever the member is called.
 check("[near] a component's own styling argument stays a use, whatever member the codeToken ends in", (() => {
@@ -154,13 +172,13 @@ check("[near] a component's own styling argument stays a use, whatever member th
     && use("Card.tsx", "const s = {\n  hero: {\n    backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  },\n};", "#5B5FC7", "ColorsTokens.backgroundImage");
 })());
 check("[near] even in a token file, a styling-property member (key tag stripped) is refused — the bare name still works",
-  !namesToken("color", "ColorsTokens.color", { stylesheet: false, source: TOKEN_FILE }) && !namesToken("color", "ColorsTokens.color_e26d506e", { stylesheet: false, source: TOKEN_FILE })
-  && !namesToken("backgroundColor", "ColorsTokens.backgroundColor", { stylesheet: false, source: TOKEN_FILE }) && namesToken("color", "color", { stylesheet: false }));
+  !namesToken("color", "ColorsTokens.color", { stylesheet: false, enclosing: IN_TOKENS }) && !namesToken("color", "ColorsTokens.color_e26d506e", { stylesheet: false, enclosing: IN_TOKENS })
+  && !namesToken("backgroundColor", "ColorsTokens.backgroundColor", { stylesheet: false, enclosing: IN_TOKENS }) && namesToken("color", "color", { stylesheet: false }));
 check("[member] a hand-written token object is its own definition (`object AppColors { val primary = … }` for AppColors.primary)",
   literalUses([{ rel: "Theme.kt", text: "object AppColors {\n  val primary = Color(0xFF5B5FC7)\n}" }], "0xFF5B5FC7", ["AppColors.primary"]).usedIn.length === 0);
 check("[member] a comma-separated list of qualified references names each member",
-  namesToken("brand600", "ColorsTokens.brand600, ColorsTokens.accent", { stylesheet: false, source: TOKEN_FILE })
-  && namesToken("accent", "ColorsTokens.brand600,ColorsTokens.accent", { stylesheet: false, source: TOKEN_FILE }));
+  namesToken("brand600", "ColorsTokens.brand600, ColorsTokens.accent", { stylesheet: false, enclosing: IN_TOKENS })
+  && namesToken("accent", "ColorsTokens.brand600,ColorsTokens.accent", { stylesheet: false, enclosing: IN_TOKENS }));
 check("[near] a decimal in a utility is not a member reference", !namesToken("5", "p-1.5", { stylesheet: false }));
 check("[near] a line with a definition AND a usage of the literal is not a definition line", (() => {
   const code = [{ rel: "theme.css", text: ":root { --color-figma-brand-600: #5b5fc7; } .x { color: #5b5fc7 }" }];
