@@ -1458,11 +1458,16 @@ function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
-  const str2 = (x) => typeof x === "string" && x ? x : null;
   const exp = readJsonOrNull(setFile(path7.join(verifyDir, name), "expected"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
   const rep = readJsonOrNull(setFile(path7.join(verifyDir, name), "report"), isJsonObject);
-  return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(rep && rep.nodeId), reportScreen: str2(rep && rep.screen) };
+  return setFactsOf(exp, rep);
+}
+function setFactsOf(exp, rep) {
+  const str2 = (x) => typeof x === "string" && x ? x : null;
+  const e = isJsonObject(exp) ? exp : null;
+  const frame = e && isJsonObject(e.frame) ? e.frame : null;
+  const r = isJsonObject(rep) ? rep : null;
+  return { expectedId: str2(frame && frame.nodeId), expectedName: str2(frame && frame.name), reportId: str2(r && r.nodeId), reportScreen: str2(r && r.screen) };
 }
 function stemHolders(verifyDir, stems, open) {
   const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
@@ -1477,6 +1482,13 @@ function stemHolders(verifyDir, stems, open) {
 // design-to-code/node-artefacts.ts
 function planNode(plan, file) {
   return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path8.basename(file).replace(/\.json$/i, "")) : null);
+}
+function setIdsOf(name, f) {
+  return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
+}
+function setNodeOf(name, f) {
+  const ids = setIdsOf(name, f);
+  return ids.length === 1 ? ids[0] ?? null : null;
 }
 function readPlan(file) {
   const r = readJson(file, anyJson);
@@ -1508,14 +1520,8 @@ function nodeArtefacts(root, dirs = {}) {
     return { plans: out, bad };
   }
   const plansOf = (nodeId) => plans().plans.filter((p) => p.nodeId === nodeId);
-  function setIds(name) {
-    const f = setFacts(verifyAbs, name);
-    return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
-  }
-  function setNode(name) {
-    const ids = setIds(name);
-    return ids.length === 1 ? ids[0] ?? null : null;
-  }
+  const setIds = (name) => setIdsOf(name, setFacts(verifyAbs, name));
+  const setNode = (name) => setNodeOf(name, setFacts(verifyAbs, name));
   function setHolders(nodeId, runs) {
     const stems = /* @__PURE__ */ new Set(), conflicted = [], legacy2 = [];
     for (const name of [.../* @__PURE__ */ new Set([...verifySets(verifyAbs), ...runs])].sort()) {
@@ -2233,7 +2239,17 @@ function exportDirOf(cwd) {
   const e = path13.join(cwd, EXPORT_DIR);
   return fs13.existsSync(path13.join(e, "pages")) ? e : path13.join(cwd, DESIGN_DIR);
 }
-function indexRows(exportDir) {
+var locateCache = () => ({ reports: /* @__PURE__ */ new Map(), rows: /* @__PURE__ */ new Map() });
+function indexRows(exportDir, cache) {
+  if (!cache) return readIndexRows(exportDir);
+  let rows = cache.rows.get(exportDir);
+  if (!rows) {
+    rows = readIndexRows(exportDir);
+    cache.rows.set(exportDir, rows);
+  }
+  return rows;
+}
+function readIndexRows(exportDir) {
   const root = readJsonOrNull(path13.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
@@ -2263,7 +2279,7 @@ function oneSource(rows) {
   const src = { file: first.sourceFile, key: first.sourceFileKey || null };
   return rows.every((r) => !r.sourceFile || sameSource(r, src) === true);
 }
-function locateExport(plan, planFile, cwd) {
+function locateExport(plan, planFile, cwd, cache) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
@@ -2274,7 +2290,7 @@ function locateExport(plan, planFile, cwd) {
     return null;
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
-  const rows = indexRows(exportDir);
+  const rows = indexRows(exportDir, cache);
   const ids = [planNode(plan, planFile), nodeIdFromStem(plan.screen)].filter((id) => !!id);
   let row = null;
   for (const id of ids) {
@@ -2321,10 +2337,29 @@ function behaviourRef(x) {
   if (!isReportBehaviour(x)) return null;
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
-function locateReports(plan, planFile, cwd, exp) {
+function reportEntries(dir) {
+  if (!fs13.existsSync(dir)) return null;
+  const out = [];
+  for (const f of fs13.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
+    const abs = path13.join(dir, f);
+    const r = readJsonOrNull(abs, isVerifyReport);
+    if (!r) continue;
+    const stem = setBaseOf(f, "report") ?? f;
+    if (!fs13.existsSync(setFile(path13.join(dir, stem), "expected")) && fs13.existsSync(setFile(path13.join(dir, stem), "retired"))) continue;
+    out.push({ f, abs, stem, r, facts: null, mtimeMs: null });
+  }
+  return out;
+}
+var factsOf = (dir, x) => x.facts ??= setFactsOf(readJsonOrNull(setFile(path13.join(dir, x.stem), "expected"), isJsonObject), x.r);
+function locateReports(plan, planFile, cwd, exp, cache) {
   const dir = path13.join(cwd, VERIFY_DIR);
-  if (!fs13.existsSync(dir)) return [];
-  const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
+  let entries = cache ? cache.reports.get(dir) : void 0;
+  if (entries === void 0) {
+    entries = reportEntries(dir);
+    if (cache) cache.reports.set(dir, entries);
+  }
+  if (entries === null) return [];
+  const e = exp === void 0 ? locateExport(plan, planFile, cwd, cache) : exp;
   const stems = new Set([
     plan.file ? path13.basename(String(plan.file)).replace(/\.json$/i, "") : null,
     e ? path13.basename(e.file).replace(/\.json$/i, "") : null,
@@ -2332,25 +2367,21 @@ function locateReports(plan, planFile, cwd, exp) {
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
   const nodeId = planNode(plan, planFile);
-  const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs13.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
-    const abs = path13.join(dir, f);
-    const r = readJsonOrNull(abs, isVerifyReport);
-    if (!r) continue;
-    const stem = setBaseOf(f, "report") ?? f;
+  for (const x of entries) {
+    const { r, stem, abs } = x;
     let by = null;
-    const expFile = setFile(path13.join(dir, stem), "expected");
-    if (!fs13.existsSync(expFile) && fs13.existsSync(setFile(path13.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
-    else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
+    else if (nodeId && setNodeOf(stem, factsOf(dir, x)) === nodeId) by = factsOf(dir, x).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
-    let mtimeMs = 0;
-    try {
-      mtimeMs = fs13.statSync(abs).mtimeMs;
-    } catch {
+    if (x.mtimeMs === null) {
+      x.mtimeMs = 0;
+      try {
+        x.mtimeMs = fs13.statSync(abs).mtimeMs;
+      } catch {
+      }
     }
     out.push({
       rel: path13.relative(cwd, abs).split(path13.sep).join("/"),
@@ -2361,7 +2392,7 @@ function locateReports(plan, planFile, cwd, exp) {
       why: r.why || [],
       deltas: r.deltas || null,
       measuredAt: r.measuredAt || null,
-      mtimeMs,
+      mtimeMs: x.mtimeMs,
       inputs: reportInputs(r),
       behaviour: behaviourRef(r.behaviour),
       shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
@@ -2423,7 +2454,7 @@ function planStatus(root, o = {}) {
     const h = hook(plan);
     return h.kind !== "passed" || !h.complete;
   };
-  const reports = (plan, planFile, exp) => locateReports(plan, planFile, root, exp);
+  const reports = (plan, planFile, exp) => locateReports(plan, planFile, root, exp, o.locate);
   function reportVerdict(plan, exp, found) {
     const f = verificationFacts(plan.verification);
     if (!found.length) {
@@ -2456,7 +2487,7 @@ function planStatus(root, o = {}) {
     if (stored !== null) notes.push(`the stored "status": "${stored}" was not confirmed by the current hook and is ignored \u2014 status is computed, never stored`);
     const life = lifecycleOf(plan);
     if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? 'retired by hand ("status": "abandoned")' : 'paused on a question for the user ("status": "awaiting-user")'], reports: [] };
-    const exp = so.export === void 0 ? locateExport(plan, so.planFile, root) : so.export;
+    const exp = so.export === void 0 ? locateExport(plan, so.planFile, root, o.locate) : so.export;
     const found = so.reports || reports(plan, so.planFile, exp);
     const rv = reportVerdict(plan, exp, found);
     const h = hook(plan);
@@ -3805,9 +3836,9 @@ var USAGE2 = [
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
-function checkAndRecord(p, cwd, graph) {
-  const exp = locateExport(p.plan, p.file, cwd);
-  const reports = locateReports(p.plan, p.file, cwd, exp);
+function checkAndRecord(p, cwd, graph, locate) {
+  const exp = locateExport(p.plan, p.file, cwd, locate);
+  const reports = locateReports(p.plan, p.file, cwd, exp, locate);
   setPhase(`checking ${path15.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
@@ -3882,8 +3913,9 @@ async function main(argv) {
       const closed = closedStatusOf(b);
       console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" \u2014 skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
     }
+    const locate2 = locateCache();
     const rows = plans.map((p) => {
-      const st = planStatus(rootOfPlan(p.file)).status(p.plan, { planFile: p.file });
+      const st = planStatus(rootOfPlan(p.file), { locate: locate2 }).status(p.plan, { planFile: p.file });
       const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
@@ -3963,8 +3995,9 @@ async function main(argv) {
   const lines = [];
   const warned = /* @__PURE__ */ new Map();
   const graphs = /* @__PURE__ */ new Map();
+  const locate = locateCache();
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)));
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)), locate);
     const name = path15.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
@@ -4014,6 +4047,7 @@ export {
   isSourceFile,
   isStale2 as isStale,
   legacySetWarnings,
+  locateCache,
   locateExport,
   locateReports,
   main,

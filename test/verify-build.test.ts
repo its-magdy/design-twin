@@ -2249,5 +2249,59 @@ void build(tmp).then(async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
+  {
+    // One command looks up many plans: a shared LocateCache must give each plan exactly what a fresh lookup gives —
+    // every match kind, retired sets, a set whose files carry two ids (no node's), an unreadable report — while reading
+    // each report and expectation once for the command rather than three times per plan.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vb-locate-cache-"));
+    const v = path.join(root, "design", "verify");
+    fs.mkdirSync(v, { recursive: true });
+    const rep = (o: Record<string, unknown>): string => JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass", why: [], deltas: [], inputs: {}, ...o });
+    const put = (f: string, s: string): void => fs.writeFileSync(path.join(v, f), s);
+    put("Alpha__1_1.report.json", rep({ screen: "Alpha", nodeId: "1:1" }));                 // by name (the plan's file name) and by id
+    put("Alpha__1_1.dark.report.json", rep({ screen: "Alpha", verdict: "fail" }));          // a variant: by the id its stem carries
+    put("Nick.expected.json", JSON.stringify({ frame: { nodeId: "2:2", name: "Beta" } }));   // a legacy name: by its expectation's frame
+    put("Nick.report.json", rep({ screen: "Beta" }));
+    put("Mixed__3_3.expected.json", JSON.stringify({ frame: { nodeId: "4:4" } }));           // two ids: no node's
+    put("Mixed__3_3.report.json", rep({ screen: "Gamma" }));
+    put("Old.expected.json.retired", JSON.stringify({ frame: { nodeId: "2:2" } }));          // retired: history
+    put("Old.report.json", rep({ screen: "Beta", nodeId: "2:2", verdict: "fail" }));
+    put("Broken.report.json", "{ not json");
+    for (let i = 0; i < 20; i++) put(`Filler__9_${i}.report.json`, rep({ screen: `Filler ${i}`, nodeId: `9:${i}` }));
+    const plans: Array<[Plan, string]> = [
+      [{ nodeId: "1:1" }, "Alpha__1_1"], [{ nodeId: "2:2" }, "Beta__2_2"], [{ nodeId: "3:3" }, "Gamma__3_3"],
+      [{ nodeId: "4:4" }, "Gamma__4_4"], [{ screen: "Nick" }, "Nick"], [{}, "Unknown__8_8"],
+    ];
+    const pf = (stem: string): string => path.join(root, "design", "plan", stem + ".json");
+    const show = (refs: ReportRef[]): string => JSON.stringify(refs.map((r) => [r.rel, r.matchedBy, r.verdict, r.mtimeMs > 0]));
+    const fresh = plans.map(([p, s]) => show(verifyBuild.locateReports(p, pf(s), root, null)));
+    const orig = fs.readFileSync;
+    let reads = 0;
+    const counting = ((...a: Parameters<typeof fs.readFileSync>) => { reads++; return orig(...a); }) as typeof fs.readFileSync;
+    fs.readFileSync = counting;
+    let shared: string[];
+    let uncachedReads: number;
+    try {
+      const cache = verifyBuild.locateCache();
+      shared = plans.map(([p, s]) => show(verifyBuild.locateReports(p, pf(s), root, null, cache)));
+      const cachedReads = reads;
+      reads = 0;
+      for (const [p, s] of plans) verifyBuild.locateReports(p, pf(s), root, null);
+      uncachedReads = reads;
+      reads = cachedReads;
+    } finally { fs.readFileSync = orig; }
+    check(`[locate cache] every plan finds the same reports, matched the same way, through one shared cache (got ${JSON.stringify(shared)}; fresh ${JSON.stringify(fresh)})`,
+      JSON.stringify(shared) === JSON.stringify(fresh));
+    check(`[locate cache] …the expected matches: name/id, variant by id, legacy by its frame; the retired and the two-id set never (got ${JSON.stringify(fresh)})`,
+      fresh[0] === JSON.stringify([["design/verify/Alpha__1_1.dark.report.json", "nodeId", "fail", true], ["design/verify/Alpha__1_1.report.json", "name", "pass", true]])
+      && fresh[1] === JSON.stringify([["design/verify/Nick.report.json", "expectation frame", "pass", true]])
+      && fresh[2] === "[]" && fresh[3] === "[]" && fresh[5] === "[]");
+    // 30 report files (one unreadable, one retired): each report read once, each set's expectation tried at most once — one
+    // command's reads stay O(reports), not O(plans × reports)
+    check(`[locate cache] ${plans.length} plans read each report and expectation at most once (got ${reads} reads with the cache, ${uncachedReads} without)`,
+      reads <= 2 * 30 && uncachedReads >= 4 * reads);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
   report();
 });

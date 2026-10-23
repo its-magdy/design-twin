@@ -209,11 +209,18 @@ export function verifySets(verifyDir: string): string[] {
  *  `screen`. Each null when that file is absent or says nothing. */
 export interface SetFacts { expectedId: string | null; expectedName: string | null; reportId: string | null; reportScreen: string | null }
 export function setFacts(verifyDir: string, name: string): SetFacts {
-  const str = (x: unknown): string | null => (typeof x === "string" && x ? x : null);
   const exp = readJsonOrNull(setFile(path.join(verifyDir, name), "expected"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
   const rep = readJsonOrNull(setFile(path.join(verifyDir, name), "report"), isJsonObject);
-  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+  return setFactsOf(exp, rep);
+}
+/** setFacts from a set's expectation and report as already read (null: absent or unreadable) — for a caller that parsed
+ *  the report itself (verify-locate.ts), so it is not read a second time. */
+export function setFactsOf(exp: unknown, rep: unknown): SetFacts {
+  const str = (x: unknown): string | null => (typeof x === "string" && x ? x : null);
+  const e = isJsonObject(exp) ? exp : null;
+  const frame = e && isJsonObject(e.frame) ? e.frame : null;
+  const r = isJsonObject(rep) ? rep : null;
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(r && r.nodeId), reportScreen: str(r && r.screen) };
 }
 
 /** How a refusal names the stems `stems` of `verifyDir`'s sets (node-artefacts.ts's), joined by ", ": a stem with files
