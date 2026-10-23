@@ -52,6 +52,8 @@ function read(cwd: string, files: string[], flags: Parameters<typeof readScreenI
   process.chdir(cwd);
   try { return readScreenInputs(files, flags); } finally { process.chdir(was); }
 }
+// A found path is printed as findMapFile / variablesContext give it: native separators (`\` on Windows)
+const slash = (s: string | null): string | null => (s === null ? null : s.split(path.sep).join("/"));
 const ok = (r: ReturnType<typeof readScreenInputs>): ScreenInputs => {
   if ("errors" in r) throw new Error("unexpected errors: " + r.errors.join("; "));
   return r.inputs;
@@ -67,11 +69,11 @@ console.log("every input beside the screen, found on its own");
   check(`the design system: the export's own design-system/, found — not given (got ${ix.designSystem?.dir})`,
     ix.designSystem?.dir === "design/export/design-system" && ix.designSystem.given === false && ix.designSystem.components?.components[0]?.name === "Button" && !ix.designSystem.isLibrary);
   check("the libraries beside the export", ix.libraries.length === 1 && ix.libraries[0]?.name === "Brand Lib" && ix.libraries[0].components?.components[0]?.name === "Chip");
-  check("the component map, found", ix.mapFile === "design/codeconnect.local.json" && ix.map !== null);
+  check("the component map, found", slash(ix.mapFile) === "design/codeconnect.local.json" && ix.map !== null);
   const sib = ix.siblings ? ix.siblings().map((x) => x.label) : null;
   check(`the export's other screens, not the one checked (got ${JSON.stringify(sib)})`, JSON.stringify(sib) === JSON.stringify(["Reports__10_2"]));
   check(`notes name each input found (got ${JSON.stringify(ix.notes)})`,
-    ix.notes.some((n) => /^variables: .*variables\.json$/.test(n)) && ix.notes.some((n) => /^design system: design\/export\/design-system \(found beside the export/.test(n)) && ix.notes.includes("map: design/codeconnect.local.json"));
+    ix.notes.some((n) => /^variables: .*variables\.json$/.test(n)) && ix.notes.some((n) => /^design system: design\/export\/design-system \(found beside the export/.test(n)) && ix.notes.map(slash).includes("map: design/codeconnect.local.json"));
   const cc = crossCheckInputOf(ix);
   check("crossCheckInputOf: the same context as crossCheck's input, field for field",
     cc.screens === ix.screens && cc.variables === ix.variables && cc.variablesPath === ix.variablesPath && cc.sliceSources === ix.sliceSources
@@ -159,7 +161,7 @@ console.log("what is there but broken");
   put(path.join(root, "design/codeconnect.local.json"), "[]");
   const ix = ok(read(root, [SCREEN]));
   check(`a broken map that was only found: a warning, no map (got ${JSON.stringify(ix.notes.filter((n) => n.startsWith("warn")))})`,
-    ix.map === null && ix.notes.some((n) => /^warn {2}design\/codeconnect\.local\.json is not .* — proposals are not labelled alreadyMapped$/.test(n)));
+    ix.map === null && ix.notes.map(slash).some((n) => n !== null && /^warn {2}design\/codeconnect\.local\.json is not .* — proposals are not labelled alreadyMapped$/.test(n)));
   const flagged = ok(read(root, [SCREEN], { mapFlag: true }));
   check("…naming --map when the CLI has one", flagged.notes.some((n) => /alreadyMapped \(pass --map to fail on it\)$/.test(n)));
 }
@@ -168,7 +170,7 @@ console.log("what is there but broken");
   put(path.join(root, "design/variables.json"), slice);
   const ix = ok(read(root, [SCREEN]));
   check("a stale design/variables.json above design/export/: not read, and warned about", ix.variablesPath === path.join(root, "design/export/variables.json")
-    && ix.notes.some((n) => /^warn {2}.*design\/variables\.json also exists and was NOT used/.test(n)));
+    && ix.notes.map(slash).some((n) => n !== null && /^warn {2}.*design\/variables\.json also exists and was NOT used/.test(n)));
 }
 
 console.log("the two CLIs read one context");
