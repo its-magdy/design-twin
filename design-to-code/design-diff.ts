@@ -56,6 +56,7 @@ import { getOrInit } from "./map-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
+import { isSvgName } from "../bridge/src/svg-normalize.ts";
 import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILE_NAMES, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { DESIGN_DIR, EXPORT_DIR, MERGED_VARIABLES_FILE, SNAPSHOT_DIR, looksLikeExportDir } from "../bridge/src/project-layout.ts";
 import { LIBRARY_FILE_NAMES, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
@@ -520,13 +521,66 @@ export interface Baseline {
 function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: string): Set<string> {
   const now = assetHashes(file, newDoc), out = new Set<string>();
   if (!now.root) return out;
-  for (const [a, h] of Object.entries(now.hashes)) {
-    let before: string | undefined;
-    if (prev.kind === "snapshot") before = (prev.assets || {})[a];
-    else if (prev.kind === "git") { const b = gitShowHead(cwd, (relUnder(cwd, path.join(now.root, a)) ?? path.relative(cwd, path.join(now.root, a))).split(path.sep).join("/")); if (b) before = hashAssetBytes(a, b); }
+  const root = now.root, entries = Object.entries(now.hashes);
+  const headHashes = prev.kind === "git" ? gitHeadAssetHashes(cwd, entries.map(([a]) => a), (a) => (relUnder(cwd, path.join(root, a)) ?? path.relative(cwd, path.join(root, a))).split(path.sep).join("/")) : null;
+  for (const [a, h] of entries) {
+    const before = prev.kind === "snapshot" ? (prev.assets || {})[a] : headHashes?.get(a);
     if (before && before !== h) out.add(a);
   }
   return out;
+}
+
+// The HEAD copy of every asset is read through ONE `git cat-file --batch -Z` child, not a `git show` each (one child
+// per asset was most of a diff's time). A blob's normalised hash is remembered by blob id and kind (SVG or not — all
+// normalizeForCompare looks at), so an asset that several screens share is normalised once per process.
+const headHashMemo = new Map<string, string>();
+/** asset -> hashAssetBytes of its HEAD blob, for the assets committed with bytes (a missing or empty one has none). */
+function gitHeadAssetHashes(cwd: string, assets: readonly string[], relOf: (a: string) => string): Map<string, string> {
+  const out = new Map<string, string>();
+  const rels = assets.map(relOf), blobs = gitHeadBlobs(cwd, rels);
+  assets.forEach((a, i) => {
+    const b = blobs === null ? undefined : blobs[i];
+    if (b === undefined) { const bytes = gitShowHead(cwd, rels[i] ?? ""); if (bytes) out.set(a, hashAssetBytes(a, bytes)); return; } // the batch could not answer: the one-by-one read
+    if (b === null || b.bytes.length === 0) return; // not in HEAD; or committed empty, never an asset's copy (as gitShowHead says)
+    const key = (isSvgName(a) ? "svg:" : "raw:") + b.oid;
+    out.set(a, getOrInit(headHashMemo, key, () => hashAssetBytes(a, b.bytes)));
+  });
+  return out;
+}
+
+/** One answer of a `git cat-file --batch -Z` run per request: the blob (an empty one is an empty Buffer), null when
+ *  the request names nothing in HEAD, or undefined when it names something that is not a blob (a directory: the caller
+ *  asks `git show`, as before). The whole result is null when the batch cannot answer at all: not a repository, a git
+ *  without -Z (2.43+), or a path outside the repository (fatal to the whole batch) — the caller then reads each the old
+ *  way. A batch that times out (each read before had the same 60 s) has nothing for any of them. */
+function gitHeadBlobs(cwd: string, rels: readonly string[]): Array<{ oid: string; bytes: Buffer } | null | undefined> | null {
+  if (!rels.length) return [];
+  // -Z: requests and replies are NUL-terminated, so a path with a newline is one request; every reply is size-framed
+  // (`<oid> <type> <size>\0<bytes>\0`) or in-band (`<request> missing\0`), parsed on the bytes, never decoded text.
+  const reqs = rels.map((rel) => "HEAD:./" + rel);
+  const input = Buffer.from(reqs.map((q) => q + "\0").join(""), "utf8");
+  const r = runSync("git", ["cat-file", "--batch", "-Z"], { cwd, input, binary: true, expect: (x) => parseCatFileBatch(x.stdoutBytes, reqs) !== null, quiet: true, timeoutMs: 60_000 });
+  if (r.timedOut) return rels.map(() => null);
+  return r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
+}
+function parseCatFileBatch(out: Buffer | undefined, reqs: readonly string[]): Array<{ oid: string; bytes: Buffer } | null | undefined> | null {
+  if (!out) return null;
+  const got: Array<{ oid: string; bytes: Buffer } | null | undefined> = [];
+  let at = 0;
+  for (const req of reqs) {
+    const end = out.indexOf(0, at);
+    if (end < 0) return null;
+    const head = out.toString("utf8", at, end);
+    at = end + 1;
+    if (head === req + " missing" || head === req + " ambiguous") { got.push(null); continue; }
+    const m = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)$/.exec(head);
+    if (!m) return null;
+    const size = Number(m[3]);
+    if (at + size >= out.length || out[at + size] !== 0) return null;
+    got.push(m[2] === "blob" ? { oid: m[1] ?? "", bytes: out.subarray(at, at + size) } : undefined);
+    at += size + 1;
+  }
+  return at === out.length ? got : null;
 }
 
 /** The bytes `rel` (relative to cwd, `/`-separated) has in HEAD, or null: not a repo, not committed, no git. Captured
