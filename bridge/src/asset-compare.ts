@@ -124,9 +124,21 @@ export class ContentIndex {
    *  representative is within tolerance of it. `find` answers "the first member within tolerance", which is
    *  that same representative unless members chain apart by more than the tolerance (never seen: the real
    *  drift is 0.004, the tolerance 0.01). */
-  groups(): ContentGroup[] {
+  groups(): ContentGroup[] { return this.clustersOf(null); }
+
+  /** groups(), limited to the buckets holding `names` — the same clusters, in the same order, as groups() gives for
+   *  them. Clustering is quadratic in a bucket's size, so a pull asking about its own few files does not pay for
+   *  every bucket of a directory every screen ever pulled shares. A name not in the index adds nothing. */
+  groupsOf(names: Iterable<string>): ContentGroup[] {
+    const keys = new Set<string>();
+    for (const n of names) { const k = this.bucketOf.get(n); if (k !== undefined) keys.add(k); }
+    return keys.size ? this.clustersOf(keys) : [];
+  }
+
+  private clustersOf(only: ReadonlySet<string> | null): ContentGroup[] {
     const out: ContentGroup[] = [];
     for (const key of this.buckets.keys()) {
+      if (only && !only.has(key)) continue;
       const members = this.sortedBucket(key) ?? [];
       const clusters: Member[][] = [];
       for (const m of members) {

@@ -13,6 +13,7 @@ import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
 import * as owners from "../bridge/src/asset-owners.ts";
 import * as snapshotMeta from "../bridge/src/snapshot-meta.ts";
+import { fileKeyCache } from "../bridge/src/asset-compare.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { Asset, IrNode, Manifest, ScreenExport, Variable } from "../bridge/src/doc-types.ts";
 
@@ -588,6 +589,44 @@ console.log("\nlastScreenExport reads the newest row of pages/index.json:");
   t("[unit] a garbled index → null", () => last(dir) === null);
   fs.rmSync(path.join(dir, "pages", "index.json"));
   t("[unit] no index → null", () => last(dir) === null);
+}
+
+console.log("\nthe content index is built only when a consumer needs it, and duplicates are grouped per bucket:");
+{
+  // A screen pull always carries its reference PNG, which dedups only against its own copies — so a pull with nothing
+  // else (no shippable asset, no hidden reuse) must not fingerprint the shared directory; one with an icon must, and
+  // must still report the same groups, in the same order, as an index built up front.
+  const d = tmp("lazy-index");
+  const a = path.join(d, "assets");
+  fs.mkdirSync(a, { recursive: true });
+  fs.writeFileSync(path.join(a, "x.svg"), read("disc-a.svg"));
+  fs.writeFileSync(path.join(a, "x-abc123.svg"), read("disc-b.svg"));
+  fs.writeFileSync(path.join(a, "p.png"), Buffer.from([1, 2, 3]));
+  for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(a, `f${i}.svg`), `<svg><path d="M ${i} 0 L ${i + 1} 10"/></svg>`);
+  const refAsset = (id: string, bytes: number[]): Asset => ({ id: id + ":ref", name: "ref", format: "png", kind: "reference", file: id.replace(/:/g, "_") + "_ref.png", base64: Buffer.from(bytes).toString("base64") });
+  const keyOf = fileKeyCache;
+  const orig = keyOf.keyOf;
+  let keyed = 0;
+  keyOf.keyOf = function (file: string, name: string) { keyed++; return orig.call(this, file, name); };
+  let refOnly: Pull, icons: Pull;
+  try {
+    refOnly = pull(d, { name: "RefOnly", id: "2:1", nodes: [{ id: "2:1", type: "FRAME", reference: "assets/2_1_ref.png", children: [] }], assets: [refAsset("2:1", [7, 7, 7])] });
+    const keyedRefOnly = keyed;
+    keyed = 0;
+    // the reference's bytes equal p.png's: written BEFORE the index is first needed, it must land in p.png's group
+    // after p.png, exactly where an up-front index updated by the write would have put it
+    icons = pull(d, { name: "Icons", id: "1:1", nodes: [{ id: "1:1", type: "FRAME", reference: "assets/1_1_ref.png", children: [
+      { id: "1:2", type: "VECTOR", name: "Disc", box: { w: 16, h: 16 }, asset: "assets/icon.svg" },
+      { id: "1:5", type: "RECTANGLE", name: "Pic", box: { w: 16, h: 16 }, asset: "assets/pic.png" }] }],
+      assets: [refAsset("1:1", [1, 2, 3]), svgAsset("1:2", "icon.svg", read("disc-a.svg"), "Disc"),
+        { id: "1:5", name: "Pic", format: "png", file: "pic.png", base64: Buffer.from([1, 2, 3]).toString("base64") }] });
+    t(`a reference-only pull fingerprints no file of assets/ (got ${keyedRefOnly}), and still lists its reference row`,
+      () => keyedRefOnly === 0 && refOnly.assets?.duplicates.length === 0 && refOnly.assets.files.length === 0 && assetFiles(d).includes("2_1_ref.png"));
+    t(`a pull with shippable assets does build it (got ${keyed} keys)`, () => keyed > 0);
+  } finally { keyOf.keyOf = orig; }
+  t("…and reports the tolerance group and the PNG group (its reference included, after p.png), representative first",
+    () => JSON.stringify(icons.assets?.duplicates.map((g) => g.files)) === '[["assets/x.svg","assets/x-abc123.svg"],["assets/p.png","assets/1_1_ref.png"]]');
+  t("…with the icon and the picture reusing the files already on disk", () => icons.assets?.files.map((f) => f.file).join(",") === "assets/x.svg,assets/p.png");
 }
 
 report();
