@@ -1,4 +1,4 @@
-// Thrown value -> message string. The ONE definition, shared across both consumers: the Node side
+// Thrown value -> message string. The ONE definition, shared across both consumers: the Bun side
 // imports it directly, and the plugin bundle re-exports it from util.ts (esbuild inlines this
 // dependency-free module, the same way it inlines pages-layout.ts). A bare `e.message` prints
 // `undefined` for a thrown string, and the extractor's "never silent" discipline means every catch

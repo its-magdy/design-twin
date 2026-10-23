@@ -33,7 +33,7 @@
 // drift-lint.ts are now pointed at tokens.json / components.local.json directly.
 //
 // Kept dependency-free (no Node imports, ES2019-safe) for the same reason as pages-layout.ts: the
-// Node CLI imports it and esbuild inlines it into the plugin bundle, so the disk writer and the
+// bridge CLI imports it and esbuild inlines it into the plugin bundle, so the disk writer and the
 // browser-download writer build the identical set of files.
 
 // The parts live in a design-system/ SUBDIRECTORY, not next to design-system.json, because two

@@ -1,4 +1,4 @@
-// abort-reason.ts — Node-side only (AbortSignal, DOMException): json-util.ts is also type-checked by the
+// abort-reason.ts — bridge-side only (AbortSignal, DOMException): json-util.ts is also type-checked by the
 // plugin, which has no DOM lib.
 
 /**

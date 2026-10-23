@@ -20,7 +20,7 @@
 //      boundary (21.9485 → 21.9 but 21.9504 → 22.0: two exports 0.002 apart hash differently).
 //
 // The plugin bundle inlines THIS file, so it stays dependency-free and crypto-free: the byte/hash
-// helpers live in asset-compare.ts, because Node's `crypto` does not exist in the plugin's sandbox and
+// helpers live in asset-compare.ts, because `node:crypto` does not exist in the plugin's sandbox and
 // this file must also type-check under the plugin's tsconfig, which has no Node types — an
 // `import … from "node:crypto"` ANYWHERE in this file would break the plugin build even if the plugin
 // bundle never calls that function.

@@ -19,7 +19,7 @@
 // It encodes the same hierarchy in the FILENAME instead. That separator is the ONLY difference, so it
 // is the only knob here — everything else (bucketing, dir disambiguation, file naming, index shape,
 // pageDirs) is computed once, in this file, and each caller only writes bytes. Kept dependency-free
-// (no Node imports, ES2019-safe) so the Node CLI can import it and esbuild can inline it into the
+// (no Node imports, ES2019-safe) so the bridge CLI can import it and esbuild can inline it into the
 // plugin bundle — it type-checks under the plugin's tsconfig as well as the bridge's.
 
 import type { LayerFile, IndexRow, PageDirEntry, PageIndex, PagesRootIndex, LayersDoc } from "./doc-types.ts";

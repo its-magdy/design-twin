@@ -21,7 +21,7 @@
 // hygiene and we fall back to the slug alone — a rename then forks the directory, which is why it is
 // warned about rather than silently absorbed.
 //
-// Kept dependency-free (no Node imports, ES2019-safe) for the same reason as its siblings: the Node
+// Kept dependency-free (no Node imports, ES2019-safe) for the same reason as its siblings: the bridge
 // CLI imports it and esbuild inlines it into the plugin bundle, so the disk writer and the
 // browser-download writer emit the identical set of files.
 

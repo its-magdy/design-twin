@@ -6,8 +6,8 @@
 // own directory so the rename never crosses a filesystem. There is no fsync by default: these files are
 // re-creatable exports, plans and reports, and the guarantee wanted is "never half a file after a killed process",
 // which rename gives; surviving a power cut would cost a sync per write on hundreds of layer files. A file that has
-// to outlive a power cut as well (a migration's journal) passes `sync`. `sync` is Node's fsyncSync, which on
-// macOS libuv issues as fcntl F_FULLFSYNC (falling back to F_BARRIERFSYNC, then fsync, where the filesystem lacks it).
+// to outlive a power cut as well (a migration's journal) passes `sync`. `sync` is fsyncSync (node:fs). On macOS a
+// plain fsync does not flush the drive's write cache (that takes fcntl F_FULLFSYNC); which one Bun issues is unverified.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
