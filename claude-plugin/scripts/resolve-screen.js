@@ -598,23 +598,40 @@ function readExportIndex(exportRoot) {
     const file = row.file;
     return typeof file === "string" && file !== "";
   };
-  const take = (row, isRoot) => {
-    const probe = hasFile(row) ? row : { ...row, file: "\0no file " + rows.length };
-    const same = byId.get(row.id) ?? [];
-    const kept = same.find((k) => sameScreenRow(probe, k)) ?? (hasFile(row) && files.has(row.file) ? rows.find((k) => k.file === row.file) : void 0);
-    if (kept !== void 0) {
-      if (isRoot || fromRoot.has(kept) || writtenAt(row) <= writtenAt(kept)) return;
-      rows[rows.indexOf(kept)] = row;
-      const bucket2 = byId.get(kept.id) ?? [];
-      bucket2.splice(bucket2.indexOf(kept), 1);
-      if (!bucket2.length) byId.delete(kept.id);
-      if (hasFile(kept)) files.delete(kept.file);
-    } else rows.push(row);
+  const probeOf = (row) => hasFile(row) ? row : { ...row, file: "\0no file " + rows.length };
+  const sameScreen = (older, newer) => hasFile(older) && older.file === newer.file || sameScreenRow(probeOf(older), newer);
+  const keep = (row, isRoot) => {
+    rows.push(row);
     const bucket = byId.get(row.id);
     if (bucket) bucket.push(row);
     else byId.set(row.id, [row]);
     if (hasFile(row)) files.add(row.file);
     if (isRoot) fromRoot.add(row);
+  };
+  const take = (row, isRoot) => {
+    const candidates = [...byId.get(row.id) ?? [], ...hasFile(row) && files.has(row.file) ? rows.filter((k) => k.file === row.file && k.id !== row.id) : []];
+    if (isRoot) {
+      if (!candidates.some((k) => sameScreen(row, k))) keep(row, true);
+      return;
+    }
+    const newer = (k) => writtenAt(row) > writtenAt(k);
+    const conflicts = candidates.filter((k) => fromRoot.has(k) || !newer(k) ? sameScreen(row, k) : sameScreen(k, row));
+    if (!conflicts.length) {
+      keep(row, false);
+      return;
+    }
+    if (conflicts.some((k) => fromRoot.has(k) || !newer(k))) return;
+    const at = Math.min(...conflicts.map((k) => rows.indexOf(k)));
+    for (const k of conflicts) {
+      rows.splice(rows.indexOf(k), 1);
+      const bucket = byId.get(k.id) ?? [];
+      bucket.splice(bucket.indexOf(k), 1);
+      if (!bucket.length) byId.delete(k.id);
+      if (hasFile(k) && !rows.some((r) => r.file === k.file)) files.delete(k.file);
+    }
+    keep(row, false);
+    rows.splice(rows.length - 1, 1);
+    rows.splice(at, 0, row);
   };
   for (const row of rootDoc?.layers ?? []) take(row, true);
   for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {

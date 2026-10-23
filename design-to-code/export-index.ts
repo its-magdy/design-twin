@@ -121,25 +121,38 @@ export function readExportIndex(exportRoot: string): ExportIndex {
     return t;
   };
   const hasFile = (row: IndexRow): boolean => { const file: unknown = row.file; return typeof file === "string" && file !== ""; };
-  // one screen, one row (see the top of the file). A row with no `file` (hand-edited; the guards ask only for id and
-  // name) shares no file with another such row.
-  const take = (row: IndexRow, isRoot: boolean): void => {
-    const probe = hasFile(row) ? row : { ...row, file: "\u0000no file " + rows.length };
-    const same = byId.get(row.id) ?? [];
-    const kept = same.find((k) => sameScreenRow(probe, k)) ?? (hasFile(row) && files.has(row.file) ? rows.find((k) => k.file === row.file) : undefined);
-    if (kept !== undefined) {
-      // a page index's row replaces another page index's row of the screen when its file was written later
-      if (isRoot || fromRoot.has(kept) || writtenAt(row) <= writtenAt(kept)) return;
-      rows[rows.indexOf(kept)] = row;
-      const bucket = byId.get(kept.id) ?? [];
-      bucket.splice(bucket.indexOf(kept), 1);
-      if (!bucket.length) byId.delete(kept.id);
-      if (hasFile(kept)) files.delete(kept.file);
-    } else rows.push(row);
+  // A row with no `file` (hand-edited; the guards ask only for id and name) shares no file with another such row.
+  const probeOf = (row: IndexRow): IndexRow => (hasFile(row) ? row : { ...row, file: "\u0000no file " + rows.length });
+  // sameScreenRow(older, newer) is the writer's rule, and it is not symmetric: asked with the newer row second
+  const sameScreen = (older: IndexRow, newer: IndexRow): boolean => (hasFile(older) && older.file === newer.file) || sameScreenRow(probeOf(older), newer);
+  const keep = (row: IndexRow, isRoot: boolean): void => {
+    rows.push(row);
     const bucket = byId.get(row.id);
     if (bucket) bucket.push(row); else byId.set(row.id, [row]);
     if (hasFile(row)) files.add(row.file);
     if (isRoot) fromRoot.add(row);
+  };
+  // one screen, one row (see the top of the file). The root's rows come first: the writer merged them already, and the
+  // first of two it left is kept. A page index's row is dropped beside a root row of its screen; beside page rows of its
+  // screen it replaces every one of them when its screen file was written after each, else it is dropped.
+  const take = (row: IndexRow, isRoot: boolean): void => {
+    const candidates = [...(byId.get(row.id) ?? []), ...(hasFile(row) && files.has(row.file) ? rows.filter((k) => k.file === row.file && k.id !== row.id) : [])];
+    if (isRoot) { if (!candidates.some((k) => sameScreen(row, k))) keep(row, true); return; }
+    const newer = (k: IndexRow): boolean => writtenAt(row) > writtenAt(k);
+    const conflicts = candidates.filter((k) => (fromRoot.has(k) || !newer(k) ? sameScreen(row, k) : sameScreen(k, row)));
+    if (!conflicts.length) { keep(row, false); return; }
+    if (conflicts.some((k) => fromRoot.has(k) || !newer(k))) return;
+    const at = Math.min(...conflicts.map((k) => rows.indexOf(k))); // the earliest: removing the others leaves it in place
+    for (const k of conflicts) {
+      rows.splice(rows.indexOf(k), 1);
+      const bucket = byId.get(k.id) ?? [];
+      bucket.splice(bucket.indexOf(k), 1);
+      if (!bucket.length) byId.delete(k.id);
+      if (hasFile(k) && !rows.some((r) => r.file === k.file)) files.delete(k.file);
+    }
+    keep(row, false);
+    rows.splice(rows.length - 1, 1);
+    rows.splice(at, 0, row);
   };
   for (const row of rootDoc?.layers ?? []) take(row, true);
   for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
