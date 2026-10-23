@@ -21,7 +21,7 @@ import { alnumKey } from "./map-util.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
-import { nodeIdFromSetName, parseSetName, setFacts, stemHolders, verifySets } from "./verify-sets.ts";
+import { nodeIdFromSetName, parseSetName, setFacts, stemHolders, verifySets, type SetFacts } from "./verify-sets.ts";
 import { openRunSets } from "./verify-status.ts";
 
 export type ArtefactKind = "plan" | "verify set" | "audit report";
@@ -30,6 +30,17 @@ export type ArtefactKind = "plan" | "verify set" | "audit report";
  *  (a plan known by no file: its `nodeId` alone). */
 export function planNode(plan: Plan, file: string | undefined): string | null {
   return plan.nodeId || (file !== undefined ? nodeIdFromStem(path.basename(file).replace(/\.json$/i, "")) : null);
+}
+
+/** Every node id verify set `name` carries, from its facts (verify-sets.ts setFacts): its name's, its expectation's
+ *  frame, its report's nodeId — sorted, deduplicated. The one rule setIds/setNode below and verify-locate.ts share. */
+export function setIdsOf(name: string, f: SetFacts): string[] {
+  return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x): x is string => x !== null))].sort();
+}
+/** The node a set is of: the one id it carries (setIdsOf); none, or two, is null. */
+export function setNodeOf(name: string, f: SetFacts): string | null {
+  const ids = setIdsOf(name, f);
+  return ids.length === 1 ? ids[0] ?? null : null;
 }
 
 /** A plan file on disk, parsed and checked (doc-guards.ts parsePlan): plan-skeleton.ts writes it, a model fills it. */
@@ -129,14 +140,8 @@ export function nodeArtefacts(root: string, dirs: NodeArtefactDirs = {}): NodeAr
 
   // every id a set carries: its name's (a grammar name), its expectation's frame, its report's nodeId — a run open in the
   // run cache with no file yet carries its name's only
-  function setIds(name: string): string[] {
-    const f = setFacts(verifyAbs, name);
-    return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x): x is string => x !== null))].sort();
-  }
-  function setNode(name: string): string | null {
-    const ids = setIds(name);
-    return ids.length === 1 ? ids[0] ?? null : null;
-  }
+  const setIds = (name: string): string[] => setIdsOf(name, setFacts(verifyAbs, name));
+  const setNode = (name: string): string | null => setNodeOf(name, setFacts(verifyAbs, name));
   // the sets holding `nodeId` (every set carrying its id): grammar-named stems — a variant's is its stem's — sorted, with
   // the ones that carry another id too, and the legacy-named sets
   function setHolders(nodeId: string, runs: readonly string[]): { stems: string[]; conflicted: Array<{ name: string; ids: string[] }>; legacy: string[] } {

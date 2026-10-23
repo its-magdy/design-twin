@@ -127,20 +127,23 @@ export function encodePng(img: Rgba): Buffer {
   return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 1 })), chunk("IEND", Buffer.alloc(0))]);
 }
 
-/** The pixels of `r` (clamped to the image; integer px). */
+/** The pixels of `r` (clamped to the image; integer px). A crop of the whole image is `img` itself, not a copy: the result
+ *  is read-only to every caller (the diff, the diff image, the encoder). */
 export function crop(img: Rgba, r: { x: number; y: number; w: number; h: number }): Rgba {
   const x0 = Math.max(0, Math.min(img.w, Math.round(r.x))), y0 = Math.max(0, Math.min(img.h, Math.round(r.y)));
   const w = Math.max(0, Math.min(img.w - x0, Math.round(r.w))), h = Math.max(0, Math.min(img.h - y0, Math.round(r.h)));
+  if (x0 === 0 && y0 === 0 && w === img.w && h === img.h && img.data.length === w * h * 4) return img;
   const data = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) data.set(img.data.subarray(((y0 + y) * img.w + x0) * 4, ((y0 + y) * img.w + x0 + w) * 4), y * w * 4);
   return { w, h, data };
 }
 
 /** Area-average (box) resample to w×h: every output pixel is the coverage-weighted mean of the source pixels under it,
- *  colour weighted by alpha (a transparent pixel adds no colour). Exact for integer factors on uniform blocks. */
+ *  colour weighted by alpha (a transparent pixel adds no colour). Exact for integer factors on uniform blocks. At the
+ *  image's own size it is `img` itself, not a copy (read-only to every caller, as crop's). */
 export function resampleBox(img: Rgba, w: number, h: number): Rgba {
   if (w <= 0 || h <= 0) return { w: Math.max(0, w), h: Math.max(0, h), data: new Uint8Array(0) };
-  if (w === img.w && h === img.h) return { w, h, data: img.data.slice() };
+  if (w === img.w && h === img.h) return img.data.length === w * h * 4 ? img : { w, h, data: img.data.slice() };
   /** per output index, the source spans and their weights along one axis */
   const spans = (n: number, m: number): Array<Array<[number, number]>> => {
     const sc = n / m, out: Array<Array<[number, number]>> = [];
@@ -152,26 +155,36 @@ export function resampleBox(img: Rgba, w: number, h: number): Rgba {
     return out;
   };
   const xs = spans(img.w, w), ys = spans(img.h, h);
-  // horizontal pass into premultiplied floats (r·a, g·a, b·a, a), then vertical
-  const tmp = new Float64Array(w * img.h * 4);
-  for (let y = 0; y < img.h; y++) {
+  // horizontal pass into premultiplied floats (r·a, g·a, b·a, a), then vertical. The horizontal pass is per source row, made
+  // when an output row first needs it and dropped once the spans (which only move down) have passed it: a few rows of
+  // w × 4 doubles, not one w × img.h × 4 plane (512 MiB at 4096²). Each row holds the same doubles the plane did.
+  const rows = new Map<number, Float64Array>(), spare: Float64Array[] = [];
+  const hRow = (y: number): Float64Array => {
+    const have = rows.get(y);
+    if (have) return have;
+    const t = spare.pop() ?? new Float64Array(w * 4);
     for (let x = 0; x < w; x++) {
       let r = 0, g = 0, bl = 0, a = 0, tw = 0;
       for (const [s, wgt] of xs[x] ?? []) {
         const i = (y * img.w + s) * 4, al = img.data[i + 3] ?? 0;
         r += (img.data[i] ?? 0) * al * wgt; g += (img.data[i + 1] ?? 0) * al * wgt; bl += (img.data[i + 2] ?? 0) * al * wgt; a += al * wgt; tw += wgt;
       }
-      const o = (y * w + x) * 4;
-      tmp[o] = r / tw; tmp[o + 1] = g / tw; tmp[o + 2] = bl / tw; tmp[o + 3] = a / tw;
+      const o = x * 4;
+      t[o] = r / tw; t[o + 1] = g / tw; t[o + 2] = bl / tw; t[o + 3] = a / tw;
     }
-  }
+    rows.set(y, t);
+    return t;
+  };
   const data = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) {
+    const span = ys[y] ?? [], first = span[0]?.[0];
+    if (first !== undefined) for (const [s, t] of rows) if (s < first) { rows.delete(s); spare.push(t); }
+    const src = span.map(([s]) => hRow(s));
     for (let x = 0; x < w; x++) {
       let r = 0, g = 0, bl = 0, a = 0, tw = 0;
-      for (const [s, wgt] of ys[y] ?? []) {
-        const i = (s * w + x) * 4;
-        r += (tmp[i] ?? 0) * wgt; g += (tmp[i + 1] ?? 0) * wgt; bl += (tmp[i + 2] ?? 0) * wgt; a += (tmp[i + 3] ?? 0) * wgt; tw += wgt;
+      for (let j = 0; j < span.length; j++) {
+        const t = src[j], wgt = span[j]?.[1] ?? 0, i = x * 4;
+        r += (t?.[i] ?? 0) * wgt; g += (t?.[i + 1] ?? 0) * wgt; bl += (t?.[i + 2] ?? 0) * wgt; a += (t?.[i + 3] ?? 0) * wgt; tw += wgt;
       }
       const o = (y * w + x) * 4;
       a /= tw;

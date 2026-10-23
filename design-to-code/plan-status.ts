@@ -21,7 +21,7 @@ import type { CachedBytes } from "./report-freshness.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan, PlanComputedStatus, PlanLifecycle } from "./types.ts";
 import { locateExport, locateReports } from "./verify-locate.ts";
-import type { ExportHit, ReportRef } from "./verify-locate.ts";
+import type { ExportHit, LocateCache, ReportRef } from "./verify-locate.ts";
 
 // ---------------------------------------------------------------- what a person sets
 
@@ -93,8 +93,10 @@ export interface PlanStatus {
 const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 const listed = (xs: readonly string[]): string => `${xs.slice(0, 6).join(", ")}${xs.length > 6 ? `, +${xs.length - 6} more` : ""}`;
 
-/** `cached`: bytes the caller already read this run (verify-build's project graph); absent, every file is read from disk. */
-export function planStatus(root: string, o: { cached?: CachedBytes | undefined } = {}): PlanStatus {
+/** `cached`: bytes the caller already read this run (verify-build's project graph); absent, every file is read from disk.
+ *  `locate`: the command's report/export-index reads, shared across its plans (verify-locate.ts LocateCache); absent,
+ *  each lookup reads afresh. */
+export function planStatus(root: string, o: { cached?: CachedBytes | undefined; locate?: LocateCache | undefined } = {}): PlanStatus {
   const codeHashes = (plan: Plan | null | undefined): Record<string, string | null> => fileHashes(planCodeFiles(plan || {}, root), root, o.cached);
 
   // The record's code hashes against the code now. A key the record never hashed is a change when it is a files[] entry;
@@ -132,7 +134,7 @@ export function planStatus(root: string, o: { cached?: CachedBytes | undefined }
     return h.kind !== "passed" || !h.complete;
   };
 
-  const reports = (plan: Plan, planFile?: string, exp?: ExportHit | null): ReportRef[] => locateReports(plan, planFile, root, exp);
+  const reports = (plan: Plan, planFile?: string, exp?: ExportHit | null): ReportRef[] => locateReports(plan, planFile, root, exp, o.locate);
 
   // What the verify report(s) say about the plan, on their own: failed | unverified | static-only | verified |
   // verified-with-deviations, never with empty reasons. A stale passing report (report-freshness judge) reads as
@@ -174,7 +176,7 @@ export function planStatus(root: string, o: { cached?: CachedBytes | undefined }
     if (stored !== null) notes.push(`the stored "status": "${stored}" was not confirmed by the current hook and is ignored — status is computed, never stored`);
     const life = lifecycleOf(plan);
     if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? "retired by hand (\"status\": \"abandoned\")" : "paused on a question for the user (\"status\": \"awaiting-user\")"], reports: [] };
-    const exp = so.export === undefined ? locateExport(plan, so.planFile, root) : so.export;
+    const exp = so.export === undefined ? locateExport(plan, so.planFile, root, o.locate) : so.export;
     const found = so.reports || reports(plan, so.planFile, exp);
     const rv = reportVerdict(plan, exp, found);
     const h = hook(plan);

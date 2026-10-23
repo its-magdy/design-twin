@@ -106,6 +106,21 @@ t("[index] non-SVG bytes match exactly only", () => {
   ix.add("p.png", Buffer.from([1, 2, 3]));
   return ix.find("q.png", Buffer.from([1, 2, 3])) === "p.png" && ix.find("q.png", Buffer.from([1, 2, 4])) === undefined;
 });
+t("[index] groupsOf(names) is exactly groups() limited to the buckets holding those names — same clusters, same order", () => {
+  const ix = new cmp.ContentIndex();
+  ix.add("ring.svg", read("ring-a.svg")); ix.add("ring-2fd8d2.svg", read("ring-b.svg"));       // one bucket, two clusters
+  ix.add("x-abc123.svg", read("disc-b.svg")); ix.add("x.svg", read("disc-a.svg"));             // a tolerance group
+  for (const n of ["bb.svg", "a-123456.svg", "ab.svg", "c.svg"]) ix.add(n, read("cross-a.svg")); // a four-file group
+  ix.add("p.png", Buffer.from([1, 2, 3])); ix.add("q.png", Buffer.from([1, 2, 3])); ix.add("r.png", Buffer.from([9]));
+  const all = ix.groups();
+  const limited = (names: string[]): string => JSON.stringify(all.filter((g) => g.files.some((f) => names.includes(f)) ||
+    // a name's whole bucket is clustered, so a sibling cluster of the same bucket comes along
+    names.some((n) => ["ring.svg", "ring-2fd8d2.svg"].includes(n) && ["ring.svg", "ring-2fd8d2.svg"].includes(g.files[0] ?? ""))));
+  const cases = [["ab.svg", "q.png"], ["x-abc123.svg"], ["ring.svg"], ["c.svg", "x.svg", "p.png", "ring-2fd8d2.svg", "r.png"], ["nope.svg"], []];
+  return cases.every((names) => JSON.stringify(ix.groupsOf(names)) === limited(names))
+    && JSON.stringify(ix.groupsOf(["ring.svg"]).map((g) => g.files)) === '[["ring.svg"],["ring-2fd8d2.svg"]]'
+    && ix.groupsOf([]).length === 0 && ix.groupsOf(["nope.svg"]).length === 0;
+});
 t("[index] a group's hash is stable whichever member it was built from", () => {
   const a = new cmp.ContentIndex(); a.add("x.svg", read("badge-a.svg")); a.add("x-111111.svg", read("badge-b.svg"));
   const b = new cmp.ContentIndex(); b.add("x.svg", read("badge-a.svg"));

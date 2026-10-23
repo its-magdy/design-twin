@@ -445,6 +445,9 @@
     byContent.clear();
     byName.clear();
   }
+  function assetNameTableSizes() {
+    return { byContent: byContent.size, byName: byName.size };
+  }
   function assetSafe(x) {
     return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
   }
@@ -503,10 +506,12 @@
       if (img) {
         const s = await img.getSizeAsync();
         if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-        try {
-          const bytes = await img.getBytesAsync();
-          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-        } catch (e) {
+        if (runDelivery.sourceBytes) {
+          try {
+            const bytes = await img.getBytesAsync();
+            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+          } catch (e) {
+          }
         }
       }
     } catch (e) {
@@ -724,6 +729,7 @@
   var assets = [];
   var runOpts = readOptDefaults();
   var imageSizeCache = /* @__PURE__ */ new Map();
+  var runDelivery = { sourceBytes: true };
   var warnings = [];
   var newStats = () => ({
     nodes: 0,
@@ -856,6 +862,10 @@
   }
   function releaseAssets() {
     assets.length = 0;
+    resetAssetNames();
+  }
+  function assetRetention() {
+    return { assets: assets.length, ...assetNameTableSizes() };
   }
   async function loadAllPages(consequence) {
     if (!figma.loadAllPagesAsync) return;
@@ -867,7 +877,6 @@
   }
   function resetRun() {
     releaseAssets();
-    resetAssetNames();
     warnings = [];
     grouped = /* @__PURE__ */ new Map();
     stats = newStats();
@@ -876,6 +885,7 @@
     nodeNameLookup.reset();
     collectionLookup.reset();
     imageSizeCache.clear();
+    runDelivery.sourceBytes = true;
   }
 
   // ../bridge/src/node-id.ts
@@ -2495,6 +2505,7 @@
     const seenNames = /* @__PURE__ */ new Set();
     const variantsBySet = /* @__PURE__ */ new Map();
     const entriesBySetId = /* @__PURE__ */ new Map();
+    const standalone = [];
     const prevSkip = figma.skipInvisibleInstanceChildren;
     try {
       try {
@@ -2576,14 +2587,7 @@
           }
           if (asLibrary) pendingPublish.push({ entry, node: n });
           if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
-          if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize2) {
-            try {
-              const node = await serializeVariant(n, serialize2);
-              if (node) entry.node = node;
-            } catch (e) {
-              warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
-            }
-          }
+          if (runOpts.variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
           components.push(entry);
         }
       }
@@ -2591,6 +2595,16 @@
       try {
         figma.skipInvisibleInstanceChildren = prevSkip;
       } catch (e) {
+      }
+    }
+    if (serialize2) {
+      for (const { entry, node: n } of standalone) {
+        try {
+          const node = await serializeVariant(n, serialize2);
+          if (node) entry.node = node;
+        } catch (e) {
+          warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
+        }
       }
     }
     if (runOpts.variantVisuals && serialize2 && variantsBySet.size) {
@@ -3587,6 +3601,7 @@
   async function collectDesignSystemOnly(opts) {
     resetRun();
     applyOpts(opts);
+    runDelivery.sourceBytes = false;
     const designSystem = await buildDesignSystem(void 0, serialize);
     checkCancelled();
     if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
@@ -3600,6 +3615,7 @@
   async function collectLibraryFile(opts) {
     resetRun();
     applyOpts(opts);
+    runDelivery.sourceBytes = false;
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
     const designSystem = await buildDesignSystem({ asLibrary }, serialize);
     checkCancelled();
@@ -3935,7 +3951,7 @@
   }
 
   // src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel, assetRetention };
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post2 = (m) => figma.ui.postMessage(m);

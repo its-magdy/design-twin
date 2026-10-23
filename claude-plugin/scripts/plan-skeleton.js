@@ -1459,11 +1459,16 @@ function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
-  const str = (x) => typeof x === "string" && x ? x : null;
   const exp = readJsonOrNull(setFile(path6.join(verifyDir, name), "expected"), isJsonObject);
-  const frame = exp && isJsonObject(exp.frame) ? exp.frame : null;
   const rep = readJsonOrNull(setFile(path6.join(verifyDir, name), "report"), isJsonObject);
-  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(rep && rep.nodeId), reportScreen: str(rep && rep.screen) };
+  return setFactsOf(exp, rep);
+}
+function setFactsOf(exp, rep) {
+  const str = (x) => typeof x === "string" && x ? x : null;
+  const e = isJsonObject(exp) ? exp : null;
+  const frame = e && isJsonObject(e.frame) ? e.frame : null;
+  const r = isJsonObject(rep) ? rep : null;
+  return { expectedId: str(frame && frame.nodeId), expectedName: str(frame && frame.name), reportId: str(r && r.nodeId), reportScreen: str(r && r.screen) };
 }
 function stemHolders(verifyDir, stems, open) {
   const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
@@ -1478,6 +1483,13 @@ function stemHolders(verifyDir, stems, open) {
 // design-to-code/node-artefacts.ts
 function planNode(plan, file) {
   return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path7.basename(file).replace(/\.json$/i, "")) : null);
+}
+function setIdsOf(name, f) {
+  return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
+}
+function setNodeOf(name, f) {
+  const ids = setIdsOf(name, f);
+  return ids.length === 1 ? ids[0] ?? null : null;
 }
 function readPlan(file) {
   const r = readJson(file, anyJson);
@@ -1509,14 +1521,8 @@ function nodeArtefacts(root, dirs = {}) {
     return { plans: out, bad };
   }
   const plansOf = (nodeId) => plans().plans.filter((p) => p.nodeId === nodeId);
-  function setIds(name) {
-    const f = setFacts(verifyAbs, name);
-    return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
-  }
-  function setNode(name) {
-    const ids = setIds(name);
-    return ids.length === 1 ? ids[0] ?? null : null;
-  }
+  const setIds = (name) => setIdsOf(name, setFacts(verifyAbs, name));
+  const setNode = (name) => setNodeOf(name, setFacts(verifyAbs, name));
   function setHolders(nodeId, runs) {
     const stems = /* @__PURE__ */ new Set(), conflicted = [], legacy2 = [];
     for (const name of [.../* @__PURE__ */ new Set([...verifySets(verifyAbs), ...runs])].sort()) {

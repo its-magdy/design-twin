@@ -19,7 +19,7 @@ import { buildDesignSystemLayout } from "./design-system-layout.ts";
 import type { DesignSystemLayout } from "./design-system-layout.ts";
 import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-layout.ts";
 import { mergeVariablesDoc } from "./variables-merge.ts";
-import { sha1Hex, normalizeForCompare, ContentIndex, contentKey, fileKeyCache } from "./asset-compare.ts";
+import { sha1Hex, normalizeForCompare, ContentIndex, contentKey, fileKeyCache, type ContentKey } from "./asset-compare.ts";
 import { isRasterShell } from "./svg-normalize.ts";
 import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owners.ts";
 import { FileMemo } from "./file-memo.ts";
@@ -306,15 +306,41 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 // writeScreenAssets' `duplicates` — one scan, one rule, so a file writeAssets reuses can never show up
 // as a `duplicates` entry it did not also see. A file unchanged since an earlier pull in this process is
 // not read again (asset-compare.ts fileKeyCache; file-memo.ts says when a remembered key may be used).
-function buildContentIndex(adir: string): ContentIndex {
+function buildContentIndex(adir: string, skip?: ReadonlySet<string>): ContentIndex {
   const index = new ContentIndex();
   let names: string[] = [];
   try { names = fs.readdirSync(adir); } catch { return index; }
   for (const name of names) {
+    if (skip && skip.has(name)) continue;
     const key = fileKeyCache.keyOf(path.join(adir, name), name);
     if (key) index.addKey(name, key);
   }
   return index;
+}
+
+// One pull's ContentIndex of assets/, built on first use rather than up front: a pull whose assets never consult it —
+// a reference PNG alone (it reuses only its own copies, ownCopyWithContent), with no hidden node reusing another
+// screen's file — never scans the directory. A file writeAssets writes before that first use is held back and added
+// after the scan, in write order: exactly the index an up-front build updated by writeAssets would be, so `duplicates`
+// lists the same groups in the same order either way.
+class PullIndex {
+  private readonly adir: string;
+  private index: ContentIndex | null = null;
+  private readonly pending: Array<{ name: string; key: ContentKey }> = [];
+  constructor(adir: string) { this.adir = adir; }
+  get(): ContentIndex {
+    if (this.index === null) {
+      const index = buildContentIndex(this.adir, new Set(this.pending.map((p) => p.name)));
+      for (const p of this.pending) index.addKey(p.name, p.key);
+      this.pending.length = 0;
+      this.index = index;
+    }
+    return this.index;
+  }
+  add(name: string, key: ContentKey): void {
+    if (this.index !== null) this.index.addKey(name, key);
+    else this.pending.push({ name, key });
+  }
 }
 
 // A file of THIS asset's own name family — `baseName` itself or `<stem>-<6 hex>[_N]<ext>`, the only names
@@ -432,10 +458,9 @@ const countTag = (text: string, re: RegExp): number => (text.match(re) || []).le
 const PATH_TAG_RE = /<path\b/g;
 const IMAGE_TAG_RE = /<image\b/g;
 
-// `index` is the directory's ContentIndex when the caller already built one (writeScreen, writeExport —
-// so assets/ is scanned once per pull, not once here and again for `duplicates`); it is updated in place
-// with every file this call writes.
-function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string, index?: ContentIndex): number {
+// `index` is the pull's PullIndex when the caller shares one (writeScreen — so assets/ is scanned at most once per
+// pull, not once here and again for `duplicates`); it is updated with every file this call writes.
+function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string, index?: PullIndex): number {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
@@ -444,7 +469,7 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
   for (const [k, v] of existing) claimed.set(k, v);
   // Seeded from disk and updated as THIS call writes new content, so two assets in the SAME pull that
   // happen to share content (not just two pulls) also collapse to one file.
-  const byContent = index || buildContentIndex(adir);
+  const byContent = index || new PullIndex(adir);
   const heavy: Array<{ file: string; node: string | undefined; bytes: number; paths: number; rasters: number }> = [];
   let n = 0;
   for (const a of assets) {
@@ -470,7 +495,7 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     // the same frame wrote (`<id>_ref-<hash>[_N].png`, when the plain name held other bytes) — without the
     // second, every re-pull over an old thumbnail added another `_1`, `_2`, … copy.
     // That own-copy check stays EXACT bytes (a PNG; the tolerance is for SVG coordinates only).
-    const byContentName = a.kind === "reference" ? ownCopyWithContent(adir, claimed, baseName, sha1Hex(normalizeForCompare(baseName, bytes))) : byContent.findKey(key);
+    const byContentName = a.kind === "reference" ? ownCopyWithContent(adir, claimed, baseName, sha1Hex(normalizeForCompare(baseName, bytes))) : byContent.get().findKey(key);
     if (byContentName !== undefined) {
       let priorBytes: Buffer | null = null;
       try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch { /* fall through as new */ }
@@ -503,7 +528,7 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     const file = path.join(adir, baseName);
     fs.writeFileSync(file, bytes);
     claimed.set(lower, baseName);
-    byContent.addKey(baseName, key); // so a LATER asset in this same call also dedups against it
+    byContent.add(baseName, key); // so a LATER asset in this same call also dedups against it
     a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
     const paths = a.text != null ? countTag(a.text, PATH_TAG_RE) : 0;
     const rasters = a.text != null ? countTag(a.text, IMAGE_TAG_RE) : 0;
@@ -817,7 +842,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // screen JSON is — otherwise nodes point at files that were never written, or (case-insensitive disk) at
   // a different icon, and the index's `reference` at whatever thumbnail held the plain name.
   const before = (r.assets || []).map((a) => a.file);
-  const contentIndex = buildContentIndex(path.join(dir, "assets"));
+  const contentIndex = new PullIndex(path.join(dir, "assets"));
   const assets = writeAssets(dir, r.assets, log, undefined, contentIndex);
   const moved = rewireAssetPointers(r.screen.nodes, renamedAssets(r.assets, before));
   if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
@@ -1060,13 +1085,19 @@ function ownerFields(entry: AssetIndexEntry, uses: readonly Graphic[] | undefine
 }
 
 // `tree` is the screen's nodes as written (after rewiring and hidden reuse) — the owner fields come from it;
-// `index` the directory's ContentIndex writeAssets already used (built here when absent).
-function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined, tree?: readonly IrNode[] | null, index?: ContentIndex): { count: number; duplicates: number; totalBytes: number } | null {
+// `index` the pull's PullIndex writeAssets already used (one is made here when absent).
+function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined, tree?: readonly IrNode[] | null, index?: PullIndex): { count: number; duplicates: number; totalBytes: number } | null {
   const uses = usesByPointer(collectGraphics(tree));
   // No index for a pull that exported nothing — unless a hidden node reuses another screen's file.
   const reusesAny = [...uses.values()].some((list) => list.some((u) => typeof u.node.assetFrom === "string"));
   if (!Array.isArray(assets) || (!assets.length && !reusesAny)) return null;
-  const groups = (index || buildContentIndex(path.join(dir, "assets"))).groups().filter((g) => g.files.length > 1);
+  // `duplicates` reports only the groups holding a file this screen lists — its shippable assets and the files its
+  // hidden nodes reuse (never the reference PNG: below) — so only those files' buckets are clustered, and a pull
+  // listing none (a reference PNG alone) does not build the index at all.
+  const want = new Set<string>();
+  for (const a of assets) if (a && a.file && a.kind !== "reference") want.add(path.basename(a.file));
+  for (const [pointer, list] of uses) if (list.some((u) => typeof u.node.assetFrom === "string")) want.add(path.basename(pointer));
+  const groups = want.size ? (index || new PullIndex(path.join(dir, "assets"))).get().groupsOf(want).filter((g) => g.files.length > 1) : [];
   const groupOf = new Map<string, { hash: string; files: string[] }>(); // basename -> its duplicate group
   for (const g of groups) for (const f of g.files) groupOf.set(f, g);
   const files: AssetIndexEntry[] = [];

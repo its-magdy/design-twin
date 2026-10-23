@@ -95,18 +95,43 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s: string | null): string => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const pathOf = (el: PageElement): string => {
-    const parts: string[] = [];
-    let cur: PageElement | null = el;
-    while (cur && cur !== document.documentElement) {
-      const parent: PageElement | null = cur.parentElement;
-      if (!parent) break;
-      const idx = Array.from(parent.children).indexOf(cur) + 1;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${idx})`);
-      cur = parent;
+  // An element's path is its parent's path plus its own nth-child step, each kept once per call: nothing changes the DOM
+  // while this synchronous function runs, so a path or a sibling index read once stays true for the rest of the call. Built
+  // from scratch per candidate, every step scanned its parent's children again — the text records of one long list
+  // re-scanned that list's children once per record (about 4.6 of 11 s at 25,000 elements with a 1,800-child list).
+  const paths = new Map<PageElement, string>();
+  const childIndex = new Map<PageElement, Map<PageElement, number>>();
+  const indexIn = (parent: PageElement, el: PageElement): number => {
+    let idx = childIndex.get(parent);
+    if (!idx) {
+      const m = new Map<PageElement, number>();
+      Array.from(parent.children).forEach((c, i) => m.set(c, i + 1));
+      childIndex.set(parent, m);
+      idx = m;
     }
-    parts.unshift("html");
-    return parts.join(" > ");
+    return idx.get(el) ?? 0;
+  };
+  const pathOf = (el: PageElement): string => {
+    // up to the nearest ancestor whose path is known (or the top: <html>, or an element with no parent — both "html"),
+    // then down again, keeping each element's path on the way (a loop, not recursion: no depth limit)
+    const up: PageElement[] = [];
+    let cur: PageElement = el;
+    let base: string | undefined = paths.get(cur);
+    while (base === undefined) {
+      const parent: PageElement | null = cur.parentElement;
+      if (cur === document.documentElement || !parent) { base = "html"; paths.set(cur, base); break; }
+      up.push(cur);
+      cur = parent;
+      base = paths.get(cur);
+    }
+    for (let i = up.length - 1; i >= 0; i--) {
+      const e = up[i];
+      const parent = e?.parentElement;
+      if (!e || !parent) break;
+      base = `${base} > ${e.tagName.toLowerCase()}:nth-child(${indexIn(parent, e)})`;
+      paths.set(e, base);
+    }
+    return base;
   };
   const all: PageElement[] = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
   const orderOf = new Map<PageElement, number>();

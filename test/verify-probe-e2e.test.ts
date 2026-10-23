@@ -18,8 +18,8 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
-import { freeHoverPoint } from "../design-to-code/probe-page.ts";
-import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
+import { collectCandidates, freeHoverPoint, type CollectOutput } from "../design-to-code/probe-page.ts";
+import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -779,6 +779,64 @@ check(`a 204 → exit 4, 'could not load … no document (e.g. 204 No Content)' 
 const rDl = await probe(["--expected", expected, "--url", `${origin}/download`, "--out", path.join(tmp, "abort-download") + path.sep, "--timeout", "3000", "--project", ROOT]);
 check(`a download → exit 4, 'could not load … started a file download, not a page' (got ${String(rDl.status)}: ${rDl.stderr.split("\n").find((l) => l.startsWith("verify-probe:")) ?? ""})`,
   rDl.status === 4 && /could not load .*started a file download, not a page/.test(rDl.stderr));
+
+// ---- collectCandidates' element paths on a large page: each candidate's path is built from its parent's (kept once per
+// call), and must be the path the element's own ancestor walk gives — the one the probe used before (every ancestor's
+// nth-child index read from its parent's children). A candidate's `order` (its index among <body> and its descendants)
+// names the element independently of its path, so the walk below finds it without trusting the path. The page: a list
+// of 400 rows (one parent with 400 children), wrappers, repeated and differently cased text, placeholders, closed dialogs,
+// duplicate / foreign / untagged rows, a 300-deep chain, an iframe; frame-size, text and position inputs.
+{
+  const row = (k: number): string => {
+    const tag = k % 3 === 0 ? ` data-dt-node="7:${10 + (k % 40)}"` : k % 7 === 0 ? ` data-dt-node="999:${k}"` : "";
+    return `<li${tag}><div><div><h3${k % 5 === 0 ? ` data-dt-node="7:${200 + k}"` : ""}>Crate ${k % 90}</h3><p>Mark done</p><p>mark   done&nbsp;</p>` +
+      `<span>Row one<br>Row two</span><button><span>Keep</span></button><input placeholder="Filter rows"></div></div>` +
+      (k % 25 === 0 ? `<dialog><h2>Crate ${k % 90}</h2><button data-dt-node="7:5">Keep</button></dialog>` : "") +
+      (k % 97 === 0 ? `<iframe srcdoc="<p>Mark done</p>" width="40" height="20"></iframe>` : "") + "</li>";
+  };
+  const chain = `${"<div>".repeat(300)}<p data-dt-node="7:9">Deep note</p>${"</div>".repeat(300)}`;
+  const html = `<!doctype html><html data-dt-node="7:0"><head><style>body{margin:0;font:14px sans-serif}</style></head><body><div id="root">` +
+    `<div style="width:1280px;height:800px;overflow:auto"><div style="width:1280px;height:800px"><ul>${Array.from({ length: 400 }, (_, k) => row(k)).join("")}</ul>${chain}</div></div></div></body></html>`;
+  const texts = [...Array.from({ length: 90 }, (_, i) => `Crate ${i}`), "Mark done", "mark done", "Keep", "Filter rows", "Row one Row two", "Deep note", "Not on the page"];
+  const naiveCheck = `(recs) => {
+    const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
+    const all = [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName));
+    const walk = (el) => {
+      const parts = [];
+      let cur = el;
+      while (cur && cur !== document.documentElement) {
+        const parent = cur.parentElement;
+        if (!parent) break;
+        parts.unshift(cur.tagName.toLowerCase() + ":nth-child(" + (Array.from(parent.children).indexOf(cur) + 1) + ")");
+        cur = parent;
+      }
+      parts.unshift("html");
+      return parts.join(" > ");
+    };
+    const bad = recs.filter((r) => r.order < 0 ? r.path !== walk(document.documentElement) : walk(all[r.order]) !== r.path);
+    return { checked: recs.length, bad: bad.slice(0, 3) };
+  }`;
+  let outcome: string;
+  let ok = false;
+  try {
+    const pw = await import("playwright");
+    const browser = await pw.chromium.launch({ args: [...LAUNCH_ARGS] });
+    try {
+      const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+      await page.setContent(html);
+      const out: CollectOutput = await page.evaluate(collectCandidates, { frames: [{ nodeId: "7:1", w: 1280, h: 800 }], texts, positions: [{ nodeId: "7:2", x: 0, y: 0, w: 1280, h: 800 }] });
+      const recs = [...out.tagged, ...Object.values(out.frames).flatMap((f) => f.sized), ...Object.values(out.text).flatMap((t) => [...t.exact, ...t.caseless]),
+        ...Object.values(out.placeholders).flat(), ...Object.values(out.positions).flat()].map((c) => ({ order: c.order, path: c.path }));
+      const res: unknown = await page.evaluate(`(${naiveCheck})(${JSON.stringify(recs)})`);
+      const bad = isJsonObject(res) && Array.isArray(res.bad) ? res.bad : null;
+      const kinds = { html: recs.some((r) => r.order < 0), deep: recs.some((r) => r.path.split(" > ").length > 300), list: recs.filter((r) => /> li:nth-child\(\d{3}\)/.test(r.path)).length };
+      ok = bad !== null && bad.length === 0 && isJsonObject(res) && res.checked === recs.length && recs.length > 2000 && kinds.html && kinds.deep && kinds.list > 500
+        && Object.values(out.positions).flat().length > 0 && Object.values(out.frames).flatMap((f) => f.sized).length > 0;
+      outcome = `${recs.length} candidates (${kinds.list} in rows past the 99th, html ${kinds.html}, deep ${kinds.deep}); mismatches ${JSON.stringify(bad)}`;
+    } finally { await browser.close(); }
+  } catch (e) { outcome = `failed: ${String(e instanceof Error ? e.message : e).split("\n")[0] ?? ""}`; }
+  check(`collectCandidates on a ~6,000-element page: every candidate's path is its element's own ancestor-walk path (${outcome})`, ok);
+}
 
 finish();
 report();

@@ -1275,16 +1275,59 @@ function assetHashes(file, doc) {
 function redrawnAssets(file, newDoc, prev, cwd) {
   const now = assetHashes(file, newDoc), out = /* @__PURE__ */ new Set();
   if (!now.root) return out;
-  for (const [a, h] of Object.entries(now.hashes)) {
-    let before;
-    if (prev.kind === "snapshot") before = (prev.assets || {})[a];
-    else if (prev.kind === "git") {
-      const b = gitShowHead(cwd, (relUnder(cwd, path4.join(now.root, a)) ?? path4.relative(cwd, path4.join(now.root, a))).split(path4.sep).join("/"));
-      if (b) before = hashAssetBytes(a, b);
-    }
+  const root = now.root, entries = Object.entries(now.hashes);
+  const headHashes = prev.kind === "git" ? gitHeadAssetHashes(cwd, entries.map(([a]) => a), (a) => (relUnder(cwd, path4.join(root, a)) ?? path4.relative(cwd, path4.join(root, a))).split(path4.sep).join("/")) : null;
+  for (const [a, h] of entries) {
+    const before = prev.kind === "snapshot" ? (prev.assets || {})[a] : headHashes?.get(a);
     if (before && before !== h) out.add(a);
   }
   return out;
+}
+var headHashMemo = /* @__PURE__ */ new Map();
+function gitHeadAssetHashes(cwd, assets, relOf) {
+  const out = /* @__PURE__ */ new Map();
+  const rels = assets.map(relOf), blobs = gitHeadBlobs(cwd, rels);
+  assets.forEach((a, i) => {
+    const b = blobs === null ? void 0 : blobs[i];
+    if (b === void 0) {
+      const bytes = gitShowHead(cwd, rels[i] ?? "");
+      if (bytes) out.set(a, hashAssetBytes(a, bytes));
+      return;
+    }
+    if (b === null || b.bytes.length === 0) return;
+    const key = (isSvgName(a) ? "svg:" : "raw:") + b.oid;
+    out.set(a, getOrInit(headHashMemo, key, () => hashAssetBytes(a, b.bytes)));
+  });
+  return out;
+}
+function gitHeadBlobs(cwd, rels) {
+  if (!rels.length) return [];
+  const reqs = rels.map((rel) => "HEAD:./" + rel);
+  const input = Buffer.from(reqs.map((q) => q + "\0").join(""), "utf8");
+  const r = runSync("git", ["cat-file", "--batch", "-Z"], { cwd, input, binary: true, expect: (x) => parseCatFileBatch(x.stdoutBytes, reqs) !== null, quiet: true, timeoutMs: 6e4 });
+  return !r.timedOut && r.status === 0 ? parseCatFileBatch(r.stdoutBytes, reqs) : null;
+}
+function parseCatFileBatch(out, reqs) {
+  if (!out) return null;
+  const got = [];
+  let at = 0;
+  for (const req of reqs) {
+    const end = out.indexOf(0, at);
+    if (end < 0) return null;
+    const head = out.toString("utf8", at, end);
+    at = end + 1;
+    if (head === req + " missing" || head === req + " ambiguous") {
+      got.push(null);
+      continue;
+    }
+    const m = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)$/.exec(head);
+    if (!m) return null;
+    const size = Number(m[3]);
+    if (at + size >= out.length || out[at + size] !== 0) return null;
+    got.push(m[2] === "blob" ? { oid: m[1] ?? "", bytes: out.subarray(at, at + size) } : void 0);
+    at += size + 1;
+  }
+  return at === out.length ? got : null;
 }
 function gitShowHead(cwd, rel) {
   const r = runSync("git", ["show", "HEAD:./" + rel], { cwd, binary: true, expect: "stdout", quiet: true, timeoutMs: 6e4 });

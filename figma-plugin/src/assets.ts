@@ -2,7 +2,7 @@
 // and Dev-Mode resource links.
 import type { Geometry, DevResource as IrDevResource, AssetFormat, AssetKind } from "../../bridge/src/doc-types.ts";
 import { safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
-import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
+import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts, runDelivery } from "./state";
 import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
@@ -52,13 +52,20 @@ function contentHash(a: { base64?: string; text?: string }): string {
   return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
 }
 
-// Per-run, reset by resetRun() via releaseAssets(): content hash -> the file already written for it,
-// and taken basename -> the hash that owns it.
+// Per-run: content hash -> the file already written for it, and taken basename -> the hash that owns
+// it. Cleared by releaseAssets() (state.ts) both when a run settles and when the next one starts:
+// `byContent` holds the same Asset objects (base64/text payloads) the run returned, so leaving it
+// populated kept the last export's payloads alive for the whole idle period after `assets` was
+// emptied. Clearing drops the references only; the returned objects are never touched.
 const byContent = new Map<string, { file: string; asset: Asset }>();
 const byName = new Map<string, string>();
 export function resetAssetNames(): void {
   byContent.clear();
   byName.clear();
+}
+/** Test surface: how many entries the per-run dedupe tables hold right now. */
+export function assetNameTableSizes(): { byContent: number; byName: number } {
+  return { byContent: byContent.size, byName: byName.size };
 }
 
 // A Figma layer name is often a path (`icons/linear/arrow-down`, `Linear / School / Award`) and may be
@@ -160,11 +167,14 @@ async function readSourceImage(hash: string): Promise<{ w: number; h: number } |
     if (img) {
       const s = await img.getSizeAsync();
       if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-      // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed.
-      try {
-        const bytes = await img.getBytesAsync();
-        if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-      } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
+      // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed. A reply that
+      // delivers no assets (runDelivery, state.ts) has no use for the original bytes: the size above is all it keeps.
+      if (runDelivery.sourceBytes) {
+        try {
+          const bytes = await img.getBytesAsync();
+          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+        } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
+      }
     }
   } catch (e) {
     warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");

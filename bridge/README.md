@@ -737,7 +737,11 @@ stops it too, and a port-in-use error names that socket.
 Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
-  exactly like a sequence of one-shot runs.
+  exactly like a sequence of one-shot runs. The identity reads the plugin itself answers during an
+  export (`ping`, `whoami`) are not held behind that order: a `whoami` to one file answers while another
+  file exports. The selection and the listings (`list pages` / `list` / `list children`, `list
+  libraries`) stay in order, because they read layers and an export's catalogue walk briefly hides
+  hidden layers inside instances (`skipInvisibleInstanceChildren`).
 - Every request id is unique per bridge (`r<nonce>-<seq>`) and a reply only settles the request on the
   connection it was sent to, so a late reply from an abandoned earlier request cannot answer the
   next one. When the plugin is connected but sends nothing the stall message says so ("the plugin is
@@ -908,6 +912,11 @@ Pre-approve tools in `.claude/settings.json`:
   4096). A value that is not a number above 0 falls back to 128 with a warning — there is no "unlimited".
   An export over it fails with a message quoting the cap in force.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
+- Profiling: `DTWIN_TIMINGS=1` prints one `[dtwin] timings {…}` JSON line on stderr at the end of a
+  `dtwin` command; `DTWIN_TIMINGS=<file>` appends it to that file instead (JSON Lines). It holds the
+  connect / export / write split, when each plugin phase (`queued`, `page`, `designSystem`, `assets`, …)
+  was first and last heard, the queue wait, the reply's asset count and decoded bytes, and peak RSS —
+  counts and times only, never a file, page or layer name, a key or document content. Off by default.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").
 - Hidden-graphic reuse (`assetFrom`) compares the node's own rotation/flip and box only, not an

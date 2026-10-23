@@ -161,6 +161,8 @@ export interface DesignExportApi {
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
   collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
+  /** state.ts assetRetention: entries the run-owned asset array and dedupe tables still hold. */
+  assetRetention(): { assets: number; byContent: number; byName: number };
 }
 
 // ---- the scene: what is in the file
@@ -216,6 +218,27 @@ export interface World {
 /** figma.mixed. One symbol for every world, so a fixture can carry it before its world exists. */
 export const MIXED = Symbol("figma.mixed");
 
+/** figma.skipInvisibleInstanceChildren's effect on one INSTANCE subtree, which a plain fixture does not have: while
+ *  `skipping()` is true, `children` of the instance and of every node inside it omits the invisible nodes (and so
+ *  their descendants) — "Defaults to true in Figma Dev Mode and false in Figma and FigJam", and when true "`children`
+ *  and methods such as `findAll` exclude these invisible nodes" (Plugin API docs, figma.skipInvisibleInstanceChildren).
+ *  Opt-in per fixture: `skipping` reads the case's own world, e.g. `() => w.figma.skipInvisibleInstanceChildren === true`.
+ *  Rewrites `children` in place as a getter and returns the same node. Not modelled: find* on the instance, and the
+ *  throw on reading a property of an already-held invisible node. */
+export function skipAwareInstance(instance: FakeNode, skipping: () => boolean): FakeNode {
+  const wire = (n: FakeNode): void => {
+    const all = n.children;
+    if (all === undefined) return; // a leaf has no `children` at all — keep it that way
+    for (const c of all) wire(c);
+    Object.defineProperty(n, "children", {
+      configurable: true, enumerable: true,
+      get: () => (skipping() ? all.filter((c) => c.visible !== false) : all),
+    });
+  };
+  wire(instance);
+  return instance;
+}
+
 // ---- the plugin bundle: built once per process from the current sources
 const built = await esbuild.build({ ...pluginBuildOptions(), write: false, logLevel: "silent" });
 const bundleText = built.outputFiles?.[0]?.text;
@@ -237,7 +260,7 @@ const pluginConsole: Pick<Console, "log" | "info" | "warn" | "error" | "debug"> 
 const API_MEMBERS: Record<keyof DesignExportApi, true> = {
   serialize: true, collectSelection: true, collectNode: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
   buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
-  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true,
+  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true, assetRetention: true,
 };
 const missingApi = (c: Record<string, unknown>): string[] => Object.keys(API_MEMBERS).filter((k) => typeof c[k] !== "function");
 // The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi). Narrowed by a

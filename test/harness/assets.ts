@@ -2,7 +2,8 @@
 // and the source-image container format.
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { Case } from "./helpers.ts";
+import type { FakeNode } from "../fake-figma.ts";
+import { gate, settle, type Case } from "./helpers.ts";
 import { world } from "./scene.ts";
 
 // --- [NOASSETS-SHAPE]'s icon sheet (the [MANIFEST] checks read over it too)
@@ -194,5 +195,86 @@ export const cases: Case[] = [{
       const r = await api.collectSelection({ css: false });
       ok(`source image format detected from magic bytes: ${fmt}`, r.assets.some((a) => a.kind === "source" && a.format === fmt));
     }
+  },
+}, {
+  name: "[SOURCE-BYTES] a reply that delivers no assets reads an image's size, not its original bytes",
+  async run() {
+    // collectDesignSystemOnly / collectLibraryFile replies have no `assets` field: an image fill's original bytes read
+    // there (getBytesAsync + base64) went nowhere. The intrinsic size is on the paint record and must stay.
+    let sizeReads = 0, byteReads = 0;
+    const style = { name: "Brand/Photo", id: "s_photo", key: "photokey", description: "", paints: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "h_src" }] };
+    const w = world({
+      localStyles: { paint: [style] },
+      images: { h_src: { getSizeAsync: async () => { sizeReads++; return { width: 8, height: 6 }; }, getBytesAsync: async () => { byteReads++; return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]); } } },
+    });
+    const { api } = w;
+    const SIZE = '"intrinsicSize":{"w":8,"h":6}';
+    const ds = await api.collectDesignSystemOnly({});
+    ok(`[SOURCE-BYTES] design-system pull: the size is read and kept, the bytes are not read (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 0 && JSON.stringify(ds.designSystem).includes(SIZE));
+    sizeReads = 0; byteReads = 0;
+    const lib = await api.collectLibraryFile({ asLibrary: "Lib" });
+    ok(`[SOURCE-BYTES] library pull: the same (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 0 && JSON.stringify(lib.designSystem).includes(SIZE));
+    sizeReads = 0; byteReads = 0;
+    // a full export delivers assets: there the original bytes are read and shipped as before
+    const full = await api.collectFull({ css: false });
+    ok(`[SOURCE-BYTES] a full export still reads and delivers them (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 1 && full.assets.some((a) => a.kind === "source" && a.id === "img:h_src" && a.format === "png")
+      && JSON.stringify(full.designSystem).includes(SIZE));
+    // and the flag does not leak: a design-system pull followed by a full one in the same plugin session
+    sizeReads = 0; byteReads = 0;
+    await api.collectDesignSystemOnly({});
+    const again = await api.collectFull({ css: false });
+    ok("[SOURCE-BYTES] …also right after a design-system pull (the flag is per run)", byteReads === 1 && again.assets.some((a) => a.kind === "source"));
+  },
+}, {
+  name: "[ASSET-RELEASE] a settled run keeps no asset payloads",
+  async run() {
+    // The dedupe table (assets.ts byContent) holds the same Asset objects the run returned. Emptying
+    // only the asset array when a run settled left the last export's payloads reachable until the next
+    // run started. Every way a run can settle must leave all three tables empty — while what the run
+    // returned stays intact (the release drops references, it never mutates the returned objects).
+    const EMPTY = JSON.stringify({ assets: 0, byContent: 0, byName: 0 });
+    const icon = (id: string, body: string, onExport?: () => void): FakeNode => ({ type: "VECTOR", name: "glyph-" + id, visible: true, id, width: 16, height: 16,
+      fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+      exportAsync: async () => { onExport?.(); return body; } });
+    const frame = (id: string, children: FakeNode[]): FakeNode => ({ type: "FRAME", name: "Rel " + id, visible: true, id, width: 100, height: 100,
+      layoutMode: "NONE", children, exportAsync: async () => new Uint8Array([137, 80, 78, 71]) });
+    const w = world({ selection: [frame("rel:1", [icon("rel:a", "<svg>a</svg>"), icon("rel:b", "<svg>a</svg>"), icon("rel:c", "<svg>c</svg>")])] });
+    const { api } = w;
+    const retained = (): string => JSON.stringify(api.assetRetention());
+
+    // success
+    const r = await api.serializeRun(() => api.collectSelection({ css: false }), { source: "ui", label: "rel-ok" });
+    ok("[ASSET-RELEASE] success: the settled run retains nothing", retained() === EMPTY);
+    const a = r.assets.find((x) => x.id === "rel:a");
+    ok("[ASSET-RELEASE] success: the returned assets are complete (2 deduped SVGs + the reference PNG)",
+      r.assets.filter((x) => x.format === "svg").length === 2 && r.assets.some((x) => x.kind === "reference"));
+    ok("[ASSET-RELEASE] success: returned payloads and dedupe provenance are untouched by the release",
+      !!a && a.text === "<svg>a</svg>" && JSON.stringify(a.from) === '["rel:a","rel:b"]');
+
+    // a run that throws after collecting
+    const thrownRun = await settle(api.serializeRun(async () => { await api.collectSelection({ css: false }); throw new Error("boom"); },
+      { source: "ui", label: "rel-throw" }));
+    ok("[ASSET-RELEASE] error: the run failed and retains nothing", thrownRun.err?.message === "boom" && retained() === EMPTY);
+
+    // a run cancelled mid-walk (rel:x registers, rel:y arms the cancel, rel:z's checkpoint throws)
+    w.figma.currentPage.selection = [frame("rel:2", [icon("rel:x", "<svg>x</svg>"), icon("rel:y", "<svg>y</svg>", () => { api.requestCancel(); }),
+      icon("rel:z", "<svg>z</svg>")])];
+    const cancelled = await settle(api.serializeRun(() => api.collectSelection({ css: false }), { source: "ui", label: "rel-cancel" }));
+    ok("[ASSET-RELEASE] cancel: the run was cancelled and retains nothing", cancelled.err !== null && retained() === EMPTY);
+
+    // a queued next run: A holds the chain while B waits; each gets its own complete result
+    w.figma.currentPage.selection = [frame("rel:1", [icon("rel:a", "<svg>a</svg>"), icon("rel:c", "<svg>c</svg>")])];
+    const g = gate();
+    const pA = api.serializeRun(async () => { const out = await api.collectSelection({ css: false }); await g.p; return out; }, { source: "bridge", label: "rel-A" });
+    const pB = api.serializeRun(() => api.collectSelection({ css: false }), { source: "bridge", label: "rel-B" });
+    g.open();
+    const [rA, rB] = await Promise.all([pA, pB]);
+    ok("[ASSET-RELEASE] queued: both runs return their own complete assets",
+      rA.assets.filter((x) => x.format === "svg").length === 2 && rB.assets.filter((x) => x.format === "svg").length === 2 &&
+      rA.assets.find((x) => x.id === "rel:c")?.text === "<svg>c</svg>");
+    ok("[ASSET-RELEASE] queued: nothing is retained once both settle", retained() === EMPTY);
   },
 }];

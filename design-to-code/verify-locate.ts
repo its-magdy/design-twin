@@ -9,8 +9,9 @@ import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVe
 import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { canonical } from "./run-cache.ts";
-import { nodeArtefacts, planNode } from "./node-artefacts.ts";
-import { setBaseOf, setFacts, setFile } from "./verify-sets.ts";
+import { planNode, setNodeOf } from "./node-artefacts.ts";
+import { setBaseOf, setFactsOf, setFile, type SetFacts } from "./verify-sets.ts";
+import { isJsonObject } from "./types.ts";
 import type { IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { reportInputs } from "./report-freshness.ts";
 import type { ReportInputs } from "./report-freshness.ts";
@@ -22,7 +23,28 @@ function exportDirOf(cwd: string): string {
   return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, DESIGN_DIR); // pre-split projects
 }
 
-function indexRows(exportDir: string): IndexRow[] {
+/** One verify-dir report as every plan's lookup reads it: parsed once, its set's facts read once (on first need). */
+interface ReportEntry { f: string; abs: string; stem: string; r: VerifyReport; facts: SetFacts | null; mtimeMs: number | null }
+/**
+ * One command's reads of the verify dirs and export indexes, shared by every plan it looks up — each report parsed once,
+ * each set's expectation read once, each export index read once — rather than every report re-read (three times) for
+ * each plan: 500 reports cost ~1,500 file reads per plan looked up. A snapshot: it is right while nothing those files
+ * hold is rewritten, so a command that writes reports, expectations or exports between lookups (verify-migrate) takes a
+ * new one, or passes none — each call then reads afresh, as before.
+ */
+export interface LocateCache {
+  readonly reports: Map<string, ReportEntry[] | null>;
+  readonly rows: Map<string, IndexRow[]>;
+}
+export const locateCache = (): LocateCache => ({ reports: new Map(), rows: new Map() });
+
+function indexRows(exportDir: string, cache?: LocateCache): IndexRow[] {
+  if (!cache) return readIndexRows(exportDir);
+  let rows = cache.rows.get(exportDir);
+  if (!rows) { rows = readIndexRows(exportDir); cache.rows.set(exportDir, rows); }
+  return rows;
+}
+function readIndexRows(exportDir: string): IndexRow[] {
   const root = readJsonOrNull(path.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
@@ -78,7 +100,7 @@ function oneSource(rows: readonly IndexRow[]): boolean {
 // any stamp only when the whole index is of one Figma file; several, or only other files' rows, keep the header (with no
 // row: a row of its node id may be another file's).
 // Returns { file, doc, row, … } or null.
-function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
+function locateExport(plan: Plan, planFile: string | undefined, cwd: string, cache?: LocateCache): ExportHit | null {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel: string | null | undefined): { file: string; doc: ScreenDoc } | null => {
     if (!rel) return null;
@@ -89,7 +111,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
     return null;
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
-  const rows = indexRows(exportDir);
+  const rows = indexRows(exportDir, cache);
   // the plan's node (node-artefacts.ts planNode), then — a lookup hint, not its identity — the id in its `screen` stem
   const ids = [planNode(plan, planFile), nodeIdFromStem(plan.screen)].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
@@ -154,10 +176,35 @@ function behaviourRef(x: unknown): ReportRef["behaviour"] {
   if (!isReportBehaviour(x)) return null;
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
-function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
+// The verify dir's readable reports, sorted by file name, less the retired sets' — plan-independent, so a LocateCache
+// holds them for every plan of the command. null when the dir does not exist.
+function reportEntries(dir: string): ReportEntry[] | null {
+  if (!fs.existsSync(dir)) return null;
+  const out: ReportEntry[] = [];
+  for (const f of fs.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
+    const abs = path.join(dir, f);
+    const r = readJsonOrNull(abs, isVerifyReport);
+    if (!r) continue;
+    const stem = setBaseOf(f, "report") ?? f;
+    // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
+    if (!fs.existsSync(setFile(path.join(dir, stem), "expected")) && fs.existsSync(setFile(path.join(dir, stem), "retired"))) continue;
+    out.push({ f, abs, stem, r, facts: null, mtimeMs: null });
+  }
+  return out;
+}
+// The set's facts (verify-sets.ts setFacts) from the report already parsed and its expectation, read once per entry
+const factsOf = (dir: string, x: ReportEntry): SetFacts =>
+  (x.facts ??= setFactsOf(readJsonOrNull(setFile(path.join(dir, x.stem), "expected"), isJsonObject), x.r));
+
+function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined, cache?: LocateCache): ReportRef[] {
   const dir = path.join(cwd, VERIFY_DIR);
-  if (!fs.existsSync(dir)) return [];
-  const e = exp === undefined ? locateExport(plan, planFile, cwd) : exp;
+  let entries = cache ? cache.reports.get(dir) : undefined;
+  if (entries === undefined) {
+    entries = reportEntries(dir);
+    if (cache) cache.reports.set(dir, entries);
+  }
+  if (entries === null) return [];
+  const e = exp === undefined ? locateExport(plan, planFile, cwd, cache) : exp;
   const stems = new Set([
     plan.file ? path.basename(String(plan.file)).replace(/\.json$/i, "") : null,
     e ? path.basename(e.file).replace(/\.json$/i, "") : null,
@@ -165,26 +212,21 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     plan.screen ? String(plan.screen) : null,
   ].filter((s): s is string => !!s));
   const nodeId = planNode(plan, planFile);
-  const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out: ReportRef[] = [];
-  for (const f of fs.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
-    const abs = path.join(dir, f);
-    const r = readJsonOrNull(abs, isVerifyReport);
-    if (!r) continue;
-    const stem = setBaseOf(f, "report") ?? f;
+  for (const x of entries) {
+    const { r, stem, abs } = x;
     let by: ReportMatch | null = null;
-    const expFile = setFile(path.join(dir, stem), "expected");
-    // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
-    if (!fs.existsSync(expFile) && fs.existsSync(setFile(path.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
-    else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
+    else if (nodeId && setNodeOf(stem, factsOf(dir, x)) === nodeId) by = factsOf(dir, x).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
-    let mtimeMs = 0;
-    try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
+    if (x.mtimeMs === null) {
+      x.mtimeMs = 0;
+      try { x.mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
+    }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
-      why: r.why || [], deltas: r.deltas || null, measuredAt: r.measuredAt || null, mtimeMs, inputs: reportInputs(r),
+      why: r.why || [], deltas: r.deltas || null, measuredAt: r.measuredAt || null, mtimeMs: x.mtimeMs, inputs: reportInputs(r),
       behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;

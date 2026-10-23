@@ -36,7 +36,7 @@ import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "../
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { ClientRow, HelloFrame, ProgressTick, ReplyFrame } from "../bridge/src/server-core.ts";
 import { COMMANDS } from "../bridge/src/commands.ts";
-import type { Cmd, Commands, ListPagesReply, PingReply } from "../bridge/src/commands.ts";
+import type { Cmd, Commands, FullExportReply, PingReply } from "../bridge/src/commands.ts";
 import type { Sent } from "../bridge/src/route.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
@@ -2401,11 +2401,34 @@ void (async () => {
 
     // Requests are SERIALIZED. The plugin is single-threaded and its heavy commands mutate shared
     // per-run state, so concurrent exports interleave badly — the daemon must behave like a sequence of
-    // one-shot runs, which is what every existing caller was written against.
+    // one-shot runs, which is what every existing caller was written against. (The plugin's unqueued reads
+    // skip the queue: the two-file checks in the cancel section below.)
     const order: string[] = [];
-    const three: Cmd[] = ["ping", "whoami", "getSelection"];
-    await Promise.all(three.map((c) => dcli.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
-    ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === three.join(","));
+    const three = ["first", "second", "third"];
+    calls.length = 0;
+    await Promise.all(three.map((label) => dcli.request({ cmd: "exportFull", args: {}, timeoutMs: 5000 }, 5000).then(() => order.push(label))));
+    ok("[daemon] concurrent client exports run ONE at a time, in arrival order",
+      order.join(",") === three.join(",") && calls.filter((c) => c === "exportFull").length === 3);
+    // The daemon's unqueued set is the plugin's unqueued commands less the tree-walking listings: a command the
+    // plugin runs through serializeRun (it mutates per-run state or the document) must never skip the daemon's
+    // queue, nor may a listing that could overlap an export's skipInvisibleInstanceChildren window.
+    {
+      const pluginSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "src", "bridge.ts"), "utf8");
+      const queuedInPlugin = (cmd: Cmd): boolean | null => {
+        const at = pluginSrc.indexOf(`case "${cmd}":`);
+        if (at < 0) return null;
+        const rest = pluginSrc.slice(at + 1);
+        const next = rest.search(/case "|default:/);
+        return /serializeRun\(/.test(next < 0 ? rest : rest.slice(0, next));
+      };
+      const mismatched = COMMANDS.filter((c) => queuedInPlugin(c) === null
+        || (queuedInPlugin(c) === false) !== (daemon.UNQUEUED_READS.has(c) || daemon.QUEUED_TREE_READS.has(c))
+        || (daemon.UNQUEUED_READS.has(c) && daemon.QUEUED_TREE_READS.has(c)));
+      ok(`[daemon] every plugin-unqueued command is either skipped past the daemon's queue or named as a queued tree read, and no queued one is either (mismatched: ${mismatched.join(",") || "none"})`,
+        mismatched.length === 0 && daemon.UNQUEUED_READS.size > 0);
+      ok("[daemon] the scene reads (selection, listings) stay on the daemon's queue",
+        ["getSelection", "listPages", "listChildren", "listLibraries"].every((c) => daemon.QUEUED_TREE_READS.has(c) && !daemon.UNQUEUED_READS.has(c)));
+    }
 
     // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` is not
     // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` does not reach setTimeout as NaN.
@@ -3886,7 +3909,8 @@ void (async () => {
       // client ends its socket after writing the frame, so the daemon reads B, then its 'end' aborts B
       // (allowHalfOpen:false: the daemon's own FIN goes out after that listener ran) — the client's
       // 'close' therefore proves B is aborted before A is answered. A third request C is the fence:
-      // the queue is FIFO, so a forwarded B would sit between A and C.
+      // the queue is FIFO, so a forwarded B would sit between A and C. A and C are exports: an unqueued read
+      // (listPages, whoami, …) never waits on the queue, so it could neither hold B nor fence it.
       const replyOn = (c: net.Socket) => new Promise<string>((resolve) => {
         let buf = "";
         c.setEncoding("utf8");
@@ -3894,23 +3918,23 @@ void (async () => {
         c.on("close", () => resolve(buf));
       });
       const beforeQ = cmdFrames(ws1).length;
-      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      const cA = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
       const aReply = replyOn(cA);
       await until(() => cmdFrames(ws1).length > beforeQ);
       const aSent = cmdFrames(ws1)[beforeQ];
       const cB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
       cB.end();
       await new Promise((r) => cB.once("close", r));
-      const pagesReply = malformed<ListPagesReply>({ pages: [], manifest: {} }); // the minimum listPages reply server-core accepts
-      if (aSent) ws1.send({ id: aSent.id, ok: true, result: pagesReply } satisfies ReplyFrame);
+      const fullReply = malformed<FullExportReply>({ designSystem: {}, layersDoc: {}, assets: [] }); // the minimum exportFull reply server-core accepts
+      if (aSent) ws1.send({ id: aSent.id, ok: true, result: fullReply } satisfies ReplyFrame);
       const aGot = await aReply;
-      const cC = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
+      const cC = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
       await until(() => cmdFrames(ws1).length > beforeQ + 1);
       const cSent = cmdFrames(ws1)[beforeQ + 1];
-      if (cSent) ws1.send({ id: cSent.id, ok: true, result: pagesReply } satisfies ReplyFrame);
+      if (cSent) ws1.send({ id: cSent.id, ok: true, result: fullReply } satisfies ReplyFrame);
       const afterQ = cmdFrames(ws1).slice(beforeQ).map((f) => f.cmd);
       ok("[cancel-daemon] a request still QUEUED when its client disconnects is never forwarded to the plugin",
-        /"ok":true/.test(aGot) && afterQ.join(",") === "listPages,listPages" && cancelsFor(ws1, sent?.id).length === 1);
+        /"ok":true/.test(aGot) && afterQ.join(",") === "exportFull,exportFull" && cancelsFor(ws1, sent?.id).length === 1);
       cC.destroy();
       cA.destroy();
       shutdown();
@@ -3930,7 +3954,7 @@ void (async () => {
         port: 0, isConnected: () => true, close: () => {},
         request: (cmd) => {
           seenCmds.push(cmd);
-          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r(fakeSent({}, row)); });
+          if (cmd === "exportFull") return new Promise((r) => { releaseA = () => r(fakeSent({}, row)); });
           return Promise.resolve(fakeSent({}, row));
         },
       };
@@ -3941,19 +3965,120 @@ void (async () => {
         c.on("error", reject);
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
-      const fA = await openRaw({ cmd: "listPages", args: {}, timeoutMs: 20000 });
+      const fA = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
       await until(() => seenCmds.length === 1);
       const fB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
       fB.end();
       await new Promise((r) => fB.once("close", r));
       releaseA?.();
-      const fC = await openRaw({ cmd: "whoami", args: {}, timeoutMs: 20000 });
-      await until(() => seenCmds.includes("whoami"));
+      const fC = await openRaw({ cmd: "exportNode", args: { nodeId: "1:2" }, timeoutMs: 20000 });
+      await until(() => seenCmds.includes("exportNode"));
       ok(`[cancel-daemon] the daemon itself drops a queued request whose client left — a bridge that ignores the abort never sees it (${seenCmds.join(",")})`,
-        seenCmds.join(",") === "listPages,whoami");
+        seenCmds.join(",") === "exportFull,exportNode");
       fA.destroy();
       fC.destroy();
       shutdown();
+    }
+
+    // (g) two files behind one daemon: the plugin's unqueued reads skip the daemon's queue, exports do not.
+    // A real server-core bridge, two fake plugins (Alpha, Bravo) and a real daemon socket. Alpha's export is
+    // held for the whole block. Pre-change every request here queued behind it: Bravo's whoami answered
+    // only once Alpha's export did (measured ~2.8 s of a 3 s export, ~2 ms idle).
+    if (process.platform === "win32") console.log("  (skipped on Windows: drives the POSIX daemon socket at a fixed name — the pipe is daemon-sock.test.ts's)");
+    else {
+      const port = nextPort++;
+      const b = core.createBridge(port, { settleMs: 0 });
+      const fullReply = malformed<FullExportReply>({ designSystem: {}, layersDoc: {}, assets: [] });
+      let releaseA: (() => void) | undefined;
+      const two = (instanceId: string, file: string, fileKey: string, on: Handlers): FakePlugin =>
+        fakePlugin(port, { token: TOKEN, hello: { instanceId, file, fileKey, page: "Home" }, on, unhandled: HANG });
+      const alpha = two("fig-alpha", "File Alpha", "KEYALPHA", {
+        ping: () => ({ pong: true, page: "Home", file: "File Alpha" }),
+        exportFull: () => new Promise((r) => { releaseA = () => r(fullReply); }),
+      });
+      const bravoOn: Handlers = {
+        whoami: () => ({ instanceId: "fig-bravo", startedAt: 1, uptimeMs: 5, file: "File Bravo", page: "Home", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: "KEYBRAVO", fileKeyAvailable: true }),
+        listPages: () => ({ exportedAt: "2026-10-01T00:00:00.000Z", file: "File Bravo", depth: 1, pages: [], manifest: { pages: 0, warnings: [] } }),
+        exportFull: () => fullReply,
+        // ping: unhandled → HANG, the in-flight read the cancel check abandons
+      };
+      let bravo = two("fig-bravo", "File Bravo", "KEYBRAVO", bravoOn);
+      await alpha.opened;
+      await bravo.opened;
+      await until(() => b.listClients().filter((c) => c.identified).length === 2);
+      const G_PORT = 19789; // a socket name only (the bridge above has its own TCP port)
+      const h = await daemon.serve(servedBridge(b), { port: G_PORT, signals: false, crashHandlers: false });
+      const gcli = must(await daemon.connect(G_PORT), "daemon.connect() right after serve() (two-file daemon)");
+      const errOf = (p: Promise<unknown>) => p.then(() => "answered", (e: unknown) => asErr(e).message);
+
+      // Alpha's export: forwarded, and held by the plugin.
+      const aDone = gcli.request({ cmd: "exportFull", client: "Alpha", args: {}, timeoutMs: 20000 }, 20000);
+      await until(() => alpha.commands("exportFull").length === 1);
+      let aSettled = false;
+      void aDone.then(() => { aSettled = true; }, () => { aSettled = true; });
+
+      const who = await gcli.requestWithClient({ cmd: "whoami", client: "Bravo", timeoutMs: 5000 }, 5000);
+      ok("[two-files] a read of file B answers while file A's export is still running",
+        who.reply.file === "File Bravo" && who.client?.file === "File Bravo" && !aSettled);
+      // A listing walks node trees: it stays queued (an export's catalogue walk may hold skipInvisibleInstanceChildren on)
+      const pagesB = errOf(gcli.request({ cmd: "listPages", client: "KEYBRAVO", args: { depth: 1 }, timeoutMs: 20000 }, 20000));
+      const pagesForwardedEarly = await until(() => bravo.commands("listPages").length > 0, 400);
+      ok("[two-files] …but a page list of file B is NOT forwarded while file A's export runs (tree reads stay queued)", !pagesForwardedEarly && !aSettled);
+      const pingA = await gcli.request({ cmd: "ping", client: "Alpha", timeoutMs: 5000 }, 5000);
+      ok("[two-files] …and a ping of file A itself (the plugin answers it during its own export)", pingA.file === "File Alpha" && !aSettled);
+      ok("[two-files] an unaddressed read with two files connected is still refused as ambiguous — at once, not after A",
+        /2 Figma files are connected to the bridge — say which one to use/.test(await errOf(gcli.request({ cmd: "whoami", timeoutMs: 5000 }, 5000))) && !aSettled);
+
+      // An export of file B still waits its turn: never forwarded while A's runs, forwarded once A answers.
+      const bDone = gcli.request({ cmd: "exportFull", client: "Bravo", args: {}, timeoutMs: 20000 }, 20000);
+      const bForwardedEarly = await until(() => bravo.commands("exportFull").length > 0, 400);
+      ok("[two-files] an export of file B is NOT forwarded while file A's export runs (heavy ops stay serialized)", !bForwardedEarly);
+
+      // Reconnect: Bravo's window goes away and comes back as a new connection. A named read issued in the
+      // gap waits for it (its connect window) — still while A's export runs — and answers from the NEW one.
+      const oldBravo = must(b.listClients().find((c) => c.file === "File Bravo"), "Bravo's first connection").connId;
+      bravo.stop();
+      await until(() => !b.listClients().some((c) => c.connId === oldBravo));
+      const whoAfter = gcli.requestWithClient({ cmd: "whoami", client: "Bravo", timeoutMs: 5000, waitForConnection: 4000 }, 8000);
+      await sleep(150);
+      bravo = two("fig-bravo", "File Bravo", "KEYBRAVO", bravoOn);
+      const reWho = await whoAfter;
+      ok("[two-files] a read of a file that reconnects mid-export waits for it and answers from the new connection, A still running",
+        reWho.reply.file === "File Bravo" && !!reWho.client && reWho.client.connId !== oldBravo && !aSettled);
+
+      // Cancellation: an unqueued read in flight to Bravo (it never answers ping) whose client leaves
+      // → Bravo gets the cancel frame for exactly that request; Alpha's export is not touched.
+      const ac = new AbortController();
+      const lc = errOf(gcli.request({ cmd: "ping", client: "Bravo", timeoutMs: 20000 }, 20000, undefined, ac.signal));
+      await until(() => bravo.commands("ping").length === 1);
+      const lcId = bravo.commands("ping")[0]?.id;
+      ac.abort();
+      await lc;
+      await until(() => bravo.cancels.length >= 1);
+      ok("[two-files] a read whose client leaves mid-flight is cancelled in its plugin, and only it",
+        !!lcId && bravo.cancels.join(",") === lcId && alpha.cancels.length === 0 && !aSettled);
+      // …and one whose client leaves during its connect wait (no such file yet) is never forwarded anywhere.
+      const ac2 = new AbortController();
+      const ghost = errOf(gcli.request({ cmd: "whoami", client: "File Charlie", timeoutMs: 5000, waitForConnection: 4000 }, 8000, undefined, ac2.signal));
+      await sleep(150);
+      ac2.abort();
+      await ghost;
+      await sleep(100);
+      ok("[two-files] a read abandoned during its connect wait reaches no plugin",
+        alpha.commands("whoami").length === 0 && bravo.commands("whoami").length === 1);
+
+      // A answers → B's queued export is forwarded and answers; nothing is left in flight.
+      releaseA?.();
+      const aOut = await errOf(aDone);
+      const bOut = await errOf(bDone);
+      const pagesOut = await pagesB;
+      ok("[two-files] once A's export answers, B's queued page list and export are forwarded and answer (arrival order kept)",
+        aOut === "answered" && bOut === "answered" && pagesOut === "answered" && bravo.commands("exportFull").length === 1);
+      await until(() => h.activity().inFlight === 0, 2000);
+      ok("[two-files] nothing is left in flight (reads and exports both counted, both released)", h.activity().inFlight === 0);
+      h.shutdown();
+      alpha.stop();
+      bravo.stop();
     }
   }
 

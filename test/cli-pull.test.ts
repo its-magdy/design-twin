@@ -11,6 +11,7 @@ import { fakePlugin, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply } from "./fixtures.ts";
 import { formatDone } from "../bridge/src/figma-pull.ts";
+import { base64Bytes, timingsTarget } from "../bridge/src/timings.ts";
 import type { Asset } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, ScreenshotReply, WhoamiReply } from "../bridge/src/commands.ts";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -92,6 +93,49 @@ try {
     const r2 = await dtwin(dir2, ["pull", "out", "--node", "1:2", "--timeout", "30"]);
     p2.stop();
     check("a `start` frame alone prints no queued line", r2.code === 0 && !/queued/.test(r2.stderr));
+    check("without DTWIN_TIMINGS no timings record is printed", !/\[dtwin\] timings /.test(r.stderr + r2.stderr));
+  }
+  // DTWIN_TIMINGS (bridge/src/timings.ts): an opt-in stage record — phases by arrival, payload size, peak RSS — and
+  // never a name, a key or document content.
+  console.log("\ncli pull — DTWIN_TIMINGS stage record:");
+  {
+    const dir = path.join(tmp, "timings");
+    fs.mkdirSync(dir);
+    const svgText = "<svg><path d=\"M0 0h4\"/></svg>";
+    const reply = (): ScreenReply => {
+      const r = nodeReply();
+      r.assets = [refAsset, { id: "1:3", name: "Secret Layer Name", format: "svg", file: "glyph.svg", text: svgText }];
+      return r;
+    };
+    const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, {
+      exportNode: async (_a, ctx) => {
+        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
+        await sleep(60);
+        ctx.progress({ phase: "start" });
+        ctx.progress({ phase: "page", page: { index: 1, of: 1, name: "Private Page Name" }, nodes: 3 });
+        ctx.progress({ phase: "assets", nodes: 3, assets: 1 });
+        ctx.progress({ phase: "assets", nodes: 3, assets: 2 });
+        return reply();
+      },
+    });
+    const file = path.join(dir, "timings.jsonl");
+    const r = await runDtwin(["pull", "out", "--node", "1:2", "--timeout", "30"], { cwd: dir, env: bridgeEnv({ port: PORT, token: TOKEN, set: { DTWIN_TIMINGS: file } }), timeoutMs: 40_000 });
+    plugin.stop();
+    const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n") : [];
+    const rec = lines.length === 1 ? json(lines[0] ?? "") : null;
+    const phases = rec && Array.isArray(rec.phases) ? rec.phases as Array<{ phase: string; ticks: number; firstMs: number }> : [];
+    const payload = rec && rec.payload && typeof rec.payload === "object" ? rec.payload as { assets: number; assetBytes: number } : null;
+    check(`one record is appended to the DTWIN_TIMINGS file (got ${lines.length})`, r.status === 0 && rec !== null && rec.schema === "designtwin/timings@1");
+    check(`…phases in arrival order with their tick counts (got ${JSON.stringify(phases.map((p) => [p.phase, p.ticks]))})`,
+      JSON.stringify(phases.map((p) => [p.phase, p.ticks])) === '[["queued",1],["start",1],["page",1],["assets",2]]');
+    // exportMs is the done line's Date.now() figure (whole ms), queueMs a performance.now() span: allow that granularity
+    check(`…the queue wait is the time to the first non-queued tick (got ${String(rec?.queueMs)} ms of ${String(rec?.exportMs)} ms)`,
+      typeof rec?.queueMs === "number" && rec.queueMs >= 50 && rec.queueMs <= Number(rec.exportMs) + 2);
+    check(`…the payload: 2 assets, their decoded bytes (got ${JSON.stringify(payload)})`,
+      payload !== null && payload.assets === 2 && payload.assetBytes === Buffer.from(png, "base64").length + Buffer.byteLength(svgText));
+    check("…the connect/export/write split and a peak RSS", typeof rec?.exportMs === "number" && typeof rec.writeMs === "number" && typeof rec.connectMs === "number" && typeof rec.peakRssBytes === "number" && rec.peakRssBytes > 0);
+    check("…and no file, page or layer name, file key or content", !/Sample App|KEYA|Private Page Name|Secret Layer Name|Sample Frame|<svg/.test(lines.join("\n")));
+    check("the ordinary done line is still printed", /\[dtwin\] done in /.test(r.stderr));
   }
   // The pure formatter: the daemon variant, and the hint at >= 5 s of connect wait.
   {
@@ -106,6 +150,12 @@ try {
     // the daemon waits for its plugin inside the request, so "no reconnect" can be false.
     check("formatDone: via the daemon, no '(no reconnect)' claim; the export figure says it includes any plugin wait",
       via[0] === "done in 3.1s — via the running daemon · export (incl. any wait for the plugin) 2.8s · write 0.3s");
+    // timings.ts: where a record goes, and a base64 payload's decoded size without decoding it
+    const to = (v: string | undefined): string => JSON.stringify(timingsTarget({ DTWIN_TIMINGS: v }));
+    check("timingsTarget: unset/''/0/false → off; 1/true → stderr; anything else → that file",
+      to(undefined) === "null" && to("") === "null" && to("0") === "null" && to("false") === "null" && to("1") === '"stderr"' && to("TRUE") === '"stderr"' && to("/tmp/t.jsonl") === '{"file":"/tmp/t.jsonl"}');
+    check("base64Bytes matches the decoded length with 0, 1 and 2 padding characters",
+      [0, 1, 2, 3, 4, 5, 31, 32, 33].every((n) => base64Bytes(Buffer.alloc(n, 7).toString("base64")) === n));
   }
 
   // the screenshot JSON carries the node size, the scale and the PNG's own size.

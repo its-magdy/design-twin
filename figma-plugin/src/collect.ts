@@ -17,7 +17,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // NodeSummary is the bridge's own row type (commands.ts), not a copy: a field added there reaches summarize() here.
 import { NO_NODE_ID, type ListPagesArgs, type NodeSummary } from "../../bridge/src/commands.ts";
 import { deriveTitle, firstText, collectTexts, PLACEHOLDER_TEXT, type TextWalkNode } from "../../bridge/src/pages-layout.ts";
-import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
+import { type Asset, assets, stats, resetRun, manifest, runOpts, runDelivery, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
 import { serialize } from "./serialize";
@@ -731,6 +731,7 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
 export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult> {
   resetRun();
   applyOpts(opts);
+  runDelivery.sourceBytes = false; // the reply has no `assets`: an image fill keeps its size, its original bytes go unread
   const designSystem = await buildDesignSystem(undefined, serialize);
   // A cancel armed during the catalog's opt-in variant walk is caught there per variant (each one
   // warned "unreadable" and skipped, components.ts), so it must not end here as a delivered doc with
@@ -761,6 +762,7 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
 export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult> {
   resetRun();
   applyOpts(opts);
+  runDelivery.sourceBytes = false; // as collectDesignSystemOnly: the reply has no `assets`
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
   const designSystem = await buildDesignSystem({ asLibrary }, serialize);
   checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly

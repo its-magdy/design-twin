@@ -4,7 +4,7 @@
 import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
 import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
-import { resetAssetNames } from "./assets";
+import { resetAssetNames, assetNameTableSizes } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
 /** One exported asset — doc-types' Asset, re-exported under the name every module here imports it by. */
@@ -43,6 +43,12 @@ export const runOpts: Record<ReadOptName, boolean> = readOptDefaults();
 // Holds the in-flight PROMISE: paints resolve concurrently, so a value-cache let two fills sharing a
 // hash both miss — costing a second download AND pushing the source bytes into `assets` twice.
 export const imageSizeCache = new Map<string, Promise<{ w: number; h: number } | undefined>>();
+
+// Whether this run's reply delivers assets at all. The design-system-only and library-file replies carry no `assets`
+// field, so an image fill's ORIGINAL bytes read there (getBytesAsync + base64) went nowhere; their collectors clear
+// this so readSourceImage keeps the intrinsic size (it is on the paint record) and skips the bytes. Per run: resetRun
+// sets it back. Not a read option — no caller chooses it; it follows from the reply's shape.
+export const runDelivery = { sourceBytes: true };
 
 // Per-run diagnostics so the agent knows what was and wasn't captured (never silent truncation).
 export let warnings: string[] = [];
@@ -281,8 +287,16 @@ async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
 // Drop the run's asset payloads once they've been handed to the caller. Every collector returns
 // assets.slice(), so after that the module array is pure retained garbage — and it holds every base64
 // PNG/SVG of the export (tens of MB) for the whole idle period until the NEXT run's resetRun().
+// The dedupe tables in assets.ts go too: `byContent` points at the same Asset objects, so emptying
+// only the array left every deduped payload reachable until the next run.
 export function releaseAssets(): void {
   assets.length = 0;
+  resetAssetNames();
+}
+
+/** Test surface: what the run-owned asset tables still hold (0s once a run has settled). */
+export function assetRetention(): { assets: number; byContent: number; byName: number } {
+  return { assets: assets.length, ...assetNameTableSizes() };
 }
 
 // The blanket document load, with its one guard. Two callers need it (the all-pages export walk and
@@ -300,8 +314,7 @@ export async function loadAllPages(consequence: string): Promise<void> {
 }
 
 export function resetRun(): void {
-  releaseAssets();
-  resetAssetNames(); // the per-run dedupe/name tables live in assets.ts
+  releaseAssets(); // also resets the per-run dedupe/name tables in assets.ts
   warnings = [];
   grouped = new Map();
   stats = newStats();
@@ -310,4 +323,5 @@ export function resetRun(): void {
   nodeNameLookup.reset();
   collectionLookup.reset();
   imageSizeCache.clear();
+  runDelivery.sourceBytes = true;
 }

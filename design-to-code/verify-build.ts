@@ -66,7 +66,7 @@ import { alnumKey, getOrInit } from "./map-util.ts";
 import { parsePlanText, recordedEdits, updatePlan, verificationFacts } from "./plan-record.ts";
 import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "./plan-status.ts";
 import type { StatusResult } from "./plan-status.ts";
-import { locateExport, locateReports } from "./verify-locate.ts";
+import { locateCache, locateExport, locateReports, type LocateCache } from "./verify-locate.ts";
 import { isPlanFile, nodeArtefacts, planNode, readPlan } from "./node-artefacts.ts";
 import type { BadPlan, PlanFile } from "./node-artefacts.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
@@ -1429,9 +1429,9 @@ const USAGE = [
 
 interface RecordResult { blocking: string[]; warnings: string[]; cleared: PlanStoredStatus | null | undefined; status: StatusResult }
 
-function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): RecordResult {
-  const exp = locateExport(p.plan, p.file, cwd);
-  const reports = locateReports(p.plan, p.file, cwd, exp);
+function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph, locate?: LocateCache): RecordResult {
+  const exp = locateExport(p.plan, p.file, cwd, locate);
+  const reports = locateReports(p.plan, p.file, cwd, exp, locate);
   setPhase(`checking ${path.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...(graph ? { graph } : {}) });
   const plan = p.plan;
@@ -1500,8 +1500,9 @@ async function main(argv: string[]): Promise<number> {
       console.error(closed ? `verify-build: ${show(b.file)} is "${closed}" — skipped (the file ${b.error})` : `verify-build: cannot read plan ${b.file}: ${b.error}`);
     }
     // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
+    const locate = locateCache(); // every plan's lookup shares one read of the reports and export indexes
     const rows = plans.map((p) => {
-      const st = planStatus(rootOfPlan(p.file)).status(p.plan, { planFile: p.file });
+      const st = planStatus(rootOfPlan(p.file), { locate }).status(p.plan, { planFile: p.file });
       const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
@@ -1598,9 +1599,12 @@ async function main(argv: string[]): Promise<number> {
   // A warning several plans share (a merged token on a shared theme) is printed ONCE, naming them all.
   const warned = new Map<string, string[]>();
   const graphs = new Map<string, ProjectGraph>(); // built once per project root per run, on first use
+  // One read of the reports and export indexes for every plan checked: checkAndRecord writes only the plan's own hook
+  // record, never a report, an expectation or an export, so what the cache holds stays true for the whole loop.
+  const locate = locateCache();
   for (const { p, cwd } of all) {
     // the hook's own cwd has its plans parsed already (findPlans above); a plan named on the command line is found again
-    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)));
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)), locate);
     const name = path.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
@@ -1623,7 +1627,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 export {
-  checkPlan, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
+  checkPlan, locateCache, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, recordedEdits, reportRecordNames, legacySetWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,

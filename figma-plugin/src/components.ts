@@ -171,6 +171,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
   const seenNames = new Set<string>();
   const variantsBySet = new Map<string, ComponentNode[]>(); // setId -> variant COMPONENT nodes, collected in the same pass
   const entriesBySetId = new Map<string, CatalogComponent>(); // setId -> that COMPONENT_SET's catalog entry
+  const standalone: { entry: CatalogComponent; node: ComponentNode }[] = []; // standalone COMPONENTs to walk once the flag is restored
   // findAllWithCriteria is the extractor's one full-document traversal, and the Plugin API docs call
   // out invisible instance children as its main cost ("several times faster in large documents").
   // A COMPONENT/COMPONENT_SET is never nested inside an instance, so skipping them loses no catalog
@@ -283,25 +284,30 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
         // A standalone COMPONENT (not a variant inside a set — those were already filtered out above)
         // has no COMPONENT_SET wrapper to hang variants[] off of, but it is exactly as "one master node
-        // worth walking" as every variant is, so give it the same serializeVariant treatment and attach
-        // the tree directly as entry.node rather than entry.variants[].node.
-        if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize) {
-          try {
-            const node = await serializeVariant(n, serialize);
-            if (node) entry.node = node;
-          } catch (e) {
-            warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
-          }
-        }
+        // worth walking" as every variant is, so it gets the same serializeVariant treatment (below,
+        // after the flag is restored — walked here, Figma would drop the hidden layers of every instance
+        // nested in it) and the tree is attached directly as entry.node rather than entry.variants[].node.
+        if (runOpts.variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
         components.push(entry);
       }
     }
   } finally {
     try { figma.skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
   }
-  // Per-variant visual truth (opt-in). Runs AFTER skipInvisibleInstanceChildren is restored to its
-  // prior value: serialize() deliberately KEEPS hidden nodes (hidden variant states are real design),
-  // so the catalog traversal's flag must not leak into this walk.
+  // Per-variant visual truth (opt-in), for standalone components and set variants alike. Runs AFTER
+  // skipInvisibleInstanceChildren is restored to its prior value: serialize() deliberately KEEPS hidden
+  // nodes (hidden variant states are real design), so the catalog traversal's flag must not leak into
+  // this walk.
+  if (serialize) {
+    for (const { entry, node: n } of standalone) {
+      try {
+        const node = await serializeVariant(n, serialize);
+        if (node) entry.node = node;
+      } catch (e) {
+        warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
+      }
+    }
+  }
   if (runOpts.variantVisuals && serialize && variantsBySet.size) {
     for (const [setId, variants] of variantsBySet) {
       const entry = entriesBySetId.get(setId);

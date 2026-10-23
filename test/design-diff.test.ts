@@ -7,7 +7,8 @@ import { spawnSync } from "node:child_process";
 import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
 import { cliRunner } from "./cli-runner.ts";
-import { main as designDiffMain } from "../design-to-code/design-diff.ts";
+import { main as designDiffMain, redrawnAssets } from "../design-to-code/design-diff.ts";
+import type { Baseline } from "../design-to-code/design-diff.ts";
 import { malformed, manifest, must, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
@@ -418,6 +419,63 @@ check("a re-drawn icon (same node id, same path, different bytes) is a change", 
   const d: unknown = (() => { try { return JSON.parse(r.stdout) as unknown; } catch { return null; } })();
   check(`a committed EMPTY asset is not a committed copy, and its expected re-run (proc.ts runSync, quiet) prints no [spawn-helper] line to the user's stderr (exit ${String(r.status)}${r.stderr ? ": " + r.stderr.trim().slice(0, 300) : ""})`,
     r.status === 0 && isScreenResult(d) && d.against === "git HEAD" && d.summary.changed === 0 && !/spawn-helper|re-running/.test(r.stderr));
+}
+// The HEAD copies of a screen's assets are read through one `git cat-file --batch -Z`: every reply size-framed on the
+// bytes, the in-band `missing` told apart from a committed empty file, and a path git cannot take in a batch (outside
+// the repository) still read one by one.
+{
+  const GIT_BASELINE: Baseline = { doc: null, source: "git HEAD", kind: "git", notes: [] };
+  const withAssets = (assets: string[]): FxScreen => { const s = screen(); s.tree.children.push(...assets.map((a, i) => ({ id: `2:${i}`, name: "Icon", type: "VECTOR", asset: a, box: { w: 16, h: 16, x: 0, y: 0 } }))); return s; };
+  const writeAsset = (root: string, a: string, bytes: string | Buffer): void => { const f = path.join(root, "design", a); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, bytes); };
+  const redrawn = (root: string, assets: string[], cwd = root): string[] => [...redrawnAssets(path.join(root, "design", "login.json"), withAssets(assets), GIT_BASELINE, cwd)].sort();
+  // bytes a text-framed parser would split on: NUL, newline, CR, a fake header, a byte that is no UTF-8
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0xff, 0xfe]), Buffer.from("\0HEAD:./x missing\0" + "0".repeat(40) + " blob 3\0abc\0")]);
+  const NL = process.platform === "win32" ? null : "assets/odd\nname.svg"; // a newline is no file name on Windows
+  const all = ["assets/same.svg", "assets/drawn.svg", "assets/empty.svg", "assets/img.png", "assets/img2.png", "assets/a dir/é ü.svg", "assets/noise.svg", ...(NL ? [NL] : [])];
+  const root = project(); git(root, "init", "-q");
+  writeAsset(root, "assets/same.svg", "<svg><path d=\"M1 1\"/></svg>"); writeAsset(root, "assets/drawn.svg", "<svg>old</svg>"); writeAsset(root, "assets/empty.svg", "");
+  writeAsset(root, "assets/img.png", PNG); writeAsset(root, "assets/img2.png", PNG); writeAsset(root, "assets/a dir/é ü.svg", "<svg>old</svg>");
+  writeAsset(root, "assets/noise.svg", "<svg><path d=\"M4.97401 1\"/></svg>"); if (NL) writeAsset(root, NL, "<svg>old</svg>");
+  put(root, "v1", "2026-01-01T00:00:00Z"); git(root, "add", "-A"); git(root, "commit", "-qm", "v1");
+  // on disk now: one redrawn, one empty file filled, one PNG byte flipped, the odd paths redrawn, an SVG re-export
+  // whose only difference is the float noise normalizeSvgText folds away, and one asset HEAD never had
+  writeAsset(root, "assets/drawn.svg", "<svg>new</svg>"); writeAsset(root, "assets/empty.svg", "<svg>new</svg>");
+  writeAsset(root, "assets/img2.png", Buffer.concat([PNG.subarray(0, -1), Buffer.from([0x01])])); writeAsset(root, "assets/a dir/é ü.svg", "<svg>new</svg>");
+  writeAsset(root, "assets/noise.svg", "<svg><path d=\"M4.97596 1\"/></svg>"); if (NL) writeAsset(root, NL, "<svg>new</svg>");
+  writeAsset(root, "assets/uncommitted.svg", "<svg>new</svg>");
+  const want = ["assets/a dir/é ü.svg", "assets/drawn.svg", "assets/img2.png", ...(NL ? [NL] : [])].sort();
+  const got = redrawn(root, [...all, "assets/uncommitted.svg"]);
+  check(`[git batch] one read answers every asset: a redrawn SVG, a flipped PNG byte (NULs, newlines, a fake header inside), spaces/unicode${NL ? "/a newline" : ""} in the path are changes; the same bytes, float noise, a committed EMPTY file and an asset not in HEAD are not (got ${JSON.stringify(got)})`,
+    JSON.stringify(got) === JSON.stringify(want));
+  check("[git batch] an asset not in HEAD, alone: no baseline, no change", redrawn(root, ["assets/uncommitted.svg"]).length === 0);
+  check("[git batch] the PNG bytes come back exact: unchanged is not a change, one changed byte is", redrawn(root, ["assets/img.png"]).length === 0 && redrawn(root, ["assets/img2.png"]).length === 1);
+  // the git children one diff starts, counted through a git first on PATH (sh: not on Windows)
+  if (process.platform !== "win32") {
+    const shim = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-git-")), log = path.join(shim, "calls");
+    const real = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    fs.writeFileSync(path.join(shim, "git"), `#!/bin/sh\necho x >> '${log}'\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    const PATH = process.env.PATH;
+    process.env.PATH = shim + path.delimiter + (PATH ?? "");
+    let calls = -1;
+    try { fs.writeFileSync(log, ""); redrawn(root, [...all, "assets/uncommitted.svg"]); calls = fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length; }
+    finally { process.env.PATH = PATH; }
+    check(`[git batch] ${all.length + 1} assets are ONE git child, not one each (got ${calls})`, calls === 1);
+  }
+  // the assets' root above the repository (cwd): `HEAD:./../…` is fatal to a whole batch — each is then read on its own,
+  // and the repository's own assets are still compared
+  const outer = project(), inner = path.join(outer, "design", "inner");
+  fs.mkdirSync(inner, { recursive: true }); git(inner, "init", "-q");
+  writeAsset(outer, "inner/in.svg", "<svg>old</svg>"); writeAsset(outer, "assets/out.svg", "<svg>old</svg>");
+  git(inner, "add", "-A"); git(inner, "commit", "-qm", "v1");
+  writeAsset(outer, "inner/in.svg", "<svg>new</svg>"); writeAsset(outer, "assets/out.svg", "<svg>new</svg>");
+  check("[git batch] a path outside the repository (fatal to a batch) falls back to one read each: the committed asset is still a change",
+    JSON.stringify([...redrawnAssets(path.join(outer, "design", "login.json"), withAssets(["inner/in.svg", "assets/out.svg"]), GIT_BASELINE, inner)]) === JSON.stringify(["inner/in.svg"]));
+  // a repository with no commit: HEAD names nothing, every request is `missing`
+  const fresh = project(); git(fresh, "init", "-q"); writeAsset(fresh, "assets/a.svg", "<svg/>");
+  check("[git batch] a repository with no commit yet: no baseline for any asset, no throw", redrawn(fresh, ["assets/a.svg"]).length === 0);
+  // not a repository at all: the batch fails, the one-by-one reads fail, nothing is a change
+  const bare = project(); writeAsset(bare, "assets/a.svg", "<svg/>");
+  check("[git batch] not a git repository: no baseline for any asset, no throw", redrawn(bare, ["assets/a.svg"]).length === 0);
 }
 check("an unknown flag is an error, not a silently different command", (() => { const root = project(); put(root, "v1", "2026-01-01T00:00:00Z"); const r = cli(root, "design/login.json", "--agains", "x.json"); return r.status === 2 && /unknown flag --agains/.test(r.stderr); })());
 check("a file of an unknown kind exits 2 with the reason", (() => { const root = project(); fs.writeFileSync(path.join(root, "a.json"), "{}"); fs.writeFileSync(path.join(root, "b.json"), "{}"); const r = cli(root, "a.json", "--against", "b.json"); return r.status === 2 && /nothing here can be diffed/.test(r.stderr); })());
