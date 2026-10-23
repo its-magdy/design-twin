@@ -2664,13 +2664,13 @@ function memberRefs(codeToken) {
   }
   return out;
 }
-var IDENTS = /[A-Za-z_$][\w$]*/g;
+var escapeRe = (s) => s.replace(/[$]/g, "\\$");
 function headNames(head, container) {
-  for (const m of head.matchAll(IDENTS)) {
-    const id = m[0];
-    if (id === container || id.length >= 6 && /^[A-Z]/.test(id) && container.endsWith(id)) return true;
-  }
-  return false;
+  const names = container.startsWith("Local") && container.length > 5 ? [container, container.slice(5)] : [container];
+  return names.some((n) => {
+    const c = escapeRe(n);
+    return new RegExp(`\\b(?:class|struct|object|interface|enum|extension)\\s+${c}(?![\\w$])`).test(head) || new RegExp(`=\\s*${c}\\s*$`).test(head) || new RegExp(`(?:^|[^\\w$.])(?:const|val|var|let|final)\\s+${c}(?![\\w$])[^=]*=\\s*$`).test(head);
+  });
 }
 function tokenCandidates(codeToken) {
   const out = [codeToken];
@@ -2846,20 +2846,27 @@ function blocksOf(text) {
   const have = blockCache.get(text);
   if (have) return have;
   const out = [], stack = [];
+  const headOf = (open) => text.slice(text.lastIndexOf("\n", open) + 1, open);
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < text.length && text.charAt(j) !== c && (c === "`" || text.charAt(j) !== "\n")) j += text.charAt(j) === "\\" ? 2 : 1;
+      if (j < text.length && text.charAt(j) === c) i = j;
+      continue;
+    }
     const want = CLOSER[c];
     if (want !== void 0) {
       stack.push({ open: i, want });
       continue;
     }
-    const top = stack[stack.length - 1];
-    if (top && c === top.want) {
-      stack.pop();
-      out.push({ open: top.open, close: i, head: text.slice(text.lastIndexOf("\n", top.open) + 1, top.open) });
-    }
+    if (c !== ")" && c !== "]" && c !== "}") continue;
+    let k = stack.length - 1;
+    while (k >= 0 && stack[k]?.want !== c) k--;
+    if (k < 0) continue;
+    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: headOf(s.open) });
   }
-  for (const s of stack) out.push({ open: s.open, close: text.length, head: text.slice(text.lastIndexOf("\n", s.open) + 1, s.open) });
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: headOf(s.open) });
   if (blockCache.size > 64) blockCache.clear();
   blockCache.set(text, out);
   return out;

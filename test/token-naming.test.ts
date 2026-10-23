@@ -113,7 +113,8 @@ check("[css] var(--x) needs --x, which tokens.css declares", (() => {
 })());
 
 // The gate's own path: the emitted file is in files[], each of its colour literals is on a line that defines the token
-// the plan names — so none of them is a usage.
+// the plan names — so none of them is a usage. (SwiftUI is not in this loop: it writes a colour as `Color(.sRGB, red: …)`,
+// which holds no hex literal for the gate to find.)
 console.log("round trip — the emitted files' colour lines are definitions, not usages:");
 const files: Array<{ rel: string; text: string; spell: (r: Row) => string[] }> = [
   { rel: "tokens.css", text: tokensCss, spell: cssSpellings },
@@ -153,6 +154,27 @@ check("[enclosing] the heads of the blocks around a position, outermost first; a
   const text = "object ColorsTokens {\n  val a = Color(0xFF000000)\n}\nfun Card() {\n  Text(color = Color(0xFF5B5FC7))\n}";
   const around = enclosingHeads(text, text.indexOf("0xFF5B5FC7"));
   return JSON.stringify(around) === JSON.stringify(["fun Card() ", "  Text", "  Text(color = Color"]) && enclosingHeads(text, text.indexOf("0xFF000000"))[0] === "object ColorsTokens ";
+})());
+// Review round 4: a block head only counts when it declares the container, constructs it, or initialises a binding of
+// that name — a local OVERRIDE (`.copy(`, `.copyWith(`, `Partial<C> = {`, a style array) is a hand-picked colour.
+check("[near] a local override of the token object is a use, not a definition", (() => {
+  const use = (rel: string, text: string, lit: string, token: string): boolean => literalUses([{ rel, text }], lit, [token]).usedIn.join() === rel;
+  return use("Card.kt", "val c = ColorsTokens.light.copy(\n  brand600 = Color(0xFF5B5FC7),\n)", "0xFF5B5FC7", "ColorsTokens.brand600")
+    && use("card.dart", "final t = Theme.of(context).extension<ColorsTokens>()!.copyWith(\n  brand600: const Color(0xFF5B5FC7),\n);", "0xFF5B5FC7", "Theme.of(context).extension<ColorsTokens>()!.brand600")
+    && use("Root.kt", "CompositionLocalProvider(LocalColorsTokens provides ColorsTokensLight.copy(\n  brand600 = Color(0xFF5B5FC7),\n)) {}", "0xFF5B5FC7", "LocalColorsTokens.current.brand600")
+    && use("Theme.kt", "MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(\n  primary = Color(0xFF5B5FC7),\n)) {}", "0xFF5B5FC7", "MaterialTheme.colorScheme.primary")
+    && use("Card.tsx", "const o: Partial<ColorsTokens> = {\n  brand600: \"#5B5FC7\",\n};", "#5B5FC7", "ColorsTokens.brand600")
+    && use("Card.tsx", "<View style={[colorsTokens.card, {\n  brand600: \"#5B5FC7\" }]} />", "#5B5FC7", "colorsTokens.light.brand600");
+})());
+check("[near] a shorter type name is not the container: `Colors(` for AppColors, `Tokens` for colorsTokens", (() => {
+  const use = (rel: string, text: string, lit: string, token: string): boolean => literalUses([{ rel, text }], lit, [token]).usedIn.join() === rel;
+  return use("Card.kt", "val c = Colors(\n  primary = Color(0xFF5B5FC7),\n)", "0xFF5B5FC7", "AppColors.primary")
+    && use("Card.tsx", "const s = makeStyles((Tokens) => ({\n  brand600: \"#5B5FC7\",\n}));", "#5B5FC7", "colorsTokens.light.brand600");
+})());
+check("[enclosing] a bracket inside a string does not open a block: the token object closes where it ends", (() => {
+  const text = "object ColorsTokens {\n  val sep = \"(\"\n}\nfun Card() {\n  val brand600 = Color(0xFF5B5FC7)\n}";
+  return literalUses([{ rel: "Card.kt", text }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
+    && JSON.stringify(enclosingHeads(text, text.indexOf("0xFF5B5FC7")).slice(0, 1)) === JSON.stringify(["fun Card() "]);
 })());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {

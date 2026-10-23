@@ -149,15 +149,21 @@ function memberRefs(codeToken: string): MemberRef[] {
   }
   return out;
 }
-// Does a block head name `container`? Exactly, or as the tail of a longer container name in the reference
-// (`LocalColorsTokens` → the `ColorsTokens(` instances it provides).
-const IDENTS = /[A-Za-z_$][\w$]*/g;
+// Is a block the container's own? Its head must DECLARE the container (`data class ColorsTokens`, `public struct
+// ColorsTokens: …`, `object SpacingTokens`), CONSTRUCT it into a binding (`val ColorsTokensLight = ColorsTokens`, `static const light =
+// ColorsTokens`) or INITIALISE a binding of that name (`export const colorsTokens: Record<…> = `) — the shapes the
+// generated files have. A head that only mentions it is a local override (`ColorsTokens.light.copy`,
+// `extension<ColorsTokens>()!.copyWith`, `const o: Partial<ColorsTokens> = `) — a hand-picked value. Compose's
+// `LocalColorsTokens` provides `ColorsTokens` instances, so a `Local<C>` container also accepts C's blocks.
+const escapeRe = (s: string): string => s.replace(/[$]/g, "\\$");
 function headNames(head: string, container: string): boolean {
-  for (const m of head.matchAll(IDENTS)) {
-    const id = m[0];
-    if (id === container || (id.length >= 6 && /^[A-Z]/.test(id) && container.endsWith(id))) return true;
-  }
-  return false;
+  const names = container.startsWith("Local") && container.length > 5 ? [container, container.slice(5)] : [container];
+  return names.some((n) => {
+    const c = escapeRe(n);
+    return new RegExp(`\\b(?:class|struct|object|interface|enum|extension)\\s+${c}(?![\\w$])`).test(head)
+      || new RegExp(`=\\s*${c}\\s*$`).test(head)
+      || new RegExp(`(?:^|[^\\w$.])(?:const|val|var|let|final)\\s+${c}(?![\\w$])[^=]*=\\s*$`).test(head);
+  });
 }
 // Every spelling a declaration of this token may carry, whatever file it is in: the whole codeToken, each part, each
 // part's property.

@@ -159,14 +159,27 @@ function blocksOf(text: string): Block[] {
   const have = blockCache.get(text);
   if (have) return have;
   const out: Block[] = [], stack: Array<{ open: number; want: string }> = [];
+  const headOf = (open: number): string => text.slice(text.lastIndexOf("\n", open) + 1, open);
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
+    // a bracket inside a string is not one: skip a quoted string — to its closing quote on the same line (a lone `'` in
+    // prose, `don't`, is no string), a template literal to its closing backtick
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < text.length && text.charAt(j) !== c && (c === "`" || text.charAt(j) !== "\n")) j += text.charAt(j) === "\\" ? 2 : 1;
+      if (j < text.length && text.charAt(j) === c) i = j;
+      continue;
+    }
     const want = CLOSER[c];
     if (want !== undefined) { stack.push({ open: i, want }); continue; }
-    const top = stack[stack.length - 1];
-    if (top && c === top.want) { stack.pop(); out.push({ open: top.open, close: i, head: text.slice(text.lastIndexOf("\n", top.open) + 1, top.open) }); }
+    if (c !== ")" && c !== "]" && c !== "}") continue;
+    // a closer closes the nearest block it matches (any unclosed ones inside it end with it); one matching none is stray
+    let k = stack.length - 1;
+    while (k >= 0 && stack[k]?.want !== c) k--;
+    if (k < 0) continue;
+    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: headOf(s.open) });
   }
-  for (const s of stack) out.push({ open: s.open, close: text.length, head: text.slice(text.lastIndexOf("\n", s.open) + 1, s.open) });
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: headOf(s.open) });
   if (blockCache.size > 64) blockCache.clear();
   blockCache.set(text, out);
   return out;
