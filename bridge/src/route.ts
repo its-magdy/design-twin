@@ -22,8 +22,7 @@
 // MCP's sharing layer (figma-mcp.ts holder) decides per call WHICH upstream to use; a route takes that
 // decision as a function, so it re-resolves exactly when the sharing layer does.
 //
-// Side-effect free, like daemon.ts: figma-pull.ts imports it at module level, and only types come from
-// server-core (which resolves the token and may exit at load).
+// Side-effect free, like daemon.ts; only types come from server-core.
 import { TIMEOUTS, daemonGuardMs } from "./timeouts.ts";
 import { ifDefined } from "./json-util.ts";
 import { isExportCmd } from "./commands.ts";
@@ -88,8 +87,12 @@ export interface Upstream {
   connectionInfo(connId?: string | null): Promise<RouteConnection>;
 }
 
+/** What the own adapter and servedBridge use of a bridge this process holds (server-core's createBridge result) —
+ *  the narrow face the bridge holder hands them, and what a suite's fake bridge implements. */
+export type HeldBridge = Pick<Bridge, "port" | "isConnected" | "requestWithClient" | "awaitClient" | "connectionInfo" | "listClients" | "close">;
+
 /** The own adapter: server-core's positional requestWithClient, behind the seam. */
-export function ownUpstream(bridge: Bridge): Upstream {
+export function ownUpstream(bridge: HeldBridge): Upstream {
   return {
     kind: "own",
     address: "ws://localhost:" + bridge.port,
@@ -127,8 +130,8 @@ export function daemonUpstream(conn: DaemonConnection, status: () => Promise<Dae
 }
 
 /** What daemon.serve() drives, made from a bridge this process holds: requests go through the own adapter.
- *  `close` replaces the bridge's own (the MCP server's wrapper, which also forgets the bridge). */
-export function servedBridge(bridge: Bridge, close: () => void = () => bridge.close()): DaemonBridge {
+ *  `close` replaces the bridge's own (the bridge holder's, which also forgets the bridge). */
+export function servedBridge(bridge: HeldBridge, close: () => void = () => bridge.close()): DaemonBridge {
   return {
     port: bridge.port,
     isConnected: () => bridge.isConnected(),

@@ -13,6 +13,7 @@ import path from "node:path";
 import { fakePlugin, HANG, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { screenReply } from "./fixtures.ts";
+import { settingsAt } from "./bridge-settings.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ProgressTick } from "../bridge/src/server-core.ts";
 import type { Route, RoutePolicy } from "../bridge/src/route.ts";
@@ -21,7 +22,6 @@ import type { ListPagesReply, PingReply } from "../bridge/src/commands.ts";
 const TOKEN = "bridge-route-test-token";
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
 process.env.XDG_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-route-")); // mkdtemp: 0700, ours
-// server-core reads FIGMA_BRIDGE_TOKEN at load time, so it is imported after the assignment above.
 const core = await import("../bridge/src/server-core.ts");
 const daemon = await import("../bridge/src/daemon.ts");
 const { createRoute, ownUpstream, daemonUpstream, servedBridge } = await import("../bridge/src/route.ts");
@@ -56,7 +56,7 @@ interface Rig { name: string; port: number; route(policy: RoutePolicy): Route; s
 let sockPort = 19797; // a socket NAME per daemon rig (the bridge's own TCP port is ephemeral)
 
 async function bridge() {
-  const b = core.createBridge(0, { settleMs: 0, heartbeatMs: 0 });
+  const b = core.createBridge(settingsAt(0), { settleMs: 0, heartbeatMs: 0 });
   await b.listening;
   const port = b.boundPort();
   if (port === null) throw new Error("the bridge did not bind");
@@ -74,7 +74,7 @@ async function daemonRig(): Promise<Rig> {
   const { b, port } = await bridge();
   const name = sockPort++;
   // The token named on both ends, so on Windows the pipe is named from it and never the user's saved one.
-  const h = await daemon.serve(servedBridge(b), { port: name, idleMin: 0, signals: false, crashHandlers: false, token: DAEMON_TOKEN });
+  const h = await daemon.serve(servedBridge(b), { port: name, idleMs: 0, signals: false, crashHandlers: false, token: DAEMON_TOKEN });
   const conn = await daemon.connect(name, { token: DAEMON_TOKEN });
   if (!conn) throw new Error("daemon.connect() returned null right after serve()");
   const up = daemonUpstream(conn, () => daemon.status(name, { token: DAEMON_TOKEN }));

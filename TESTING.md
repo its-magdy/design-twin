@@ -189,6 +189,12 @@ bun test/bridge-route.test.ts  # expect: all checks pass, exit 0 — the route e
                                  # behind a real daemon socket (fake WS plugins, ephemeral ports, a private XDG_RUNTIME_DIR);
                                  # then the rules it owns: the connect window spent once, the stall check, the never-connected
                                  # guard, and which commands hear progress ticks
+bun test/bridge-holder.test.ts # expect: all checks pass, exit 0 — who holds the bridge (bridge-holder.ts) for each lifetime
+                                 # (one-shot, serve, MCP session), in-process over a fake bridge factory and a fake daemon side:
+                                 # one bind for concurrent calls, a daemon preferred, a held port as an error, when a session
+                                 # whose client left may exit, release exactly once
+bun test/settings.test.ts      # expect: all checks pass, exit 0 — settings.ts: port, token precedence (--token-file, env,
+                                 # saved, minted) as values never exits, limits; server-core loads with no side effects
 bun test/read-plan.test.ts     # expect: all checks pass, exit 0 — the read plan (read-plan.ts): each read scope's command,
                                  # arguments, budget and label, the read options each READ_OPTS row's `scopes` admit (and the
                                  # refusal of the rest), --timeout through the CLI's parsed command line; no bridge, no port

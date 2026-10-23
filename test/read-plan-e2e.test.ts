@@ -62,7 +62,7 @@ const fake: DaemonBridge = {
 };
 process.env.FIGMA_BRIDGE_PORT = String(PORT);
 // The token named, so on Windows the pipe is named from this suite's token and never the user's saved one.
-const served = await daemon.serve(fake, { port: PORT, idleMin: 0, signals: false, token: TOKEN });
+const served = await daemon.serve(fake, { port: PORT, idleMs: 0, signals: false, token: TOKEN });
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "read-plan-e2e-"));
 const env: Record<string, string> = {};

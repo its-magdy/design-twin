@@ -243,13 +243,13 @@ void (async () => {
     console.log("daemon.serve() handle — activity() and idleOut():");
     await daemonSection("idle shutdown on a quiet socket", async () => {
       const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19793, idleMin: 0, signals: false, crashHandlers: false });
+      const h = await daemon.serve(f.b, { port: 19793, idleMs: 0, signals: false, crashHandlers: false });
       const before = h.activity().frames;
       const alive = await daemon.probe(h.sock);
       ok("activity().frames is 0 before anything used the socket, 1 after one probe", before === 0 && alive && h.activity().frames === 1);
       ok("…inFlight 0 and a recent lastActivity", h.activity().inFlight === 0 && Date.now() - h.activity().lastActivity < 2000);
       const st = await sockReq(h.sock, { cmd: "__status" });
-      ok("idleMin 0 → __status idleMs null (disabled)", rec(st?.result).idleMs === null);
+      ok("idleMs 0 → __status idleMs null (disabled)", rec(st?.result).idleMs === null);
       h.idleOut(300);
       const st2 = rec((await sockReq(h.sock, { cmd: "__status" }))?.result);
       ok("idleOut(300) → __status reports idleMs 300", st2.idleMs === 300);
@@ -262,7 +262,7 @@ void (async () => {
     });
     await daemonSection("idle shutdown held off by an in-flight request", async () => {
       const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19794, idleMin: 0, signals: false, crashHandlers: false });
+      const h = await daemon.serve(f.b, { port: 19794, idleMs: 0, signals: false, crashHandlers: false });
       const c = await openRaw(h.sock, { cmd: "listPages", args: {}, timeoutMs: 20000 });
       await until(() => f.pending() === 1, 2000);
       h.idleOut(300);
@@ -276,7 +276,7 @@ void (async () => {
     });
     await daemonSection("idleOut after the window has passed", async () => {
       const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19795, idleMin: 0, signals: false, crashHandlers: false });
+      const h = await daemon.serve(f.b, { port: 19795, idleMs: 0, signals: false, crashHandlers: false });
       await sleep(700);
       const t0 = Date.now();
       h.idleOut(500); // the socket has been quiet 700 ms already: the check at once shuts it, no 500 ms tick
@@ -284,18 +284,11 @@ void (async () => {
       ok(`idleOut after the window has already passed → shut down at once, not at the first tick (${Date.now() - t0} ms)`, shut);
       h.shutdown();
     });
-    await section("idle window from the environment", async () => {
-      ok("[IDLE] idleMsFromEnv: default 120 min, 0 and an unparsable value disable it, 0.5 → 30 s",
-        daemon.idleMsFromEnv({}) === 7200000 && daemon.idleMsFromEnv({ FIGMA_DAEMON_IDLE_MIN: "0" }) === 0 &&
-        daemon.idleMsFromEnv({ FIGMA_DAEMON_IDLE_MIN: "soon" }) === 0 && daemon.idleMsFromEnv({ FIGMA_DAEMON_IDLE_MIN: "0.5" }) === 30000);
-      ok("[IDLE] one idle formatting helper, daemon.humanMs: 2 h → \"120 min\", 1.2 s → \"1s\"",
-        typeof daemon.humanMs === "function" && daemon.humanMs(7200000) === "120 min" && daemon.humanMs(1200) === "1s");
-    });
     await daemonSection("STOPPED", async () => {
       // [STOPPED] a frame that lands after shutdown() on a connection opened before it is refused, never
       // forwarded to the (closed) bridge.
       const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19796, idleMin: 0, signals: false, crashHandlers: false });
+      const h = await daemon.serve(f.b, { port: 19796, idleMs: 0, signals: false, crashHandlers: false });
       const c = net.createConnection(h.sock);
       c.setEncoding("utf8");
       c.on("error", () => { /* closed under us */ });
@@ -441,7 +434,7 @@ void (async () => {
     await daemonSection("stdin EOF, routed through a daemon", async () => {
       // routed through a daemon (not holding the bridge) → exits at once (the via path).
       const f = fakeBridge();
-      const fake = await daemon.serve(f.b, { port: 8789, idleMin: 0, signals: false, crashHandlers: false }); // a socket name only
+      const fake = await daemon.serve(f.b, { port: 8789, idleMs: 0, signals: false, crashHandlers: false }); // a socket name only
       const s = startServer({ tmp: OWN_TMP });
       if (await up(s, false)) {
         ok("fixture: the server routes through the test's daemon", /Sharing the bridge already running at/.test(s.err()));

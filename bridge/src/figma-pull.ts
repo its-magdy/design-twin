@@ -7,7 +7,7 @@
 // -S, so there the documented form is `bun --no-install --no-env-file <this file>` (bridge/README.md).
 //
 // ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor`,
-// `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before server-core loads.
+// `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before the settings are read.
 // `dtwin mcp` routes to the MCP server (figma-mcp.ts). The .mcp.json entry `dtwin init --mcp` writes names
 // figma-mcp.ts itself (an absolute bun and path); this route must not disturb any existing invocation: the branch is taken
 // ONLY when this file is the process entry AND the first argument is exactly "mcp", so `dtwin …` and
@@ -29,22 +29,21 @@ import fs from "node:fs";
 import path from "node:path";
 import * as LAYOUT from "./project-layout.ts";
 // TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts); a read's own tier comes from
-// read-plan.ts, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
-// staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
-// NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
-// server-core itself, after routing and the --token-file pre-scan.
+// read-plan.ts, so the CLI and the MCP tools cannot drift apart. parseArgs and formatClients are pure and test-driven:
+// importing this module resolves no token and reads no port — cli() reads the settings (settings.ts) once the
+// arguments are parsed.
 import { TIMEOUTS, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { emitTimings, stageClock, timingsTarget } from "./timings.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { Bridge, ClientRow, ProgressTick } from "./server-core.ts";
+import type { ClientRow, ProgressTick } from "./server-core.ts";
+// No load-time effects (settings.ts resolves what it once resolved at load), so a static import.
+import { createBridge } from "./server-core.ts";
 // The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
 // from it, so this file cannot read a reply field the plugin never sends (a hand-mirror once
 // declared a top-level `frames` that did not exist, and two hints silently never printed).
 import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary } from "./commands.ts";
-// Type-only (erased): cli() loads server-core itself, lazily — see above.
-import type * as ServerCore from "./server-core.ts";
 // node-id.ts is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
 // (its own header). --children's raw token is not handed straight to the plugin, whose only
 // normalisation is replace(/-/g, ":") — a pasted design URL would work through the MCP twin
@@ -62,13 +61,16 @@ import type { ReadOptName } from "./read-opts.ts";
 // What a pull SENDS — command, arguments, budget, label — is the read plan's, shared with the MCP export tools.
 import { planRead } from "./read-plan.ts";
 import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScope } from "./read-plan.ts";
-// daemon.ts holds the bridge open across invocations. Every ordinary command below asks it for a
-// connection FIRST and falls back to opening its own bridge — so the one-shot behaviour is unchanged
-// when no daemon is running, and no command needs to know which mode it is in.
+// daemon.ts holds the bridge open across invocations. Every ordinary command below goes through the bridge
+// holder (bridge-holder.ts), which asks it for a connection FIRST and falls back to opening its own bridge — so the
+// one-shot behaviour is unchanged when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
-import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import { bridgeHolder, daemonSide } from "./bridge-holder.ts";
+import { daemonPlace, humanMs, readSettings, tokenOverridden } from "./settings.ts";
+import type { BridgeSettings } from "./settings.ts";
+import { createRoute } from "./route.ts";
 import { ALLOWED_PORTS } from "./ports.ts";
-import type { Route, Sent, Upstream } from "./route.ts";
+import type { Route, Sent } from "./route.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
 // THE command registry (cli-commands.ts): every command's flag, family, read and verb spellings, the
 // combination guards per family, the modifiers and the help. Parsing, the guards, unknown-flag detection,
@@ -81,7 +83,7 @@ import { ifDefined, isUnknownArray } from "./json-util.ts";
 import pkg from "../package.json" with { type: "json" };
 import { CliExit, exitCli, exitFlushed, runCli } from "./stdio.ts";
 
-// --help / -h: print USAGE and exit 0. Handled in cli() BEFORE server-core is loaded, so help has no
+// --help / -h: print USAGE and exit 0. Handled in cli() BEFORE the settings are read, so help has no
 // side effects at all — no token minted, no port bound. A constant, not text read back from this file
 // at run time: a compiled `dtwin` binary has no source file beside it to read.
 const USAGE = `Usage:
@@ -717,8 +719,9 @@ function tokenStatus(): void {
   if (st.loosePerms) console.error("[dtwin] warning: " + st.path + " is readable by other users — chmod 600 it.");
 }
 
-function showToken(tokenFile: string | null): void {
-  const { token, source } = tokenStore.resolve({ tokenFile, persist: false });
+function showToken(settings: BridgeSettings): void {
+  if (!settings.token.ok) throw settings.token.error;
+  const { token, source } = settings.token.resolved;
   // stdout, alone, so it pipes: `dtwin --show-token | pbcopy`. Every note goes to stderr.
   console.log(token);
   if (source === "ephemeral") {
@@ -733,19 +736,20 @@ function showToken(tokenFile: string | null): void {
 // the stored file changing then changes nothing for it (the env token as token-store reads it: trimmed).
 // Every allowed port, not just FIGMA_BRIDGE_PORT's: the saved token is shared by all three, so a daemon
 // another shell started on 8788 would be stranded the same way.
-async function stopDaemonForTokenChange(): Promise<void> {
-  if ((process.env.FIGMA_BRIDGE_TOKEN || "").trim() || process.env.FIGMA_BRIDGE_TOKEN_FILE) return;
+async function stopDaemonForTokenChange(settings: BridgeSettings): Promise<void> {
+  if (tokenOverridden(settings.token)) return;
+  const { place } = daemonPlace(settings);
   for (const port of ALLOWED_PORTS) {
     // Looked up first (status: creates nothing), so a token command never makes a socket directory.
-    if (!(await daemon.status(port).catch(() => null))) continue;
+    if (!(await daemon.status(port, place).catch(() => null))) continue;
     let stopped = false;
-    try { stopped = await daemon.stop(port); } catch { /* a refused socket location: no daemon of ours is there */ }
+    try { stopped = await daemon.stop(port, place); } catch { /* a refused socket location: no daemon of ours is there */ }
     if (stopped) console.error(`[dtwin] stopped the running daemon on port ${port} first — it was using the old token. Start it again with \`dtwin serve\`.`);
   }
 }
 
-async function rotateToken(): Promise<void> {
-  await stopDaemonForTokenChange();
+async function rotateToken(settings: BridgeSettings): Promise<void> {
+  await stopDaemonForTokenChange(settings);
   const had = tokenStore.readFrom(tokenStore.tokenPath());
   const token = tokenStore.generate();
   const file = tokenStore.write(token);
@@ -754,13 +758,13 @@ async function rotateToken(): Promise<void> {
   // The whole point of naming this: the plugin has the OLD token in clientStorage and will
   // fail every handshake, retrying on its own, until someone re-pastes.
   console.error('[dtwin] re-paste it into the plugin\'s "Bridge token" field and press Save — until you do, the plugin cannot connect.');
-  if (process.env.FIGMA_BRIDGE_TOKEN) {
+  if (settings.token.ok && settings.token.resolved.source === "env") {
     console.error("[dtwin] warning: FIGMA_BRIDGE_TOKEN is set and OVERRIDES this file, so the bridge will keep using the env value. Unset it for the rotation to take effect.");
   }
 }
 
-async function forgetToken(): Promise<void> {
-  await stopDaemonForTokenChange();
+async function forgetToken(settings: BridgeSettings): Promise<void> {
+  await stopDaemonForTokenChange(settings);
   const file = tokenStore.tokenPath();
   const removed = tokenStore.remove(file);
   console.error("[dtwin] " + (removed ? `deleted ${file}. The next bridge start mints and saves a new token.` : `nothing to delete — no token saved at ${file}.`));
@@ -768,39 +772,38 @@ async function forgetToken(): Promise<void> {
 
 // ---- daemon lifecycle commands. Each owns the whole invocation.
 
-async function stopDaemon(): Promise<void> {
-  const stopped = await daemon.stop();
+async function stopDaemon(settings: BridgeSettings): Promise<void> {
+  const { port, place } = daemonPlace(settings);
+  const stopped = await daemon.stop(port, place);
   // Nothing at the current location: a daemon an earlier build started (before an upgrade) still
   // listens at the old one, and is what holds the port.
-  const old = stopped ? null : await daemon.stopLegacy();
+  const old = stopped ? null : await daemon.stopLegacy(port, place);
   console.error("[dtwin] " + (stopped ? "daemon stopped." : old ? `stopped a daemon started by an earlier dtwin version (socket ${old}).` : "no daemon is running."));
 }
 
-async function daemonStatus(): Promise<void> {
-  const st = await daemon.status();
+async function daemonStatus(settings: BridgeSettings): Promise<void> {
+  const { port, place } = daemonPlace(settings);
+  const st = await daemon.status(port, place);
   console.log(JSON.stringify(st || { daemon: false }, null, 2));
   // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
   console.error("[dtwin] " + (st
     ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
-      (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
+      (st.idleMs ? `, idle ${humanMs(st.idleForMs ?? 0)}/${humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
     : "no daemon is running — start one with --serve."));
 }
 
-async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promise<void> {
-  // The already-running probe FIRST: createBridge() binds the port, and with a daemon already up
-  // that is an EADDRINUSE exit naming "another dtwin bridge" — the right answer is the daemon's own
-  // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
-  // No saved token yet (Windows, first run): nothing can be serving a pipe named from a token nobody saved,
-  // and createBridge() below saves the one it mints — serve() then names the pipe from it.
-  try { await daemon.assertNoDaemon(); } catch (e) { if (errMsg(e) !== daemon.NO_DAEMON_TOKEN) throw e; }
-  const bridge = createBridge();
-  const { sock } = await daemon.serve(servedBridge(bridge), { log: (m) => console.error("[dtwin] " + m) });
-  console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
+// `dtwin serve`: the bridge holder's "serve" lifetime (bridge-holder.ts) — refused when a daemon already runs (naming
+// --stop), then this process's bridge, published on the daemon socket with the settings' idle window.
+async function serveDaemon(settings: BridgeSettings): Promise<void> {
+  const holder = bridgeHolder("serve", { settings, createBridge, daemon: daemonSide, log: (m) => console.error("[dtwin] " + m) });
+  const up = await holder.upstream();
+  const h = holder.held();
+  console.error("[dtwin] bridge listening on " + up.address + " — socket " + (h.kind === "own" ? h.sock ?? "?" : "?"));
   console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
   console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
-  const idleMs = daemon.idleMsFromEnv(); // the ONE rule serve() uses (an unparsable value disables it)
+  const idleMs = settings.idleMs; // the ONE rule the served socket uses (an unparsable value disables it)
   console.error("[dtwin] " + (idleMs > 0
-    ? `It also shuts down after ${daemon.humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
+    ? `It also shuts down after ${humanMs(idleMs)} idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
     : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
   // the socket + WS server keep the event loop alive; no close() here, by design
 }
@@ -828,7 +831,7 @@ interface Session {
 // ---- ordinary commands. Route through a running daemon when there is one: it already holds the
 // bridge (and port 8787), so opening our own here would hit EADDRINUSE and exit. When there is no
 // daemon this is exactly the one-shot path it always was.
-async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.createBridge): Promise<Session> {
+async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promise<Session> {
   const { command, client, connectWaitMs } = parsed;
   // Timing (see `doneLine` below): the clock starts before the daemon probe.
   const tStart = Date.now();
@@ -836,8 +839,12 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // DTWIN_TIMINGS (timings.ts): the same split plus plugin phase arrival, payload size and peak RSS, as one JSON record
   const timingsTo = timingsTarget();
   const clock = timingsTo ? stageClock() : null;
-  const d = await daemon.connect();
-  if (d) console.error("[dtwin] using the running daemon (" + d.sock + ") — no reconnect needed.");
+  // Where requests go: the running daemon, or a bridge of our own for this command only — the bridge holder's
+  // "one-shot" lifetime (bridge-holder.ts). Never shared: a process that finds the port held exits on it.
+  const holder = bridgeHolder("one-shot", { settings, createBridge, daemon: daemonSide, log: (m) => console.error("[dtwin] " + m) });
+  const up = await holder.upstream();
+  const viaDaemon = up.kind === "daemon";
+  if (viaDaemon) console.error("[dtwin] using the running daemon (" + up.address + ") — no reconnect needed.");
 
   // outDir is created lazily by each writer (writeExport/writeScreen/writeScreenshot all
   // fs.mkdirSync(dir, {recursive:true}) themselves) rather than eagerly here. Creating it up front —
@@ -853,7 +860,7 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // Without `dtwin serve`, every pull opens a throwaway bridge and the plugin's
   // reconnect is what actually costs the time (measured 300s/908s vs 7.5-8.8s with a daemon warm).
   // Said up front, before anything is sent, not just diagnosed after the fact by `dtwin doctor`.
-  if (!d && isExportCmd) {
+  if (!viaDaemon && isExportCmd) {
     console.error("[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection.");
   }
   // The plugin sends a `queued` progress frame when this command waits behind another run in the
@@ -867,26 +874,18 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
   };
 
-  // Where requests go: the running daemon, or a bridge of our own. The route (route.ts) owns the rules either
-  // way — the connect window (`--timeout`; a named --client waits at least NAMED_CLIENT_WAIT_MS), the stall
+  // The route (route.ts) owns the rules either way — the connect window (`--timeout`; a named --client waits at least NAMED_CLIENT_WAIT_MS), the stall
   // check (own bridge, export commands: if NOTHING is heard back within FIGMA_BRIDGE_STALL_MS of sending, abort
   // rather than sit out the full export timeout), the "no plugin ever connected" error, and which commands
   // hear progress ticks.
-  let bridge: Bridge | null = null;
-  let up: Upstream;
-  if (d) {
-    // The DAEMON does the waiting: the plugin may not have reconnected yet after a Figma restart, and the
-    // daemon is the side holding the socket. Each request carries the connect window, and an export's
-    // progress frames re-arm the outer guard (daemonGuardMs), so a long walk that is still reporting is not
-    // cut off by a budget sized for silence — the daemon's own per-command `timeoutMs` still bounds it.
-    up = daemonUpstream(d, () => daemon.status());
-  } else {
-    const b = createBridge();
-    bridge = b;
-    console.error("[dtwin] listening on ws://localhost:" + b.port);
+  // Through a daemon, the DAEMON does the waiting: the plugin may not have reconnected yet after a Figma restart,
+  // and the daemon is the side holding the socket. Each request carries the connect window, and an export's
+  // progress frames re-arm the outer guard (daemonGuardMs), so a long walk that is still reporting is not cut off
+  // by a budget sized for silence — the daemon's own per-command `timeoutMs` still bounds it.
+  if (!viaDaemon) {
+    console.error("[dtwin] listening on " + up.address);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
     console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
-    up = ownUpstream(b);
   }
   const route = createRoute(async () => up, { connectWaitMs, oneShot: true });
   // Our own bridge spends the connect window here, once, before anything is sent — timed for the done line.
@@ -919,12 +918,12 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   };
   // Every command that prints the done line calls this once, at its end — so it is also where the opt-in record goes
   const doneLine = () => {
-    if (clock && timingsTo) emitTimings(clock.record({ command: command.id, viaDaemon: d !== null, ...timing }), timingsTo);
-    return formatDone({ totalMs: Date.now() - tStart, ...timing, viaDaemon: d !== null });
+    if (clock && timingsTo) emitTimings(clock.record({ command: command.id, viaDaemon, ...timing }), timingsTo);
+    return formatDone({ totalMs: Date.now() - tStart, ...timing, viaDaemon });
   };
-  // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — one
-  // helper so no exit path below has to know which.
-  const finish = () => { if (bridge) bridge.close(); };
+  // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — the holder knows
+  // which, so no exit path below has to.
+  const finish = () => { holder.release(); };
   return { route, send, timedWrite, doneLine, finish };
 }
 
@@ -1104,13 +1103,13 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: 
 type Sessionless = CommandIdIn<Exclude<Family, SessionFamily>>;
 const RUN_SESSIONLESS = {
   tokenStatus: () => tokenStatus(),
-  showToken: (p) => showToken(p.tokenFile),
-  rotateToken: () => rotateToken(),
-  forgetToken: () => forgetToken(),
-  serve: (_p, core) => serveDaemon(core.createBridge),
-  stop: () => stopDaemon(),
-  daemonStatus: () => daemonStatus(),
-} satisfies Record<Sessionless, (p: ParsedArgs, core: typeof ServerCore) => void | Promise<void>>;
+  showToken: (_p, s) => showToken(s),
+  rotateToken: (_p, s) => rotateToken(s),
+  forgetToken: (_p, s) => forgetToken(s),
+  serve: (_p, s) => serveDaemon(s),
+  stop: (_p, s) => stopDaemon(s),
+  daemonStatus: (_p, s) => daemonStatus(s),
+} satisfies Record<Sessionless, (p: ParsedArgs, settings: BridgeSettings) => void | Promise<void>>;
 const RUN_ON_SESSION = {
   listClients: (s, p) => listClientsCmd(s, p.json),
   whoami: (s) => whoamiCmd(s),
@@ -1139,21 +1138,21 @@ function readCmd(session: Session, parsed: ParsedArgs): Promise<void> {
 }
 
 // Runs the one command the parsed command line names.
-async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
+async function main(parsed: ParsedArgs, settings: BridgeSettings): Promise<void> {
   const { id } = parsed.command;
-  if (sessionless(id)) return RUN_SESSIONLESS[id](parsed, core);
-  return RUN_ON_SESSION[id](await openSession(parsed, core.createBridge), parsed);
+  if (sessionless(id)) return RUN_SESSIONLESS[id](parsed, settings);
+  return RUN_ON_SESSION[id](await openSession(parsed, settings), parsed);
 }
 
 // The verbs routed to their own entry point (cli-commands.ts VERB_ROWS `to: "routed"`), by name. Each runs
-// before server-core loads and shares none of the pull flags, so each gets its own parser:
-//   mcp     the MCP server (figma-mcp.ts), on stdio
-//   init    project setup (init.ts) — before server-core, which resolves the token and knows about ports
-//   doctor  diagnose the setup (doctor.ts) — doctor must decide for ITSELF whether it is safe to load
-//           server-core (a bad FIGMA_BRIDGE_PORT exits the process at module load, and a held port exits it
-//           in createBridge): those are findings to report, not ways for the diagnostic to die
+// before the CLI reads its settings and shares none of the pull flags, so each gets its own parser:
+//   mcp     the MCP server (figma-mcp.ts), on stdio — it reads its own settings
+//   init    project setup (init.ts) — no bridge
+//   doctor  diagnose the setup (doctor.ts) — doctor must decide for ITSELF whether it is safe to open a
+//           bridge (a bad FIGMA_BRIDGE_PORT and a held port are findings to report, not ways for the diagnostic
+//           to die)
 //   seed    components.json from Code Connect files (seed-components.ts) — reads source files only: no
-//           bridge, no token (server-core would resolve, and may mint, one), no plugin
+//           bridge, no token (a bridge would resolve, and may mint, one), no plugin
 const ROUTES = {
   mcp: runMcp,
   init: async (args) => { (await import("./init.ts")).main(args); },
@@ -1173,10 +1172,10 @@ async function runMcp(args: string[]): Promise<void> {
   // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
   process.argv.splice(2, 1);
   // Awaited only until the module has LOADED; then its server is started (runServer — loading it starts nothing, so a
-  // suite can load it) and runs on, unawaited, after cli() returns. A failure to load it — an invalid FIGMA_BRIDGE_PORT
-  // exits through exitCli at server-core's load, still inside runCli, so the CliExit lands here — ends the process on
-  // its exit code, naturally: nothing holds the loop once the module failed. Once cli() has returned, runCli is done
-  // with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
+  // suite can load it) and runs on, unawaited, after cli() returns. A failure to load it (a CliExit thrown while still
+  // inside runCli lands here) ends the process on its exit code, naturally: nothing holds the loop once the module
+  // failed. Once cli() has returned, runCli is done with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts
+  // says why) — an invalid FIGMA_BRIDGE_PORT included: the server reports it and exits 1.
   try {
     (await import("./figma-mcp.ts")).runServer();
   } catch (e) {
@@ -1187,17 +1186,17 @@ async function runMcp(args: string[]): Promise<void> {
 }
 
 // The CLI entry. Runs ONLY when this file is the process entry (see the guard at the bottom): routing
-// first, then --version/--help, then the --token-file pre-scan, THEN server-core is loaded, then the
-// arguments are parsed and the command runs.
+// first, then --version/--help, then the arguments are parsed, THEN the settings are read (settings.ts — port, token
+// with --token-file, limits) and the command runs.
 async function cli(argv: string[]): Promise<void> {
   // `dtwin mcp|init|doctor|seed` — their own entry points, before anything else runs (in particular before
-  // server-core loads): `dtwin mcp` is taken ONLY when the first argument is exactly "mcp", so `dtwin …` and
+  // the settings are read): `dtwin mcp` is taken ONLY when the first argument is exactly "mcp", so `dtwin …` and
   // importing this module from the test suites are untouched, and `bun bridge/src/figma-mcp.ts` still works.
   const word = argv[0];
   if (routed(word)) return ROUTES[word](argv.slice(1));
   // `dtwin <verb>` — verbs.ts rewrites a leading verb into the flags parsed below (`dtwin list pages` →
   // `--list-pages`), so there is still ONE parser and one set of guards. Done here, before the --help
-  // check and the --token-file pre-scan, so both see the translated argv. verbs.ts is pure (no imports,
+  // check and the argument parse, so both see the translated argv. verbs.ts is pure (no imports,
   // no I/O), so `dtwin help` keeps --help's zero-side-effects guarantee.
   {
     // Help wins over the verb's own argument check. `dtwin screenshot --help` must not be answered with
@@ -1230,20 +1229,6 @@ async function cli(argv: string[]): Promise<void> {
   const portWarning = dtwinPortWarning(process.env);
   if (portWarning) console.error("[dtwin] warning: " + portWarning);
 
-  // --token-file has to be honoured BEFORE server-core is loaded, because server-core resolves the
-  // token at module load (so the test suite can set FIGMA_BRIDGE_TOKEN and import it). readArgs
-  // runs after that load, so the flag is pre-scanned here and handed over as the env var
-  // server-core already reads. readArgs still parses it properly — this scan only has to be right
-  // about the VALUE, and it is checked against the parsed result once parsing has happened.
-  {
-    const i = argv.indexOf("--token-file");
-    const eq = argv.find((a) => a.startsWith("--token-file="));
-    const v = i !== -1 ? argv[i + 1] : eq ? eq.slice("--token-file=".length) : null;
-    if (v && !v.startsWith("--")) process.env.FIGMA_BRIDGE_TOKEN_FILE = v;
-  }
-
-  const core = await import("./server-core.ts");
-
   // Parse once, turning a UsageError back into the message + exit 1 it replaced, then print the
   // validation's warnings and, after them, its refusal (exit 1). (When this file is IMPORTED — the test
   // suite pulling in parseArgs/writeJson — cli() never runs, so nothing is parsed: the runner's own
@@ -1263,9 +1248,17 @@ async function cli(argv: string[]): Promise<void> {
     exitCli(1);
   }
 
+  // The bridge settings, resolved ONCE (settings.ts) — --token-file is an argument here, not an environment variable
+  // written for a module that read it at load. A port no plugin can reach leaves nothing for any command to do.
+  const resolved = readSettings({ tokenFile: parsed.tokenFile });
+  if (!resolved.ok) {
+    console.error(resolved.problem);
+    exitCli(1);
+  }
+
   // A failed command may leave the bridge it opened listening (it holds the loop), so this one ends with an explicit
   // exit — once the error line is out (exitFlushed), never cutting it off.
-  await main(parsed, core).catch((e: unknown) => {
+  await main(parsed, resolved.settings).catch((e: unknown) => {
     if (e instanceof CliExit) throw e;
     console.error("[dtwin] error:", errMsg(e));
     process.exitCode = 1;

@@ -1,7 +1,7 @@
 // timeouts.ts — the per-command time budgets, split out of server-core.ts (same reason as
 // staleness.ts): figma-pull.ts's exported, test-driven parseArgs (and read-plan.ts) pick their budgets from this table,
-// and it must not load server-core (token resolution + a process.exit on a bad FIGMA_BRIDGE_PORT at
-// module load) just to read two constants. No load-time effects. Every caller imports them from here.
+// and it need not load the whole bridge core just to read two constants. No load-time effects. Every caller imports
+// them from here.
 import { ALLOWED_PORTS } from "./ports.ts";
 
 // Per-COMMAND time budgets, in ONE table. The budget is a property of the work, not of the caller, so

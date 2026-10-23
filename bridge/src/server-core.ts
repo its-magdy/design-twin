@@ -21,7 +21,8 @@ import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
 import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
-import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
+import { ALLOWED_PORTS } from "./ports.ts";
+import type { BridgeSettings } from "./settings.ts";
 import { legacySock } from "./daemon.ts";
 import { isConnId, connectionFor } from "./route.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
@@ -39,44 +40,14 @@ import { exitFlushed } from "./stdio.ts";
 // tests drive it through exactly that shape.
 type VerifyClientCallback = (ok: boolean, code?: number, message?: string) => void;
 
-// FIGMA_BRIDGE_PORT is a choice of three (ports.ts), not a free number; any other value exits here, at load.
-const PORT = bridgePortOrExit(process.env.FIGMA_BRIDGE_PORT);
-
-// Shared secret the plugin must present as ?token=... on connect. This is the REAL access control:
-// loopback binding and the Origin check below are both defeatable — a sandboxed attacker iframe on
-// any site the user visits also sends "Origin: null" — so without the token any local page/process
-// could drive the plugin. See AgentSeal's Figma-MCP CSWSH writeup.
+// Nothing here runs at load: the port, the token and the limits a bridge uses are a BridgeSettings value its
+// process resolved once at its entry (settings.ts) and hands to createBridge.
 //
-// token-store.ts owns everything ABOUT the token that isn't this handshake: the precedence
-// (--token-file > env > stored file > mint), the per-OS path, and the file's 0600 mode. It is
-// resolved once here at require time, so the tests that set FIGMA_BRIDGE_TOKEN before requiring this
-// module still get exactly that token.
-//
-// `persist: false` here on purpose: requiring this module must not have the side effect of CREATING
-// a token file. `dtwin --token-status` requires it just to ask a question, and a status command that
-// silently mints the thing it is reporting on would be lying. The mint is committed in createBridge
-// instead — the moment a token is actually about to be used.
-// Resolution happens at REQUIRE time, so a bad --token-file would otherwise throw out of a module
-// load — a raw stack trace, before either front-end has error handling of any kind in scope, for what is
-// just a mistyped path. Hold the failure instead and re-throw it from createBridge, which every
-// caller already funnels into its own "[dtwin] error: …" + exit 1 path. Commands that never open a
-// bridge (--token-status) then keep working, which is exactly when you want to diagnose this.
-// "error" is this module's own marker for a resolution that threw (TOKEN_ERROR holds why); every other
-// source is token-store's.
-type TokenInfo = Omit<ResolvedToken, "token" | "source"> & { token: string | null; source: ResolvedToken["source"] | "error" };
-let TOKEN_INFO: TokenInfo;
-let TOKEN_ERROR: unknown = null;
-try {
-  TOKEN_INFO = tokenStore.resolve({
-    tokenFile: process.env.FIGMA_BRIDGE_TOKEN_FILE || null,
-    persist: false,
-  });
-} catch (e) {
-  TOKEN_ERROR = e;
-  TOKEN_INFO = { token: null, source: "error", path: null, created: false };
-}
-const TOKEN = TOKEN_INFO.token;
-const TOKEN_FROM_ENV = TOKEN_INFO.source === "env";
+// The token is the REAL access control: loopback binding and the Origin check below are both defeatable — a
+// sandboxed attacker iframe on any site the user visits also sends "Origin: null" — so without the token any
+// local page/process could drive the plugin. See AgentSeal's Figma-MCP CSWSH writeup. token-store.ts owns
+// everything ABOUT the token that isn't this handshake (precedence, per-OS path, the file's 0600 mode); settings.ts
+// resolves it without persisting, and createBridge commits a freshly minted one the moment it is about to be used.
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -127,7 +98,8 @@ function rejectBadToken(presented: string, expected: string): string {
   return "bad or missing token";
 }
 
-const authStats = () => ({ failures: authFailures, lastBadToken, expected: tokenStore.fingerprint(TOKEN) });
+/** The failed-handshake record (process-wide, like the counters above) and the fingerprint `token` is checked against. */
+const authStatsFor = (token: string) => ({ failures: authFailures, lastBadToken, expected: tokenStore.fingerprint(token) });
 
 // The handshake fields the check reads (the shape of ws's verifyClient `info`, which it was written
 // against): createBridge's fetch() builds one from the upgrade Request, and the test suite drives the
@@ -683,76 +655,56 @@ interface BridgeOptions {
   settleMs?: number;
 }
 
-const DEFAULT_MAX_PAYLOAD_MB = 128;
-const MiB = 1024 * 1024;
-/** The bridge's per-frame cap from FIGMA_BRIDGE_MAX_PAYLOAD_MB. It bounds a single frame so a malformed/huge payload can't
- *  OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large file can raise it. Bun.serve
- *  takes it as `maxPayloadLength`, an unsigned 32-bit byte count, so a value past 4096 MB is clamped to just under 4 GiB
- *  and `mb` says so (the too-big diagnosis quotes it — the cap in force, not the number typed).
- *  A value that is not a finite number above 0 falls back to the default, with a `warning`: `ws` read 0 (and below) as
- *  "unlimited", but Bun.serve has no unlimited — 0 there refuses every non-empty frame — and a typo must not become either one. */
-function maxPayloadFromEnv(raw: string | undefined): { mb: number; bytes: number; warning?: string } {
-  const v = (raw ?? "").trim();
-  if (v === "") return { mb: DEFAULT_MAX_PAYLOAD_MB, bytes: DEFAULT_MAX_PAYLOAD_MB * MiB };
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) {
-    return { mb: DEFAULT_MAX_PAYLOAD_MB, bytes: DEFAULT_MAX_PAYLOAD_MB * MiB, warning: `FIGMA_BRIDGE_MAX_PAYLOAD_MB=${JSON.stringify(raw)} is not a number of megabytes above 0 — using the default ${DEFAULT_MAX_PAYLOAD_MB} MB (there is no "unlimited")` };
-  }
-  const bytes = Math.max(1, Math.min(Math.floor(n * MiB), 0xffffffff));
-  return { mb: Math.round((bytes / MiB) * 100) / 100, bytes };
-}
-
-function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
+function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
+  const port = settings.port;
   // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
   // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
   // every single run is exactly the habit this store exists to end. `--show-token` reveals it on
   // demand; `--token-status` answers "which one is in play" without disclosing it.
-  // A token that could not be resolved at require time (a mistyped --token-file) surfaces HERE, where
-  // the caller's error handling can turn it into a one-line message instead of a module-load stack.
-  // Before the server is even constructed, so a failed start leaves nothing listening — and so the
-  // token every handshake is checked against is a real string from here on (the `null` case IS the
-  // resolution error; there is no bridge without a token).
-  if (TOKEN_ERROR) throw TOKEN_ERROR;
-  if (TOKEN === null) throw new Error("no bridge token could be resolved");
-  const token: string = TOKEN;
+  // A token that could not be resolved (a mistyped --token-file) surfaces HERE, where the caller's error handling
+  // turns it into a one-line message. Before the server is even constructed, so a failed start leaves nothing
+  // listening.
+  if (!settings.token.ok) throw settings.token.error;
+  let tokenInfo = settings.token.resolved;
+  const token = tokenInfo.token;
 
-  // The per-frame cap (maxPayloadFromEnv): FIGMA_BRIDGE_MAX_PAYLOAD_MB, or 128 MB.
-  const payload = maxPayloadFromEnv(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB);
+  // The per-frame cap (settings.ts maxPayloadFromEnv): FIGMA_BRIDGE_MAX_PAYLOAD_MB, or 128 MB.
+  const payload = settings.maxPayload;
   if (payload.warning) console.error("[bridge] " + payload.warning);
   const { mb: maxPayloadMb, bytes: maxPayloadBytes } = payload;
   const admit = admitWith(token);
 
-  // Commit a freshly-minted token to disk now that one is actually being used. Resolution happened at
-  // require time (deliberately without persisting); this is where it becomes permanent.
-  if (TOKEN_INFO.source === "ephemeral") {
+  // Commit a freshly-minted token to disk now that one is actually being used. Settings resolved it
+  // (deliberately without persisting); this is where it becomes permanent.
+  if (tokenInfo.source === "ephemeral") {
     try {
       const file = tokenStore.write(token);
-      TOKEN_INFO = { ...TOKEN_INFO, source: "file", path: file, created: true };
+      tokenInfo = { ...tokenInfo, source: "file", path: file, created: true };
     } catch (e) {
-      TOKEN_INFO = { ...TOKEN_INFO, persistError: e };
+      tokenInfo = { ...tokenInfo, persistError: e };
     }
   }
 
-  if (TOKEN_INFO.source === "token-file") {
-    console.error(`[bridge] auth: token read from ${TOKEN_INFO.path} (${tokenStore.fingerprint(token)}).`);
-  } else if (TOKEN_FROM_ENV) {
+  if (tokenInfo.source === "token-file") {
+    console.error(`[bridge] auth: token read from ${tokenInfo.path} (${tokenStore.fingerprint(token)}).`);
+  } else if (tokenInfo.source === "env") {
     console.error(`[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment (${tokenStore.fingerprint(token)}).`);
-  } else if (TOKEN_INFO.created) {
+  } else if (tokenInfo.created) {
     console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
-    console.error(`[bridge] saved to ${TOKEN_INFO.path} — you won't be asked to paste it again.`);
+    console.error(`[bridge] saved to ${tokenInfo.path} — you won't be asked to paste it again.`);
     console.error("[bridge] see it later with `dtwin --show-token`; replace it with `dtwin --rotate-token`.");
-  } else if (TOKEN_INFO.source === "ephemeral") {
+  } else if (tokenInfo.source === "ephemeral") {
     // Couldn't persist (read-only FS, no HOME, locked-down container). Still works — but say so,
     // because the user WILL have to paste again next run and deserves to know why.
     console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
     console.error(
-      "[bridge] could not save it (" + errMsg(TOKEN_INFO.persistError) + ") — it changes every run. " +
+      "[bridge] could not save it (" + errMsg(tokenInfo.persistError) + ") — it changes every run. " +
         "Set FIGMA_BRIDGE_TOKEN to a stable value instead."
     );
   } else {
-    console.error(`[bridge] auth: using the saved token from ${TOKEN_INFO.path} (${tokenStore.fingerprint(token)}).`);
-    if (TOKEN_INFO.path !== null && tokenStore.loosePerms(TOKEN_INFO.path)) {
-      console.error(`[bridge] warning: ${TOKEN_INFO.path} is readable by other users — chmod 600 it.`);
+    console.error(`[bridge] auth: using the saved token from ${tokenInfo.path} (${tokenStore.fingerprint(token)}).`);
+    if (tokenInfo.path !== null && tokenStore.loosePerms(tokenInfo.path)) {
+      console.error(`[bridge] warning: ${tokenInfo.path} is readable by other users — chmod 600 it.`);
     }
   }
   // MULTI-CLIENT registry. Every connected plugin instance gets an entry, keyed by a server-minted
@@ -954,7 +906,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // on stderr (`[bridge] DT_TEST_EPHEMERAL_PORT: <port> -> <real port>`), so a test that spawns a server
   // never takes 8787–8789 from a live Figma session or another test run. `port` keeps naming everything
   // else (the daemon socket, status output). No user-facing path sets it.
-  const ephemeral = process.env.DT_TEST_EPHEMERAL_PORT === "1";
+  const ephemeral = settings.ephemeralPort;
   let server: Server<SocketData> | null = null;
   let bindError: Error | null = null;
   try {
@@ -1276,6 +1228,14 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
 
   return {
     request, requestWithClient, isConnected, awaitClient, connectionInfo, listClients, resolveClient, close, port, listening, boundPort,
+    /** the failed-handshake record, and the fingerprint of the token this bridge checks against (doctor reads both) */
+    authStats: () => authStatsFor(token),
+    /** the token a daemon serving this bridge is keyed on (settings.ts daemonTokenOf): this bridge's own once it is saved —
+     *  the run that mints one saves it above, before anything serves — else null */
+    savedToken: (): string | null => (tokenInfo.source === "ephemeral" ? null : token),
+    /** the token in use, as the next bridge of this process should be given it: a token minted and saved here is now
+     *  the saved file's (so a later bridge neither writes it over a rotated file nor prints it again) */
+    tokenInUse: (): ResolvedToken => ({ token, source: tokenInfo.source, path: tokenInfo.path, created: false }),
     /** test seam: one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
     heartbeatTick,
   };
@@ -1288,6 +1248,6 @@ export type { BridgeOptions };
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-// isConnId and connectionFor live in route.ts (side-effect free, so the front-ends reach them without this
-// module's load-time token read); re-exported for the suites that test them here.
-export { createBridge, maxPayloadFromEnv, createRegistry, connectionFor, isConnId, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
+// isConnId and connectionFor live in route.ts (which takes only types from this module); re-exported for the suites
+// that test them here.
+export { createBridge, createRegistry, connectionFor, isConnId, verifyClientWith, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
