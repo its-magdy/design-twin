@@ -178,7 +178,7 @@ console.log("the CLI: --plan at --expect, and the plan found in design/plan/:");
   const two = cli("--expect", shot);
   const e3 = readExp();
   safe(`[plans] two plans of the frame's node → exit 2 naming both, no expectation written (got ${two.status}: ${two.stderr.trim()})`, () =>
-    two.status === 2 && e3 === null && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry\.json, design\/plan\/Pantry__1_1\.json\) — keep one, or pass --plan/m.test(two.stderr));
+    two.status === 2 && e3 === null && /^error {2}node 1:1 has 2 plans \(design\/plan\/Pantry\.json, design\/plan\/Pantry__1_1\.json\) — one node, one plan: keep one, or pass --plan/m.test(two.stderr));
   const twoFlag = cli("--expect", shot, "--plan", planFile);
   safe("[plans] …--plan wins over them, with a note naming the other", () => twoFlag.status === 0 && readExp()?.planInteractions?.plan === planFile
     && /note {2}using design\/plan\/Pantry__1_1\.json \(--plan\); design\/plan\/ also describes node 1:1 in design\/plan\/Pantry\.json/.test(twoFlag.stderr));
@@ -365,7 +365,7 @@ console.log("one plan rule, guards, steps, page notes:");
   const ex0 = cli("--expect", shot);
   const expRel = "design/verify/Pantry__1_1.expected.json";
   safe(`[plans] two plans, one lists files[]: no tie-break — --expect exits 2 naming both, nothing written (got ${ex0.status})`, () =>
-    ex0.status === 2 && /2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_old\.json\)/.test(ex0.stderr) && !fs.existsSync(path.join(cwd, expRel)));
+    ex0.status === 2 && /node 1:1 has 2 plans \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_old\.json\)/.test(ex0.stderr) && !fs.existsSync(path.join(cwd, expRel)));
   fs.rmSync(path.join(cwd, "design/plan/Pantry_old.json"));
   const ex = cli("--expect", shot);
   const e = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
@@ -513,7 +513,7 @@ console.log("one plan rule, guards, steps, page notes:");
   const repBefore = fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8");
   const r7 = run();
   safe(`[plans] recorded plan gone + two plans of the node (none chosen) → exit 2 naming both, no report written (got ${r7.status})`, () =>
-    r7.status === 2 && /^error {2}2 plans in design\/plan\/ describe node 1:1 \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_v2\.json\) — keep one, or pass --plan/m.test(r7.stderr)
+    r7.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_v2\.json\) — one node, one plan: keep one, or pass --plan/m.test(r7.stderr)
     && fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8") === repBefore);
   fs.renameSync(path.join(cwd, "scratch/moved-plan.json"), path.join(cwd, MINE));
   const r8 = run();

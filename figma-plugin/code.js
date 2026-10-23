@@ -246,15 +246,28 @@
   var DIR = "design-system";
   var COMPONENTS_DIR = "components";
   var TOKENS = "tokens.json";
-  var STYLES_PAINT = "styles.paint.json";
-  var STYLES_TEXT = "styles.text.json";
-  var STYLES_EFFECT = "styles.effect.json";
-  var STYLES_GRID = "styles.grid.json";
-  var STYLES_ANIMATION = "styles.animation.json";
   var COMPONENTS_LOCAL = "components.local.json";
   var COMPONENTS_LIBRARY = "components.library.json";
   var HYGIENE = "hygiene.json";
   var MANIFEST = "design-system.json";
+  var STYLE_KIND_ROWS = {
+    paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+    text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+    effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+    grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+    animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+    // local custom animation styles
+  };
+  var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+  function stylesOf(styles, kind) {
+    const list = styles ? styles[kind] : void 0;
+    return Array.isArray(list) ? list : [];
+  }
+  function byStyleKey(value) {
+    const out = {};
+    for (const row of STYLE_KINDS) out[row.key] = value(row);
+    return out;
+  }
   function isLibraryEntry(c) {
     return !!(c && c.remote === true);
   }
@@ -306,19 +319,9 @@
       });
       return { ...c, variants: slimVariants, variantsFile: detailPath };
     });
-    const styles = d.styles || {};
-    const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-    const stylesText = Array.isArray(styles.text) ? styles.text : [];
-    const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-    const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-    const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
     const files = [
       { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
-      { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-      { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-      { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-      { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-      { path: join(STYLES_ANIMATION), data: { ...stamp, styles: stylesAnimation } },
+      ...STYLE_KINDS.map((row) => ({ path: join(row.file), data: { ...stamp, styles: stylesOf(d.styles, row.kind) } })),
       { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
       { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
       { path: join(HYGIENE), data: { ...stamp, hygiene } },
@@ -327,11 +330,7 @@
     const counts = {
       collections: (d.collections || []).length,
       variables: (d.variables || []).length,
-      stylesPaint: stylesPaint.length,
-      stylesText: stylesText.length,
-      stylesEffect: stylesEffect.length,
-      stylesGrid: stylesGrid.length,
-      stylesAnimation: stylesAnimation.length,
+      ...byStyleKey((row) => stylesOf(d.styles, row.kind).length),
       components: local.length,
       libraryComponents: library.length,
       hygiene: hygiene.length
@@ -340,11 +339,7 @@
       ...stamp,
       files: {
         tokens: join(TOKENS),
-        stylesPaint: join(STYLES_PAINT),
-        stylesText: join(STYLES_TEXT),
-        stylesEffect: join(STYLES_EFFECT),
-        stylesGrid: join(STYLES_GRID),
-        stylesAnimation: join(STYLES_ANIMATION),
+        ...byStyleKey((row) => join(row.file)),
         componentsLocal: join(COMPONENTS_LOCAL),
         componentsLibrary: join(COMPONENTS_LIBRARY),
         hygiene: join(HYGIENE)
@@ -358,6 +353,7 @@
     files.push({ path: MANIFEST, data: manifest2 });
     return { files, manifest: manifest2, counts, dir: DIR };
   }
+  var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
   // src/progress.ts
   var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
@@ -665,11 +661,13 @@
   }
 
   // ../bridge/src/read-opts.ts
+  var WALK = ["node", "selection", "pages"];
   var READ_OPTS = [
     {
       name: "css",
       flag: "--css",
-      describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."
+      describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing.",
+      scopes: WALK
     },
     {
       // NOT "Dev Mode only": per developers.figma.com only addMeasurement/editMeasurement/
@@ -677,27 +675,32 @@
       // longer "current page": collect.ts reads measurements from the page(s) actually exported.
       name: "measurements",
       flag: "--measurements",
-      describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode."
+      describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode.",
+      scopes: WALK
     },
     {
       name: "pluginData",
       flag: "--plugin-data",
-      describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."
+      describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it.",
+      scopes: WALK
     },
     {
       name: "motion",
       flag: "--motion",
-      describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."
+      describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose.",
+      scopes: WALK
     },
     {
       name: "sharedData",
       flag: "--shared-data",
-      describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
+      describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node.",
+      scopes: WALK
     },
     {
       name: "variantVisuals",
       flag: "--variant-visuals",
-      describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems."
+      describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems.",
+      scopes: [...WALK, "designSystem", "library"]
     },
     {
       // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
@@ -707,7 +710,8 @@
       // frame limit. Opt-IN to skipping, so the default stays exactly as it was.
       name: "skipAssets",
       flag: "--no-assets",
-      describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here."
+      describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here.",
+      scopes: WALK
     }
   ];
   function readOptDefaults() {

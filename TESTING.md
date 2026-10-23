@@ -14,20 +14,30 @@ ends with a line saying it was not the full run — use it while iterating, `bun
 The run-suites summary is the authority for the check counts: the per-suite numbers below were true when written and drift as checks are added, so read the `N/N checks passed` row, not a figure in this file.
 The browser e2e suites run their probes through a small pool (`test/pool.ts`): `DT_E2E_POOL=<n>` sets its size (default: 2 under CI, else half the cores clamped to 2–4; an out-of-range value is clamped to 1–8 with a warning). The drive e2e's wall-clock-timing cases are a suite of their own, `verify-probe-drive-tail-e2e`, which runs its probes strictly one at a time (no pool); the pooled cases are `verify-probe-drive-e2e`, and the two share `test/drive-e2e-fixture.ts`.
 `DT_TEST_EPHEMERAL_PORT=1` is a test-only seam (`bridge/src/server-core.ts`): the bridge binds an ephemeral port instead of `FIGMA_BRIDGE_PORT`'s and prints the real one on stderr (`[bridge] DT_TEST_EPHEMERAL_PORT: <port> -> <real>`), so `mcp-lifecycle` spawns its MCP servers without contending for 8787–8789. Never set it outside the suites: the plugin can only reach the three ports its manifest names.
+`test/build-screen-docs.test.ts` checks that every IR field `bridge/src/doc-types.ts` declares is named in
+`claude-plugin/skills/build-screen/references/ir-fields.md`, and that every field that doc introduces exists; add a
+field to the IR and the doc in the same change. Its regex pins on ir-fields.md are kept for behaviour rules only.
 Right after the two lints, `test/real-names.test.ts` fails if a real field-test file, company, layer or
 person name reaches the tree; it reports `file:line`, never the name. The list is stored as salted hashes, which
 keeps plain names out of the tree but is not secrecy: they are dictionary-reversible, and git history already holds
 the old names.
 
 The plugin's extraction transforms are TypeScript (`figma-plugin/src/*.ts`), bundled to
-`figma-plugin/code.js`. `test/harness.ts` loads the built `code.js` in a VM with a mock `figma` object
-and a representative node tree (mixed text, gradient, reaction, effects, bound token, scroll frame,
-multi-mode variables), then asserts the emitted JSON. The bundle exposes its read API on a namespaced
-global (`__designExport`) which the harness lifts onto the sandbox.
+`figma-plugin/code.js`. `test/harness.ts` runs the cases in `test/harness/<area>.ts`, and every case
+builds its own world with `test/fake-figma.ts`: a fresh VM running the plugin bundle against a fake
+`figma` derived from a scene (pages, selection, the nodes / styles / variables / images reachable by id)
+over the representative file in `test/harness/scene.ts` (mixed text, gradient, reaction, effects, bound
+token, scroll frame, multi-mode variables). The plugin keeps its run state at module level
+(`figma-plugin/src/state.ts`), so the fresh VM is what keeps a case's result independent of the cases
+before it. The bundle is built once per run, in memory, from the current `figma-plugin/src`
+(`figma-plugin/build-options.ts`, the same options `build.ts` writes `code.js` with), so the harness never
+tests a stale `code.js`. One check fails while the committed `code.js` is not what `src/` builds to (a run
+of any area included): run `bun figma-plugin/build.ts` after editing `src/`.
 
 ```
 cd figma-plugin && bun install && bun run typecheck && bun run build && cd ..   # after editing src/
-bun test/harness.ts
+bun test/harness.ts                 # every area
+bun test/harness.ts library pages   # just those areas (the file names in test/harness/)
 ```
 
 Expected: every check passes (the run-suites summary has the count; exit 0). Any `✗ FAIL` prints which transform regressed.
@@ -42,8 +52,10 @@ bun build --no-bundle bridge/src/seed-components.ts > /dev/null
 ```
 
 When you add a new extracted field, edit the relevant `figma-plugin/src/*.ts` module, rebuild, then add
-a matching assertion to `test/harness.ts` (extend the mock node with the source property, assert the
-output key). Keep both `typecheck` and the harness green.
+a matching case to the area file in `test/harness/` it belongs to (put the source property on a node in
+the case's own scene, assert the output key). A case says what its file contains through `world(delta,
+overrides)`: the scene for what is in the file (its tables add to the base file's), overrides for a call
+that throws, counts or changes its answer, or a lookup that must not see the base file's entries. Keep both `typecheck` and the harness green.
 
 ### `design-to-code/` — design-to-code layer (agent-runnable, no Figma)
 
@@ -87,10 +99,18 @@ bun test/identity.test.ts             # expect: all checks pass, exit 0 — toke
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
 bun test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the shared node-id/layer-name/indexed-title
                                        # resolver every skill uses to turn "the Jet Roles screen" into one exact file
+bun test/node-artefacts.test.ts       # expect: all checks pass, exit 0 — which plan / verify sets / audit report a node has,
+                                       # which node each is of, and the one "one node, one X" refusal, on temp projects
+bun test/report-freshness.test.ts     # expect: all checks pass, exit 0 — what a report is stamped with, fresh or stale (and why),
+                                       # a measured file bound to its expectation and run, a plan's record vs its report (fake git)
+bun test/plan-status.test.ts          # expect: all checks pass, exit 0 — a plan's computed status: the lifecycle a person sets, the
+                                       # Stop hook's record against the plan and its code, open or closed, the precedence, on temp projects
+bun test/verify-sets.test.ts          # expect: all checks pass, exit 0 — a verify set's files by kind, the --migrate journal, which
+                                       # files only the verify tools write (the guard's and --publish's rule), the run cache's place
 bun test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
 bun test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
+bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts design-to-code/node-artefacts.ts design-to-code/report-freshness.ts design-to-code/plan-status.ts
 ```
 
 `test/audit.test.ts` drives `design-to-code/audit.ts` (the pre-build design audit behind the
@@ -119,6 +139,28 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
 
+Every suite that plays the Figma plugin (bridge, bridge-route, cli-pull, mcp-smoke, mcp-lifecycle) does it
+through `test/fake-plugin.ts`: it dials with the token and the `null` Origin, sends a typed `hello`, answers
+each command through a handler typed by that command's reply (`bridge/src/commands.ts`), records what the
+bridge sent, and hangs (`HANG`), fails (`fail()`), redials or closes on cue. The frames on the wire are
+declared once, in `bridge/src/server-core.ts` (`CommandFrame`, `CancelFrame`, `HelloFrame`, `ProgressFrame`,
+`ReplyFrame`); `figma-plugin/ui.html` is plain JS, so those types are its contract. A socket whose point is
+the handshake itself (a refused token, Origin or Host; the dead peer that never pongs) stays on
+`test/ws-client.ts`.
+
+The bridge-side suites start dtwin, the MCP server, seed-components or any `bun <script>` through
+`test/children.ts` (`dtwin` / `dtwinSync`, `startChild` for a long-lived child, `startMcp` with its stdio
+JSON-RPC client, `bridgeEnv` for the child's environment). It runs every child through
+`design-to-code/proc.ts`, the same hardened spawn `cli-runner` and `pool.runNode` use, never detached (so
+run-suites' group kill reaches a server a suite left running). A child whose point is the runtime's own
+pipe or exit behaviour, the thing `proc.ts` works around, is spawned raw.
+
+`cli-commands.ts` is the command registry every part of the CLI surface is derived from, and the two
+suites that own it walk its rows rather than listing commands: `test/figma-pull-args.test.ts` parses every
+command alone, refuses every pair of commands (with the owning family's wording), accepts each read
+option exactly where the row's read takes it, and runs every `dtwin <verb>` spelling to its row's command;
+`test/cli-help.test.ts` spawns every verb row's `--help` and checks `dtwin --help` carries every row's
+summary line and documents every flag in the table.
 `verbs.ts` (`dtwin <verb>` → flags) is tested as the pure argv → argv function it is, plus subprocess
 runs proving a verb and its flag are the same command. `doctor.ts` is tested three ways: its pure
 check functions directly; its probes against real sockets on spare ports (a plain HTTP server, a real
@@ -141,7 +183,25 @@ bun test/bridge.test.ts        # expect: all checks pass, exit 0 — determinist
 bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
                                  # a Figma client every front-end uses (awaitClient: named target, connId, no target,
                                  # leave/abort/close, listeners and timers released), on plain objects — binds no port
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
+bun test/bridge-route.test.ts  # expect: all checks pass, exit 0 — the route every front-end reaches the plugin through
+                                 # (route.ts), one contract run against both adapters: a real bridge, and the same bridge
+                                 # behind a real daemon socket (fake WS plugins, ephemeral ports, a private XDG_RUNTIME_DIR);
+                                 # then the rules it owns: the connect window spent once, the stall check, the never-connected
+                                 # guard, and which commands hear progress ticks
+bun test/read-plan.test.ts     # expect: all checks pass, exit 0 — the read plan (read-plan.ts): each read scope's command,
+                                 # arguments, budget and label, the read options each READ_OPTS row's `scopes` admit (and the
+                                 # refusal of the rest), --timeout through the CLI's parsed command line; no bridge, no port
+bun test/read-plan-e2e.test.ts # expect: all checks pass, exit 0 — what BOTH front-ends send for every read, end to end: the
+                                 # real dtwin process and the real MCP server through a recording daemon (FIGMA_BRIDGE_PORT=8789's
+                                 # socket — run it after cli-pull, never beside it), each MCP tool's declared read options, and
+                                 # the CLI's files equal to writeAny's for the same reply
+bun test/mcp-delivery.test.ts  # expect: all checks pass, exit 0 — how an MCP export is delivered (delivery.ts): inline,
+                                 # an explicit write, an implicit spill or a refusal, and the note from write-out's change
+                                 # report (.prev kept / layer files replaced / earlier .prev still on disk); then the real
+                                 # tools IN PROCESS (figma-mcp.ts loaded as a module — it starts nothing on import — over an
+                                 # in-memory transport) through a recording daemon on FIGMA_BRIDGE_PORT=8789's socket, every
+                                 # writeToDisk / outDir / reply-kind path; and that `bun figma-mcp.ts` and `dtwin mcp` both serve
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed

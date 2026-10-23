@@ -148,7 +148,7 @@ report the pair once, not once per screen.
    with two byte-identical reports under different names). Pass `--out` explicitly only if the user asks for
    a specific filename.
 
-   **If it refuses** ("node … already has an audit report at <file> — refusing to also write …"), a report
+   **If it refuses** ("node … already has an audit report (<file>) — one node, one audit report: refusing to also write …"), a report
    for this node already exists under another name (a legacy name, or one a person typed). Read the message
    and take its first option: write to that existing name (pass it as `--out`, minus the extension), so the
    screen keeps one report pair; or pass `--force` to write the default name anyway, and then retire the old

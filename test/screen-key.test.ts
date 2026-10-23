@@ -7,8 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import {
-  MAX_SLUG, RESERVED_SLUGS, allSets, canonicalStemsFor, existingStem, expectationSetProblem, formatSetName, isVariantSlug, legacySetsFor, nodeIdFromSetName, outBaseOf,
-  nodeStem, parseSetName, screenKey, setKey, setNameOfFile, setNodeId, statusBaseOf, variantProblem, variantSlug, verifySets,
+  MAX_SLUG, RESERVED_SLUGS, allSets, expectationSetProblem, formatSetName, isVariantSlug, nodeIdFromSetName, outBaseOf,
+  parseSetName, screenKey, setKey, setNameOfFile, statusBaseOf, variantProblem, variantSlug, verifySets,
 } from "../design-to-code/screen-key.ts";
 import { writeStatus } from "../design-to-code/verify-run.ts";
 import type { ScreenKey } from "../design-to-code/screen-key.ts";
@@ -62,13 +62,8 @@ console.log("\nthe verify dir's sets:");
   check(`allSets names every set once, a retired one flagged (got ${JSON.stringify(all)})`,
     JSON.stringify(all.map((s) => `${s.name}${s.retired ? "*" : ""}`)) === JSON.stringify(["Beds", "Beds@320", "Mixed", "Plots__1_1", "Plots__1_1.dark", "Rows*", "Sheds"]));
   check("verifySets leaves the retired one out", !verifySets(dir).includes("Rows") && verifySets(dir).length === 6);
-  check("setNodeId: the expectation's frame, else the report; two different ids name none",
-    setNodeId(dir, "Beds") === "1:1" && setNodeId(dir, "Beds@320") === "1:1" && setNodeId(dir, "Mixed") === null && setNodeId(dir, "Nothing") === null);
-  check("canonicalStemsFor / existingStem: the one grammar-named stem of the node", JSON.stringify(canonicalStemsFor(dir, "1:1")) === JSON.stringify(["Plots__1_1"]) && existingStem(dir, "1:1") === "Plots__1_1" && existingStem(dir, "2:2") === null);
-  check(`legacySetsFor: the live legacy-named sets of the node (got ${JSON.stringify(legacySetsFor(dir, "1:1"))})`, JSON.stringify(legacySetsFor(dir, "1:1")) === JSON.stringify(["Beds", "Beds@320"]) && JSON.stringify(legacySetsFor(dir, "2:2")) === JSON.stringify(["Sheds"]));
-  put(path.join(dir, "Yard__1_1.report.json"), { nodeId: "1:1" });
-  check("two grammar-named stems for one node: existingStem names neither", existingStem(dir, "1:1") === null && canonicalStemsFor(dir, "1:1").length === 2);
-  check("a verify dir that does not exist holds no sets", allSets(path.join(dir, "missing")).length === 0 && existingStem(path.join(dir, "missing"), "1:1") === null);
+  // which sets hold a node, and the node a set is of: test/node-artefacts.test.ts
+  check("a verify dir that does not exist holds no sets", allSets(path.join(dir, "missing")).length === 0);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -123,7 +118,8 @@ console.log("\nscreenKey without an export index:");
   check("…the set's own stem is taken", keyOf(k("Beds__1_1")) === "1:1 Beds__1_1");
   put(path.join(verifyDir, "Sheds.expected.json"), expectation("2:2", "Sheds"));
   const legacy = k("Sheds__2_2");
-  check("a legacy-named set of the node counts as another name (run --migrate)", legacy.status === "unresolved" && /Sheds/.test(legacy.why) && /--migrate/.test(legacy.why));
+  check(`a legacy-named set of the node never refuses its canonical stem: taken, the legacy set listed for --migrate (got ${JSON.stringify(legacy)})`,
+    legacy.status === "resolved" && legacy.stem === "Sheds__2_2" && JSON.stringify(legacy.legacy) === JSON.stringify(["Sheds"]));
   fs.rmSync(root, { recursive: true, force: true });
 }
 
@@ -197,7 +193,7 @@ console.log("\n[setKey] a query to the set --status / --wait key a run by:");
   check(`[setKey] after a Figma rename, the name and the id find the existing Old_Trays__1_1 (got ${sk("Seed Trays")} / ${sk("1:1")})`,
     sk("Seed Trays") === "1:1 Old_Trays__1_1 - true" && sk("1:1") === "1:1 Old_Trays__1_1 - true" && sk("Old_Trays__1_1.dark") === "1:1 Old_Trays__1_1.dark dark true");
   const other = sk("Seed_Trays__1_1");
-  check(`[setKey] another stem of the node → unresolved, naming the set it has (got ${other})`, /^unresolved: node 1:1 already has a verify set under another name \(Old_Trays__1_1\)/.test(other));
+  check(`[setKey] another stem of the node → unresolved, naming the set it has (got ${other})`, /^unresolved: node 1:1 already has a verify set \(Old_Trays__1_1\) — one node, one verify set: pass that name$/.test(other));
   put(path.join(verifyDir, "Shed.expected.json"), expectation("2:2", "Sheds"));
   const legacyName = sk("Shed");
   check(`[setKey] a legacy-named set's own name → unresolved, with --migrate (got ${legacyName})`, /^unresolved: Shed is a legacy-named verify set — run verify-screen --migrate --apply/.test(legacyName));
@@ -206,7 +202,7 @@ console.log("\n[setKey] a query to the set --status / --wait key a run by:");
   // a run open in the run cache of a set with no files yet (openSets) fixes the node's stem like a set on disk
   const withOpen = (q: string): string => { const k = setKey(q, { exportDir, verifyDir, openSets: ["Shed_Run__2_2"] }); return k.status === "resolved" ? `${k.name} ${k.existing}` : `unresolved: ${k.why}`; };
   check(`[setKey] an open run's set fixes the stem: the name and the id → Shed_Run__2_2, existing (got ${withOpen("Sheds")} / ${withOpen("2:2")})`,
-    withOpen("Sheds") === "Shed_Run__2_2 true" && withOpen("2:2") === "Shed_Run__2_2 true" && /^unresolved: node 2:2 already has a verify set under another name \(Shed_Run__2_2\)/.test(withOpen("Sheds__2_2")));
+    withOpen("Sheds") === "Shed_Run__2_2 true" && withOpen("2:2") === "Shed_Run__2_2 true" && /^unresolved: node 2:2 already has a verify set \(Shed_Run__2_2\)/.test(withOpen("Sheds__2_2")));
   // that run's live status is in the run cache and no file of its set is in the verify dir: a refusal names the run, and
   // the command that ends it — not a set the user cannot find there
   put(path.join(root, "package.json"), {});
@@ -214,14 +210,7 @@ console.log("\n[setKey] a query to the set --status / --wait key a run by:");
   const endIt = "--status Shed_Run__2_2 --phase failed --run run-s --dir ";
   const runRefusal = withOpen("Sheds__2_2");
   check(`[setKey] the other name is only an open run: the refusal says so and how to end it (got ${runRefusal})`,
-    runRefusal.startsWith("unresolved: node 2:2 already has a verify set under another name (an open run run-s under Shed_Run__2_2 (no file of it yet; end it: ") && runRefusal.includes(endIt));
-  const two = nodeStem(verifyDir, "1:1", "Seed Trays", ["New_Trays__1_1"]);
-  writeStatus(path.join(verifyDir, "New_Trays__1_1"), { runId: "run-t", phase: "queued", by: "agent" });
-  const twoRun = nodeStem(verifyDir, "1:1", "Seed Trays", ["New_Trays__1_1"]);
-  check(`[nodeStem] two stems, one only an open run: the set on disk by name, the other as that run (got ${"why" in two ? two.why : ""} / ${"why" in twoRun ? twoRun.why : ""})`,
-    "why" in two && two.why.includes("(New_Trays__1_1, Old_Trays__1_1)") && "why" in twoRun
-    && twoRun.why.startsWith("node 1:1 has 2 verify sets under different names (an open run run-t under New_Trays__1_1 (no file of it yet; end it: ")
-    && twoRun.why.includes("--status New_Trays__1_1 --phase failed --run run-t --dir ") && twoRun.why.endsWith(", Old_Trays__1_1) — keep one"));
+    runRefusal.startsWith("unresolved: node 2:2 already has a verify set (an open run run-s under Shed_Run__2_2 (no file of it yet; end it: ") && runRefusal.includes(endIt));
   const legacyOnly = setKey("Sheds", { exportDir, verifyDir });
   check(`[setKey] a node with only a legacy set → its new stem, not existing, the legacy set listed (got ${JSON.stringify(legacyOnly)})`,
     legacyOnly.status === "resolved" && legacyOnly.name === "Sheds__2_2" && !legacyOnly.existing && JSON.stringify(legacyOnly.legacy) === JSON.stringify(["Shed"]));

@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { runCacheDir } from "./run-cache.ts";
+import { setBaseOf, setFile } from "./verify-sets.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import type { ProcessStamp } from "../bridge/src/file-lock.ts";
 
@@ -72,7 +73,7 @@ export function isVerifyStatusV2(x: unknown): x is VerifyStatusV2 {
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 
 /** The LIVE status of `<base>` (design/verify/<S>): `<run cache>/<S>.status.json`. */
-export const liveStatusFile = (base: string): string => path.join(runCacheDir(path.dirname(base)), path.basename(base) + ".status.json");
+export const liveStatusFile = (base: string): string => path.join(runCacheDir(path.dirname(base)), setFile(path.basename(base), "status"));
 
 /** A status file read: a v2 status, "v1" (an older hand-written one), or null (absent, unreadable, or neither). */
 export function readStatusFile(file: string): VerifyStatusV2 | "v1" | null {
@@ -99,9 +100,8 @@ export function runCommands(base: string, open: { runId: string }): { waitIt: st
 /** The sets of `verifyDir` with a run open (a v2 live status that has not ended) in its run cache, sorted — a run opened
  *  by --status before any of its set's files exist is one of them. */
 export function openRunSets(verifyDir: string): string[] {
-  const SUFFIX = ".status.json";
   let files: fs.Dirent[];
   try { files = fs.readdirSync(runCacheDir(verifyDir), { withFileTypes: true }); } catch { return []; }
-  return files.filter((e) => e.isFile() && e.name.endsWith(SUFFIX)).map((e) => e.name.slice(0, -SUFFIX.length))
+  return files.filter((e) => e.isFile() && setBaseOf(e.name, "status") !== null).map((e) => setBaseOf(e.name, "status") ?? e.name)
     .filter((name) => { const st = readStatusFile(liveStatusFile(path.join(verifyDir, name))); return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase); }).sort();
 }

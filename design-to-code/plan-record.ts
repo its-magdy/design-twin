@@ -32,8 +32,9 @@ import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, RECORD_V1_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
-import { readRegularFile } from "./read-json.ts";
-import { legacyPlanHash, planHash } from "./content-hash.ts";
+import { reportRecordNames } from "./report-freshness.ts";
+import { siblingFile } from "./verify-sets.ts";
+import { hookHashOf, planHash } from "./content-hash.ts";
 import { canonical } from "./plan-waivers.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
@@ -173,7 +174,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
       if (r === null) { if (!outside.includes(slash(p))) outside.push(slash(p)); } else if (!artifacts.includes(r)) artifacts.push(r);
     };
     addArtifact(reportAt);
-    addArtifact(reportAt.replace(/\.report\.json$/, ".report.md"));
+    addArtifact(siblingFile(reportAt, "report", "reportMd"));
     for (const a of report.artifacts) {
       if (typeof a === "string") addArtifact(a);
       else if (a && typeof a.path === "string" && !("exists" in a && a.exists === false)) addArtifact(a.path);
@@ -203,7 +204,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
     // A hook record under the older formula matches only while verification is unchanged — re-stamp it (computed on
     // the plan BEFORE this record touches verification) so this write does not send the plan back to pending
     const hook = v.hook;
-    if (hook && typeof hook.planHash === "string" && hook.planHash !== planHash(plan) && hook.planHash === legacyPlanHash(plan)) {
+    if (hook && hookHashOf(hook, plan) === "legacy") {
       hook.planHash = planHash(plan);
       notes.push("the hook's record held an older plan hash that also covered verification — re-stamped with the current one, so this record does not reopen the plan");
     }
@@ -243,8 +244,8 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
 // anything that report decides (recordFacts, above: verdict, headline, counts, mode, reason, renderer, the open
 // deltas, a11y; not artifacts, which depend on the disk) that is not what the report says, was edited by hand. The one
 // verification check that BLOCKS in verify-build: a hand edit there would pass for the tool's record, and re-recording
-// repairs it. It also reopens a plan the hook had closed (verify-build.ts isOpen), and --status then reads "blocked" — or
-// "failed" when a report says fail, which comes first (verify-build.ts computeStatus). verify-screen --migrate checks a
+// repairs it. It also reopens a plan the hook had closed (plan-status.ts open), and --status then reads "blocked" — or
+// "failed" when a report says fail, which comes first (plan-status.ts status). verify-screen --migrate checks a
 // plan with it before and after a rename (verify-migrate.ts). A recorded block with only the first record's keys (recorded@1) is read the
 // older way, and only what that record held is compared: verdict, headline, behaviourHeadline and counts (recordedV1Edits);
 // one with a key only @2 writes is a @2 block, `schema` or not (doc-guards.ts
@@ -259,17 +260,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
 export interface RecordedEdit { fact: string; advice: string }
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
-// The report a record's reportSha256 still names, parsed — null when there is none to compare with: no report on disk
-// (or not a regular file), its bytes rewritten since (the sha differs: an older record, verify-build.ts
-// recordedReportWarnings), or not a verify report.
-function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string): VerifyReport | null {
-  if (typeof report !== "string" || !report || typeof reportSha256 !== "string") return null;
-  const bytes = readRegularFile(path.resolve(cwd, report));
-  if (!bytes || sha256Hex(bytes) !== reportSha256) return null;
-  let parsed: unknown = null;
-  try { const x: unknown = JSON.parse(bytes.toString("utf8")); parsed = x; } catch { /* unparseable: not the report the sha names */ }
-  return isVerifyReport(parsed) ? parsed : null;
-}
+// (the report a record's reportSha256 still names: report-freshness.ts reportRecordNames)
 // A recorded@1 block (the first record's keys only) whose reportSha256 still names the report on disk: its verdict,
 // headline, behaviourHeadline and counts that are not what that report says were edited by hand. The first writer took
 // each of them from the report as recordFacts does now — verdict and headline copied as they are (the headline is the
@@ -334,4 +325,4 @@ function recordedEditFacts(plan: Plan, cwd: string): RecordedEdit[] {
   return out;
 }
 
-export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, reportRecordNames, updatePlan, verificationFacts };
+export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, updatePlan, verificationFacts };

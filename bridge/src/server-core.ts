@@ -23,6 +23,7 @@ import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS }
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
 import { daemonSupported, legacySock } from "./daemon.ts";
+import { isConnId, connectionFor } from "./route.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
 import { replyShapeError } from "./commands.ts";
@@ -185,6 +186,33 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // an unauthenticated caller gains over the 401 is one bit it already had ("a bridge is here").
 // Origin/Host failures are still refused outright at the HTTP layer.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
+
+// ---- the plugin <-> bridge protocol on the wire: the JSON each side sends. The plugin's side is
+// figma-plugin/ui.html (plain JS, so these types are its contract, not its source); the test suites'
+// fake plugin (test/fake-plugin.ts) sends and reads exactly these.
+
+/** bridge -> plugin: run one command; the plugin answers with a ReplyFrame carrying the same id. */
+export interface CommandFrame<C extends Cmd = Cmd> { id: string; cmd: C; args: Commands[C]["args"] }
+/** bridge -> plugin: the bridge gave up on request `id` (timed out, stalled out, or its caller left). */
+export interface CancelFrame { type: "cancel"; id: string }
+export type BridgeFrame = CommandFrame | CancelFrame;
+/** plugin -> bridge: who this plugin is, sent on every socket open. ui.html sends null for what it does not
+ *  know; a plugin older than version reporting omits pluginVersion. */
+export interface HelloFrame {
+  type: "hello";
+  instanceId?: string | null; file?: string | null; fileKey?: string | null; page?: string | null; pluginVersion?: string | null;
+}
+/** plugin -> bridge: an unsolicited progress tick (figma-plugin/src/progress.ts), for the run serving `requestId`. */
+export interface ProgressFrame {
+  type: "progress";
+  requestId?: string | null; phase?: string; page?: { index: number; of: number; name?: string | null } | null;
+  nodes?: number | null; assets?: number | null;
+  /** a `queued` frame: who the waiting run is for */
+  source?: "ui" | "bridge"; label?: string;
+}
+/** plugin -> bridge: the answer to command `id`. */
+export type ReplyFrame = { [C in Cmd]: { id: string; ok: true; result: Commands[C]["reply"] } }[Cmd] | { id: string; ok: false; error: string };
+export type PluginWireFrame = HelloFrame | ProgressFrame | ReplyFrame;
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
@@ -362,12 +390,6 @@ function portInUseMessage(port: number, platform: NodeJS.Platform = process.plat
 }
 
 // ---- the client registry: which plugin sockets are connected, what each `hello` said, and who addresses which.
-
-/** A connection id as the registry mints it ("c" + a per-bridge sequence number). A target of this form
- *  names one socket, so it never depends on identification: waits for a client never hold it for a name. */
-export function isConnId(target: string): boolean {
-  return /^c\d+$/.test(target);
-}
 
 /** How long a connected client that has not sent its `hello` still holds a wait that would otherwise resolve
  *  without its file name (an unaddressed request, a listing, an ambiguity). The plugin sends it a beat after the socket opens (ui.html, on every open); a client that never does
@@ -990,7 +1012,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // drain), 0 (DROPPED: the socket is closed, or its buffer is past backpressureLimit) or the bytes
   // written. Only a drop is a failure: false, so the caller can say so instead of waiting on a reply to
   // a frame that never left.
-  const sendFrame = (ws: BridgeSocket, frame: object): boolean => ws.send(JSON.stringify(frame)) !== 0;
+  const sendFrame = (ws: BridgeSocket, frame: BridgeFrame): boolean => ws.send(JSON.stringify(frame)) !== 0;
 
   const liveClients = registry.live;
   const describe = registry.describe;
@@ -1246,25 +1268,13 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   };
 }
 
-// The object createBridge() returns — what both front-ends (and the daemon) drive.
-/**
- * `info` re-described for the connection `connId` — the `clients[]` row with that connId supplies
- * `connId`, `connectedAt` and `connectionUptimeMs` (its `uptimeMs`); every other field (`connected`,
- * `clientsConnected`, `clients`, `connectionsThisRun`, `takeovers`, `lastTakeoverAt`) is kept. A null/absent
- * connId, or one not among `clients`, returns `info` unchanged. Pure — works on a daemon's relayed
- * `status().connection` as well as on the own bridge's connectionInfo().
- */
-function connectionFor(info: ConnectionInfo, connId: string | null | undefined): ConnectionInfo {
-  if (!connId) return info;
-  const row = (info.clients || []).find((c) => c && c.connId === connId);
-  if (!row) return info;
-  return { ...info, connId: row.connId, connectedAt: row.connectedAt, connectionUptimeMs: row.uptimeMs };
-}
-
+// The object createBridge() returns — what route.ts's own adapter (and through it the daemon) drives.
 export type Bridge = ReturnType<typeof createBridge>;
 export type { BridgeOptions };
 
 // verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, maxPayloadFromEnv, createRegistry, connectionFor, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };
+// isConnId and connectionFor live in route.ts (side-effect free, so the front-ends reach them without this
+// module's load-time token read); re-exported for the suites that test them here.
+export { createBridge, maxPayloadFromEnv, createRegistry, connectionFor, isConnId, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, portInUseMessage, IDENTIFY_GRACE_MS };

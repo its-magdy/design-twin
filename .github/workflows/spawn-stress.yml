@@ -17,7 +17,7 @@ on:
       - bridge/src/stdio.ts
       - test/run-suites.ts
       - test/pool.ts
-      - test/spawn-helper.ts
+      - test/children.ts
       - test/assert.ts
       - test/spawn-stress/**
       - .github/workflows/spawn-stress.yml

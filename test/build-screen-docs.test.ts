@@ -2,6 +2,9 @@
 //   bun test/build-screen-docs.test.ts
 // Each check asserts one rule is STATED in the text a builder reads; the map-status list is also
 // compared with the validator's own source so the doc and the code cannot drift apart.
+// ir-fields.md: which fields it names is the parity check at the end (every IR field doc-types.ts declares is named
+// there, and every field it introduces exists). A sentence of it is pinned only when it states a rule that changes
+// what a builder does (treat as unknown, never rotate again, the main-axis longhand…), not a field's name or shape.
 import fs from "node:fs";
 import path from "node:path";
 import { check, report } from "./assert.ts";
@@ -554,7 +557,7 @@ console.log("build-screen docs (assets):");
   const mcp = flat(read("bridge/src/figma-mcp.ts"));
   const hv = flat(read("claude-plugin/skills/audit-design/references/heuristics.md"));
   const ck = flat(read("claude-plugin/skills/audit-design/references/checklist.md"));
-  check("ir-fields: assetSkipped \"hidden\" + assetFrom (the visible twin's file, still hidden:true)", /`assetSkipped`.{0,400}`"hidden"`/.test(irf) && /`assetFrom`/.test(irf) && /keeps `hidden:true`/.test(irf));
+  check("ir-fields: a hidden graphic pointed at its visible twin's file still keeps hidden:true (still conditional UI)", /`assetFrom`\*\* = the twin's node id; the node keeps `hidden:true`/.test(irf));
   check("ir-fields: sourceTransform is already drawn into the asset file — never rotate/flip again", /`sourceTransform`.{0,200}drawn into it\. Never rotate or flip/.test(irf) && /bare `rotation`\/`flipped` still applies on a `geometry` leaf/.test(irf));
   check("ir-fields: layout is absent on asset/geometry/assetSkipped leaves", /`layout` is absent on asset, `geometry` and `assetSkipped` leaves/.test(irf));
   check("extract manifest table: assetsHidden + hiddenNodes, and any geometry fallback warns", /\| `assetsHidden` \|/.test(ext) && /\| `hiddenNodes` \|/.test(ext) && /any fallback warns and names them/.test(ext));
@@ -573,13 +576,9 @@ console.log("build-screen docs (assets):");
     /\| `hiddenNodes` \| nodes hidden themselves or under a hidden ancestor, kept in the tree/.test(ext) && !/nodes kept as `hidden:true`/.test(ext));
   check("README + export-layout: an embedded image's numbers (<use>/<image> transform, <pattern> x/y/width/height) compare relatively",
     [readme, exl].every((d) => /`<use>`\/`<image>`/.test(d) && /`<pattern>`'s\s+x\/y\/width\/height/.test(d) && /relatively, within 1 %/.test(d)));
-  check("ir-fields: a hidden graphic's twin has the same variable modes", /same component and parent variants, same variable modes, size/.test(irf));
-  check("ir-fields: a motion styles[] row's shape; a custom: true row carries the style's entries[] (same shape) and description; entries: [] is an empty style, absent entries are unreadable; a `kind` row is an unknown style kind",
-    /`styles\[\]` row is an applied animation style: `\{id, name, styleId, description, duration, timelineOffset, props\}`/.test(irf) &&
-    /`custom: true` is a custom animation style: the row itself has no `duration` or `props`; its `entries\[\]` are the animations the style plays, in order, each a row of that same shape, plus the style's `description`/.test(irf) &&
-    /`entries: \[\]` is a style that plays no animations; with `entries` absent its animations could not be read/.test(irf) &&
-    /A row with a `kind` \(e\.g\. `"spring"`\) is an animation style kind this exporter doesn't know: only `id`, `name`, `styleId` and `timelineOffset` are exported/.test(irf) &&
-    !/you have its name only/.test(irf) && !/read as its name only \(no duration or props\)/.test(irf));
+  check("ir-fields: a motion styles[] row — entries: [] plays no animations, absent entries are unknown; a `kind` row is an unknown style kind, never read as a Figma style",
+    /`entries: \[\]` is a style that plays no animations; with `entries` absent its animations could not be read, so treat them as unknown/.test(irf) &&
+    /A row with a `kind` \(e\.g\. `"spring"`\) is an animation style kind this exporter doesn't know: .{0,80} so treat it as unknown and never read it as a Figma style/.test(irf));
   check("export-layout: styles.animation.json lists the custom animation styles, entries[] in the motion styles[] row form; entries: [] = none, absent = unreadable",
     /`styles\.grid\.json` \/ `styles\.animation\.json` — one file per style type/.test(exl) &&
     /`styles\.animation\.json` lists the file's custom animation styles, each with `entries\[\]`/.test(exl) && /same form as a motion `styles\[\]` row/.test(exl) &&
@@ -662,8 +661,8 @@ console.log("build-screen docs (quick keys + export docs):");
   check("ir-fields.md carries QUICK_KEYS (bridge/src/quick-keys.ts) between the quick-keys markers", block !== "" && norm(block) === norm(QUICK_KEYS));
   check("the block sits before `## Contents`", m !== null && irRaw.indexOf("<!-- quick-keys:start") < irRaw.indexOf("## Contents") && irRaw.indexOf("<!-- quick-keys:end -->") < irRaw.indexOf("## Contents"));
   const qk = flat(block);
-  check("the block states `text` not `characters`, box.w/h, index w/h, PAGE coordinates + the nearest-frame x/y rule",
-    /`text`, not `characters`/.test(qk) && /`box\.w`\/`box\.h`/.test(qk) && /A single-screen index row repeats the size as `w`\/`h`/.test(qk) && /PAGE \(canvas\) coordinates/.test(qk) && /nearest frame \/ component \/ instance \/ section ancestor/.test(qk) && !/parent-relative/.test(qk));
+  check("the block states `text` not `characters`, box.w/h, PAGE coordinates + the nearest-frame x/y rule",
+    /`text`, not `characters`/.test(qk) && /`box\.w`\/`box\.h`/.test(qk) && /PAGE \(canvas\) coordinates/.test(qk) && /nearest frame \/ component \/ instance \/ section ancestor/.test(qk) && !/parent-relative/.test(qk));
   check("the block states absolute:true vs layout.mode, bottom → top order, hidden + ANY ANCESTOR + no `visible`, runs FIRST run, three strokes, I<…> ids",
     /`absolute:true`/.test(qk) && /layout\.mode:"absolute"/.test(qk) && /bottom → top/.test(qk) && /OR ANY ANCESTOR/.test(qk) && /no node-level `visible` key/.test(qk) && /FIRST\s+run's/.test(qk) && /Three `strokes`/.test(qk) && /`I<instance id>;<layer id>`/.test(qk));
   // statements the real exports contradicted — renderBox is not an outset (a TEXT's is usually
@@ -675,9 +674,8 @@ console.log("build-screen docs (quick keys + export docs):");
     /on a TEXT usually smaller than `box` \(observed\)/.test(irBody) && ![qk, irBody].some((d) => /adds shadow \/ stroke \/ blur extent|`renderBox`\*\* — includes/.test(d)));
   check("hidden: descendants are not flagged on its account (they may carry their own); no node-level `visible` — quick keys and ir-fields",
     [qk, irBody].every((d) => /not flagged on its account \(they may carry their own\)/.test(d) && /no node-level `visible` key/.test(d) && !/descendants (carry no flag|carry none)/.test(d)));
-  check("x/y: a section is a position container (quick keys + ir-fields); layout.inferred children still carry x/y; tokens.strokes may be a list",
-    /instance \/ section ancestor/.test(irBody) && /`layout\.inferred:true` is a guess on a frame without auto layout — its children still carry `x`\/`y`/.test(qk) &&
-    /`tokens\.strokes` is a variable name \(or a list\)/.test(qk));
+  check("x/y: a section is a position container (quick keys + ir-fields); layout.inferred children still carry x/y",
+    /instance \/ section ancestor/.test(irBody) && /`layout\.inferred:true` is a guess on a frame without auto layout — its children still carry `x`\/`y`/.test(qk));
   // X-01: fixedChildren = the LAST N of children[]; nothing may say first / leading N next to it.
   const x01Files = ["claude-plugin/skills/build-screen/references/ir-fields.md", ...["_template", "web-tailwind", "web-css-modules", "react-native", "swiftui", "flutter", "android-compose"].map((n) => `claude-plugin/skills/build-screen/profiles/${n}.md`), "figma-plugin/src/serialize.ts"];
   const firstN = "(?:first N\\b|first \\d+ children|leading (?:child|children)\\b|leading[^.]{0,30}pinned)";
@@ -689,14 +687,14 @@ console.log("build-screen docs (quick keys + export docs):");
     ![irBody, qk, skill].some((d) => /every TEXT carries it/.test(d)) && /only a node that can hold children has it/.test(qk) && /Only a node that can hold children has a `layout`/.test(irBody) && /only on nodes that hold children/.test(skill));
   const olderRe = /\*\*Older exports\.\*\*.*?\(design-diff does\)\./;
   check("the \"Older exports\" sentence (quick keys + ir-fields): gridColumnStart/RowStart:-1 on every node, gridAlignSelf/gridJustifySelf on a node whose parent is not a grid, layout on SLICE/STICKY and other leaf types",
-    [qk, flat(block)].every((d) => {
+    [qk].every((d) => {
       const s = olderRe.exec(d)?.[0] ?? "";
       return /`gridColumnStart:-1`/.test(s) && /`gridRowStart:-1`/.test(s) && /`gridAlignSelf`/.test(s) && /`gridJustifySelf`/.test(s) && /whose parent is not a grid/.test(s) && /SLICE, STICKY and other leaf type/.test(s);
     }) && !/Noise to ignore/.test(qk));
   check("fixedChildren = the LAST N, fixed only (\"sticky\" is not exposed), each pinned child carries x/y (quick keys + ir-fields)",
     [qk, irBody].every((d) => /`fixedChildren:N`(?:\*\* —| =) the LAST N entries of `children\[\]`/.test(d) && /"sticky" is not exposed/.test(d) && /[Ee]ach pinned child carries `x`\/`y`/.test(d) && /only an `absolute:true` child be fixed/.test(d)));
-  check("ir-fields: the token catalog row has `collectionKey` (the collection's key; names repeat)",
-    /`variables\[\] \{name, type, collection, collectionKey,/.test(irBody) && /`collectionKey` is the collection's own key \(collection NAMES repeat/.test(irBody));
+  check("ir-fields: join a variable to its collection by `collectionKey` — collection names repeat",
+    /`collectionKey` is the collection's own key \(collection NAMES repeat/.test(irBody));
   const syncSkill = flat(read("claude-plugin/skills/sync-design/SKILL.md"));
   check("sync-design: a \"differ only by the exporter's format\" warning after a plugin update is not a design change; re-run --expect/--compare once",
     /differ only by the exporter's format" after a plugin update is not a design change/.test(syncSkill) && /Re-run `verify-screen --expect` \/ `--compare` once/.test(syncSkill));
@@ -721,7 +719,7 @@ console.log("build-screen docs (quick keys + export docs):");
     && /A symlinked `design\/export` is found by its path through `design\/`/.test(syncSkill));
   const readme21 = flat(read("bridge/README.md"));
   const extract21 = extractDocs;
-  const verbs21 = read("bridge/src/verbs.ts");
+  const verbs21 = read("bridge/src/cli-commands.ts"); // the verb help pages (VERB_ROWS)
   const mcp21 = read("bridge/src/figma-mcp.ts");
   const mcpAt = mcp21.indexOf('"figma_list_children",');
   const mcpDesc = mcpAt < 0 ? "" : mcp21.slice(mcpAt, mcp21.indexOf("inputSchema", mcpAt));
@@ -737,8 +735,6 @@ console.log("build-screen docs (quick keys + export docs):");
   const ir = flat(irRaw);
   check("ir-fields Text: with runs[] `font` holds the FIRST run's values; \"mixed\" only when Figma could not split into runs",
     /`font\.size`\*\* px\. With `runs\[\]`[^.]{0,60}`font` holds the FIRST run's values/.test(ir) && /`"mixed"` appears only when Figma could not split/.test(ir) && !/\(or `"mixed"` → read `runs`\)/.test(ir));
-  check("ir-fields tokens example: a single bound paint is a string, a list only when several paints are bound",
-    /fills:"color\/surface"/.test(ir) && !/fills:\["color\/surface"\]/.test(ir) && /a string, a list only when\s+several paints are bound/.test(ir));
   check("[ir-fields] hidden sits on the layer switched off (descendants not flagged on its account); box x/y presence rule + group container rule; children[] order line",
     /sits on the layer that was switched off itself/.test(ir) && /present only where the parent does not lay the node out/.test(ir) && /skips GROUP and boolean-operation parents/.test(ir) && /\*\*`children\[\]`\*\* is Figma's layer order, normally bottom → top/.test(ir));
   // one wording — a consuming file's --design-system is not the library's catalog.
@@ -1151,12 +1147,35 @@ console.log("build-screen docs (wrapped-track gap):");
 console.log("build-screen docs (shader property definitions):");
 {
   const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
-  check("ir-fields: a shader's `propertyDefs[defId].name` names an input (the source identifier, not the panel label), `type` is lowercased, and the map is absent without Figma metadata",
-    /\*\*`propertyDefs`\*\* `\{defId: \{name, type, default\?, description\?, tokens\?\}\}` names those inputs — read `propertyDefs\[defId\]\.name` to name a shader input \(the identifier the shader's source declares/.test(irf)
-    && /Figma's properties panel can show a different label, which the Plugin API does not expose/.test(irf)
-    && /can list inputs `properties` omits/.test(irf) && /absent when Figma supplied no definitions/.test(irf));
-  check("ir-fields: a bound shader `default` (or a bound colour inside one) is named under `propertyDefs[defId].tokens`, keys `default` / `default.color` / `default.stops.N.color`",
-    /left out of `default` and named under that definition's own `tokens` \(`propertyDefs\[defId\]\.tokens`, keys `default`, `default\.color`, `default\.stops\.N\.color`\)/.test(irf));
+  check("ir-fields: name a shader input by `propertyDefs[defId].name` (the source identifier, not the panel label)",
+    /read `propertyDefs\[defId\]\.name` to name a shader input \(the identifier the shader's source declares/.test(irf)
+    && /Figma's properties panel can show a different label, which the Plugin API does not expose/.test(irf));
+}
+console.log("ir-fields ↔ doc-types (every IR field is documented, every documented field exists):");
+{
+  // doc-types.ts is cut into sections by `// ====… <title>` banners. A section's field names are every `name:` /
+  // `name?:` its interfaces and inline object types declare, read after comments and string literals are stripped.
+  const docTypes = read("bridge/src/doc-types.ts");
+  const banners = [...docTypes.matchAll(/^\/\/ ={8,} (.+)$/gm)];
+  const fieldsIn = (title: string): Set<string> => {
+    const i = banners.findIndex((b) => (b[1] ?? "").startsWith(title));
+    const src = i < 0 ? "" : docTypes.slice(banners[i]?.index, banners[i + 1]?.index ?? docTypes.length)
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    return new Set([...src.matchAll(/(?<=[{;,(\s])([A-Za-z_$][\w$]*)\??\s*:/g)].map((m) => m[1] ?? ""));
+  };
+  const irFields = fieldsIn("the IR");
+  const docFields = fieldsIn("the documents a pull writes"); // root-level fields of a pulled doc: manifest, flows, measurements…
+  const irRaw = read("claude-plugin/skills/build-screen/references/ir-fields.md");
+  // A field is documented when its name is an identifier in some code span of ir-fields.md (`font.case`, `{x, y}`, …).
+  const inCode = new Set([...irRaw.matchAll(/`([^`]+)`/g)].flatMap((m) => (m[1] ?? "").match(/[A-Za-z_$][\w$]*/g) ?? []));
+  check(`the IR section of doc-types.ts was found and read (${irFields.size} field names)`, irFields.size > 200 && irFields.has("fixedChildren") && irFields.has("propertyDefs"));
+  const undocumented = [...irFields].filter((f) => !inCode.has(f)).sort();
+  check("every IR field doc-types.ts declares is named in ir-fields.md" + (undocumented.length ? " — missing: " + undocumented.join(", ") : ""), undocumented.length === 0);
+  // ir-fields.md introduces a field as bold code (**`font.case`**, **`hidden:true`**, **`runs[]`**): every name on the
+  // path before a `:value` must be a field doc-types.ts declares, in the IR or on the pulled document itself.
+  const introduced = [...irRaw.matchAll(/\*\*`([^`]+)`\*\*/g)].map((m) => m[1] ?? "");
+  const unknown = introduced.filter((f) => (f.split(":")[0] ?? "").split(/[.[\]]+/).filter(Boolean).some((seg) => !irFields.has(seg) && !docFields.has(seg)));
+  check("every field ir-fields.md introduces exists in doc-types.ts" + (unknown.length ? " — unknown: " + unknown.join(", ") : ""), introduced.length > 50 && unknown.length === 0);
 }
 
 report();

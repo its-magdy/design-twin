@@ -1,18 +1,19 @@
 // verify-locate.ts — which screen export and which verify reports a plan is about (locateExport, locateReports).
-// verify-build computes a plan's status from them; verify-screen --migrate (verify-migrate.ts) checks that a rename
-// leaves every plan finding the reports it found. A module of its own so --migrate does not bundle verify-build.
+// plan-status.ts computes a plan's status from them (verify-build's checks read them too); verify-screen --migrate
+// (verify-migrate.ts) checks, through plan-status, that a rename leaves every plan finding the reports it found.
 import fs from "node:fs";
 import path from "node:path";
-import { sha256Hex } from "../bridge/src/hash.ts";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id in a `<Layer>__<id>` stem (the exporter's own file naming)
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
 import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { canonical } from "./run-cache.ts";
-import { nodeIdFromSetName } from "./verify-sets.ts";
-import { isJsonObject } from "./types.ts";
-import type { CodeInputs, IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import { nodeArtefacts, planNode } from "./node-artefacts.ts";
+import { setBaseOf, setFacts, setFile } from "./verify-sets.ts";
+import type { IndexRow, IrNode, Plan, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import { reportInputs } from "./report-freshness.ts";
+import type { ReportInputs } from "./report-freshness.ts";
 
 // Stricter than project-layout's findExportDir (any export marker): the plan's screen is looked up in pages/,
 // so design/export counts only once it holds pages/ — else the pre-split design/ is tried.
@@ -89,7 +90,8 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, nodeIdFromStem(plan.screen), planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
+  // the plan's node (node-artefacts.ts planNode), then — a lookup hint, not its identity — the id in its `screen` stem
+  const ids = [planNode(plan, planFile), nodeIdFromStem(plan.screen)].filter((id): id is string => !!id);
   let row: IndexRow | null = null;
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   let staleFile: string | null = null;
@@ -124,21 +126,14 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length, staleFile });
 }
 
-/** The node id a plan is of, as locateReports reads it: its `nodeId`, else its export's, else the id in its `screen`
- *  stem or its own file name; null when none names one. */
-function planNodeId(plan: Plan, planFile: string | undefined, exp: ExportHit | null): string | null {
-  return plan.nodeId || (exp && exp.nodeId) || nodeIdFromStem(plan.screen) || (planFile ? nodeIdFromStem(path.basename(planFile, ".json")) : null);
-}
-
 /** A verify report as locateReports() summarises it for the status computation. */
 /** How locateReports() tied a report to the plan (first that matches, in this order). */
 export type ReportMatch = "name" | "nodeId" | "expectation frame" | "layer name";
 export interface ReportRef {
   rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
-  exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
-  expectationChanged: boolean; expectationRel: string | null;
-  /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
-  waiversSha256: string | null;
+  measuredAt: string | null; mtimeMs: number;
+  /** what the report was computed against (report-freshness.ts reportInputs) — judged there, never here */
+  inputs: ReportInputs;
   /** report.behaviour, summarised (null = none or unreadable — a report without a behaviour section). Warnings only. */
   behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
   /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
@@ -146,9 +141,9 @@ export interface ReportRef {
 }
 
 // Reports are found by name first — `<Layer>__<id>` (the set verify-screen names the node), the plan's
-// own name, its `screen` — then by content: a report whose `nodeId` is the plan's (or whose set name carries it, a
-// variant's `<Layer>__<id>.<slug>` too), whose sibling
-// `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
+// own name, its `screen` — then by node: a report whose set is of the plan's node (node-artefacts.ts: the plan's
+// planNode; the set's setNode — its expectation's frame, else the report's `nodeId`, the two disagreeing: none — else
+// the id its set name carries, a variant's `<Layer>__<id>.<slug>` too), or whose `screen` is
 // the frame's layer name when that name is unique in the export (the older `JetRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
@@ -169,39 +164,30 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     planFile ? path.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null,
   ].filter((s): s is string => !!s));
-  const nodeId = planNodeId(plan, planFile, e);
+  const nodeId = planNode(plan, planFile);
+  const art = nodeArtefacts(cwd);
   const layer = e ? e.layerName.trim() : null;
   const out: ReportRef[] = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
     const abs = path.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
-    const stem = f.replace(/\.report\.json$/, "");
+    const stem = setBaseOf(f, "report") ?? f;
     let by: ReportMatch | null = null;
-    const expFile = path.join(dir, stem + ".expected.json");
+    const expFile = setFile(path.join(dir, stem), "expected");
     // A set retired by the guard's printed migration (`<old>.expected.json.retired`) is history, not this screen's report
-    if (!fs.existsSync(expFile) && fs.existsSync(expFile + ".retired")) continue;
-    // Only the expectation's frame.nodeId is read here, so only that is required of the file.
-    const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
+    if (!fs.existsSync(expFile) && fs.existsSync(setFile(path.join(dir, stem), "retired"))) continue;
     if (stems.has(stem)) by = "name";
-    else if (nodeId && (r.nodeId === nodeId || nodeIdFromSetName(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && art.setNode(stem) === nodeId) by = setFacts(dir, stem).expectedId === nodeId ? "expectation frame" : "nodeId";
     else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
-    // @2: which expectation the report was computed against, and whether that file still says the same
-    const want = r.inputs && r.inputs.expectationSha256;
-    let expectationChanged = false;
-    if (want && fs.existsSync(expFile)) { try { expectationChanged = sha256Hex(fs.readFileSync(expFile)) !== want; } catch { /* ignore */ } }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
-      why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
-      exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
-      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
-      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null,
+      why: r.why || [], deltas: r.deltas || null, measuredAt: r.measuredAt || null, mtimeMs, inputs: reportInputs(r),
       behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;
 }
 
-export { exportDirOf, indexRows, locateExport, locateReports, planNodeId };
+export { exportDirOf, indexRows, locateExport, locateReports };

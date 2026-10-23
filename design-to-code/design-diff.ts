@@ -41,9 +41,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type {
-  Box, CatalogBrief, CatalogComponent, CatalogDiff, ComponentsCatalog, DesignSystemManifest, DiffCategory, DiffNodeRef, DiffReport, DiffResult, DirDiffResult,
-  AnimationStyle, EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
-  StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
+  AnyStyle, Box, CatalogBrief, CatalogComponent, CatalogDiff, ComponentsCatalog, DesignSystemManifest, DiffCategory, DiffNodeRef, DiffReport, DiffResult,
+  DirDiffResult, FieldDiff, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff, StylesDoc, TokensDiff, TokensDoc,
+  Variable, VariableCollection,
 } from "./types.ts";
 import { bag, isJsonObject } from "./types.ts";
 import { isLayerFile, isScreenExport, manifestOf, screenRoots } from "./export-shape.ts";
@@ -56,7 +56,7 @@ import { getOrInit } from "./map-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
-import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILE_NAMES, DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { DESIGN_DIR, EXPORT_DIR, MERGED_VARIABLES_FILE, SNAPSHOT_DIR, looksLikeExportDir } from "../bridge/src/project-layout.ts";
 import { LIBRARY_FILE_NAMES, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
 import { runCli, runSync } from "./proc.ts";
@@ -295,14 +295,13 @@ function diffCatalog(oldDoc: ComponentsCatalog, newDoc: ComponentsCatalog): Cata
 }
 const CATALOG_IGNORED = new Set(["page", "pageId", "box", "renderBox"]);
 
-// The five style files (styles.paint/text/effect/grid/animation.json — bridge/src/design-system-layout.ts) share one
+// The style files (one per style kind, bridge/src/design-system-layout.ts STYLE_KINDS) share one
 // shape: `{ exportedAt, file, colorProfile, styles: [{ name, key, id, ...fields }] }`.
-// The export-directory diff (sync-design) covers each of these (and hygiene.json below), so all six
+// The export-directory diff (sync-design) covers each of these (and hygiene.json below), so every one
 // must be diffable rather than exit 2 with "nothing here can be diffed" — otherwise a typography-only or
 // effect-only design-system change would be undetectable. Keyed
-// by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle/
-// CustomAnimationStyle all have one), falling back to `name` for a style that somehow has none.
-type AnyStyle = PaintStyle | TextStyle | EffectStyle | GridStyle | AnimationStyle;
+// by `key` (Figma's style key — stable across pulls; every style kind has one), falling back to `name`
+// for a style that somehow has none.
 function styleKey(s: { key?: string; name?: string } | null | undefined): string {
   return (s && typeof s.key === "string" && s.key) ? "k:" + s.key : "n:" + String((s && s.name) || "");
 }
@@ -611,9 +610,9 @@ function previous(file: string, against: string | undefined, cwd: string = proce
 }
 
 // The design-system files a --design-system pull writes, as bridge/src/design-system-layout.ts names
-// them (the per-component detail directory is not a file to diff): the nine parts under
-// design-system/ and the manifest, design-system.json, which stays at the export root beside it.
-const DS_FILE_NAMES = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+// them (the per-component detail files are not diffed): every part under design-system/ and the
+// manifest, design-system.json, which stays at the export root beside it.
+const DS_FILE_NAMES = DESIGN_SYSTEM_FILE_NAMES;
 const dsFilePath = (exportRoot: string, name: string): string => name === DESIGN_SYSTEM_FILES.MANIFEST ? path.join(exportRoot, name) : path.join(exportRoot, DESIGN_SYSTEM_DIR, name);
 // Every file under an export root this tool diffs as a set: the merged variables.json, every
 // design-system file, and every file of each --as-library export (libraries/<dir>/, as

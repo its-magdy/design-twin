@@ -1,5 +1,5 @@
-// verify-build.ts — the Stop-hook gate for the build-screen skill, and the ONE place a plan's status
-// is computed. Usage, what blocks and the status precedence are in --help (USAGE below).
+// verify-build.ts — the Stop-hook gate for the build-screen skill, and the CLI that prints each plan's computed status
+// (plan-status.ts computes it). Usage, what blocks and the status precedence are in --help (USAGE below).
 //
 // Registered in two places. build-screen/SKILL.md's frontmatter (Stop): active only for a session
 // that actually invoked build-screen. claude-plugin/hooks/hooks.json (SubagentStop, matched to the
@@ -18,12 +18,13 @@
 // Status is COMPUTED, never stored. A stored status can say "verified" beside a report that says
 // "fail", so the hook never writes `plan.status`; it writes `plan.verification.hook`
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
-// and `computeStatus()` derives the status at read time from THREE facts that must all hold: hook
+// and plan-status.ts derives the status at read time from THREE facts that must all hold: hook
 // result "pass"; every file in files[] (and every mapped module) still hashes the same; and the verify
-// report (design/verify/<…>.report.json, schema @2) passes and measured THIS design and THIS code — by
-// content: its inputs.exportContentSha256 equals the export's (timestamps stripped), its
-// inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the hash of the
-// plan's waivers[]/descopes[] now (absent = none). No clock is consulted. A stored "verified"/
+// report (design/verify/<…>.report.json, schema @2) passes and is fresh (report-freshness.ts judge) — by
+// content: its inputs.exportContentSha256 equals the export's (timestamps stripped), its expectation is the one on
+// disk, its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the hash of the
+// plan's waivers[]/descopes[] now (absent = none). No clock decides a status (STALE_HOURS below decides only which
+// plans the Stop hook looks at). A stored "verified"/
 // "static-only" (written by an older hook) is ignored and deleted the next time the hook checks that
 // plan. `status` keeps only the states a PERSON sets: "pending" (default) · "awaiting-user" (paused on
 // a question — skipped, never closed) · "abandoned" (retired — skipped). Every reader runs
@@ -45,7 +46,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { sha256Hex } from "../bridge/src/hash.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { visibility } from "./plan-skeleton.ts";
 import * as contentHash from "./content-hash.ts";
@@ -53,21 +53,26 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
-import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isRecordV2Shaped, isVerificationRecord, parsePlan } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull, readRegularFile } from "./read-json.ts";
+import { isPassingVerdict } from "./plan-waivers.ts";
+import { recordedReport, reportRecordNames } from "./report-freshness.ts";
+import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
+import { anyJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import type {
-  IrNodeType, Plan, PlanAnchor, PlanComputedStatus, PlanHookRecord, PlanLifecycle,
+  IrNodeType, Plan, PlanAnchor, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc,
 } from "./types.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
-import { parsePlanText, recordedEdits, reportRecordNames, updatePlan, verificationFacts } from "./plan-record.ts";
-import { locateExport, locateReports, planNodeId } from "./verify-locate.ts";
+import { parsePlanText, recordedEdits, updatePlan, verificationFacts } from "./plan-record.ts";
+import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "./plan-status.ts";
+import type { StatusResult } from "./plan-status.ts";
+import { locateExport, locateReports } from "./verify-locate.ts";
+import { isPlanFile, nodeArtefacts, planNode, readPlan } from "./node-artefacts.ts";
+import type { BadPlan, PlanFile } from "./node-artefacts.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { exitFlushed, runCli } from "./proc.ts";
-import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE, listPlans } from "../bridge/src/project-layout.ts";
-import { parseSetName } from "./verify-sets.ts";
+import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE } from "../bridge/src/project-layout.ts";
+import { parseSetName, setBaseOf, siblingFile } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
@@ -104,107 +109,26 @@ function staleCutoffMs(): number {
   return Number.isFinite(h) && h > 0 ? h * 3600 * 1000 : 0;
 }
 
+// DELIBERATE clock: this decides the Stop hook's SCOPE (a plan untouched for STALE_HOURS is a leftover from another
+// session, so its hook does not block this one), never a plan's status or a report's freshness — plan-status.ts and
+// `--status` ignore it, and the hook puts a plan's mtime back after writing it so its own write does not reset this.
 function isStale(file: string, now: number = Date.now()): boolean {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try { return now - fs.statSync(file).mtimeMs > cutoff; } catch { return false; }
 }
 
-/** A plan file on disk, parsed and checked (doc-guards.ts parsePlan): plan-skeleton.ts writes it, a model fills it. */
-export interface PlanFile { file: string; plan: Plan }
-/** A plan file that could not be used, and why (one line). */
-export interface BadPlan { file: string; error: string }
-
-function readPlan(file: string): PlanFile | BadPlan {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return { file, error: r.error };
-  const p = parsePlan(r.doc);
-  return "plan" in p ? { file, plan: p.plan } : { file, error: p.error };
-}
-const isPlanFile = (p: PlanFile | BadPlan): p is PlanFile => "plan" in p;
-
 // Every plan under design/plan/, and — separately — the ones that could not be read: those are reported,
 // never silently skipped (a hand-broken plan would otherwise vanish from the hook's view, so it would never be checked).
 function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
-  const dir = path.join(cwd, PLAN_DIR);
-  const read = listPlans(dir).map((f) => readPlan(path.join(dir, f)));
-  return { plans: read.filter(isPlanFile), bad: read.filter((p): p is BadPlan => !isPlanFile(p)) };
+  return nodeArtefacts(cwd, { planDir: path.join(cwd, PLAN_DIR) }).plans();
 }
 
-// The project root a plan belongs to: <root>/design/plan/<x>.json → <root>.
-function rootOfPlan(file: string, fallback?: string): string {
-  const abs = path.resolve(file);
-  const dir = path.dirname(abs);
-  if (dir.endsWith(path.sep + PLAN_DIR)) return path.dirname(path.dirname(dir));
-  return fallback || process.cwd();
-}
-
-// Lifecycle states a PERSON sets. Anything else stored in `status` ("verified", "static-only", from an
-// older hook) is a computed value that must not be trusted, and counts as pending.
-const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
-const LIFECYCLE = new Set<string>(["pending", "awaiting-user", "abandoned"]);
-const COMPUTED_STORED = new Set<string>(["verified", "verified-with-deviations", "static-only"]);
-const isLifecycle = (s: string): s is PlanLifecycle => LIFECYCLE.has(s);
-const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
-  const s = String((plan && plan.status) || "pending").trim().toLowerCase();
-  return isLifecycle(s) ? s : "pending";
-};
-
-// ================================================================ hashing
-
-// files[] AND every anchors/components mapModule (contentHash.planCodeFiles) — a shared
-// shell the plan maps but another plan lists is code this screen renders. The same list verify-screen --compare hashes.
-// `cached`: bytes this run already read (see ProjectGraph.cached); absent, every file is read from disk.
-type CachedBytes = (rel: string) => Uint8Array | undefined;
-function fileHashes(plan: Plan | null | undefined, cwd: string, cached?: CachedBytes): Record<string, string | null> {
-  return contentHash.fileHashes(contentHash.planCodeFiles(plan || {}, cwd), cwd, cached); // the same hashes verify-screen --compare records
-}
-
-// contentHash.planHash is the plan's own content, minus what the hook writes and what is not the plan's substance: status, the owner's
-// waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report records their hash instead,
-// inputs.waivers.sha256, and reportVerdict() compares that) and all of `verification` (--compare --record-plan writes
-// it; its one block, a hand-edited verification.recorded, reopens the plan in isOpen instead).
-// A hook record written under the older formula (verification minus hook) is still accepted, so no plan
-// reopens on upgrade. The hook's next write records the new one.
-const hookHashMatches = (hook: PlanHookRecord, plan: Plan): boolean => hook.planHash === contentHash.planHash(plan) || hook.planHash === contentHash.legacyPlanHash(plan);
-
-// The hook record against the files now: `changed` reopens the plan (stale); `unhashed` does not. A key the record never
-// hashed is a change when it is a files[] entry ("added to files[]"); a MAPPED module the record never hashed (a hook
-// record that hashed files[] only) is only noted — the upgrade must not reopen a plan the hook closed with
-// no file changed. The hook's next write records it, and from then on a change to it is a change.
-interface HookFileDiff { changed: string[]; unhashed: string[] }
-function hookFileDiff(plan: Plan, cwd: string, cached?: CachedBytes): HookFileDiff | null {
-  const hook = plan.verification && plan.verification.hook;
-  if (!hook || !hook.files) return null;
-  const now = fileHashes(plan, cwd, cached);
-  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
-  const changed: string[] = [], unhashed: string[] = [];
-  const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) {
-    if (hook.files[f] === now[f]) continue;
-    // Gone from planCodeFiles — dropped from files[] or the anchors, or an extensionless mapModule no longer resolves
-    if (now[f] === undefined) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
-    else if (hook.files[f] === undefined) { if (listed.has(f)) changed.push(`${f} (added to files[])`); else unhashed.push(`${f} (now hashed: mapped module)`); }
-    else changed.push(now[f] === null ? `${f} (missing)` : f);
-  }
-  return { changed, unhashed };
-}
-function changedFiles(plan: Plan, cwd: string): string[] | null {
-  const d = hookFileDiff(plan, cwd);
-  return d && d.changed;
-}
-
-// OPEN = the hook still has work on this plan. The planHash leaves `verification` out, so a hand edit of the tool's
-// verification.recorded after a pass reopens the plan here (recordedEdits): it is a block, and the fast path must not skip it.
+// OPEN = the hook still has work on this plan (plan-status.ts open) and it is in the hook's scope: touched within
+// STALE_HOURS. A hand edit of the tool's verification.recorded after a pass reopens it (it is a block, and the fast path
+// must not skip it).
 function isOpen(p: PlanFile, cwd: string): boolean {
-  if (lifecycleOf(p.plan) !== "pending") return false;
-  if (isStale(p.file)) return false;
-  const hook = p.plan.verification && p.plan.verification.hook;
-  if (!hook || hook.result !== "pass") return true;
-  if (!hookHashMatches(hook, p.plan)) return true;
-  if (recordedEdits(p.plan, cwd).length) return true;
-  const ch = changedFiles(p.plan, cwd);
-  return !ch || ch.length > 0;
+  return !isStale(p.file) && planStatus(cwd).open(p.plan);
 }
 
 // ================================================================ source scanning
@@ -522,22 +446,18 @@ function verificationWarnings(plan: Plan): string[] {
 
 // plan.verification.recorded is what `--compare --record-plan` wrote from ONE report (its sha256 names that report's
 // text). When the report file has since been rewritten (another --compare without --record-plan, a hand edit), the
-// record is older than the verdict it summarises. A warning — the report is the verdict either way; computeStatus reads the record's
+// record is older than the verdict it summarises. A warning — the report is the verdict either way; plan-status.ts reads the record's
 // mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
 // (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
 // A record naming a report that is not on disk at all (renamed or deleted) cannot be compared with it, so a hand edit of
 // the record would go unseen (recordedEdits): that is a warning of its own.
 function recordedReportWarnings(plan: Plan, cwd: string): string[] {
-  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return [];
-  if (!fs.existsSync(path.resolve(cwd, rec.report))) {
-    return [`plan.verification.recorded names ${rec.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
+  const r = recordedReport(plan, cwd);
+  if (r.kind === "missing") {
+    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
       "legacy-named verify set, else re-run verify-screen --compare --record-plan"];
   }
-  const bytes = readRegularFile(path.resolve(cwd, rec.report));
-  if (!bytes) return [];
-  const now = sha256Hex(bytes);
-  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
+  return r.kind === "rewritten" ? [`plan.verification records an older run of ${r.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`] : [];
 }
 
 // Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written
@@ -561,18 +481,36 @@ function recordedShadowWarnings(plan: Plan): string[] {
 // What the report's behaviour/a11y section says — WARNINGS only, never a block (not the fidelity verdict).
 // (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
 // (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
-// (report.json or its .md), else the report for the plan's own screen (matched by name, as locateReports ranks), newest first.
+// (report.json or its .md), else the plan's own report (newestOwn).
 // The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
 // fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
 // them. "Not found" only when nothing matches, so a real disagreement is never hidden behind a path spelling.
-const newestOwn = (reports: ReportRef[]): ReportRef | null => {
-  const own = reports.filter((r) => r.matchedBy === "name");
-  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || r.mtimeMs > best.mtimeMs ? r : best), null);
+// The plan's own report is chosen by CONTENT, never by a clock (a `touch` or a fresh clone reorders mtimes — the
+// freshness rule of plan-status.ts): the report verification.recorded.report names (the one its record was written from),
+// else, among the reports for the plan's own screen (matched by name, as locateReports ranks; all of them when none is),
+// the latest measuredAt — none is the oldest — with mtime only breaking a tie.
+const json = (x: string): string => siblingFile(x, "reportMd", "report");
+const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+// verification.recorded.report in ReportRef.rel's spelling (read as recordedReportWarnings reads it: project-relative or absolute)
+function recordedReportRel(plan: Plan, cwd: string | undefined): string | null {
+  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
+  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
+  const named = rec.report.trim();
+  return json(slash(cwd === undefined ? named : path.relative(cwd, path.resolve(cwd, named))).replace(/^\.\//, ""));
+}
+const measuredMs = (r: ReportRef): number => {
+  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
+  return Number.isNaN(t) ? -Infinity : t;
 };
-function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): { ref: ReportRef | null; missing?: string } {
-  if (named === undefined || !named.trim()) return { ref: newestOwn(reports) };
-  const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
-  const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+const newestOwn = (reports: ReportRef[], recordedRel: string | null = null): ReportRef | null => {
+  const recorded = recordedRel === null ? undefined : reports.find((r) => r.rel === recordedRel);
+  if (recorded) return recorded;
+  const own = reports.filter((r) => r.matchedBy === "name");
+  const later = (r: ReportRef, best: ReportRef): boolean => measuredMs(r) > measuredMs(best) || (measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs);
+  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || later(r, best) ? r : best), null);
+};
+function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string; recordedRel?: string | null } = {}): { ref: ReportRef | null; missing?: string } {
+  if (named === undefined || !named.trim()) return { ref: newestOwn(reports, ctx.recordedRel) };
   const want = slash(named.trim());
   const rels = new Set<string>([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== undefined) {
@@ -583,10 +521,10 @@ function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cw
   if (exact) return { ref: exact };
   const base = json(path.posix.basename(want));
   const byBase = reports.filter((r) => path.posix.basename(r.rel) === base);
-  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
   return { ref: null, missing: want };
 }
-// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
+// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own (newestOwn); its fail count is of
 // failed elements ("+N more" rows count N), so it says "failures". A re-run of a set overwrites its report, so a run's
 // older rounds are gone. Every OTHER report file locateReports matched (design/verify/ is flat, so
 // another file is another set — a variant <Layer>__<id>.<slug> (a narrow width, a dark theme), or a legacy-named one)
@@ -598,10 +536,11 @@ function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, 
   const f = verificationFacts(plan.verification);
   const a11y = f.a11y;
   const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
-  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
+  const recordedRel = recordedReportRel(plan, ctx.cwd);
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, { ...ctx, recordedRel });
   if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran))
     out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
-  const r = target.ref ?? newestOwn(all);
+  const r = target.ref ?? newestOwn(all, recordedRel);
   const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
   const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
     const ids = [...new Set(failed)];
@@ -1184,11 +1123,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
-  warnings.push(...legacySetWarnings(plan, file, reports, exp));
+  warnings.push(...legacySetWarnings(plan, file, reports));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
-  warnings.push(...auditGateWarnings(plan, cwd, exp));
+  warnings.push(...auditGateWarnings(plan, cwd, exp, file));
   // One line per distinct message (the same sentence repeated is noise that buries the real ones).
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...(tagCoverage ? { tagCoverage } : {}) };
 }
@@ -1197,11 +1136,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 // plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
 // be indistinguishable, on disk, from one that never read it.
 // (audit-gate.ts is a static import, which cannot fail at this point.)
-function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined): string[] {
+function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined, planFile?: string): string[] {
   const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || (exp && exp.layerName) || null;
   let g: ReturnType<typeof auditGateStatus>;
-  try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
+  try { g = auditGateStatus(cwd, planNode(plan, planFile), screenFile, screenName); } catch { return []; }
   // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
   if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run the audit script for this screen`];
   if (!g.auditFile || !g.blockers.length) return [];
@@ -1243,122 +1182,12 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // A report found for this plan under a name outside the key grammar (`<Layer>__<id>`, `<Layer>__<id>.<variant>` —
 // screen-key.ts): a nickname, or an `@320` / `-r1` variant. It is still read (locateReports matches it by content); the
 // warning names it so `verify-screen --migrate` can give it the screen's key.
-function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[], exp: ExportHit | null | undefined): string[] {
-  const nodeId = planNodeId(plan, planFile, exp ?? null);
+function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: ReportRef[]): string[] {
+  const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = path.posix.basename(r.rel).replace(/\.report\.json$/, "");
+    const set = setBaseOf(path.posix.basename(r.rel), "report") ?? path.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} — run verify-screen --migrate`] : [];
   });
-}
-
-// ================================================================ computed status
-
-interface Verdict { status: PlanComputedStatus; reasons: string[] }
-
-// What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
-// failed | unverified | static-only | verified | verified-with-deviations. Never empty reasons.
-// A report that recorded no inputs.waivers (an older report) applied none: it stays fresh while the
-// plan has none, and goes stale once the owner accepts one.
-const NO_WAIVERS = waiversHash(null);
-const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
-const WAIVERS_CHANGED = "waivers changed since the last compare — re-run --compare (with --plan <plan.json> when several plans describe the frame)";
-function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[], cached?: CachedBytes): Verdict {
-  const f = verificationFacts(plan.verification);
-  if (!reports.length) {
-    if (f.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${f.reason || "no reason recorded"})`] };
-    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ — run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
-  }
-  // A report older than verify-report@2 counted hidden layers as "never built" / "failed"
-  // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
-  const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, ` +
-    `whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
-  const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
-  const waiversNow = waiversHash(plan);
-  const failing = reports.filter((r) => r.verdict === "fail");
-  // A fail stays a fail until it is re-compared — but say when the owner has since accepted something.
-  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` — ${WAIVERS_CHANGED}` : "")) };
-  // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
-  // not a pass — and not a failure the build caused either.
-  const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
-  if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
-  // Freshness is decided by CONTENT, never by a clock: not exportedAt (a no-change
-  // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
-  const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
-  for (const r of reports) {
-    if (!r.exportContentSha256) {
-      if (r.expectationChanged) return { status: "unverified",
-        reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
-    }
-    if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`] };
-    if (r.exportContentSha256 !== expSha) return { status: "unverified",
-      reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
-    const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, ` +
-      `where design/plan/ lists this screen's files`] };
-    const now = fileHashes(plan, cwd, cached);
-    // A mapped module an older report never hashed reads "(not recorded)" — one re-compare records it
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
-    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — ` +
-      `re-run --compare`] };
-    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
-  }
-  const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
-  const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
-  return { status: withDeviations.length ? "verified-with-deviations" : "verified",
-    reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
-}
-
-/** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
-export interface StatusOptions { cwd?: string; planFile?: string; export?: ExportHit | null; reports?: ReportRef[]; cached?: CachedBytes }
-export interface StatusResult { status: PlanComputedStatus; reasons: string[]; reports: ReportRef[] }
-
-// The computed status. PRECEDENCE (first match wins; also in --status --help):
-//   1. abandoned / awaiting-user  — set by a person; nothing is evaluated
-//   2. failed    — a verify report (schema @2) for this screen says fail: a measured defect is never
-//                  hidden behind the hook's state
-//   3. pending   — the hook has not checked this version of the plan (no hook record, or the plan changed since)
-//   4. blocked   — the Stop hook's last check blocked, or it passed and verification.recorded was edited by hand since
-//                  (recordedEdits: the hook's next check blocks on it)
-//   5. stale     — a file in files[] changed since the hook passed (and the record was not edited)
-//   6. unverified / static-only / verified / verified-with-deviations — what the report says (see reportVerdict)
-// `reasons` is never empty for a non-verified status: it always carries the hook's state AND what the
-// report(s) say (a report too old to trust is named with its schema), plus a note when a stored
-// "verified"/"static-only" was ignored.
-function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
-  const o = opts || {};
-  const cwd = o.cwd || (o.planFile ? rootOfPlan(o.planFile) : process.cwd());
-  const notes: string[] = [];
-  const stored = String((plan && plan.status) || "").trim().toLowerCase();
-  if (COMPUTED_STORED.has(stored)) notes.push(`the stored "status": "${plan.status}" was not confirmed by the current hook and is ignored — status is computed, never stored`);
-  const life = lifecycleOf(plan);
-  if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? "retired by hand (\"status\": \"abandoned\")" : "paused on a question for the user (\"status\": \"awaiting-user\")"], reports: [] };
-  const exp = o.export === undefined ? locateExport(plan, o.planFile, cwd) : o.export;
-  const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const rv = reportVerdict(plan, cwd, exp, reports, o.cached);
-  const hook = plan.verification && plan.verification.hook;
-  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [], unhashedWhy: string[] = [];
-  if (!hook || !hook.result) { hookState = "pending"; hookWhy = ["the build-screen Stop hook has not checked this plan"]; }
-  else if (hook.planHash && !hookHashMatches(hook, plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
-  else if (hook.result !== "pass") { hookState = "blocked"; hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]; }
-  else {
-    const d = hookFileDiff(plan, cwd, o.cached);
-    const ch = d ? d.changed : [];
-    // the record edited by hand after the hook passed (planHash leaves verification out): the hook's next check blocks
-    // on it, so the status says so now
-    const edits = recordedEdits(plan, cwd);
-    if (edits.length) { hookState = "blocked"; hookWhy = edits; }
-    else if (ch.length) { hookState = "stale"; hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`]; }
-    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates hashing of mapped modules), so not a change: ` +
-      `${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} — the hook's next check of this plan records it; until then an edit to it does not reopen the plan ` +
-      `(\`verify-build <plan>\` re-checks now)`];
-  }
-  const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 
 // ================================================================ fan-out scoping
@@ -1550,11 +1379,9 @@ function ownBadPlans(bad: readonly BadPlan[], scan: TranscriptScan | undefined, 
 }
 
 // The closed status ("abandoned", "awaiting-user") the raw JSON of an unreadable plan holds, or null when it holds none.
-function closedStatusOf(b: BadPlan): string | null {
-  const doc = readJsonOrNull(b.file, anyJson);
-  if (!isJsonObject(doc) || typeof doc.status !== "string") return null;
-  const s = doc.status.trim().toLowerCase();
-  return /^(abandoned|awaiting-user)$/.test(s) ? s : null;
+function closedStatusOf(b: BadPlan): PlanLifecycle | null {
+  const life = lifecycleOf(readJsonOrNull(b.file, anyJson));
+  return life === "pending" ? null : life;
 }
 
 // ================================================================ CLI
@@ -1608,8 +1435,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
   setPhase(`checking ${path.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...(graph ? { graph } : {}) });
   const plan = p.plan;
-  const isComputed = (x: Plan): boolean => COMPUTED_STORED.has(String(x.status || "").toLowerCase());
-  const cleared = isComputed(plan) ? plan.status : null;
+  const cleared = storedComputed(plan);
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
   setPhase(`hashing files[] of ${path.basename(p.file)}`);
@@ -1621,7 +1447,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     blocking,
     warnings: warnings.length,
     planHash: contentHash.planHash(plan),
-    files: fileHashes(plan, cwd, cached),
+    files: planStatus(cwd, { cached }).codeHashes(plan),
     ...(tagCoverage ? { tagCoverage } : {}),
   };
   plan.verification.hook = hook;
@@ -1638,7 +1464,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try { const s = fs.statSync(p.file); was.times = [s.atime, s.mtime]; } catch { delete was.times; }
-      if (isComputed(fresh)) delete fresh.status;
+      if (storedComputed(fresh) !== null) delete fresh.status;
       fresh.verification = { ...fresh.verification, hook };
       recorded = fresh;
       return fresh;
@@ -1652,7 +1478,7 @@ function checkAndRecord(p: PlanFile, cwd: string, graph?: () => ProjectGraph): R
     warnings.push(`the hook record was not written into ${path.basename(p.file)} (${errMsg(e)}) — the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file); // a later plan that lists this one reads it from disk
-  const st = computeStatus(recorded, { cwd, planFile: p.file, export: exp, reports, ...(cached ? { cached } : {}) });
+  const st = planStatus(cwd, { cached }).status(recorded, { planFile: p.file, export: exp, reports });
   return { blocking, warnings, cleared, status: st };
 }
 
@@ -1675,7 +1501,7 @@ async function main(argv: string[]): Promise<number> {
     }
     // The mapModules the code hash cannot follow — one note per plan, here only (the Stop hook stays quiet)
     const rows = plans.map((p) => {
-      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const st = planStatus(rootOfPlan(p.file)).status(p.plan, { planFile: p.file });
       const skipped = contentHash.planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
@@ -1797,9 +1623,9 @@ async function main(argv: string[]): Promise<number> {
 }
 
 export {
-  checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
+  checkPlan, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, recordedReportWarnings, recordedEdits, reportRecordNames, legacySetWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
-  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, fileHashes, readHookInput, main, USAGE,
+  colorLiterals, arbitraryPx, colorKey, isStale, readHookInput, main, USAGE,
   forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,
 };
 export type { ExportHit, ReportMatch, ReportRef } from "./verify-locate.ts";

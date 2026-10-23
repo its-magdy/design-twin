@@ -59,7 +59,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isCI } from "./pool.ts";
-import { goneOrZombie, installQueuedConsole } from "./spawn-helper.ts";
+import { goneOrZombie, installQueuedConsole } from "../design-to-code/proc.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type Kind = "lint" | "suite";
@@ -90,14 +90,14 @@ const SUITE_ENV: NodeJS.ProcessEnv = { ...process.env, BUN_OPTIONS: bunOptions(p
 const SUITE_FILES: readonly string[] = [
   // the real-name guard, right after the lints (fast, repo-wide)
   "real-names.test.ts",
-  "harness.ts", "bridge.test.ts", "await-client.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "figma-pull-args.test.ts", "ports.test.ts", "cli-pull.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "write-out-bookkeeping.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts", "file-lock.test.ts",
+  "harness.ts", "bridge.test.ts", "await-client.test.ts", "bridge-route.test.ts", "daemon-framing.test.ts", "cli-help.test.ts", "figma-pull-args.test.ts", "read-plan.test.ts", "ports.test.ts", "cli-pull.test.ts", "read-plan-e2e.test.ts", "asset-compare.test.ts", "asset-index.test.ts", "asset-key-cache.test.ts", "write-out-bookkeeping.test.ts", "quick-keys.test.ts", "design-to-code.test.ts", "tokens-cli.test.ts", "g14-step0.test.ts", "cli-exit.test.ts", "atomic-write.test.ts", "file-lock.test.ts",
   "audit.test.ts", "build-screen-docs.test.ts", "verify-build.test.ts", "verifier-guard.test.ts", "plugin-hooks.test.ts", "plan-record.test.ts", "verify-screen.test.ts", "verify-migrate.test.ts", "verify-accuracy.test.ts", "verify-values.test.ts",
   "verify-waivers.test.ts", "verify-node-rules.test.ts", "verify-run.test.ts", "verify-behaviour.test.ts",
   "verify-integrity.test.ts", "verify-probe.test.ts", "pw-errors.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
   "verify-probe-drive-e2e.test.ts", "verify-probe-drive-tail-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",
   "visual-diff.test.ts", "verify-visual.test.ts", "verify-probe-visual-e2e.test.ts", "cross-check.test.ts",
-  "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "screen-key.test.ts", "ui.test.ts", "plugin-es2019.test.ts",
-  "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-lifecycle.test.ts", "json-size.test.ts",
+  "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "node-artefacts.test.ts", "report-freshness.test.ts", "plan-status.test.ts", "verify-sets.test.ts", "screen-key.test.ts", "ui.test.ts", "plugin-es2019.test.ts",
+  "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-lifecycle.test.ts", "mcp-delivery.test.ts", "json-size.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];

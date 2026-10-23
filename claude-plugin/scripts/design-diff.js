@@ -812,29 +812,22 @@ var fileKeyCache = new FileKeyCache();
 var DIR = "design-system";
 var COMPONENTS_DIR = "components";
 var TOKENS = "tokens.json";
-var STYLES_PAINT = "styles.paint.json";
-var STYLES_TEXT = "styles.text.json";
-var STYLES_EFFECT = "styles.effect.json";
-var STYLES_GRID = "styles.grid.json";
-var STYLES_ANIMATION = "styles.animation.json";
 var COMPONENTS_LOCAL = "components.local.json";
 var COMPONENTS_LIBRARY = "components.library.json";
 var HYGIENE = "hygiene.json";
 var MANIFEST = "design-system.json";
-var DESIGN_SYSTEM_DIR = DIR;
-var DESIGN_SYSTEM_FILES = {
-  TOKENS,
-  STYLES_PAINT,
-  STYLES_TEXT,
-  STYLES_EFFECT,
-  STYLES_GRID,
-  STYLES_ANIMATION,
-  COMPONENTS_LOCAL,
-  COMPONENTS_LIBRARY,
-  COMPONENTS_DIR,
-  HYGIENE,
-  MANIFEST
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
 };
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
 // bridge/src/project-layout.ts
 import fs5 from "node:fs";
@@ -866,9 +859,9 @@ function looksLikeExportDir(dir) {
 // bridge/src/library-layout.ts
 var ROOT = "libraries";
 var INDEX = "index.json";
-var { TOKENS: TOKENS2, STYLES_PAINT: STYLES_PAINT2, STYLES_TEXT: STYLES_TEXT2, STYLES_EFFECT: STYLES_EFFECT2, STYLES_GRID: STYLES_GRID2, STYLES_ANIMATION: STYLES_ANIMATION2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
 var COMPONENTS = "components.json";
-var LIBRARY_FILE_NAMES = [TOKENS2, STYLES_PAINT2, STYLES_TEXT2, STYLES_EFFECT2, STYLES_GRID2, STYLES_ANIMATION2, COMPONENTS, HYGIENE2, INDEX];
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX];
 
 // design-to-code/design-diff.ts
 var CATEGORY = {
@@ -1341,7 +1334,7 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (snap !== null && newest.source === path4.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since \u2014 this lists everything since that diff, including changes the earlier sync already applied.`);
   return { ...newest, notes };
 }
-var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+var DS_FILE_NAMES = DESIGN_SYSTEM_FILE_NAMES;
 var dsFilePath = (exportRoot, name) => name === DESIGN_SYSTEM_FILES.MANIFEST ? path4.join(exportRoot, name) : path4.join(exportRoot, DESIGN_SYSTEM_DIR, name);
 function exportSetCandidates(exportRoot) {
   const libRoot = path4.join(exportRoot, ROOT);

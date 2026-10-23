@@ -18,17 +18,17 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { WsClient } from "./ws-client.ts";
-import type { RawData } from "./ws-client.ts";
+import type { ChildProcess } from "node:child_process";
+import { startMcp } from "./children.ts";
+import { fakePlugin as dialPlugin, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
+import type { Cmd, Commands, FullExportReply, ScreenReply } from "../bridge/src/commands.ts";
+import type { Sent } from "../bridge/src/route.ts";
+import { malformed } from "./fixtures.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
-const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
 const TOKEN = "lifecycle-test-token";
 // Short, and resolved: /tmp is /private/tmp on macOS, and the server's getcwd() is the resolved form.
 const BASE = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "dtl-")));
@@ -81,7 +81,7 @@ function openRaw(sock: string, frame: object): Promise<net.Socket> {
 // ---------------------------------------------------------------- the server under test
 interface Exit { code: number | null; signal: NodeJS.Signals | null; at: number }
 interface Server {
-  p: ChildProcessWithoutNullStreams;
+  p: ChildProcess;
   dir: string;
   cwd: string;
   sock: string;
@@ -111,59 +111,19 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
     HOME: home, USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), TMPDIR: tmp, TEMP: tmp, TMP: tmp,
     FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "", DT_TEST_EPHEMERAL_PORT: "1",
   }, opts.env ?? {});
-  const p = spawn(process.execPath, [MCP], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
-  let err = "";
-  let exit: Exit | null = null;
-  p.stderr.setEncoding("utf8");
-  p.stderr.on("data", (d: string) => { err += d; });
-  p.on("exit", (code, signal) => { exit = { code, signal, at: Date.now() }; });
-  p.stdin.on("error", () => { /* the server went away first */ });
-  p.stdout.on("error", () => { /* destroyed on purpose */ });
-  const waiting = new Map<number, (v: Record<string, unknown>) => void>();
-  let out = "";
-  p.stdout.setEncoding("utf8");
-  p.stdout.on("data", (d: string) => {
-    out += d;
-    let i;
-    while ((i = out.indexOf("\n")) >= 0) {
-      const line = out.slice(0, i);
-      out = out.slice(i + 1);
-      let m: unknown;
-      try { m = JSON.parse(line) as unknown; } catch { continue; }
-      const r = rec(m);
-      if (typeof r.id === "number") {
-        const w = waiting.get(r.id);
-        waiting.delete(r.id);
-        if (w) w(r.error !== undefined ? { rpcError: r.error } : rec(r.result));
-      }
-    }
-  });
-  let rpcId = 0;
-  const send = (o: object) => { try { p.stdin.write(JSON.stringify(o) + "\n"); } catch { /* closed */ } };
-  const rpc = (method: string, params: object, ms = 15000) => new Promise<Record<string, unknown> | null>((resolve) => {
-    const id = ++rpcId;
-    const t = setTimeout(() => { waiting.delete(id); resolve(null); }, ms);
-    waiting.set(id, (v) => { clearTimeout(t); resolve(v); });
-    send({ jsonrpc: "2.0", id, method, params });
-  });
+  // test/children.ts startMcp: its stdout/stderr accumulated, its exit recorded, a JSON-RPC client on top
+  const m = startMcp({ env, cwd });
+  const p = m.child;
+  p.stdout?.on("error", () => { /* destroyed on purpose */ });
   const s: Server = {
     p, dir, cwd,
     sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp }),
-    err: () => err,
-    exit: () => exit,
-    wsPort: () => { const m = /\[bridge\] DT_TEST_EPHEMERAL_PORT: 8789 -> (\d+)/.exec(err); return m ? Number(m[1]) : null; },
-    rpc,
-    call: async (name, args, ms) => {
-      const r = await rpc("tools/call", { name, arguments: args }, ms);
-      if (!r) return null;
-      const content = r.content;
-      const first = Array.isArray(content) ? rec(content[0]) : {};
-      const text = typeof first.text === "string" ? first.text : JSON.stringify(r);
-      let json: Record<string, unknown> = {};
-      try { json = rec(JSON.parse(text) as unknown); } catch { /* an error text */ }
-      return { isError: r.isError === true, text, json };
-    },
-    kill: () => { if (!exit) { try { p.kill("SIGKILL"); } catch { /* gone */ } } },
+    err: m.stderr,
+    exit: m.exit,
+    wsPort: () => { const w = /\[bridge\] DT_TEST_EPHEMERAL_PORT: 8789 -> (\d+)/.exec(m.stderr()); return w ? Number(w[1]) : null; },
+    rpc: m.rpc,
+    call: m.call,
+    kill: () => { m.kill("SIGKILL"); },
   };
   servers.push(s);
   return s;
@@ -178,49 +138,47 @@ async function up(s: Server, owner = true): Promise<boolean> {
 }
 async function initialize(s: Server): Promise<boolean> {
   const r = await s.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "mcp-lifecycle", version: "0.0.0" } });
-  s.p.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  s.p.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   return !!r && isRecord(r.serverInfo);
 }
 
 // ---------------------------------------------------------------- a fake plugin
-interface Frame { m: Record<string, unknown>; at: number }
-interface Plugin { ws: WsClient; frames: Frame[]; hang: boolean; full: (() => object) | null; close(): void }
-const screenReply = () => ({
+// `hang` and `full` are read by the handlers on every command, so a section flips them mid-run.
+interface Plugin { fake: FakePlugin; hang: boolean; full: (() => FullExportReply) | null; close(): void }
+// not a full ScreenReply on purpose: its screen manifest carries only `nodes`
+const screenReply = (): ScreenReply => malformed<ScreenReply>({
   screenName: "Sample",
   screen: { exportedAt: "2026-10-01T00:00:00.000Z", screen: "Sample", manifest: { nodes: 1 }, nodes: [{ id: "9:1", name: "Sample", type: "FRAME", box: { x: 0, y: 0, w: 100, h: 100 } }] },
   variables: { collections: [], variables: [], hygiene: [] },
   assets: [],
 });
 async function fakePlugin(port: number): Promise<Plugin> {
-  const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-  await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
-  ws.on("error", () => { /* the server went away */ });
-  const pl: Plugin = { ws, frames: [], hang: false, full: null, close: () => { try { ws.terminate(); } catch { /* gone */ } } };
-  ws.on("message", (raw: RawData) => {
-    let v: unknown;
-    try { v = JSON.parse(String(raw)) as unknown; } catch { return; }
-    const m = rec(v);
-    pl.frames.push({ m, at: Date.now() });
-    const id = m.id;
-    if (typeof m.cmd !== "string" || typeof id !== "string") return;
-    const answer = (result: object) => ws.send(JSON.stringify({ id, ok: true, result }));
-    if (m.cmd === "ping") return answer({ pong: true, page: "Page A", file: "Sample File" });
-    if (pl.hang) return;
-    if (m.cmd === "exportNode" || m.cmd === "exportSelection") return answer(screenReply());
-    if (m.cmd === "exportFull" && pl.full) return answer(pl.full());
-  });
-  ws.send(JSON.stringify({ type: "hello", instanceId: "fig-1", file: "Sample File", page: "Page A" }));
+  const pl: Plugin = {
+    fake: dialPlugin(port, {
+      token: TOKEN, hello: { instanceId: "fig-1", file: "Sample File", page: "Page A" }, unhandled: HANG,
+      on: {
+        ping: () => ({ pong: true, page: "Page A", file: "Sample File" }),
+        exportNode: () => (pl.hang ? HANG : screenReply()),
+        exportSelection: () => (pl.hang ? HANG : screenReply()),
+        exportFull: () => (pl.hang || !pl.full ? HANG : pl.full()),
+      },
+    }),
+    hang: false, full: null,
+    close: () => { try { pl.fake.terminate(); } catch { /* gone */ } },
+  };
+  await pl.fake.opened;
   await sleep(150);
   return pl;
 }
-const cmdFrames = (pl: Plugin, cmd: string) => pl.frames.filter((f) => f.m.cmd === cmd);
-const cancelFor = (pl: Plugin, id: unknown) => pl.frames.find((f) => f.m.type === "cancel" && f.m.id === id);
+const cmdFrames = (pl: Plugin, cmd: Cmd) => pl.fake.commands(cmd);
+const cancelFor = (pl: Plugin, id: unknown) => pl.fake.frames.find((f) => "type" in f.frame && f.frame.type === "cancel" && f.frame.id === id);
 
 // A full export (exportFull reply) whose inline JSON is far past the 48k-char cap: one big layer + one small.
-function fullReply(): object {
+function fullReply(): FullExportReply {
   const stamp = new Date().toISOString();
+  // not a full FullExportReply on purpose: a hand-written design system (collections/variables in a looser shape)
   const rows = Array.from({ length: 500 }, (_, i) => ({ id: `1:${100 + i}`, name: `Row ${i}`, type: "TEXT", box: { x: 0, y: i * 40, w: 390, h: 40 }, characters: `Row label ${i}` }));
-  return {
+  return malformed<FullExportReply>({
     designSystem: {
       file: "Sample File", exportedAt: stamp, colorProfile: "srgb",
       collections: [{ id: "c:1", name: "Core", modes: ["Light"] }],
@@ -238,7 +196,7 @@ function fullReply(): object {
       ],
     },
     assets: [],
-  };
+  });
 }
 const walk = (d: string): string[] => {
   let ents: fs.Dirent[] = [];
@@ -255,7 +213,7 @@ function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; r
   const waiters: Array<() => void> = [];
   const b: DaemonBridge = {
     port: 0, isConnected: () => true,
-    request: (cmd) => { requests++; return cmd === "listPages" ? new Promise((r) => { waiters.push(() => r({})); }) : Promise.resolve({}); },
+    request: <C extends Cmd>(cmd: C) => { requests++; const sent: Sent<C> = { reply: malformed<Commands[C]["reply"]>({}), client: null }; return cmd === "listPages" ? new Promise<Sent<C>>((r) => { waiters.push(() => r(sent)); }) : Promise.resolve(sent); },
     close: () => { closes++; },
   };
   return { b, closes: () => closes, pending: () => waiters.length, requests: () => requests, release: () => { for (const w of waiters.splice(0)) w(); } };
@@ -358,7 +316,7 @@ void (async () => {
       const s = startServer();
       if (await up(s)) {
         const t0 = Date.now();
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         ok(`owner, shared socket never used → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
@@ -373,7 +331,7 @@ void (async () => {
       if (await up(s)) {
         const st0 = await sockReq(s.sock, { cmd: "__status" });
         ok("while the client is here, the served socket has no idle window (idleMs null)", rec(st0?.result).idleMs === null);
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await sleep(2000);
         ok("socket used by another process → stdin EOF → still alive at +2 s", s.exit() === null);
         const st = rec((await sockReq(s.sock, { cmd: "__status" }))?.result);
@@ -392,7 +350,7 @@ void (async () => {
       if (await up(s)) {
         await sockReq(s.sock, { cmd: "__ping" });
         const t0 = Date.now();
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await until(() => s.exit() !== null, 6000);
         const e = s.exit();
         ok(`FIGMA_DAEMON_IDLE_MIN=0.02 (1.2 s) → idles out and exits 0 within 6 s of stdin EOF (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
@@ -407,8 +365,8 @@ void (async () => {
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
-        s.p.stdin.end();
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
+        s.p.stdin?.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         const cancel = cancelFor(pl, sent);
@@ -429,7 +387,7 @@ void (async () => {
         const other = await openRaw(s.sock, { cmd: "exportNode", args: { nodeId: "9:1" }, timeoutMs: 20000 });
         other.on("error", () => { /* the server went away */ });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
         s.p.kill("SIGTERM");
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
@@ -453,7 +411,7 @@ void (async () => {
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.m.id;
+        const sent = cmdFrames(pl, "exportNode")[0]?.id;
         const t0 = Date.now();
         s.p.kill("SIGINT");
         await sleep(100);
@@ -481,7 +439,7 @@ void (async () => {
       if (await up(s, false)) {
         ok("fixture: the server routes through the test's daemon", /Sharing the bridge already running at/.test(s.err()));
         const t0 = Date.now();
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         ok(`routed via a daemon → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
@@ -501,19 +459,19 @@ void (async () => {
         // With a progressToken, so every plugin tick becomes a notifications/progress write to stdout.
         void s.rpc("tools/call", { name: "figma_export_url", arguments: { url: "9:1" }, _meta: { progressToken: "life-7" } });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const reqId = cmdFrames(pl, "exportNode")[0]?.m.id;
-        s.p.stdout.destroy();
+        const reqId = cmdFrames(pl, "exportNode")[0]?.id;
+        s.p.stdout?.destroy();
         // the client is killed — both pipes break, but the plugin's progress ticks reach stdout BEFORE
         // stdin's end is seen. The first such write hits EPIPE; with no stdout 'error' listener yet, that
         // would be an uncaught exception that kills the orphan.
         let n = 0;
-        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.ws.send(JSON.stringify({ type: "progress", requestId: reqId, phase: "walk", nodes: ++n })); } catch { /* gone */ } } }, 5);
+        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.fake.progress({ ...(reqId !== undefined ? { requestId: reqId } : {}), phase: "walk", nodes: ++n }); } catch { /* gone */ } } }, 5);
         await until(() => s.exit() !== null || /went away \(stdout closed\)/.test(s.err()), 3000);
         await sleep(100);
         clearInterval(ticks);
         ok(`progress ticks after stdout is gone (stdin still open; ${n} sent) → alive, and the closed stdout counts as the client going away`,
           s.exit() === null && /the MCP client went away \(stdout closed\); other dtwin commands\/sessions use this shared bridge/.test(s.err()));
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await sleep(2000);
         ok("stdout gone + stdin EOF with an export in flight → still alive at +2 s", s.exit() === null);
         ok("…no EPIPE / uncaught exception on stderr", !/EPIPE|uncaught exception/i.test(s.err()));
@@ -533,7 +491,7 @@ void (async () => {
         await sockReq(s.sock, { cmd: "__ping" });
         await sleep(900);
         const t0 = Date.now();
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         ok(`socket used, then quiet past the window (0.6 s) → stdin EOF → exit 0 at once (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0 && e.at - t0 < 3000);
@@ -548,7 +506,7 @@ void (async () => {
         const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: v } });
         if (!(await up(s))) return { v, s, ok: false };
         await sockReq(s.sock, { cmd: "__ping" });
-        s.p.stdin.end();
+        s.p.stdin?.end();
         await until(() => /still serving it/.test(s.err()) || s.exit() !== null, 5000);
         await sockReq(s.sock, { cmd: "__shutdown" });
         await until(() => s.exit() !== null, 5000);
@@ -575,7 +533,7 @@ void (async () => {
           !!r && !r.isError && rec(r.json.screen).screen === "Sample" && cmdFrames(pl, "exportNode").length === 1 && !fs.existsSync(outside));
         pl.close();
       } else ok("server came up", false);
-      s.p.stdin.end();
+      s.p.stdin?.end();
     });
 
     // ============================================================ outDir pre-check, .prev on a full spill
@@ -597,7 +555,7 @@ void (async () => {
         const escSel = await s.call("figma_export_selection", { writeToDisk: true, outDir: "../escape" });
         ok("…the same for figma_screenshot / figma_export_full / figma_export_design_system / figma_export_selection (no frame sent)",
           [escShot, escFull, escDs, escSel].every((r) => !!r && r.isError && /outDir must stay inside/.test(r.text)) &&
-          pl.frames.filter((f) => typeof f.m.cmd === "string" && f.m.cmd !== "ping").length === n0);
+          pl.fake.commands().filter((c) => c.cmd !== "ping").length === n0);
         const inline = await s.call("figma_export_url", { url: "9:1", writeToDisk: false, outDir: "../escape" });
         ok("writeToDisk:false + a bad outDir → the inline result (nothing is written, so nothing is refused)",
           !!inline && !inline.isError && rec(inline.json.screen).screen === "Sample" && asks() === n0 + 1);
@@ -646,7 +604,7 @@ void (async () => {
         }
         pl.close();
       } else ok("server came up", false);
-      s.p.stdin.end();
+      s.p.stdin?.end();
     });
   } catch (e) {
     ok("mcp-lifecycle run completed without throwing — " + (e instanceof Error ? e.stack ?? e.message : String(e)), false);

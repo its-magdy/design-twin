@@ -2,7 +2,7 @@
 
 
 // design-to-code/verifier-guard.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import os from "node:os";
 
 // design-to-code/hook-input.ts
@@ -331,13 +331,93 @@ var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` :
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
+// bridge/src/project-layout.ts
+import path2 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path2.join(DESIGN_DIR, ".sync");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path2.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+
+// bridge/src/file-lock.ts
+import fs2 from "node:fs";
+var LIVE_STALE_MS = 2 * 6e4;
+var PID_NS = (() => {
+  if (process.platform !== "linux") return "";
+  try {
+    return fs2.readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+})();
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/run-cache.ts
+var CACHE_NAME = "designtwin-verify";
+var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
+
+// design-to-code/verify-sets.ts
+import path3 from "node:path";
+
+// design-to-code/verify-status.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr(x.expectationSha256) && optStr(x.measuredSha256) && optStr(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+
+// design-to-code/verify-sets.ts
+var SET_FILE = {
+  /** the expectation (verify-screen --expect) — what names the set */
+  expected: ".expected.json",
+  /** the expectation --expect replaced, kept beside it */
+  expectedPrev: ".expected.prev.json",
+  /** the report and its markdown (verify-screen --compare) */
+  report: ".report.json",
+  reportMd: ".report.md",
+  /** what the probe (or the verifier) measured */
+  measured: ".measured.json",
+  /** the run's status (verify-run.ts: the live one is in the run cache, the final one published here) */
+  status: ".status.json",
+  /** the interactions the verifier drove (--interactions) */
+  evidence: ".evidence.json",
+  /** the probe's visual diff and forced-colors screenshot */
+  diff: ".diff.png",
+  forcedColors: ".forced-colors.png",
+  /** an expectation moved aside: history, never a live set (allSets) */
+  retired: ".expected.json.retired"
+};
+var EXPECTED_SUFFIX = SET_FILE.expected;
+var JOURNAL_RE = /^\.migrate-.+\.json$/i;
+var isJournalFile = (fileName) => JOURNAL_RE.test(fileName);
+var TOOL_OWNED_KINDS = ["expected", "expectedPrev", "report", "reportMd", "status"];
+function isToolOwned(fileName) {
+  const f = fileName.toLowerCase();
+  return isJournalFile(f) || TOOL_OWNED_KINDS.some((k) => f.endsWith(SET_FILE[k]));
+}
+var TRAILING_SEP = path3.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+
 // design-to-code/verifier-guard.ts
 var VERIFIER_AGENT = /^(designtwin:)?visual-verifier$/;
 var HOOK_WAIT_MS = 1e3;
 var HOOK_HARD_MS = 5e3;
-var TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected(\.prev)?\.json|report\.json|report\.md|status\.json|diff\.png))$/i;
-var CACHE_RUN = ["node_modules", ".cache", "designtwin-verify"];
-var VERIFY_DIR = ["design", "verify"];
+var handWriteRefused = (name) => isToolOwned(name) || name.toLowerCase().endsWith(SET_FILE.diff);
+var CACHE_RUN = RUN_CACHE_SEGMENTS.map((s) => s.toLowerCase());
+var VERIFY_DIR2 = VERIFY_DIR.split(/[\\/]/).map((s) => s.toLowerCase());
 function segments(p, cwd) {
   const norm = (s) => s.replaceAll("\\", "/");
   const abs = (s) => s.startsWith("/") || /^[A-Za-z]:\//.test(s);
@@ -360,10 +440,10 @@ function writeVerdict(file, ctx) {
   if (after(segs, CACHE_RUN) >= 0) return null;
   for (const root of ctx.tmpRoots) {
     const r = segments(root, "/");
-    if (startsWith(segs, r) && after(segs.slice(r.length), ["designtwin-verify"]) >= 0) return null;
+    if (startsWith(segs, r) && after(segs.slice(r.length), [CACHE_NAME]) >= 0) return null;
   }
-  if (after(segs, VERIFY_DIR) >= 0) {
-    if (!TOOL_OWNED.test(segs[segs.length - 1] ?? "")) return null;
+  if (after(segs, VERIFY_DIR2) >= 0) {
+    if (!handWriteRefused(segs[segs.length - 1] ?? "")) return null;
     return `${file} is the verify tools' own (the expectation, report, status, diff and migration journal), never written by hand. Report progress with \`${scriptCmd("verify-screen")} --status <Layer>__<id> --phase <phase> --run <id>\`; the caller runs --expect and --compare.`;
   }
   return `the visual-verifier measures, it never edits app code: it writes only design/verify/ (its measured file and screenshots) and the run cache node_modules/.cache/designtwin-verify/ (stage/<runId>/ for evidence, scratch/ for throwaway scripts). ${file} is outside both. Put a scratch script in node_modules/.cache/designtwin-verify/scratch/, and report a defect in the build as a measurement or a note \u2014 never fix it.`;
@@ -788,7 +868,7 @@ function decide(payload, ctx) {
 function tempRoots(env = process.env) {
   const roots = [os.tmpdir(), env.TMPDIR, env.TEMP, env.TMP];
   try {
-    roots.push(fs2.realpathSync(os.tmpdir()));
+    roots.push(fs3.realpathSync(os.tmpdir()));
   } catch {
   }
   if (process.platform !== "win32") roots.push("/tmp", "/private/tmp", "/var/folders", "/private/var/folders");

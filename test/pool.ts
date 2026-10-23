@@ -7,7 +7,7 @@
 //
 // Each task is still its own `bun verify-probe.ts` process with its own chromium (process isolation is what the suites
 // test); this only bounds how many are alive at once.
-import { runAsync } from "./spawn-helper.ts";
+import { runAsync } from "../design-to-code/proc.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,7 +71,7 @@ export const killTree = (p: { pid?: number | undefined; kill: (signal: NodeJS.Si
  *  (process.execPath), so a script path or `-e` source both work.
  *  `env`: the child's WHOLE environment, passed to spawn as is — it replaces this process's, nothing is merged (a caller that
  *  wants to add a variable spreads process.env itself); omitted, the child inherits this process's.
- *  It goes through runAsync (test/spawn-helper.ts), so it settles on close, on exit + the pipes' end, on an exit the runtime
+ *  It goes through runAsync (design-to-code/proc.ts), so it settles on close, on exit + the pipes' end, on an exit the runtime
  *  reported before the listeners existed (Bun #45483), or on a pid its liveness poll finds gone (#45365) — a run recovered
  *  that way carries a `[spawn-helper] …` line in stderr, so a check on the output still sees something went wrong. */
 export const runNode = async (cwd: string, script: string, args: string[], killAfterMs = 0, env?: NodeJS.ProcessEnv): Promise<Run> => {

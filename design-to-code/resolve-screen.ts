@@ -51,7 +51,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { IndexRow, ResolveScreenResult, ResolveStageKind, ScreenCandidate } from "./types.ts";
-import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
+import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
@@ -59,9 +59,8 @@ import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { runCli } from "./proc.ts";
-import { EXPORT_DIR, EXPORT_SUBDIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
-import { nodeStem } from "./verify-sets.ts";
-import { openRunSets } from "./verify-status.ts";
+import { EXPORT_DIR, EXPORT_SUBDIR } from "../bridge/src/project-layout.ts";
+import { nodeArtefacts } from "./node-artefacts.ts";
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
 // doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
@@ -125,15 +124,12 @@ export interface PlanRow { file: string; screenName?: string | null; nodeId?: st
 // design/plan/*.json's schema'd header (screenName, nodeId, route, file — see verify-build.ts) is a
 // secondary lookup, never primary: it only works when a human wrote a good
 // screenName, and a sibling plan for the SAME run can have nothing useful in it. Used here only
-// to map a query to a nodeId, which is then resolved through the same row list as everything else.
+// to map a query to a nodeId, which is then resolved through the same row list as everything else. A plan's node is
+// node-artefacts.ts planNode's: its nodeId, else the id its file name carries.
 function planRows(planDir: string | null | undefined): PlanRow[] {
   if (!planDir) return [];
-  const out: PlanRow[] = [];
-  for (const f of listPlans(planDir)) {
-    const doc = readJsonOrNull(path.join(planDir, f), isPlan);
-    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
-  }
-  return out;
+  return nodeArtefacts(process.cwd(), { planDir }).plans().plans.flatMap(({ file, plan, nodeId }) =>
+    plan.screenName || nodeId ? [{ file: path.basename(file), ...ifDefined("screenName", plan.screenName), ...ifDefined("nodeId", nodeId), ...ifDefined("route", plan.route) }] : []);
 }
 
 // One candidate line for the "stop and list" report: enough to tell same-named frames apart without
@@ -328,14 +324,13 @@ export function main(argv: string[]): number {
   const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
-    // the key the screen's files are named by, as screen-key.ts screenKey names it (verify-sets.ts nodeStem): plans,
+    // the key the screen's files are named by, as screen-key.ts screenKey names it (node-artefacts.ts claim): plans,
     // verify sets, --status. A verify set already in design/verify for the node keeps its stem, so after a rename in
     // Figma this names the existing set — and so does a run open in the run cache before any of its files exist.
-    const verifyDir = path.resolve(VERIFY_DIR);
-    const k = nodeStem(verifyDir, res.row.id, res.row.name, openRunSets(verifyDir));
-    console.log(`stem ${"why" in k ? screenStem(res.row.name, res.row.id) : k.stem}`);
-    if ("why" in k) console.error(`note   ${k.why}`);
-    else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} — verify-screen --migrate renames them to ${k.stem}`);
+    const k = nodeArtefacts(process.cwd()).claim("verify set", res.row.id, { layerName: res.row.name });
+    console.log(`stem ${k.ok ? k.name : screenStem(res.row.name, res.row.id)}`);
+    if (!k.ok) console.error(`note   ${k.why}`);
+    else if (k.legacy.length) console.error(`note   legacy-named verify set(s) of this node: ${k.legacy.join(", ")} — verify-screen --migrate renames them to ${k.name}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
     return 0;
   }

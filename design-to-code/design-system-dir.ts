@@ -9,11 +9,12 @@ import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
-import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { DESIGN_SYSTEM_FILES, STYLE_KIND_ROWS } from "../bridge/src/design-system-layout.ts";
 import { nodeIdFromSafe, safe } from "../bridge/src/pages-layout.ts";
 import { COMPONENTS as LIBRARY_COMPONENTS, INDEX as LIBRARIES_INDEX, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
 
-const { TOKENS, STYLES_TEXT, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
+const { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
+const STYLES_TEXT = STYLE_KIND_ROWS.text.file;
 
 // `--design-system <dir>` names one of TWO layouts (bridge/src/design-system-layout.ts and
 // library-layout.ts): a design file's design-system/ (components.local.json + the sampled

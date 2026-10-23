@@ -14,15 +14,15 @@
     "typecheck": "bun run --filter '*' typecheck && tsc -p test/tsconfig.json && tsc -p tsconfig.json",
     "build": "bun run --filter '*' build && bun claude-plugin/build-scripts.ts",
     "lint:any": "bun test/lint-any.ts",
-    "lint:types": "oxlint --type-aware bridge/src design-to-code test figma-plugin/src figma-plugin/build.ts claude-plugin/build-scripts.ts",
+    "lint:types": "oxlint --type-aware bridge/src design-to-code test figma-plugin/src figma-plugin/build.ts figma-plugin/build-options.ts claude-plugin/build-scripts.ts",
     "test": "bun test/run-suites.ts",
     "test:fast": "bun test/run-suites.ts --fast"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "axe-core": "4.14.0",
-    "oxlint": "^1.87.0",
+    "oxlint": "^1.88.0",
     "oxlint-tsgolint": "^7.0.2004",
-    "playwright": "1.64.0"
+    "playwright": "1.64.1"
   }
 }

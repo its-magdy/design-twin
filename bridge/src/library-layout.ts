@@ -27,17 +27,15 @@
 
 import type { PageLayoutFile } from "./pages-layout.ts";
 import { ifDefined } from "./json-util.ts";
-import { DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
+import { DESIGN_SYSTEM_FILES, STYLE_KINDS, byStyleKey, stylesOf } from "./design-system-layout.ts";
 import type {
-  TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc, AnimationStylesDoc, HygieneDoc, CatalogComponent,
-  ComponentsCatalog, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts, LibraryManifest,
+  TokensDoc, StylesDoc, HygieneDoc, CatalogComponent, ComponentsCatalog, DesignSystemDoc, LibraryStamp, LibraryCounts, LibraryManifest,
   LibrariesIndexRow, LibrariesIndex,
 } from "./doc-types.ts";
 
 /** Every document the library split writes, in `files` order (the manifest last). */
 export type LibraryFileData =
-  | (TokensDoc & LibraryStamp) | (PaintStylesDoc & LibraryStamp) | (TextStylesDoc & LibraryStamp) | (EffectStylesDoc & LibraryStamp)
-  | (GridStylesDoc & LibraryStamp) | (AnimationStylesDoc & LibraryStamp) | (ComponentsCatalog & LibraryStamp) | (HygieneDoc & LibraryStamp) | LibraryManifest;
+  | (TokensDoc & LibraryStamp) | (StylesDoc & LibraryStamp) | (ComponentsCatalog & LibraryStamp) | (HygieneDoc & LibraryStamp) | LibraryManifest;
 
 export interface LibraryLayout {
   /** Every file to write, INCLUDING the directory's own index.json (last). */
@@ -53,12 +51,13 @@ export interface LibraryLayout {
 
 export const ROOT = "libraries";
 export const INDEX = "index.json"; // per-directory self-description; also the name of the libraries/ index
-// The token, style and hygiene parts keep design-system/'s file names; the catalog differs: a library's own full
-// definitions are components.json (design-system/ splits local and library-sampled components).
-const { TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, STYLES_ANIMATION, HYGIENE } = DESIGN_SYSTEM_FILES;
+// The token, style and hygiene parts keep design-system/'s file names (the style files one per STYLE_KINDS row); the
+// catalog differs: a library's own full definitions are components.json (design-system/ splits local and
+// library-sampled components).
+const { TOKENS, HYGIENE } = DESIGN_SYSTEM_FILES;
 export const COMPONENTS = "components.json";
 /** Every file buildLibraryLayout writes in a libraries/<dir>/, in `files` order (the manifest, INDEX, last). */
-export const LIBRARY_FILE_NAMES: readonly string[] = [TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, STYLES_ANIMATION, COMPONENTS, HYGIENE, INDEX];
+export const LIBRARY_FILE_NAMES: readonly string[] = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE, INDEX];
 
 // Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`.
 function slug(s: unknown): string {
@@ -96,12 +95,6 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
 
   const variables = Array.isArray(d.variables) ? d.variables : [];
   const collections = Array.isArray(d.collections) ? d.collections : [];
-  const styles: DesignSystemStyles = d.styles || {};
-  const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-  const stylesText = Array.isArray(styles.text) ? styles.text : [];
-  const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-  const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-  const stylesAnimation = Array.isArray(styles.animation) ? styles.animation : [];
   const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
 
   // Inside a library file every component IS local, so there is no local/library partition to make
@@ -120,11 +113,7 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
 
   const files: Array<PageLayoutFile<LibraryFileData>> = [
     { path: join(TOKENS), data: Object.assign({}, stamp, { collections, variables }) },
-    { path: join(STYLES_PAINT), data: Object.assign({}, stamp, { styles: stylesPaint }) },
-    { path: join(STYLES_TEXT), data: Object.assign({}, stamp, { styles: stylesText }) },
-    { path: join(STYLES_EFFECT), data: Object.assign({}, stamp, { styles: stylesEffect }) },
-    { path: join(STYLES_GRID), data: Object.assign({}, stamp, { styles: stylesGrid }) },
-    { path: join(STYLES_ANIMATION), data: Object.assign({}, stamp, { styles: stylesAnimation }) },
+    ...STYLE_KINDS.map((row) => ({ path: join(row.file), data: Object.assign({}, stamp, { styles: stylesOf(d.styles, row.kind) }) })),
     { path: join(COMPONENTS), data: Object.assign({}, stamp, { components }) },
     { path: join(HYGIENE), data: Object.assign({}, stamp, { hygiene: hyg }) },
   ];
@@ -138,11 +127,7 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
   const counts: LibraryCounts = {
     collections: collections.length,
     variables: variables.length,
-    stylesPaint: stylesPaint.length,
-    stylesText: stylesText.length,
-    stylesEffect: stylesEffect.length,
-    stylesGrid: stylesGrid.length,
-    stylesAnimation: stylesAnimation.length,
+    ...byStyleKey((row) => stylesOf(d.styles, row.kind).length),
     components: components.length,
     hygiene: hyg.length,
   };
@@ -152,11 +137,7 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
     // all, so a consumer joins them against the export dir and needs to know nothing else.
     files: {
       tokens: join(TOKENS),
-      stylesPaint: join(STYLES_PAINT),
-      stylesText: join(STYLES_TEXT),
-      stylesEffect: join(STYLES_EFFECT),
-      stylesGrid: join(STYLES_GRID),
-      stylesAnimation: join(STYLES_ANIMATION),
+      ...byStyleKey((row) => join(row.file)),
       components: join(COMPONENTS),
       hygiene: join(HYGIENE),
     },

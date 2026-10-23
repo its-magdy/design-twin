@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runSync } from "./spawn-helper.ts";
+import { runSync } from "../design-to-code/proc.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";

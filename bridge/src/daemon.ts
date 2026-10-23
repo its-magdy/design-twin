@@ -30,7 +30,8 @@ import { abortReason } from "./abort-reason.ts";
 import { bridgePortOrExit } from "./ports.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
-import type { ClientRow, ConnectionInfo, ProgressTick, RequestOptions } from "./server-core.ts";
+import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { Sent, UpstreamRequest } from "./route.ts";
 import { exitFlushed } from "./stdio.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
@@ -151,18 +152,19 @@ function isDaemonStatus(x: unknown): x is DaemonStatusView {
   return isRecord(x) && x.daemon === true;
 }
 
-/** What serve() drives: the bridge shape (server-core's createBridge() result, or the test suite's fake). */
+/** What serve() drives: a bridge this process holds (route.ts servedBridge builds one from server-core's
+ *  createBridge() result; the test suites pass fakes). `request` is the own adapter's (route.ts Upstream):
+ *  the frame's fields as they arrived — `target` its `client`, `waitMs` its `waitForConnection` (the bridge
+ *  waits that long for the target first, server-core awaitClient), `onProgress` receives every tick the
+ *  chosen connection sends while the request is in flight (the source of progress frames), and `signal` is
+ *  aborted when the daemon's client disconnects (or the daemon shuts down) before the reply — server-core
+ *  then sends the plugin a cancel frame for the request. It answers WHICH client the command went to (null
+ *  when a fake does not say). The daemon never passes `stallMs`. */
 export interface DaemonBridge {
   port: number;
   isConnected(): boolean;
-  request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
-  /** The same, also naming the client the command went to (server-core has it; a fake may not).
-   *  `stallMs` is server-core's own opt-in (the daemon never passes it); `onProgress` receives every
-   *  tick the chosen connection sends while the request is in flight — the source of progress frames.
-   *  `signal` is aborted when the daemon's client disconnects (or the daemon shuts down) before the
-   *  reply; server-core then sends the plugin a cancel frame for the request. `opts.waitMs` is the
-   *  request frame's `waitForConnection`: server-core waits that long for the target first (awaitClient). */
-  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts?: RequestOptions): Promise<{ reply: unknown; client: ClientRow }>;
+  // Method syntax, and `args` as the frame carries it (absent is forwarded as absent, as it always was).
+  request<C extends Cmd>(cmd: C, args: Commands[C]["args"] | undefined, o: UpstreamRequest): Promise<Sent<C>>;
   close(): void;
   listClients?: () => ClientRow[];
   connectionInfo?: () => ConnectionInfo;
@@ -621,7 +623,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         queue = queue.then(async () => {
           try {
             if (abandoned()) return;
-            // msg.waitForConnection is the caller's connect window (the CLI sends its own, the MCP server
+            // msg.waitForConnection is the caller's connect window (route.ts: the CLI's own window, at least
             // NAMED_CLIENT_WAIT_MS for a named client): the bridge waits for the target first, a named
             // one capped at NAMED_CLIENT_WAIT_MS once a plugin is connected (server-core awaitClient), so
             // `--client <name>` does not fail on the first file that happened to reconnect after a Figma
@@ -630,24 +632,17 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             // the text every other path prints. A client that leaves during the wait ends it (ac.signal).
             // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
             // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
-            // The client the bridge picked rides back on the reply (a fake bridge without
-            // requestWithClient simply doesn't say).
+            // The client the bridge picked rides back on the reply (a fake bridge that answers null
+            // simply doesn't say).
             // Progress frames only for a client that opted in (`progress: true`) — an older client
             // reads every frame as the reply. Written on the same socket ahead of the reply, so the
             // client sees the ticks in the order they arrived, and all of them before the reply.
-            // Only a bridge with requestWithClient can take a listener (server-core's does).
             const id = msg.id;
             const onProgress = msg.progress === true
               ? (tick: ProgressTick) => { send(conn, id === undefined ? { progress: tick } : { id, progress: tick }); }
               : undefined;
-            if (typeof bridge.requestWithClient === "function") {
-              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress, ac.signal, ifDefined("waitMs", msg.waitForConnection));
-              reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, client: o.client });
-            } else {
-              // A bridge without requestWithClient (a minimal fake) has no wait either: asked at once.
-              const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
-              reply(conn, { ok: true, ...ifDefined("id", msg.id), result });
-            }
+            const o = await bridge.request(msg.cmd, msg.args, { timeoutMs: msg.timeoutMs, target: msg.client, onProgress, signal: ac.signal, waitMs: msg.waitForConnection });
+            reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, ...(o.client ? { client: o.client } : {}) });
           } catch (e) {
             reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(e) });
           } finally {

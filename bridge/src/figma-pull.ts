@@ -28,20 +28,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as LAYOUT from "./project-layout.ts";
-// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts) — the tiers below pick
-// from it rather than restating them, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
+// TIMEOUTS is the per-command budget table both front-ends read (timeouts.ts); a read's own tier comes from
+// read-plan.ts, so the CLI and the MCP tools cannot drift apart. Imported from timeouts.ts directly, like errMsg / tokenStore / the two
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout, daemonGuardMs, MAX_TIMER_MS } from "./timeouts.ts";
+import { TIMEOUTS, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { Bridge, ClientRow, ProgressTick } from "./server-core.ts";
 // The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
 // from it, so this file cannot read a reply field the plugin never sends (a hand-mirror once
 // declared a top-level `frames` that did not exist, and two hints silently never printed).
-import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary, ScreenReply } from "./commands.ts";
+import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary } from "./commands.ts";
 // Type-only (erased): cli() loads server-core itself, lazily — see above.
 import type * as ServerCore from "./server-core.ts";
 // node-id.ts is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
@@ -54,16 +54,25 @@ import { toNodeId } from "./node-id.ts";
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
-import type { Stamped } from "./write-out.ts";
 import { stampSource } from "./source-stamp.ts";
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
 import type { ReadOptName } from "./read-opts.ts";
+// What a pull SENDS — command, arguments, budget, label — is the read plan's, shared with the MCP export tools.
+import { planRead } from "./read-plan.ts";
+import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScope } from "./read-plan.ts";
 // daemon.ts holds the bridge open across invocations. Every ordinary command below asks it for a
 // connection FIRST and falls back to opening its own bridge — so the one-shot behaviour is unchanged
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
+import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import type { Route, Sent, Upstream } from "./route.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
+// THE command registry (cli-commands.ts): every command's flag, family, read and verb spellings, the
+// combination guards per family, the modifiers and the help. Parsing, the guards, unknown-flag detection,
+// dispatch and the help below are derived from it; each command's runner is in RUN_* below, typed by its id.
+import { COMMAND_ROWS, COMMAND_SUMMARY, DEFAULT_COMMAND, FAMILIES, GUARDS, MCP_HELP, MODIFIERS, VALUE_MODIFIERS, VALUE_READ_ORDER } from "./cli-commands.ts";
+import type { CommandId, CommandIdIn, CommandRow, Family, RoutedVerb, SessionFamily, ValueModifier } from "./cli-commands.ts";
 import { ifDefined, isUnknownArray } from "./json-util.ts";
 // The package's own package.json, imported (not read by a path at run time, so a compiled binary has it
 // too): `dtwin --version` prints its version.
@@ -87,19 +96,7 @@ directory can be deleted and re-pulled without touching design/target.json, desi
 design/plan/ or design/audit/ — the files you own. \`design/README.md\` (written by init) says so too.
 
 Commands (each is shorthand for a flag documented below — the flags keep working unchanged):
-  dtwin pull [outDir] [flags]              = dtwin [outDir] [flags].          See pull --help
-  dtwin list [pages|libraries|clients]     = --list | --list-pages | --list-libraries | --list-clients
-  dtwin list children <id|url>             = --children <id|url>.             See list --help
-  dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>.           See screenshot --help
-  dtwin whoami                             = --whoami
-  dtwin serve | stop | status              = --serve | --stop | --daemon-status
-  dtwin token [status|show|rotate|forget]  = --token-status | --show-token | …  See token --help
-  dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
-  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
-  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help
-  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help
-  dtwin help                               = --help
-  dtwin --version                          print the installed version
+${COMMAND_SUMMARY}
 
   Every command above answers \`--help\` with its own page, and none of them does anything else
   while doing so.
@@ -245,7 +242,6 @@ function usageText(): string {
 
 const plog = (m: string) => console.error("[dtwin] " + m);
 const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => OUT.writeJson(dir, name, obj, quiet, plog);
-const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"], scale?: number) => OUT.writeScreenshot(dir, r, plog, { scale });
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
 // COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
@@ -264,10 +260,6 @@ function printHygiene(r: { designSystem: { hygiene?: string[] } }): void {
 // Untestable arg parsing is how `--timeout` shipped silently ignoring its own flag when the value was
 // missing.
 class UsageError extends Error {}
-
-// `.filter(Boolean)` over the `cond && "--flag"` lists below, typed: keeps exactly the truthy entries
-// (the flag names), dropping the false/0/null/"" a condition produced.
-const isFlag = (x: string | number | false | null | undefined): x is string => Boolean(x);
 
 // ONE parser for every `--flag value` / `--flag=value` pair, repeatable by construction. One
 // shared rule marks every consumed index in consumedIdx, so the positional [outDir] is never a flag's
@@ -297,142 +289,25 @@ function takeValues(args: string[], flag: string, missingMsg: string, consumedId
   return out;
 }
 
+// Every flag there is (cli-commands.ts: the commands', then the modifiers'): what the unknown-flag check
+// knows, in the order its did-you-mean breaks a tie in. VALUE_FLAGS are the ones that also take `--flag=value`.
+const KNOWN_FLAGS: string[] = [
+  ...COMMAND_ROWS.flatMap((r) => (r.flag === null || r.value ? [] : [r.flag])), ...MODIFIERS.filter((m) => !m.value).map((m) => m.flag),
+  ...COMMAND_ROWS.flatMap((r) => (r.flag === null || !r.value ? [] : [r.flag])), ...MODIFIERS.filter((m) => m.value).map((m) => m.flag),
+];
+const VALUE_FLAGS: string[] = [...COMMAND_ROWS.flatMap((r) => (r.flag !== null && r.value ? [r.flag] : [])), ...MODIFIERS.filter((m) => m.value).map((m) => m.flag)];
+const isValueModifier = (f: string): f is ValueModifier => (VALUE_MODIFIERS as readonly string[]).includes(f);
+
 function readArgs(args: string[]) {
-  const selection = args.includes("--selection");
-  const allPages = args.includes("--all-pages");
-  // --design-system: tokens/styles/components/hygiene, no page/frame walk and therefore no
-  // assets either (assets are exported per-node during that walk). The cheap sibling of a full pull
-  // for "just give me the design system" — see collect.ts's collectDesignSystemOnly for the one
-  // tradeoff (library-variable completeness depends on nodes actually being walked).
-  const designSystemOnly = args.includes("--design-system");
-  // Daemon lifecycle. These are COMMANDS, not modifiers: each one owns the whole invocation, so they
-  // are refused in combination with each other and with any pull below. --serve holds the bridge open
-  // until stopped; every ordinary command then routes through it automatically (see daemon.ts).
-  const DAEMON_CMDS = ["--serve", "--stop", "--daemon-status"];
-  const daemonCmd = DAEMON_CMDS.find((f) => args.includes(f)) || null;
-  // Token lifecycle. COMMANDS, like the daemon ones above: each owns the whole invocation, needs no
-  // bridge and no plugin (they only touch the local token file), and so is refused in combination with
-  // anything else. --token-file is the exception — it is a MODIFIER, read below.
-  const TOKEN_CMDS = ["--token-status", "--show-token", "--rotate-token", "--forget-token"];
-  const tokenCmd = TOKEN_CMDS.find((f) => args.includes(f)) || null;
-  // --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
-  // which dominates the export on a real design-system file. Structure, layout and tokens are
-  // unaffected — a skipped node stays the same LEAF the full export produces, marked
-  // `assetSkipped: true` instead of carrying an `asset` path; only assets/ goes missing.
-  // Flag -> option name comes from bridge/src/read-opts.ts, the ONE registry shared with the plugin's
-  // runOpts and the MCP tool schema. Building the table from it (rather than restating the six names
-  // here) is what lets the guard below name the offending flags without a second hand-written list —
-  // a twin that would silently stop matching the moment a read option is added.
-  const READ_OPT_FLAGS = Object.fromEntries(READ_OPTS.map((o) => [o.flag, o.name]));
-  const readOpts: Partial<Record<ReadOptName, boolean>> = {};
-  const readOptFlagsGiven: string[] = [];
-  for (const [flag, opt] of Object.entries(READ_OPT_FLAGS)) {
-    readOpts[opt] = args.includes(flag);
-    if (readOpts[opt]) readOptFlagsGiven.push(flag); // same predicate by construction, one walk
-  }
-
-  // Export timeout. The extraction — not the interactive connect — is the slow half: it walks every
-  // node on every page, and a real design-system file blows past server-core's 120s default (found the
-  // hard way on a ~1000-node file with --all-pages). Scale with the work and let the user override.
-  // --list is the CHEAP map (pages + top-level frames, no recursion, no assets) you consult before
-  // paying for a deep export. --list-pages is depth 1: page names only, which needs no page load at all.
-  // One name for the structural-index command, decided once: every message and guard below asks for
-  // the flag the user actually typed, instead of re-deriving it from two booleans at each site.
-  // Exact `includes` matches, so "--list-libraries" is NOT swallowed by the "--list" branch — the same
-  // prefix trap takeValues() guards against.
-  const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
-  const listOnly = listCmd !== null;
-  const listDepth: 1 | 2 = listCmd === "--list-pages" ? 1 : 2;
-  // --list-libraries: the LIBRARY-scoped member of the same cheap-index family. Same cost model as
-  // --list (no recursion, no node properties, no assets — it reads the file's library usage), same
-  // budget tier (TIMEOUTS.list), same "prints and exits before any export runs" shape, and therefore
-  // the same guards below. It is a discovery step: find out which libraries a file draws on, THEN pull
-  // only what you need — the library analogue of --list -> --page.
-  const listLibraries = args.includes("--list-libraries");
-
-  // --whoami: the identity/liveness probe. Cheapest command there is (no page load, no node walk, no
-  // assets) and it PRINTS rather than writing outDir, so it joins the index-command family below and
-  // inherits its guards. It exists to answer, with evidence rather than inference, the three questions
-  // the docs do not: whether two Figma files can run the plugin at once, whether `figma.fileKey` is
-  // available to a locally-imported plugin, and whether a connection survives being left idle.
-  const whoami = args.includes("--whoami");
-
-  // --list-clients: which Figma FILES are connected right now. The bridge accepts one connection per
-  // open file, so this is the "which of my open files can I talk to?" index — the discovery step before
-  // --client, exactly as --list is before --page.
-  const listClients = args.includes("--list-clients");
-
   // Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
   // mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
   // outDir detection can skip them, not just skip tokens that literally start with "--".
   const consumedIdx = new Set<number>();
 
-  // --children <id>: the node-scoped twin of --list. Same cost model (no recursion, no assets), just
-  // scoped to one node's direct children instead of a page's top level — for peeking inside a frame
-  // `--list` surfaced before paying for a full recursive `--page` pull of it.
-  // Accepts `--children=<id>` as well as `--children <id>` — --page and --timeout both take the `=`
-  // form, and a value-flag that silently rejects it is a papercut with no reason to exist.
-  let childrenId: string | null = takeValues(args, "--children", "--children needs a node id (see --list)", consumedIdx)[0] || null;
-  // Accept everything the MCP twin accepts: bare id, dash form, percent-encoded, nested-instance
-  // path, or a whole figma.com URL. toNodeId is node-id.ts's lenient entry point — an id shape it
-  // doesn't recognise passes through and works rather than becoming a hard failure.
-  if (childrenId) childrenId = toNodeId(childrenId);
-
-  // --node <id>: a REAL export (properties + assets) of exactly ONE node — the CLI twin of the MCP
-  // `figma_export_url` tool ("paste a link and ask about it"). Unlike --children (peek, no recursion)
-  // and --screenshot (PNG only, no asset walk) this walks the node's subtree with the full serialize()
-  // pass and exports the assets found inside it, same as a --page pull would for that subtree. It is a
-  // SCOPE flag (selects WHAT is exported), not an index command, so it joins the `scopes` guard below.
-  let nodeId: string | null = takeValues(args, "--node", "--node needs a node id or figma.com URL (see --list / --children)", consumedIdx)[0] || null;
-  if (nodeId) nodeId = toNodeId(nodeId);
-
-  // --screenshot <id>: an on-demand PNG of ONE node — the visual-validation counterpart to --list/
-  // --children (see collectScreenshot's comment in collect.ts for why this is a single-node pull rather
-  // than a bulk pre-render pass). Unlike --list/--children it WRITES a file, so it is its own small
-  // export, not a member of the indexCmds family below.
-  let screenshotId: string | null = takeValues(args, "--screenshot", "--screenshot needs a node id (see --list / --children)", consumedIdx)[0] || null;
-  if (screenshotId) screenshotId = toNodeId(screenshotId);
   // --scale <n>: override collectReference's default (auto, capped at 2048px on the longest side). Only
-  // meaningful paired with --screenshot — refused standalone below, the same silent-loss class as a read
+  // meaningful paired with --screenshot — refused standalone, the same silent-loss class as a read
   // option combined with --list.
   const BAD_SCALE = "--scale expects a positive number";
-  const scaleArg = takeValues(args, "--scale", BAD_SCALE, consumedIdx)[0];
-  const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
-  if (scale !== undefined && !(scale > 0)) throw new UsageError(`${BAD_SCALE}, got '${scaleArg}'`);
-  // Refused here while reading, not in validateArgs: this error comes before the outDir warning.
-  if (scale !== undefined && !screenshotId) {
-    throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
-  }
-
-  // --page <id|name>, REPEATABLE (docker -e / curl -H convention): export a bounded, caller-chosen set
-  // of pages. Accepts `--page=x` and `--page x`. Ambiguous/unknown selectors fail loudly plugin-side
-  // with the available pages listed — never a silent pick, since nothing here is interactive.
-  const pageSel = takeValues(args, "--page", "--page needs an id or name (see --list)", consumedIdx);
-  // --as-library <name>: the LIBRARY-FILE pull. A scope, not a read option — it selects WHAT is
-  // exported, and like --design-system it walks no page, so the read-option guard below refuses those
-  // flags for it too. The name is required rather than defaulted from figma.root.name, because it is
-  // what the output directory is named after and a silent default is a directory the user did not
-  // choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
-  const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"Acme UI\"", consumedIdx)[0] || null;
-
-  // --client: WHICH connected Figma file this command talks to. Unlike every other flag here it is not
-  // a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
-  // bridge uses the only connected file; with several connected it refuses and lists them rather than
-  // guessing, so an export can never silently come from the wrong file. Accepts a connId (from
-  // --list-clients), a fileKey, or part of the file's name. The connId (c1, c2, …) is a reconnect-order
-  // LABEL for the current bridge lifetime, not a stable id across restarts — prefer the
-  // file name or fileKey in a script; connId is fine for a human picking between two files open right now.
-  const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)", consumedIdx)[0] || null;
-
-  // --token-file <path>: read the bridge token from somewhere other than the stored default. A
-  // MODIFIER (it changes which token every other command uses), not a command.
-  //
-  // There is deliberately NO `--token <value>` twin. Process arguments are world-readable — `ps aux`,
-  // /proc/<pid>/cmdline — so a value flag would hand the secret to every other user on the machine for
-  // as long as the command runs. A path is not a secret; the file it points at is.
-  const tokenFile = takeValues(args, "--token-file", "--token-file needs a path to a file containing the token", consumedIdx)[0] || null;
-
-
   // A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
   // with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
   // validator's own `!== undefined` guard to EXEMPT — which is how the flag once got silently ignored
@@ -444,13 +319,88 @@ function readArgs(args: string[]) {
   // Infinity at all (JSON writes it as null).
   const MAX_TIMEOUT_SEC = Math.floor(MAX_TIMER_MS / 1000);
   const BAD_TIMEOUT = `--timeout expects a positive number of seconds (at most ${MAX_TIMEOUT_SEC}, about 24 days)`;
-  const timeoutArg = takeValues(args, "--timeout", BAD_TIMEOUT, consumedIdx)[0];
+  const MISSING: Record<ValueModifier, string> = {
+    "--scale": BAD_SCALE,
+    "--client": "--client needs a connection id, fileKey, or part of a file name (see --list-clients)",
+    "--token-file": "--token-file needs a path to a file containing the token",
+    "--timeout": BAD_TIMEOUT,
+  };
+
+  // Every value-taking flag, read in VALUE_READ_ORDER (cli-commands.ts: which of several missing values is
+  // refused first). A value-taking command is typed when it has a value (takeValues refuses it with none);
+  // a node id goes through node-id.ts's lenient toNodeId — the same inputs the MCP twins accept (bare id,
+  // dash form, percent-encoded, nested-instance path, or a whole figma.com URL), and an id shape it does not
+  // recognise passes through rather than becoming a hard failure. Only --page is repeatable (docker -e /
+  // curl -H convention); ambiguous/unknown page selectors fail loudly plugin-side with the available pages
+  // listed. A --as-library name is required rather than defaulted from figma.root.name: it is what the
+  // output directory is named after, and a silent default is a directory the user did not choose.
+  const values = new Map<CommandId, string[]>();
+  const modifier = new Map<ValueModifier, string>();
+  for (const f of VALUE_READ_ORDER) {
+    const row = COMMAND_ROWS.find((r) => r.flag === f);
+    if (row?.value) {
+      const taken = takeValues(args, f, row.value.missing, consumedIdx);
+      const v = (row.value.many ? taken : taken.slice(0, 1)).map((x) => (row.value?.nodeId ? toNodeId(x) : x));
+      if (v.length) values.set(row.id, v);
+    } else if (isValueModifier(f)) {
+      const v = takeValues(args, f, MISSING[f], consumedIdx)[0];
+      if (v === undefined) continue;
+      modifier.set(f, v);
+      if (f !== "--scale") continue;
+      if (!(Number(v) > 0)) throw new UsageError(`${BAD_SCALE}, got '${v}'`);
+      // Refused here while reading, not in validateArgs: this error comes before the outDir warning.
+      if (!values.has("screenshot")) throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
+    }
+  }
+  const scaleArg = modifier.get("--scale");
+  const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
+  // --client: WHICH connected Figma file this command talks to. Unlike every command flag it is not a
+  // scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
+  // bridge uses the only connected file; with several connected it refuses and lists them rather than
+  // guessing, so an export can never silently come from the wrong file. Accepts a connId (from
+  // --list-clients), a fileKey, or part of the file's name. The connId (c1, c2, …) is a reconnect-order
+  // LABEL for the current bridge lifetime, not a stable id across restarts — prefer the
+  // file name or fileKey in a script; connId is fine for a human picking between two files open right now.
+  const client = modifier.get("--client") || null;
+  // --token-file <path>: read the bridge token from somewhere other than the stored default. A
+  // MODIFIER (it changes which token every other command uses), not a command.
+  //
+  // There is deliberately NO `--token <value>` twin. Process arguments are world-readable — `ps aux`,
+  // /proc/<pid>/cmdline — so a value flag would hand the secret to every other user on the machine for
+  // as long as the command runs. A path is not a secret; the file it points at is.
+  const tokenFile = modifier.get("--token-file") || null;
+
+  // The commands typed, in the command table's order (cli-commands.ts) — the order a refusal names them in.
+  // Matched EXACTLY (`includes`, or takeValues' flag and `=` form), so "--list-libraries" is not swallowed by
+  // "--list" — the prefix trap takeValues() guards against.
+  const given: CommandRow[] = COMMAND_ROWS.filter((r) => r.flag !== null && (r.value ? values.has(r.id) : args.includes(r.flag)));
+  // The one command this line names, once the guards have passed (validateArgs); with none, a pull of the current page.
+  const command = given[0] ?? DEFAULT_COMMAND;
+  const valueOf = (id: CommandId): string | null => values.get(id)?.[0] ?? null;
+
+  // --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
+  // which dominates the export on a real design-system file. Structure, layout and tokens are
+  // unaffected — a skipped node stays the same LEAF the full export produces, marked
+  // `assetSkipped: true` instead of carrying an `asset` path; only assets/ goes missing.
+  // Flag -> option name comes from bridge/src/read-opts.ts, the ONE registry shared with the plugin's
+  // runOpts and the MCP tool schema. Building the table from it (rather than restating the six names
+  // here) is what lets the guards name the offending flags without a second hand-written list —
+  // a twin that would silently stop matching the moment a read option is added.
+  const readOpts: Partial<Record<ReadOptName, boolean>> = {};
+  const readOptFlagsGiven: string[] = [];
+  for (const o of READ_OPTS) {
+    readOpts[o.name] = args.includes(o.flag);
+    if (readOpts[o.name]) readOptFlagsGiven.push(o.flag); // same predicate by construction, one walk
+  }
+
+  const timeoutArg = modifier.get("--timeout");
   const timeoutSec = Number(timeoutArg);
   if (timeoutArg !== undefined && !(timeoutSec > 0 && timeoutSec <= MAX_TIMEOUT_SEC)) throw new UsageError(`${BAD_TIMEOUT}, got '${timeoutArg}'`);
   // One override, applied to every budget below — spelling the `--timeout` conversion per budget is how
-  // the list ops came to be missed by the flag in the first place.
+  // the list ops came to be missed by the flag in the first place. A read's own budget (by scope) is the
+  // read plan's (read-plan.ts); `timeoutOverrideMs` is what it is handed, and absent without the flag.
   const overrideMs = timeoutSec > 0 ? timeoutSec * 1000 : undefined;
-  const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
+  const timeoutOverrideMs = overrideMs;
   // The list ops get their own budget, and --timeout raises it too — they are cheap RELATIVE to an
   // export, not fast (see TIMEOUTS.list). Without this the command you are told to run FIRST would be
   // the first to fail on the big files where looking before you pull is the whole point, with no flag to
@@ -467,16 +417,9 @@ function readArgs(args: string[]) {
   // (`--lsit`, `--al-pages`) would match nothing and fall through to the default — a full pull that
   // then waits on the plugin: the wrong command, run silently. Same silent-loss class as the guards
   // below, one step earlier. Runs after every takeValues() call so a flag's VALUE is never judged.
-  const BOOL_FLAGS = [
-    "--selection", "--all-pages", "--design-system", ...DAEMON_CMDS, ...TOKEN_CMDS,
-    "--list", "--list-pages", "--list-libraries", "--whoami", "--list-clients", "--help", "--json",
-    ...Object.keys(READ_OPT_FLAGS),
-  ];
-  const VALUE_FLAGS = ["--children", "--node", "--screenshot", "--scale", "--page", "--as-library", "--client", "--token-file", "--timeout"];
-  const KNOWN_FLAGS = [...BOOL_FLAGS, ...VALUE_FLAGS];
   const OUT_FLAG_ALIASES = ["--out", "-o", "--output", "--out-dir", "--outdir", "--dir"];
   const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consumedIdx.has(i)
-    && !BOOL_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a === f || a.startsWith(f + "=")));
+    && !KNOWN_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a.startsWith(f + "=")));
   if (unknown.length) {
     // `--out`/`-o`/`--output` are what people reach for to name where the file lands, and they are
     // too far (> 2 edits) from every real flag for the did-you-mean below to help. outDir is positional.
@@ -506,13 +449,18 @@ function readArgs(args: string[]) {
   const outDir = userOutDir ||
     (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
 
-  // For the guards in argConflict(): --json, and every daemon/token command typed (two of either kind
-  // are refused).
   const json = args.includes("--json");
-  const daemonCmdsGiven = DAEMON_CMDS.filter((f) => args.includes(f));
-  const tokenCmdsGiven = TOKEN_CMDS.filter((f) => args.includes(f));
+  // --list is pages + their top-level layers; --list-pages is depth 1, page names only (no page load).
+  const listDepth: 1 | 2 = command.id === "listPages" ? 1 : 2;
 
-  return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json, listCmd, userOutDir, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven };
+  return {
+    command, given, readOpts, readOptFlagsGiven,
+    // Each value-taking command's value (null, or [] for --page, when it was not typed).
+    nodeId: valueOf("node"), childrenId: valueOf("children"), screenshotId: valueOf("screenshot"), asLibrary: valueOf("asLibrary"), pageSel: values.get("page") ?? [],
+    allPages: given.some((r) => r.id === "allPages"),
+    listDepth,
+    scale, client, tokenFile, json, timeoutOverrideMs, listTimeoutMs, connectWaitMs, outDir, userOutDir,
+  };
 }
 
 export type ParsedArgs = ReturnType<typeof readArgs>;
@@ -534,127 +482,63 @@ function outDirWarning(userOutDir: string | undefined, exists: (p: string) => bo
     ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`;
 }
 
-// The combination guards: the first refusal's message, or null when the flags make one command.
+// The read a command names, as the read plan's scope (cli-commands.ts `reads`, with the values typed for it).
+function scopeOf(row: CommandRow, p: ParsedArgs): ReadScope {
+  switch (row.reads) {
+    case "screenshot": return { kind: "screenshot", nodeId: p.screenshotId ?? "", scale: p.scale };
+    case "library": return { kind: "library", name: p.asLibrary ?? "" };
+    case "node": return { kind: "node", nodeId: p.nodeId ?? "" };
+    case "selection": return { kind: "selection" };
+    case "designSystem": return { kind: "designSystem" };
+    // A command that reads nothing has no scope; it is asked only for one that reads (cliReadPlan, refusedReadOpts).
+    case "pages": case null: return { kind: "pages", allPages: p.allPages, pages: p.pageSel };
+  }
+}
+
+// What this command line SENDS for its read (read-plan.ts — the same plan the MCP export tools send), with
+// --timeout as its budget; null for a command that reads no design (an index, daemon or token command).
+function cliReadPlan(p: ParsedArgs): ReadPlan | ReadRefusal | null {
+  if (p.command.reads === null) return null;
+  return planRead(scopeOf(p.command, p), p.readOpts, { timeoutMs: p.timeoutOverrideMs });
+}
+
+// The read options given that a command does not take, as their flags: every one for a command that reads
+// no design; otherwise the ones its read plan refuses (read-opts.ts `scopes`).
+function refusedReadOpts(row: CommandRow, p: ParsedArgs): string[] {
+  if (row.reads === null) return p.readOptFlagsGiven;
+  const plan = planRead(scopeOf(row, p), p.readOpts);
+  return "refused" in plan ? READ_OPTS.filter((o) => plan.refused.includes(o.name)).map((o) => o.flag) : [];
+}
+
+// The combination guards: the first refusal's message, or null when the flags make one command. Every
+// rule is a GUARDS row (cli-commands.ts), asked in its order: two commands of one family, a command beside
+// another family's (or beside read options), the read options a command's read does not take, and the two
+// modifiers only some commands take. Each refusal exists because the alternative is SILENT loss — one of
+// the two things typed would run, and the other would vanish without a word.
 function argConflict(p: ParsedArgs): string | null {
-  const { selection, allPages, designSystemOnly, asLibrary, nodeId, childrenId, screenshotId, listCmd, listLibraries, whoami, listClients, pageSel, daemonCmd, tokenCmd, tokenFile, json, readOptFlagsGiven, daemonCmdsGiven, tokenCmdsGiven } = p;
-  // Scope flags are MUTUALLY EXCLUSIVE, and the loser must not be discarded in silence: collectFull is
-  // `if (allPages) … else if (page)`, so `--all-pages --page Foo` would export all 25 pages while the user
-  // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
-  // export of the WRONG scope — the failure you don't notice. Parsing is a pure function, so
-  // refusing costs two lines and a test.
-  const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node"].filter(isFlag);
-  if (scopes.length > 1) {
-    return `${scopes.join(" and ")} select different scopes — pass only one.`;
-  }
-  // --screenshot exports exactly one node's reference PNG — it is not a scope modifier, so combining it
-  // with one is the same silent-loss class the scope guard above exists for.
-  if (screenshotId && scopes.length) {
-    return `--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`;
-  }
-  // The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
-  // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
-  // added and then silently omitted from one of the three guards (the --timeout class of bug: the
-  // flag is accepted, and then quietly does nothing).
-  const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami", listClients && "--list-clients"].filter(isFlag);
-  const indexCmd = indexCmds[0] || null;
-  // --screenshot writes a file, so it does not join the indexCmds family above (which never do) — but
-  // combining it with one is still the same silent-loss class: only one command's output would appear.
-  if (screenshotId && indexCmds.length) {
-    return `--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`;
-  }
-  // Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
-  // comment above), so any of them here would be silently ignored exactly as they would on a list command.
-  if (screenshotId && readOptFlagsGiven.length) {
-    const many = readOptFlagsGiven.length > 1;
-    const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
-    return `${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`;
-  }
-
-  // --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
-  // --list-libraries). The primary caller of this CLI is an agent, and scraping an aligned table is
-  // how a column rename becomes a silent misread. --list / --list-pages / --children / --whoami already
-  // print JSON, so the flag is accepted there as a no-op (one habit for every index command) and
-  // refused everywhere else — an export writes files and prints no result to make JSON of.
-  if (json && !indexCmds.length) {
-    return "--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.";
-  }
-
-  // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
-  // export flag combined with one of them is a no-op the user has no way to see.
-  if (indexCmd && scopes.length) {
-    return `${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`;
-  }
-  // Two index commands at once is the same silent loss one step over: only one of them would run and
-  // print, and the other would vanish without a word.
-  if (indexCmds.length > 1) {
-    return `${indexCmds.join(" and ")} are different queries — pass only one.`;
-  }
-  // Read options are the SAME silent loss, one step further in. The list ops emit only structural
-  // fields (id/name/type/size) — they never serialize a node, never call getCSSAsync, never read
-  // measurements, never export an asset — so every flag in READ_OPT_FLAGS is a no-op here, discarded
-  // without a word. Refused as a group, --no-assets included: it is just as inert (nothing renders on
-  // this path), and exempting it would put the caller back to guessing WHICH flags survive a list,
-  // which is the ambiguity the guard exists to remove. `--timeout` is deliberately NOT in this set —
-  // it genuinely applies (listTimeoutMs).
-  // --list-libraries is in the same boat and joins the guard through indexCmd: it reports library
-  // identity/usage, never a serialized node, so a read option there would be discarded just as silently.
-  if (indexCmd && readOptFlagsGiven.length) {
-    const cmd = indexCmd;
-    // What the command DOES emit, so the refusal explains itself instead of asserting a shape that is
-    // wrong for one member of the family.
-    const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses"
-      : cmd === "--whoami" ? "only prints connection/plugin identity"
-      : cmd === "--list-clients" ? "only prints which Figma files are connected"
-      : "only prints a structural index (id/name/type/size)";
-    // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
-    // edit to a 400-character single expression with six branch points.
-    const many = readOptFlagsGiven.length > 1;
-    const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-    return `${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`;
-  }
-  // --design-system never walks a page or node, so every read option (css/measurements/
-  // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
-  // silent-loss class, same refusal. --variant-visuals is the ONE exception: it enriches the
-  // component catalog itself (findAllWithCriteria for COMPONENT_SET/COMPONENT), which --design-system
-  // and --as-library both build, so it is genuinely live here — excluded from the guard below and
-  // forwarded explicitly a few lines down.
-  const dsGuardFlags = readOptFlagsGiven.filter((f) => f !== "--variant-visuals");
-  if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
-    const many = dsGuardFlags.length > 1;
-    const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-    return `${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`;
-  }
-
-  // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
-  // class the scope guards above exist for: --serve --all-pages would start a daemon and never run the
-  // export the user typed, with nothing said about it.
-  if (daemonCmd) {
-    const others = [...scopes, screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
-    if (others.length) {
-      return `${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`;
+  const flag = (r: CommandRow): string => r.flag ?? "";
+  const typed = (f: Family | "readOpts"): string[] => (f === "readOpts" ? p.readOptFlagsGiven : p.given.filter((r) => r.family === f).map(flag));
+  for (const g of GUARDS) {
+    if (g.kind === "json") {
+      if (p.json && !p.given.some((r) => r.family === "index")) return g.say();
+      continue;
     }
-    if (daemonCmdsGiven.length > 1) {
-      return "--serve / --stop / --daemon-status are different commands — pass only one.";
+    if (g.kind === "tokenFile") {
+      const cmd = p.given.find((r) => r.family === "token");
+      if (p.tokenFile && cmd && g.ignoredBy.includes(cmd.id)) return g.say(flag(cmd));
+      continue;
     }
-  }
-
-  // A token command owns the invocation for the same reason a daemon one does: it manages the local
-  // credential and never opens a bridge, so pairing it with a pull would start an export the user did
-  // not ask for — or, worse, silently do only the token half of what they typed.
-  if (tokenCmd) {
-    const others = [...scopes, screenshotId && "--screenshot", daemonCmd, ...indexCmds, ...readOptFlagsGiven].filter(isFlag);
-    if (others.length) {
-      return `${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`;
-    }
-    if (tokenCmdsGiven.length > 1) {
-      return `${tokenCmdsGiven.join(" and ")} are different commands — pass only one.`;
-    }
-    // --token-file names a token to READ; these three act on the STORED one. Passing both reads as
-    // "rotate/report the token in this file", which is not what happens — the stored token is the one
-    // acted on and the --token-file one is silently ignored. --show-token is the ONE token command
-    // where --token-file genuinely applies (print the token in that file), so it is not listed here.
-    if (tokenFile && tokenCmd !== "--show-token") {
-      return `${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`;
+    const mine = p.given.filter((r) => r.family === g.family);
+    const cmd = mine[0];
+    if (!cmd) continue;
+    if (g.kind === "within") {
+      if (mine.length > 1) return g.say(mine.map(flag));
+    } else if (g.kind === "cross") {
+      const others = g.others.flatMap(typed);
+      if (others.length) return g.say(flag(cmd), others);
+    } else {
+      const refused = refusedReadOpts(cmd, p);
+      if (refused.length) return g.say(cmd, refused);
     }
   }
   return null;
@@ -889,7 +773,7 @@ async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promis
   // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
   await daemon.assertNoDaemon();
   const bridge = createBridge();
-  const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
+  const { sock } = await daemon.serve(servedBridge(bridge), { log: (m) => console.error("[dtwin] " + m) });
   console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
   console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
   console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
@@ -905,14 +789,13 @@ async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promis
 // clients` would — so a screen export can be stamped with its real source without this
 // file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
 // that field.
-type Sent<C extends Cmd> = { reply: Commands[C]["reply"]; client: ClientRow | null };
 type Send = <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
 
 // What every ordinary command runs on: where its requests go (a running daemon, or a bridge of its own),
 // and the timing and shutdown helpers the commands share.
 interface Session {
-  /** This process's own bridge; null when a daemon answers. */
-  bridge: Bridge | null;
+  /** Where requests, the client listing and the socket stats come from (route.ts). */
+  route: Route;
   send: Send;
   /** Runs one write, adding its time to the closing `done in …` line. */
   timedWrite: <T>(write: () => T) => T;
@@ -925,7 +808,7 @@ interface Session {
 // bridge (and port 8787), so opening our own here would hit EADDRINUSE and exit. When there is no
 // daemon this is exactly the one-shot path it always was.
 async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.createBridge): Promise<Session> {
-  const { listOnly, childrenId, listLibraries, whoami, listClients, client, connectWaitMs } = parsed;
+  const { command, client, connectWaitMs } = parsed;
   // Timing (see `doneLine` below): the clock starts before the daemon probe.
   const tStart = Date.now();
   const timing = { connectMs: 0, exportMs: 0, writeMs: 0 };
@@ -939,11 +822,10 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // nonexistent` with two clients connected exited 1 on "say which one to use" and left `./nonexistent/`
   // on disk. `--list`/`--children` never write outDir at all, so they need no mkdir either way.
 
-  // An export-class command is the one shape a stalled one-shot pull hits: exportNode/exportSelection/
-  // exportLibrary/exportDesignSystem/exportFull, below — never the index commands (--list/--children/
-  // --whoami/--list-clients/--list-libraries), which are cheap and already excluded from the mkdir
-  // guard above for the same reason. Only these get the upfront no-daemon warning and the stall check.
-  const isExportCmd = !listOnly && !childrenId && !listLibraries && !whoami && !listClients;
+  // An export-class command is the one shape a stalled one-shot pull hits: a pull or a screenshot — never
+  // an index command (cli-commands.ts FAMILIES `writes`), which is cheap and already excluded from the
+  // mkdir guard above for the same reason. Only these get the upfront no-daemon warning and the stall check.
+  const isExportCmd = FAMILIES[command.family].writes;
   // Without `dtwin serve`, every pull opens a throwaway bridge and the plugin's
   // reconnect is what actually costs the time (measured 300s/908s vs 7.5-8.8s with a daemon warm).
   // Said up front, before anything is sent, not just diagnosed after the fact by `dtwin doctor`.
@@ -953,14 +835,6 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
       ? "[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection."
       : "[dtwin] this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection.");
   }
-  // The stall-check window (server-core.ts's request() `stallMs`): if NOTHING at all is heard back
-  // from the plugin (not even a progress frame) within this long of SENDING the command, abort rather
-  // than sit until the full export timeout. It disarms on the first sign of life — a working export
-  // legitimately goes quiet for minutes near its end (measured live, see server-core.ts) — so after
-  // that only --timeout bounds it. Only applied to the one-shot bridge below, and only for export
-  // commands — see the comment on `request()`'s stallMs parameter for why the daemon path opts out.
-  const STALL_MS = Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;
-
   // The plugin sends a `queued` progress frame when this command waits behind another run in the
   // same file (a `start` frame when it begins — never worth a line). Say so once, so a silent wait is
   // not mistaken for a hang; --timeout still bounds it.
@@ -971,53 +845,39 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
   };
 
+  // Where requests go: the running daemon, or a bridge of our own. The route (route.ts) owns the rules either
+  // way — the connect window (`--timeout`; a named --client waits at least NAMED_CLIENT_WAIT_MS), the stall
+  // check (own bridge, export commands: if NOTHING is heard back within FIGMA_BRIDGE_STALL_MS of sending, abort
+  // rather than sit out the full export timeout), the "no plugin ever connected" error, and which commands
+  // hear progress ticks.
   let bridge: Bridge | null = null;
-  let send: Send;
+  let up: Upstream;
   if (d) {
-    // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
-    // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    // An export opts into the daemon's progress frames (daemon.ts): each tick re-arms the outer guard
-    // below, so a long walk that is still reporting is not cut off by a budget sized for silence —
-    // the daemon's own per-command `timeoutMs` still bounds the whole command, as the bridge path's
-    // does. The ticks themselves are not printed (the plugin window shows them); this is liveness only.
-    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, daemonGuardMs(timeoutMs, connectWaitMs), isExportCmd ? onTick : undefined);
+    // The DAEMON does the waiting: the plugin may not have reconnected yet after a Figma restart, and the
+    // daemon is the side holding the socket. Each request carries the connect window, and an export's
+    // progress frames re-arm the outer guard (daemonGuardMs), so a long walk that is still reporting is not
+    // cut off by a budget sized for silence — the daemon's own per-command `timeoutMs` still bounds it.
+    up = daemonUpstream(d, () => daemon.status());
   } else {
     const b = createBridge();
     bridge = b;
     console.error("[dtwin] listening on ws://localhost:" + b.port);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
     if (daemon.daemonSupported()) console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
-    // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" →
-    // "none, open one"), but with no daemon running it is talking to a bridge it JUST opened, and every
-    // plugin window currently open in Figma is mid-reconnect to it (timeouts.ts PLUGIN_REDIAL_MS). Skipping the
-    // wait here would make `list clients` answer `{"clients":[]}` with exit 0 while two files were
-    // connected a second later — the documented `--timeout` window applies to this
-    // command too. The difference from an export is only what happens on a full timeout: no plugin
-    // ever showing up is this command's legitimate "none" answer, not an error, so the wait is capped
-    // at `connectWaitMs` but a timeout falls through to the (possibly still empty) listClients() below
-    // instead of throwing.
-    // One wait (server-core awaitClient) covers the connect window and the target: a name/fileKey target
-    // (not a bare c<N> connId, which never depends on identification) can lose the race against the
-    // plugin's `hello` and, with two files open, against the OTHER file's window — whichever redials
-    // first is the only one connected for a moment (seen live) — so once a plugin is connected a named
-    // target gets min(--timeout, NAMED_CLIENT_WAIT_MS) more to show up before the request resolves it.
-    // With no target (this includes --list-clients) or a file name, whole or partial, the fresh bridge also
-    // settles first (timeouts.ts SETTLE_MS), even past a shorter --timeout, so a second open file a redial
-    // behind is connected — and the command refused as ambiguous, or listed — instead of the first file to
-    // land being taken silently. Either way it also waits out the `hello` of a window whose socket has just
-    // opened (at most the identification grace), so the listing or the refusal names that file.
-    const tConnect = Date.now();
-    await b.awaitClient(client, connectWaitMs);
-    // "No plugin connected" means none ever did: one that connected and has gone again is the request's
-    // own resolveClient to report ("Figma plugin not connected. …").
-    if (b.connectionInfo().connectionsThisRun === 0 && !listClients) {
-      b.close();
-      throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
-    }
-    // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
-    timing.connectMs = Date.now() - tConnect;
-    send = (cmd, args, timeoutMs) => b.requestWithClient(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined, onTick);
+    up = ownUpstream(b);
   }
+  const route = createRoute(async () => up, { connectWaitMs, oneShot: true });
+  // Our own bridge spends the connect window here, once, before anything is sent — timed for the done line.
+  // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" → "none, open
+  // one"), but with no daemon running it is talking to a bridge it JUST opened, and every plugin window
+  // currently open in Figma is mid-reconnect to it (timeouts.ts PLUGIN_REDIAL_MS) — so it waits too, and a
+  // window with no plugin is its legitimate empty answer. A command instead fails on its first request with
+  // the never-connected text (route.ts). The wait (server-core awaitClient) covers the target too: a named
+  // one gets more time once a plugin is connected, and with no target or a file name the fresh bridge
+  // settles first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the
+  // command refused as ambiguous, or listed — instead of the first file to land being taken silently.
+  timing.connectMs = (await route.connect(client)).waitedMs;
+  let send: Send = (cmd, args, timeoutMs) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick });
   // Where the time went, for the closing `done in …` line. The connect wait is measured above
   // (own bridge only — a daemon does its waiting inside the request), the export is the time inside
   // send(), the write is every OUT.write* call. All measured from this side: nothing in server-core.
@@ -1034,15 +894,15 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — one
   // helper so no exit path below has to know which.
   const finish = () => { if (bridge) bridge.close(); };
-  return { bridge, send, timedWrite, doneLine, finish };
+  return { route, send, timedWrite, doneLine, finish };
 }
 
 // Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
 // a terminal); the connId in the first column is what --client takes. Deliberately does NOT talk to
 // the plugin at all — the answer lives entirely in the bridge, so this works even while every
 // connected file is busy with a long export.
-async function listClientsCmd({ bridge, finish }: Session, json: boolean): Promise<void> {
-  const rows = bridge ? bridge.listClients() : (await daemon.status())?.clients || [];
+async function listClientsCmd({ route, finish }: Session, json: boolean): Promise<void> {
+  const rows = await route.listClients();
   console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
   if (rows.length > 1) {
     console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
@@ -1055,21 +915,15 @@ async function listClientsCmd({ bridge, finish }: Session, json: boolean): Promi
 // did. Run it in each of two open files (a second terminal, or twice in a row after switching the
 // focused file) and compare — the interpretation notes below are printed with the result so the
 // reading does not depend on remembering what each field means.
-async function whoamiCmd({ bridge, send, finish }: Session, core: typeof ServerCore): Promise<void> {
+async function whoamiCmd({ route, send, finish }: Session): Promise<void> {
   const { reply: r, client: whoamiClient } = await send("whoami", {}, TIMEOUTS.command);
-  // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
-  // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
-  // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
-  // than emitting `connection: null` under a help text that promises socket uptime and takeovers.
-  // The socket described is the ADDRESSED file's (the client send() routed to), not whichever
-  // connection happens to be first — with two files open `--client <name>` would print the other's.
+  // The socket half comes from whoever holds the bridge (route.ts): this process, or — with a daemon in
+  // front — the daemon, rather than emitting `connection: null` under a help text that promises socket
+  // uptime and takeovers. The socket described is the ADDRESSED file's (the client send() routed to), not
+  // whichever connection happens to be first — with two files open `--client <name>` would print the other's.
   const addressed = whoamiClient ? whoamiClient.connId : null;
-  let conn: ConnectionInfo | null = bridge ? bridge.connectionInfo(addressed ?? undefined) : null;
-  let connFrom: string | null = bridge ? "this process" : null;
-  if (!conn) {
-    const st = await daemon.status().catch(() => null);
-    if (st && st.connection) { conn = core.connectionFor(st.connection, addressed); connFrom = `the daemon (pid ${st.pid})`; }
-  }
+  const { connection: conn, owner } = await route.connectionInfo(addressed).catch(() => ({ connection: null, owner: null }));
+  const connFrom = !conn || !owner ? null : owner.kind === "own" ? "this process" : `the daemon (pid ${owner.pid ?? "?"})`;
   console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
   console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
     ", up " + Math.round(r.uptimeMs / 1000) + "s.");
@@ -1151,14 +1005,15 @@ async function listIndexCmd({ send, finish }: Session, childrenId: string | null
 // --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
 // see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
 // it sits next to, so it gets its own branch rather than joining their print-only one.
-async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, screenshotId: string, scale: number | undefined, outDir: string, exportTimeoutMs: number): Promise<void> {
+async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, plan: PlanOf<"screenshot">, outDir: string): Promise<void> {
   console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-  const { reply: r } = await send("screenshot", { nodeId: screenshotId, ...ifDefined("scale", scale) }, exportTimeoutMs);
+  const r = stampSource(await sendPlan(send, plan));
   for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
   // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
   // string: those can disagree, and a printed path that
   // finds nothing is worse than no path at all.
-  const shot = timedWrite(() => writeScreenshot(outDir, r, scale));
+  const scale = plan.args.scale;
+  const shot = timedWrite(() => OUT.writeAny(outDir, r, plog, { scale }));
   const ref = shot.reference || r.reference;
   if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
   // The node's size, the render scale and the PNG's own pixel size. Each is omitted when its
@@ -1173,10 +1028,12 @@ async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, sc
   finish();
 }
 
+// A read plan, sent: its command, arguments and budget (read-plan.ts).
+const sendPlan = <C extends ReadCmd>(send: Send, plan: PlanOf<C>): Promise<Sent<C>> => send(plan.cmd, plan.args, plan.timeout);
+
 // A pull: one node, the selection, a library catalog, the design system alone, or pages — written to outDir.
-async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed: ParsedArgs): Promise<void> {
-  const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, pageSel, exportTimeoutMs, outDir } = parsed;
-  const mode = asLibrary ? `library "${asLibrary}"` : nodeId ? `node ${nodeId}` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
+async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: Exclude<ReadPlan, PlanOf<"screenshot">>, parsed: ParsedArgs): Promise<void> {
+  const { allPages, outDir } = parsed;
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
@@ -1184,7 +1041,7 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed
     console.error("[dtwin] note: --all-pages deep-serializes EVERY frame on EVERY page and can exceed 15 min on a large file.");
     console.error("[dtwin]       prefer: --list  then  --page <id>   (repeatable, e.g. --page 1:2 --page 3:4)");
   }
-  console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
+  console.error(`[dtwin] plugin connected — pulling ${plan.label}… (timeout ${Math.round(plan.timeout / 1000)}s)`);
 
   // WHICH connected Figma file this pull talked to — the client the bridge's own
   // resolveClient() picked for --client, handed back with the reply (server-core requestWithClient;
@@ -1193,131 +1050,120 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, parsed
   // only ever report whichever file's export happened to sort first, attributing every screen to it.
   // Stamped onto the result by source-stamp.ts's stampSource before it reaches write-out.ts, which
   // persists it onto the screen JSON and its index row. Unstamped (never guessed) when a daemon too old
-  // to relay the client answered.
-
-  if (nodeId) {
-    // Same writer the MCP figma_export_url tool uses (write-out.ts's writeScreen), so a CLI --node
-    // pull and an MCP pull of the same node land in identical shape.
-    const r: Stamped<ScreenReply> = stampSource(await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
-    timedWrite(() => OUT.writeScreen(outDir, r, plog));
-  } else if (selection) {
-    // Same writer as --node above — routing both through write-out.ts's writeScreen means a
-    // selection pull and a --node pull can never drift into two slightly different write shapes
-    // (writeScreen skips variables.json when the result carries none, and prints a summary).
-    const r: Stamped<ScreenReply> = stampSource(await send("exportSelection", { ...readOpts }, exportTimeoutMs));
-    timedWrite(() => OUT.writeScreen(outDir, r, plog));
-  } else if (asLibrary) {
-    // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
-    // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
-    const { reply: r } = await send("exportLibrary", { asLibrary, ...ifDefined("variantVisuals", readOpts.variantVisuals) }, exportTimeoutMs);
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  } else if (designSystemOnly) {
-    const { reply: r } = await send("exportDesignSystem", ifDefined("variantVisuals", readOpts.variantVisuals), exportTimeoutMs);
-    // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
-    // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
-    // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
-    // writeDesignSystem persists to hygiene.json — not a `manifest.warnings` field that would be
-    // silently dropped by the split, both here and via the MCP writeToDisk path.
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  } else {
-    const r = stampSource(await send("exportFull", { allPages, ...(pageSel.length ? { page: pageSel } : {}), ...readOpts }, exportTimeoutMs));
-    // Route through the SAME split writer the MCP export tools use (write-out.ts's writeExport), so a
-    // CLI pull and an MCP pull land in identical shape — the split described in this file's own header
-    // comment and asserted by the harness's write-out tests, not r.designSystem written flat to
-    // design-system.json.
-    timedWrite(() => OUT.writeExport(outDir, r, plog));
-    printHygiene(r);
-  }
+  // to relay the client answered. A catalog's writers never read it.
+  const r = stampSource(await sendPlan(send, plan));
+  // The SAME writer the MCP export tools use (write-out.ts's writeAny), so a CLI pull and an MCP pull of
+  // the same read land in identical shape: a screen (--node / --selection) through writeScreen, a library
+  // catalog (routed on the plugin's own `source.role`, under libraries/<slug>-<fileKey8>/ — it can never
+  // overwrite design-system/), the design system alone or a page walk through writeExport's split. The
+  // limited-library-variables note of a --design-system pull rides in designSystem.hygiene (see collect.ts),
+  // which writeDesignSystem persists to hygiene.json.
+  timedWrite(() => OUT.writeAny(outDir, r, plog));
+  if ("designSystem" in r) printHygiene(r);
 
   for (const l of doneLine()) console.error("[dtwin] " + l);
   finish(); // NOT process.exit — see close() in server-core.ts (a daemon-routed run has nothing to close)
 }
 
-// Routes the parsed command line to the one command it names.
+// Each command's runner, keyed by its id in the command table (cli-commands.ts) and typed by it: a row
+// without a runner, or a runner on the wrong side of the session line, does not compile.
+// The token and daemon commands run WITHOUT a session: they need no plugin (the token ones touch only the
+// local token file), and opening one would be wrong — the token commands must still work while a daemon
+// holds the port.
+type Sessionless = CommandIdIn<Exclude<Family, SessionFamily>>;
+const RUN_SESSIONLESS = {
+  tokenStatus: () => tokenStatus(),
+  showToken: (p) => showToken(p.tokenFile),
+  rotateToken: () => rotateToken(),
+  forgetToken: () => forgetToken(),
+  serve: (_p, core) => serveDaemon(core.createBridge),
+  stop: () => stopDaemon(),
+  daemonStatus: () => daemonStatus(),
+} satisfies Record<Sessionless, (p: ParsedArgs, core: typeof ServerCore) => void | Promise<void>>;
+const RUN_ON_SESSION = {
+  listClients: (s, p) => listClientsCmd(s, p.json),
+  whoami: (s) => whoamiCmd(s),
+  listLibraries: (s, p) => listLibrariesCmd(s, p.json, p.listTimeoutMs),
+  list: (s, p) => listIndexCmd(s, p.childrenId, p.listDepth, p.listTimeoutMs),
+  listPages: (s, p) => listIndexCmd(s, p.childrenId, p.listDepth, p.listTimeoutMs),
+  children: (s, p) => listIndexCmd(s, p.childrenId, p.listDepth, p.listTimeoutMs),
+  screenshot: readCmd,
+  pull: readCmd,
+  selection: readCmd,
+  allPages: readCmd,
+  page: readCmd,
+  designSystem: readCmd,
+  asLibrary: readCmd,
+  node: readCmd,
+} satisfies Record<CommandIdIn<SessionFamily>, (s: Session, p: ParsedArgs) => Promise<void>>;
+const sessionless = (id: CommandId): id is Sessionless => Object.hasOwn(RUN_SESSIONLESS, id);
+
+// A read: the plan this command line sends (read-plan.ts), as a screenshot or a pull.
+function readCmd(session: Session, parsed: ParsedArgs): Promise<void> {
+  const plan = cliReadPlan(parsed);
+  // parseArgs/validateArgs refused a read option this read does not take before anything was opened.
+  if (!plan || "refused" in plan) throw new Error("internal: no read plan for this command line");
+  if (plan.cmd === "screenshot") return screenshotCmd(session, plan, parsed.outDir);
+  return exportCmd(session, plan, parsed);
+}
+
+// Runs the one command the parsed command line names.
 async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
-  const { listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, listTimeoutMs, exportTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
-  // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
-  // so unlike everything below they need no bridge, no daemon and no plugin. Running them before
-  // daemon.connect() also means they still work while a daemon holds the port.
-  if (tokenCmd === "--token-status") return tokenStatus();
-  if (tokenCmd === "--show-token") return showToken(tokenFile);
-  if (tokenCmd === "--rotate-token") return rotateToken();
-  if (tokenCmd === "--forget-token") return forgetToken();
+  const { id } = parsed.command;
+  if (sessionless(id)) return RUN_SESSIONLESS[id](parsed, core);
+  return RUN_ON_SESSION[id](await openSession(parsed, core.createBridge), parsed);
+}
 
-  if (daemonCmd === "--stop") return stopDaemon();
-  if (daemonCmd === "--daemon-status") return daemonStatus();
-  if (daemonCmd === "--serve") return serveDaemon(core.createBridge);
+// The verbs routed to their own entry point (cli-commands.ts VERB_ROWS `to: "routed"`), by name. Each runs
+// before server-core loads and shares none of the pull flags, so each gets its own parser:
+//   mcp     the MCP server (figma-mcp.ts), on stdio
+//   init    project setup (init.ts) — before server-core, which resolves the token and knows about ports
+//   doctor  diagnose the setup (doctor.ts) — doctor must decide for ITSELF whether it is safe to load
+//           server-core (a bad FIGMA_BRIDGE_PORT exits the process at module load, and a held port exits it
+//           in createBridge): those are findings to report, not ways for the diagnostic to die
+//   seed    components.json from Code Connect files (seed-components.ts) — reads source files only: no
+//           bridge, no token (server-core would resolve, and may mint, one), no plugin
+const ROUTES = {
+  mcp: runMcp,
+  init: async (args) => { (await import("./init.ts")).main(args); },
+  doctor: async (args) => { await (await import("./doctor.ts")).main(args); },
+  seed: async (args) => { (await import("./seed-components.ts")).main(args); },
+} satisfies Record<RoutedVerb, (args: string[]) => Promise<void>>;
+const routed = (word: string | undefined): word is RoutedVerb => word !== undefined && Object.hasOwn(ROUTES, word);
 
-  const session = await openSession(parsed, core.createBridge);
-  if (listClients) return listClientsCmd(session, json);
-  if (whoami) return whoamiCmd(session, core);
-  if (listLibraries) return listLibrariesCmd(session, json, listTimeoutMs);
-  if (listOnly || childrenId) return listIndexCmd(session, childrenId, listDepth, listTimeoutMs);
-  if (screenshotId) return screenshotCmd(session, screenshotId, scale, outDir, exportTimeoutMs);
-  return exportCmd(session, parsed);
+async function runMcp(args: string[]): Promise<void> {
+  // `--help` must never be the thing that STARTS a server. Probing a CLI's help surface silently
+  // would launch a second MCP process attached to the live bridge and hold stdio until the caller kills
+  // it — the one command in the table whose --help would have a side effect.
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(MCP_HELP);
+    exitCli(0);
+  }
+  // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
+  process.argv.splice(2, 1);
+  // Awaited only until the module has LOADED; then its server is started (runServer — loading it starts nothing, so a
+  // suite can load it) and runs on, unawaited, after cli() returns. A failure to load it — an invalid FIGMA_BRIDGE_PORT
+  // exits through exitCli at server-core's load, still inside runCli, so the CliExit lands here — ends the process on
+  // its exit code, naturally: nothing holds the loop once the module failed. Once cli() has returned, runCli is done
+  // with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
+  try {
+    (await import("./figma-mcp.ts")).runServer();
+  } catch (e) {
+    if (e instanceof CliExit) { process.exitCode = e.code; return; }
+    console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));
+    process.exitCode = 1;
+  }
 }
 
 // The CLI entry. Runs ONLY when this file is the process entry (see the guard at the bottom): routing
 // first, then --version/--help, then the --token-file pre-scan, THEN server-core is loaded, then the
 // arguments are parsed and the command runs.
 async function cli(argv: string[]): Promise<void> {
-  if (argv[0] === "mcp") {
-    // `--help` must never be the thing that STARTS a server. Probing a CLI's help surface silently
-    // would launch a second MCP process attached to the live bridge and hold stdio until the caller kills
-    // it — the one command in the table whose --help would have a side effect.
-    if (argv.includes("--help") || argv.includes("-h")) {
-      console.log(
-        "dtwin mcp\n\n" +
-        "  Run the Design Twin MCP server on stdio. This is what a .mcp.json entry points at\n" +
-        "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
-        "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
-        "  route through it rather than starting a second one (not on Windows yet: there they cannot use the\n" +
-        "  port until it exits) — `dtwin doctor` says who holds the port.\n\n" +
-        "  Its tools mirror the CLI: figma_list_clients / figma_list / figma_export_* / figma_screenshot /\n" +
-        "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
-        "  of node payloads inline — asset bytes are never returned inline."
-      );
-      exitCli(0);
-    }
-    // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.ts` run.
-    process.argv.splice(2, 1);
-    // Awaited only until the module has LOADED (its main() runs on, unawaited, after cli() returns): a failure to load
-    // it — an invalid FIGMA_BRIDGE_PORT exits through exitCli at server-core's load, still inside runCli, so the CliExit
-    // lands here — ends the process on its exit code, naturally: nothing holds the loop once the module failed. Once
-    // cli() has returned, runCli is done with it, and the server runs as `bun figma-mcp.ts` would (stdio.ts says why).
-    try {
-      await import("./figma-mcp.ts");
-    } catch (e) {
-      if (e instanceof CliExit) { process.exitCode = e.code; return; }
-      console.error("[dtwin mcp] failed to start the MCP server: " + errMsg(e));
-      process.exitCode = 1;
-    }
-    return;
-  }
-  // `dtwin init` — project setup (init.ts). Routed here for the same reason `mcp` is: it must run before
-  // server-core loads (which resolves the token and knows about ports) and it shares none of the pull
-  // flags, so it gets its own tiny parser instead of a special case in parseArgs.
-  if (argv[0] === "init") {
-    (await import("./init.ts")).main(argv.slice(1));
-    return;
-  }
-  // `dtwin doctor` — diagnose the setup (doctor.ts). Routed like `init`, and for a sharper reason: doctor
-  // must decide for ITSELF whether it is safe to load server-core (a bad FIGMA_BRIDGE_PORT exits the
-  // process at module load, and a held port exits it in createBridge) — those are findings to report,
-  // not ways for the diagnostic to die.
-  if (argv[0] === "doctor") {
-    await (await import("./doctor.ts")).main(argv.slice(1));
-    return;
-  }
-  // `dtwin seed` — components.json from Code Connect files (seed-components.ts). Routed like `init`: it
-  // reads source files only — no bridge, no token, no plugin — so it must run before server-core loads
-  // (which resolves, and may mint, the token), and it shares none of the pull flags.
-  if (argv[0] === "seed") {
-    (await import("./seed-components.ts")).main(argv.slice(1));
-    return;
-  }
+  // `dtwin mcp|init|doctor|seed` — their own entry points, before anything else runs (in particular before
+  // server-core loads): `dtwin mcp` is taken ONLY when the first argument is exactly "mcp", so `dtwin …` and
+  // importing this module from the test suites are untouched, and `bun bridge/src/figma-mcp.ts` still works.
+  const word = argv[0];
+  if (routed(word)) return ROUTES[word](argv.slice(1));
   // `dtwin <verb>` — verbs.ts rewrites a leading verb into the flags parsed below (`dtwin list pages` →
   // `--list-pages`), so there is still ONE parser and one set of guards. Done here, before the --help
   // check and the --token-file pre-scan, so both see the translated argv. verbs.ts is pure (no imports,
@@ -1409,4 +1255,4 @@ if (import.meta.main) runCli(async (argv) => { await cli(argv); return Number(pr
 // formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
 // failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
 // needs a live plugin, so the renderer is driven directly.
-export { parseArgs, readArgs, validateArgs, writeJson, formatLibraries, formatClients, formatDone, UsageError };
+export { parseArgs, readArgs, validateArgs, cliReadPlan, writeJson, formatLibraries, formatClients, formatDone, UsageError };

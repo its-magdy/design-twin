@@ -11,7 +11,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import { recordPlan, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
-import { checkPlan, computeStatus, isOpen, verificationContradictions } from "../design-to-code/verify-build.ts";
+import { checkPlan, verificationContradictions } from "../design-to-code/verify-build.ts";
+import { planStatus } from "../design-to-code/plan-status.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-build.ts";
 import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped, planHash } from "../design-to-code/content-hash.ts";
@@ -81,8 +82,8 @@ function project(): string {
 const runHook = (root: string) => runSync(process.execPath, [HOOK, REL], { cwd: root });
 const reindent = (root: string, n: number): void => { const f = path.join(root, REL); fs.writeFileSync(f, JSON.stringify(readFixture(f, isPlan), null, n) + "\n"); };
 const planOf = (root: string): Plan => readFixture(path.join(root, REL), isPlan);
-const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL) });
-const openOf = (root: string): boolean => isOpen({ file: path.join(root, REL), plan: planOf(root) }, root);
+const statusOf = (root: string) => planStatus(root).status(planOf(root), { planFile: path.join(root, REL) });
+const openOf = (root: string): boolean => planStatus(root).open(planOf(root));
 
 console.log("recordPlan:");
 {
@@ -196,8 +197,8 @@ console.log("recordPlan:");
   // a report of lows only: deltas [] is the record, not a "copy them" gap
   const lowsOnly: VerifyReportV2 = { ...rep, deltas: rep.deltas.filter((d) => d.severity === "low") };
   const v: PlanVerification = { mode: "rendered", deltas: [], recorded: { by: "verify-screen --record-plan", at: NOW, report: REPORT, reportSha256: "x", verdict: "pass", headline: "", counts: { high: 0, medium: 0, low: 2, accepted: 0, notMeasured: 0, inferred: 0 } } };
-  const refRow: ReportRef = { rel: REPORT, matchedBy: "name", schema: "designtwin/verify-report@2", verdict: lowsOnly.verdict, headline: null, why: [], deltas: lowsOnly.deltas, exportedAt: null, measuredAt: null, mtimeMs: 0,
-    exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, behaviour: null, shippedProbe: false };
+  const refRow: ReportRef = { rel: REPORT, matchedBy: "name", schema: "designtwin/verify-report@2", verdict: lowsOnly.verdict, headline: null, why: [], deltas: lowsOnly.deltas, measuredAt: null, mtimeMs: 0,
+    inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false };
   check("a recorded plan with deltas [] beside its report's 2 lows → no 'verification.deltas is [] but … lists 2' contradiction",
     verificationContradictions({ verification: { ...v } }, [refRow]).length === 0
     && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
@@ -354,11 +355,11 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
   const rec = must(isVerificationRecord(v.recorded) ? v.recorded : undefined, "recorded@2");
   check(`--record-plan of it: recorded.mode "static-only" + the report's reason, no renderer anywhere (got ${JSON.stringify({ mode: rec.mode, reason: rec.reason, renderer: rec.renderer, top: v.renderer })})`,
     rec.mode === "static-only" && rec.reason === "no dev server, no Playwright" && !("renderer" in rec) && v.renderer === undefined);
-  // no report on disk: computeStatus reads the record (the hook passed it)
+  // no report on disk: the status reads the record (the hook passed it)
   fs.rmSync(path.join(root, "design/verify"), { recursive: true });
   runHook(root);
   const st = statusOf(root);
-  check(`…computeStatus with no report reads the record: static-only, with its reason (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
+  check(`…the status with no report reads the record: static-only, with its reason (got ${st.status}: ${st.reasons.join(" | ").slice(0, 160)})`,
     st.status === "static-only" && st.reasons.includes("built and checked statically — not rendered (no dev server, no Playwright)"));
   fs.mkdirSync(path.join(root, "design/verify"), { recursive: true });
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify(rep, null, 2) + "\n");
@@ -384,32 +385,11 @@ console.log("the record is replaced whole; a recorded@1 plan is migrated; a stat
     h.status === 0 && planOf(root).verification?.hook?.result !== undefined && hooked !== text && sameFormat(hooked));
 }
 
-console.log("planHash: verification left out, the legacy formula still accepted:");
+console.log("the hook's record of a plan's code:");
 {
   const root = project();
   runHook(root);
-  // rewrite the hook record as an older hook wrote it: planHash = the legacy formula (verification minus hook)
-  const p = planOf(root);
-  const hook = must(p.verification?.hook, "hook");
-  hook.planHash = legacyPlanHash(p);
-  fs.writeFileSync(path.join(root, REL), JSON.stringify(p, null, 2) + "\n");
-  const st = statusOf(root);
-  check(`a plan closed under the legacy planHash stays closed after the upgrade (not open, not pending) (got ${st.status})`, !openOf(root) && !st.reasons.some((x) => /plan changed after the hook/.test(x)));
-  hook.planHash = "0000000000000000";
-  fs.writeFileSync(path.join(root, REL), JSON.stringify(p, null, 2) + "\n");
-  check("control: a planHash matching neither formula → pending, open", openOf(root) && statusOf(root).reasons.some((x) => /plan changed after the hook/.test(x)));
-  // a real content edit still reopens it
-  runHook(root);
-  const q = planOf(root);
-  q.route = "/crates";
-  fs.writeFileSync(path.join(root, REL), JSON.stringify(q, null, 2) + "\n");
-  check("a plan content edit (route) still reopens it", openOf(root) && statusOf(root).reasons.some((x) => /plan changed after the hook/.test(x)));
-  // and a hand edit of verification (coverage) after the new-formula hook does not
-  runHook(root);
   const c = planOf(root);
-  must(c.verification, "verification").coverage = { rendered: ["default", "hover"], notChecked: [] };
-  fs.writeFileSync(path.join(root, REL), JSON.stringify(c, null, 2) + "\n");
-  check("a hand edit of verification.coverage after the hook → still closed (planHash leaves verification out)", !openOf(root) && !statusOf(root).reasons.some((x) => /plan changed after the hook/.test(x)));
   check("the hook records exactly these files (planCodeFiles)", JSON.stringify(c.verification?.hook?.files) === JSON.stringify(fileHashes(planCodeFiles(c), root)));
 }
 
@@ -518,7 +498,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
   const edited = statusOf(root);
   check(`--status of a closed plan with an edited record: the failing report first, then the hook named blocked by the edit (got ${edited.status}: ${edited.reasons.join(" | ").slice(0, 200)})`,
     edited.status === "failed" && edited.reasons.includes(`hook: ${EDITED("verdict")}`));
-  const st2 = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, REL), reports: [] });
+  const st2 = planStatus(root).status(planOf(root), { planFile: path.join(root, REL), reports: [] });
   check(`…with no failing report in the way, the computed status is "blocked", the edit its first reason (got ${st2.status}: ${st2.reasons[0] ?? ""})`,
     st2.status === "blocked" && st2.reasons[0] === EDITED("verdict"));
   // the Stop hook: the plan was closed, and planHash leaves verification out — the edit still reopens it, and it blocks

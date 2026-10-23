@@ -760,16 +760,12 @@ export interface DesignSystemStamp {
 
 /** design-system.json — the slim POINTER manifest (never a payload; catalog-input.ts refuses it). */
 export interface DesignSystemManifest extends DesignSystemStamp {
-  files: {
-    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string; stylesAnimation: string;
+  files: { tokens: string } & StyleKeyed<string> & {
     componentsLocal: string; componentsLibrary: string; hygiene: string;
     /** only when a COMPONENT_SET detail file was written */
     componentsDir?: string;
   };
-  counts: {
-    collections: number; variables: number; stylesPaint: number; stylesText: number; stylesEffect: number; stylesGrid: number; stylesAnimation: number;
-    components: number; libraryComponents: number; hygiene: number;
-  };
+  counts: { collections: number; variables: number } & StyleKeyed<number> & { components: number; libraryComponents: number; hygiene: number };
 }
 
 /** Figma's VariableResolvedDataType, verbatim (EASING/TIMING are the motion variable types). */
@@ -891,8 +887,28 @@ export interface GridStyle extends StyleMeta { name: string; grids?: LayoutGridS
 /** A local custom animation style (CustomAnimationStyle): the Figma animations it contains, in order.
  *  `entries: []` is a style with none; `entries` is absent when the list could not be read. */
 export interface AnimationStyle extends StyleMeta { name: string; entries?: MotionStyleEntry[] }
-/** design-system/styles.<paint|text|effect|grid|animation>.json */
-export interface StylesDoc<S = PaintStyle | TextStyle | EffectStyle | GridStyle | AnimationStyle> extends DesignSystemStamp { styles: S[] }
+/**
+ * The style kinds: each kind's name (its list's key in the plugin's `styles` block) and the shape of one style of it.
+ * The kinds' files, pointers and counts follow from this map: design-system-layout.ts STYLE_KIND_ROWS needs a row per
+ * kind (its file and its manifest key, typed from the kind), and every manifest's `files` and `counts` carry a key per
+ * kind (StyleKeyed). Adding a kind is a line here, its row there and the plugin's read.
+ */
+export interface StyleByKind {
+  paint: PaintStyle;
+  text: TextStyle;
+  effect: EffectStyle;
+  grid: GridStyle;
+  /** local custom animation styles (CustomAnimationStyle) */
+  animation: AnimationStyle;
+}
+export type StyleKind = keyof StyleByKind;
+export type AnyStyle = StyleByKind[StyleKind];
+/** A kind's key in a manifest's `files` pointer map and in its `counts`: `stylesPaint`, `stylesText`, … */
+export type StyleKey<K extends StyleKind = StyleKind> = `styles${Capitalize<K>}`;
+/** One value per style kind, under its StyleKey. */
+export type StyleKeyed<V> = { [K in StyleKind as StyleKey<K>]: V };
+/** design-system/styles.<kind>.json (one file per StyleKind) */
+export interface StylesDoc<S = AnyStyle> extends DesignSystemStamp { styles: S[] }
 export type PaintStylesDoc = StylesDoc<PaintStyle>;
 export type TextStylesDoc = StylesDoc<TextStyle>;
 export type EffectStylesDoc = StylesDoc<EffectStyle>;
@@ -987,14 +1003,7 @@ export interface LayersDoc extends Omit<PagesRootIndex, "pageDirs" | "layers"> {
 
 // ---- design-system-layout.ts / library-layout.ts (the designSystem doc they split)
 /** The plugin's styles block (components.ts buildDesignSystem), one array per style kind. */
-export interface DesignSystemStyles {
-  paint?: PaintStyle[];
-  text?: TextStyle[];
-  effect?: EffectStyle[];
-  grid?: GridStyle[];
-  /** local custom animation styles (CustomAnimationStyle) */
-  animation?: AnimationStyle[];
-}
+export type DesignSystemStyles = { [K in StyleKind]?: Array<StyleByKind[K]> };
 
 /**
  * The plugin's designSystem doc (components.ts buildDesignSystem) — the ONE document
@@ -1015,25 +1024,12 @@ export interface LibraryStamp extends DesignSystemStamp {
   source?: TokensDoc["source"];
 }
 
-export interface LibraryCounts {
-  collections: number;
-  variables: number;
-  stylesPaint: number;
-  stylesText: number;
-  stylesEffect: number;
-  stylesGrid: number;
-  stylesAnimation: number;
-  components: number;
-  hygiene: number;
-}
+export type LibraryCounts = { collections: number; variables: number } & StyleKeyed<number> & { components: number; hygiene: number };
 
 /** libraries/<dir>/index.json — the slim manifest: stamp + `source` + `files` pointer map + `counts`
  *  + `publish` (a per-status count, absent when nothing carries a publish status). */
 export interface LibraryManifest extends LibraryStamp {
-  files: {
-    tokens: string; stylesPaint: string; stylesText: string; stylesEffect: string; stylesGrid: string; stylesAnimation: string;
-    components: string; hygiene: string;
-  };
+  files: { tokens: string } & StyleKeyed<string> & { components: string; hygiene: string };
   counts: LibraryCounts;
   publish?: Record<string, number>;
 }

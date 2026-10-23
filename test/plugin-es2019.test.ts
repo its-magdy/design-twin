@@ -14,13 +14,10 @@
 // newer syntax — given JS it lowers or passes it through, it never refuses it by version.
 //   bun test/plugin-es2019.test.ts
 import fs from "node:fs";
-import path from "node:path";
 import * as acorn from "acorn";
 import * as esbuild from "esbuild";
 import { check, report } from "./assert.ts";
-
-const PLUGIN = path.join(import.meta.dirname, "..", "figma-plugin");
-const version = (JSON.parse(fs.readFileSync(path.join(PLUGIN, "package.json"), "utf8")) as { version: string }).version;
+import { CODE_JS, pluginBuildOptions } from "../figma-plugin/build-options.ts";
 
 // null = parses as an ES2019 script; otherwise acorn's message (with its line:col).
 function es2019Error(code: string): string | null {
@@ -29,28 +26,16 @@ function es2019Error(code: string): string | null {
 }
 
 // ---- 1. the committed bundle
-const committed = fs.readFileSync(path.join(PLUGIN, "code.js"), "utf8");
+const committed = fs.readFileSync(CODE_JS, "utf8");
 const committedErr = es2019Error(committed);
 if (committedErr !== null) console.log("    code.js: " + committedErr);
 check("figma-plugin/code.js parses as ES2019 (no ??, ?., class fields, BigInt, …)", committedErr === null);
 check("…as a script, not a module (no top-level import/export)", acorn.parse(committed, { ecmaVersion: 2019, sourceType: "script" }).body.every((n) => !/^(?:Import|Export)/.test(n.type)));
 
 // ---- 2. the sources, built like build.ts but in memory, for three targets
-// The same options as build.ts apart from `target` / `write` / logging: if build.ts's bundle options change,
-// change them here (this guards the SYNTAX of the sources, it is not a second copy of the build).
+// build.ts's own options (figma-plugin/build-options.ts) apart from `target` / `write` / logging.
 async function bundle(target: string): Promise<string> {
-  const r = await esbuild.build({
-    absWorkingDir: PLUGIN,
-    entryPoints: [path.join(PLUGIN, "src", "main.ts")],
-    outfile: path.join(PLUGIN, "code.js"),
-    write: false,
-    bundle: true,
-    format: "iife",
-    target,
-    legalComments: "none",
-    logLevel: "silent",
-    define: { __PLUGIN_VERSION__: JSON.stringify(version) },
-  });
+  const r = await esbuild.build({ ...pluginBuildOptions(), write: false, target, logLevel: "silent" });
   const out = r.outputFiles[0];
   return out === undefined ? "" : out.text;
 }

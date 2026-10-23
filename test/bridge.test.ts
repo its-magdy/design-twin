@@ -10,29 +10,34 @@ import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
 import { getEventListeners } from "node:events";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 // The plugin stand-in: Bun's WebSocket (or the raw RFC 6455 client) behind ws's event API — see ws-client.ts.
 import { WsClient } from "./ws-client.ts";
-import type { ClientOptions, HandshakeRefusal, RawData } from "./ws-client.ts";
+import type { ClientOptions, HandshakeRefusal } from "./ws-client.ts";
+import { fakePlugin, HANG, type FakePlugin, type Handler, type Handlers } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
+import { bunSync, dtwinSync, startChild } from "./children.ts";
 import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
 import { screenPaths } from "../bridge/src/pages-layout.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
-  AnimationStylesDoc, ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
-  HygieneDoc, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
-  TextStylesDoc, TokensDoc, Asset,
+  ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, DesignSystemStyles,
+  HygieneDoc, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, ScreenExport, StylesDoc,
+  TokensDoc, Asset,
 } from "../bridge/src/doc-types.ts";
+import { STYLE_KINDS } from "../bridge/src/design-system-layout.ts";
 import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
 import { writePages } from "../bridge/src/write-out.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "../bridge/src/staleness.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
-import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
-import type { Cmd } from "../bridge/src/commands.ts";
+import type { ClientRow, HelloFrame, ProgressTick, ReplyFrame } from "../bridge/src/server-core.ts";
+import { COMMANDS } from "../bridge/src/commands.ts";
+import type { Cmd, Commands, ListPagesReply, PingReply } from "../bridge/src/commands.ts";
+import type { Sent } from "../bridge/src/route.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Check, Report } from "../bridge/src/doctor.ts";
@@ -46,6 +51,9 @@ process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
 // A static `import` is hoisted above this env assignment, and server-core reads FIGMA_BRIDGE_TOKEN at
 // load time — so this stays a dynamic import at the exact point the env var is set.
 const core = await import("../bridge/src/server-core.ts");
+/** A fake DaemonBridge's answer: its reply as given (a fake may answer a shape the command does not have, which
+ *  the daemon client must refuse), and the client it names — null when the fake does not say. */
+const fakeSent = <C extends Cmd>(reply: unknown, client: ClientRow | null = null): Sent<C> => ({ reply: malformed<Commands[C]["reply"]>(reply), client });
 
 // A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
 // cast, so a check reading `.message` still sees a string (and stays truthy, like the raw value).
@@ -61,11 +69,38 @@ const until = async (cond: () => boolean, capMs = 10_000): Promise<boolean> => {
   }
   return true;
 };
-// The one bridge -> plugin frame the fake plugins below read: `{ id, cmd, args }` (not exported by server-core).
-interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
+// A fake plugin's handlers that answer EVERY command alike, with `reply(cmd)` as its result — whatever shape that is
+// (a ping-shaped answer to listPages included), so each one goes through malformed().
+function answerAll(reply: (cmd: Cmd) => unknown): Handlers {
+  const h: Handlers = {};
+  const put = <C extends Cmd>(cmd: C): void => {
+    const answer: Handler<C> = () => malformed<Commands[C]["reply"]>(reply(cmd));
+    Object.assign(h, { [cmd]: answer }); // h[cmd] = answer, which TS cannot type for a generic key
+  };
+  for (const cmd of COMMANDS) put(cmd);
+  return h;
+}
 // A fixture asset with the producer-owned identity fields filled in (doc-types.ts Asset).
 const asset = (a: { id: string; file: string; text?: string; base64?: string; hash?: string; kind?: "reference" | "source" }): Asset =>
   ({ name: a.id, format: a.text !== undefined ? "svg" : "png", ...a });
+// Every style kind (design-system-layout.ts STYLE_KINDS) lands the same way in either layout: its own file under
+// `prefix`, holding the doc's stamp and exactly that kind's styles; a pointer to it under the kind's key in the
+// manifest's `files`, right after `tokens`, in table order; that list's length under the same key in `counts`. The doc
+// gives every kind a style of its own (distinct names), so a kind filed under another kind's name fails too.
+function styleKindsLanded(exportDir: string, prefix: string, m: DesignSystemManifest | LibraryManifest, doc: DesignSystemDoc): boolean {
+  const styles: DesignSystemStyles = doc.styles ?? {};
+  const stamp = { ...ifDefined("exportedAt", doc.exportedAt), ...ifDefined("file", doc.file), ...ifDefined("colorProfile", doc.colorProfile), ...ifDefined("source", doc.source) };
+  const keys = STYLE_KINDS.map((k) => k.key);
+  const distinct = new Set(STYLE_KINDS.map((k) => styles[k.kind]?.[0]?.name)).size === STYLE_KINDS.length;
+  const inOrder = (o: object, from: number): boolean => JSON.stringify(Object.keys(o).slice(from, from + keys.length)) === JSON.stringify(keys) &&
+    Object.keys(o).filter((k) => k.startsWith("styles")).length === keys.length;
+  return distinct && inOrder(m.files, 1) && inOrder(m.counts, 2) && STYLE_KINDS.every(({ kind, file, key }) => {
+    const want = styles[kind] ?? [];
+    const got = JSON.parse(fs.readFileSync(path.join(exportDir, prefix, file), "utf8")) as StylesDoc;
+    return want.length > 0 && m.files[key] === prefix + file && m.counts[key] === want.length &&
+      JSON.stringify(got) === JSON.stringify({ ...stamp, styles: want });
+  });
+}
 // design/target.json as bridge/src/init.ts writes it (built inline there, no exported type): the fields read below.
 interface TargetJson { profile: string | null; note?: string }
 // .mcp.json as the assertions below read it (init.ts's McpJson is not exported; entries are foreign-or-ours JSON).
@@ -117,6 +152,11 @@ ok("[auth] safeEqual is length-safe", core.safeEqual("abc", "abcdef") === false 
 // ---------------------------------------------------------------- seed-components CLI
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "seed-test-"));
 const seed = path.join(import.meta.dirname, "..", "bridge", "src", "seed-components.ts");
+/** The seeder run to completion (test/children.ts); a run that fails throws, as execFileSync did. */
+const seedRun = (args: string[]): void => {
+  const r = bunSync([seed, ...args]);
+  if (r.status !== 0) throw new Error(`seed-components ${args.join(" ")} exited ${r.status ?? r.signal ?? "without starting"}\n${r.stderr}`);
+};
 function runSeed(name: string, files: Record<string, string>, existingMap?: object | null, designFiles?: Record<string, unknown>) {
   const root = path.join(tmp, name);
   const design = path.join(root, "design");
@@ -131,7 +171,7 @@ function runSeed(name: string, files: Record<string, string>, existingMap?: obje
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, JSON.stringify(body, null, 2));
   }
-  execFileSync(process.execPath, [seed, root, design], { stdio: "pipe" });
+  seedRun([root, design]);
   const out = path.join(design, "components.json");
   return fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) as Record<string, ComponentsEntry> : null;
 }
@@ -170,7 +210,7 @@ ok("[seed-preserves-human-fields] hand-authored import survives the merge", widg
   // The hand-edited map is rewritten atomically and in its own format (not normalized to LF, 2 spaces)
   const map = path.join(tmp, "poison", "design", "components.json");
   fs.writeFileSync(map, JSON.stringify({ Widget: { component: "Widget", import: "@/ui", props: {} } }, null, 4).split("\n").join("\r\n") + "\r\n");
-  execFileSync(process.execPath, [seed, path.join(tmp, "poison"), path.dirname(map)], { stdio: "pipe" });
+  seedRun([path.join(tmp, "poison"), path.dirname(map)]);
   const text = fs.readFileSync(map, "utf8");
   ok("seed keeps a hand-edited map's own format (CRLF, 4-space indent) and leaves no temp file beside it",
     text.includes("\r\n    \"") && !/[^\r]\n/.test(text) && text.endsWith("}\r\n") && !fs.readdirSync(path.dirname(map)).some((f) => f.includes(".tmp-")));
@@ -209,13 +249,12 @@ console.log("\nseed-components — `dtwin seed` (routed by figma-pull.ts before 
   // Driven through the real CLI entry: `dtwin seed` must need no bridge, no token and no plugin, and
   // must be the SAME command as the script run directly. The token env is removed and the config dir
   // pointed at an empty temp dir, so a token minted as a side effect would show up as a file there.
-  const pullCli = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
   const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "seed-cfg-"));
   const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cfgDir };
   delete env.FIGMA_BRIDGE_TOKEN;
   delete env.FIGMA_BRIDGE_TOKEN_FILE;
-  const viaDtwin = (cwd: string, args: string[]) => spawnSync(process.execPath, [pullCli, "seed", ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
-  const direct = (cwd: string, args: string[]) => spawnSync(process.execPath, [seed, ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
+  const viaDtwin = (cwd: string, args: string[]) => dtwinSync(["seed", ...args], { cwd, env, timeoutMs: 10000 });
+  const direct = (cwd: string, args: string[]) => bunSync([seed, ...args], { cwd, env, timeoutMs: 10000 });
   // A project root with ONE Code Connect template under src/.
   const project = (name: string) => {
     const root = path.join(tmp, name);
@@ -273,11 +312,13 @@ fs.rmSync(tmp, { recursive: true, force: true });
 // a change to the auth contract broke three tests in three spots. Ports start above 8787 so a bridge
 // the user has running is never collided with.
 let nextPort = 8797;
-async function connectedBridge() {
+// The client is a fake plugin that has not said hello (a case sends one, when it needs to) and answers only the
+// commands `on` handles: every other one is never answered.
+async function connectedBridge(on: Handlers = {}) {
   const port = nextPort++;
   const bridge = core.createBridge(port, { settleMs: 0 });
-  const client = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-  await new Promise((res, rej) => { client.on("open", res); client.on("error", rej); });
+  const client = fakePlugin(port, { token: TOKEN, hello: false, on, unhandled: HANG });
+  await client.opened;
   return { bridge, client };
 }
 
@@ -320,12 +361,9 @@ void (async () => {
   // answering the wrong shape is a named rejection — not a TypeError in whichever reader touches the
   // missing field first. Driven over a real socket with a client that answers what it is told to.
   {
-    const { bridge: b, client: c } = await connectedBridge();
+    // It answers every command with `answer`, which is mostly not that command's reply.
     let answer: unknown = { nope: true };
-    c.on("message", (raw: RawData) => {
-      const m = JSON.parse(raw.toString()) as CommandFrame;
-      c.send(JSON.stringify({ id: m.id, ok: true, result: answer }));
-    });
+    const { bridge: b, client: c } = await connectedBridge(answerAll(() => answer));
     const shapeErr = async (cmd: Cmd) => { try { await b.request(cmd, {}, 2000); return null; } catch (e) { return asErr(e).message; } };
     console.log("\nserver-core — reply shape check:");
     ok("[shape] a listPages reply with no `pages` is rejected, naming the command and the field",
@@ -378,13 +416,14 @@ void (async () => {
   // Bun.serve with maxPayloadLength = FIGMA_BRIDGE_MAX_PAYLOAD_MB (default 128). Both directions, well
   // past 16 MiB: a 20 MiB command frame out (the args ride along, unread by the bridge), a 40 MiB reply back.
   {
-    const { bridge: b, client: c } = await connectedBridge();
     const MiB = 1024 * 1024;
     let argsLen = -1;
-    c.on("message", (raw: RawData) => {
-      const m = JSON.parse(raw.toString()) as CommandFrame;
-      argsLen = typeof m.args?.pad === "string" ? m.args.pad.length : -1;
-      c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "P", file: "F", pad: "y".repeat(40 * MiB) } }));
+    const { bridge: b, client: c } = await connectedBridge({
+      ping: (args) => {
+        argsLen = "pad" in args && typeof args.pad === "string" ? args.pad.length : -1;
+        const reply: PingReply & { pad: string } = { pong: true, page: "P", file: "F", pad: "y".repeat(40 * MiB) };
+        return reply;
+      },
     });
     // `ping` takes no args (NoArgs is {}, so any object passes); the pad is a payload the plugin side of this test
     // reads back, not a real argument.
@@ -412,14 +451,11 @@ void (async () => {
   {
     const before = process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB;
     process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB = "1";
-    const { bridge: b, client: c } = await connectedBridge();
+    // A ping reply with no page/file: it never gets as far as the shape check.
+    const { bridge: b, client: c } = await connectedBridge({ ping: () => malformed<PingReply>({ pong: true, pad: "z".repeat(2 * 1024 * 1024) }) });
     if (before === undefined) delete process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB;
     else process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB = before;
-    c.on("message", (raw: RawData) => {
-      const m = JSON.parse(raw.toString()) as CommandFrame;
-      c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, pad: "z".repeat(2 * 1024 * 1024) } }));
-    });
-    c.on("error", () => {});
+    c.ws.on("error", () => {});
     let capErr: Error | undefined;
     try { await b.request("ping", {}, 10000); } catch (e) { capErr = asErr(e); }
     ok("[payload] a reply over FIGMA_BRIDGE_MAX_PAYLOAD_MB fails its request at once, not at the timeout", !!capErr && /disconnected before replying/.test(capErr.message));
@@ -436,24 +472,27 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { settleMs: 0 });
-    // The plugin case dials with Bun's WebSocket, as the iframe would; the two refused ones with the raw
-    // client (ws-client.ts), the only one that can read the refusal's HTTP status.
-    const closed = (url: string, opts: ClientOptions) => new Promise<{ opened: boolean; http?: number; body?: string; code?: number; clients?: number }>((res) => {
-      const c = new WsClient(url, opts);
+    // The plugin case is a fake plugin (Bun's WebSocket, as the iframe would dial) that says hello as an intruder
+    // the moment it opens; the two refused ones are the raw client (ws-client.ts), the only one that can read the
+    // refusal's HTTP status.
+    const closed = (c: WsClient) => new Promise<{ opened: boolean; http?: number; body?: string; code?: number; clients?: number }>((res) => {
       let opened = false;
-      c.on("open", () => { opened = true; c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
+      c.on("open", () => { opened = true; });
       c.on("unexpected-response", (r: HandshakeRefusal) => res({ opened, http: r.statusCode, body: r.body }));
       c.on("close", (code: number) => res({ opened, code, clients: bridge.listClients().length }));
       c.on("error", () => {});
     });
-    const plugin = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "null" });
+    const refused = (opts: ClientOptions) => closed(new WsClient(`ws://127.0.0.1:${port}/?token=wrong`, opts));
+    const intruder = fakePlugin(port, { token: "wrong", hello: { file: "intruder" } });
+    intruder.opened.catch(() => {});
+    const plugin = await closed(intruder.ws);
     ok("[bad-token] the plugin iframe (Origin null) gets close code 4401 it can read, not an opaque refusal",
       plugin.opened === true && plugin.code === core.CLOSE_BAD_TOKEN && core.CLOSE_BAD_TOKEN === 4401);
     ok("[bad-token] and was never registered as a client, even though it sent a hello", plugin.clients === 0 && !bridge.isConnected());
-    const node = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { raw: true });
+    const node = await refused({ raw: true });
     ok("[bad-token] a non-browser client (no Origin) is still refused at the HTTP layer with 401", node.opened === false && node.http === 401);
     ok("[bad-token] and the refusal's body says why, as ws's did", node.body === "bad or missing token");
-    const site = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "https://evil.example", raw: true });
+    const site = await refused({ origin: "https://evil.example", raw: true });
     ok("[bad-token] a real website Origin is refused 403 — never admitted for diagnosis", site.opened === false && site.http === 403 && site.body === "forbidden origin");
     const good = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
     await new Promise((res, rej) => { good.on("open", res); good.on("error", rej); });
@@ -495,9 +534,9 @@ void (async () => {
     ok("[bind] a second bridge on a held port reports it through onListenError (after createBridge returned), with the port-in-use text",
       returnedFirst && !!listenErr && (listenErr as Error).message.startsWith(`[bridge] port ${port} is already in use`) && second.boundPort() === null);
     second.close();
-    const child = spawnSync(process.execPath, ["-e",
+    const child = bunSync(["-e",
       `const c = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)}); c.createBridge(${port});`],
-    { encoding: "utf8", timeout: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
+    { timeoutMs: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
     ok("[bind] …and another process (NODE_ENV=production) exits 1 with it instead of sharing the port",
       child.status === 1 && child.stderr.includes(`[bridge] port ${port} is already in use`));
     ok("[bind] the first bridge still answers on the port", bridge.boundPort() === port && await new Promise<number | undefined>((res) => {
@@ -517,25 +556,22 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { heartbeatMs: 0, settleMs: 0 });
-    const open = (autoPong: boolean) => new Promise<WsClient>((res, rej) => {
-      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", raw: !autoPong });
+    // The alive client is a fake plugin (no hello) that answers ping and nothing else. Its reply is written after
+    // its pong on the same socket, so a round trip that resolves proves the bridge has READ the pong — the fence
+    // before each tick. The dead one is the raw client: the point of it is a socket that never pongs.
+    const alive = fakePlugin(port, { token: TOKEN, hello: false, on: { ping: (): PingReply => ({ pong: true, page: "P", file: "F" }) }, unhandled: HANG });
+    await alive.opened;
+    const dead = await new Promise<WsClient>((res, rej) => {
+      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", raw: true });
       c.on("open", () => res(c));
       c.on("error", rej);
     });
-    const alive = await open(true);
-    const dead = await open(false);
     let alivePings = 0;
     let deadPings = 0;
     let deadPingsAtClose = -1;
-    alive.on("ping", () => { alivePings++; });
+    alive.ws.on("ping", () => { alivePings++; });
     dead.on("ping", () => { deadPings++; });
     dead.on("close", () => { deadPingsAtClose = deadPings; });
-    // The alive client answers every command. Its reply is written after its pong on the same socket,
-    // so a round trip that resolves proves the bridge has READ the pong — the fence before each tick.
-    alive.on("message", (d: RawData) => {
-      const f = JSON.parse(d.toString()) as CommandFrame;
-      if (f.cmd === "ping") alive.send(JSON.stringify({ id: f.id, ok: true, result: { pong: true, page: "P", file: "F" } }));
-    });
     const fence = async (): Promise<boolean> => {
       try { await bridge.request("ping", {}, 5000, "c1"); return true; } catch { return false; }
     };
@@ -562,7 +598,7 @@ void (async () => {
       if ((await until(() => alivePings === want)) && (await fence())) rounds++;
     }
     ok("[heartbeat] a client that answers pings survives many rounds (pinged each one, still open and routed to)",
-      second && rounds === 3 && alivePings === 5 && alive.readyState === WsClient.OPEN && bridge.isConnected());
+      second && rounds === 3 && alivePings === 5 && alive.ws.readyState === WsClient.OPEN && bridge.isConnected());
     alive.close();
     bridge.close();
   }
@@ -585,12 +621,14 @@ void (async () => {
   // request()'s optional onProgress hears every tick from THAT connection (figma-mcp forwards them as
   // MCP notifications/progress). A malformed counter is dropped to null, never passed through.
   {
-    const { bridge: b, client: c } = await connectedBridge();
-    c.on("message", (raw: RawData) => {
-      const m = JSON.parse(raw.toString()) as CommandFrame;
-      c.send(JSON.stringify({ type: "progress", phase: "pages", page: { index: 1, of: 2, name: "Home" }, nodes: 40, assets: "x" }));
-      c.send(JSON.stringify({ type: "progress", phase: "assets" }));
-      setTimeout(() => c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true } })), 30);
+    // A tick with a non-numeric counter is not a ProgressFrame, so it goes out as a raw frame; the reply is a bare
+    // `{ pong: true }` (no page/file), 30 ms after the ticks.
+    const { bridge: b, client: c } = await connectedBridge({
+      ping: (_, ctx) => {
+        ctx.send({ type: "progress", phase: "pages", page: { index: 1, of: 2, name: "Home" }, nodes: 40, assets: "x" });
+        ctx.progress({ phase: "assets" });
+        return new Promise<PingReply>((res) => setTimeout(() => res(malformed<PingReply>({ pong: true })), 30));
+      },
     });
     const ticks: ProgressTick[] = [];
     await b.request("ping", {}, 2000, null, undefined, (t) => ticks.push(t));
@@ -614,21 +652,17 @@ void (async () => {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port, { settleMs: 0 });
-    const open = () => new Promise<WsClient>((res, rej) => {
-      const c = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-      c.on("open", () => res(c));
-      c.on("error", rej);
-    });
-    // A client that identifies itself the way the plugin UI does, then answers whatever it is asked.
-    const identify = (c: WsClient, hello: Record<string, unknown>) => c.send(JSON.stringify({ type: "hello", ...hello }));
-    const autoReply = (c: WsClient, result: Record<string, unknown>) => c.on("message", (b: RawData) => {
-      const m = JSON.parse(b.toString()) as CommandFrame;
-      if (m && m.id) c.send(JSON.stringify({ id: m.id, ok: true, result: { ...result, cmd: m.cmd } }));
-    });
+    // A fake plugin that connects without identifying; given a `result`, it answers whatever it is asked with
+    // `{ ...result, cmd }`, and with none it never answers. It identifies itself the way the plugin UI does: a
+    // hello once it is open.
+    const open = (result?: PingReply) => {
+      const c = fakePlugin(port, { token: TOKEN, hello: false, on: result ? answerAll((cmd) => ({ ...result, cmd })) : {}, unhandled: HANG });
+      return c.opened.then(() => c);
+    };
+    const identify = (c: FakePlugin, hello: Omit<HelloFrame, "type">) => c.hello(hello);
 
-    const base = await open();
+    const base = await open({ pong: true, page: "Home", file: "base" });
     identify(base, { instanceId: "fig-base", file: "App — Base", fileKey: "KEYBASE", page: "Home" });
-    autoReply(base, { pong: true, page: "Home", file: "base" });
     await sleep(80);
 
     console.log("\nserver-core — multi-client routing (the two-files question):");
@@ -642,9 +676,8 @@ void (async () => {
     ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.file === "base");
 
     // The second file connects. It coexists with the first; nothing is terminated.
-    const lib = await open();
+    const lib = await open({ pong: true, page: "Tokens", file: "lib" });
     identify(lib, { instanceId: "fig-lib", file: "NIMA Library", fileKey: "KEYLIB", page: "Tokens" });
-    autoReply(lib, { pong: true, page: "Tokens", file: "lib" });
     await sleep(80);
 
     const two = bridge.listClients();
@@ -672,8 +705,8 @@ void (async () => {
     ok("[multi] …and the request afterwards still gets the unchanged 'no connected Figma file matches' text",
       !!stillErr && stillErr.message.startsWith("no connected Figma file matches 'nobody-has-this-name'. Connected:\n  c1  \"App — Base\"  fileKey KEYBASE"));
     const waited = bridge.awaitClient("Docs", 3000);
-    let lateWs: WsClient | undefined;
-    setTimeout(() => { void open().then((c) => { lateWs = c; identify(c, { instanceId: "fig-docs", file: "Docs File", fileKey: "KEYDOCS", page: "P" }); autoReply(c, { pong: true, page: "P", file: "docs" }); }); }, 200);
+    let lateWs: FakePlugin | undefined;
+    setTimeout(() => { void open({ pong: true, page: "P", file: "docs" }).then((c) => { lateWs = c; identify(c, { instanceId: "fig-docs", file: "Docs File", fileKey: "KEYDOCS", page: "P" }); }); }, 200);
     const tl0 = Date.now();
     await waited;
     const tl = Date.now() - tl0;
@@ -684,15 +717,13 @@ void (async () => {
       await Promise.race([bridge.awaitClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     // The same wait through a request's `waitMs`: a late named window is waited for, then routed to.
     const viaWait = bridge.request("ping", {}, 5000, "Late Named", undefined, undefined, undefined, { waitMs: 3000 });
-    let lateNamed: WsClient | undefined;
-    setTimeout(() => { void open().then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); autoReply(c, { pong: true, page: "P", file: "late-named" }); }); }, 200);
+    let lateNamed: FakePlugin | undefined;
+    setTimeout(() => { void open({ pong: true, page: "P", file: "late-named" }).then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); }); }, 200);
     ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).file === "late-named");
     lateNamed?.close();
     // A caller that gives up during the wait: rejected at once with its own reason, and nothing is sent —
     // not even to the file it named, whose hello lands just after the abort.
     const pendingMatch = await open();
-    const sentToPending: string[] = [];
-    pendingMatch.on("message", (b: RawData) => { sentToPending.push(b.toString()); });
     const acWait = new AbortController();
     setTimeout(() => acWait.abort(new Error("the caller left during the wait")), 100);
     setTimeout(() => identify(pendingMatch, { instanceId: "fig-pending", file: "Pending Match File", fileKey: null, page: "P" }), 200);
@@ -701,7 +732,7 @@ void (async () => {
     const abandonedMs = Date.now() - ta0;
     await sleep(250); // past the hello: a request that survived its abort would be sent now
     ok("[multi] a request aborted during its wait rejects at once with the caller's reason", abandonedWait === "the caller left during the wait" && abandonedMs < 1500);
-    ok("[multi] …and the file it named, identifying just after, is sent nothing", sentToPending.length === 0 && bridge.listClients().some((c) => c.file === "Pending Match File"));
+    ok("[multi] …and the file it named, identifying just after, is sent nothing", pendingMatch.frames.length === 0 && bridge.listClients().some((c) => c.file === "Pending Match File"));
     pendingMatch.close();
     lateWs?.close();
     await sleep(80);
@@ -772,18 +803,15 @@ void (async () => {
   const pull = await import("../bridge/src/figma-pull.ts");
   const parse = (argv: string[]) => pull.parseArgs(argv);
   const usage = (argv: string[]) => { try { parse(argv); return null; } catch (e) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + (e as Error).message; } };
-  // Anti-drift: --node and --selection must both write through write-out.js's shared writeScreen
-  // helper, not an ad hoc trio of writeJson/writeAssets calls each branch could quietly reinvent.
+  // Anti-drift: every pull writes through write-out.ts's writeAny — the writer the MCP export tools use —
+  // never an ad hoc trio of writeJson/writeAssets calls a branch could quietly reinvent. That the files are
+  // what writeAny makes of the same reply is read-plan-e2e.test.ts's, end to end.
   const pullSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
-  ok("[args] --node dispatch routes through the shared OUT.writeScreen writer", (() => {
-    const i = pullSrc.indexOf("if (nodeId) {");
-    const j = pullSrc.indexOf("} else if (selection) {");
-    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
-  })());
-  ok("[args] --selection dispatch ALSO routes through OUT.writeScreen (no more ad hoc write trio)", (() => {
-    const i = pullSrc.indexOf("} else if (selection) {");
-    const j = pullSrc.indexOf("} else if (asLibrary) {");
-    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
+  ok("[args] a pull (--node, --selection, a catalog, pages) writes through the shared OUT.writeAny", (() => {
+    const i = pullSrc.indexOf("async function exportCmd(");
+    const j = pullSrc.indexOf("\n}\n", i); // exportCmd's own closing brace
+    const body = i !== -1 && j > i ? pullSrc.slice(i, j) : "";
+    return (body.match(/OUT\.writeAny\(outDir, r, plog\)/g) || []).length === 1 && !/OUT\.write(Screen|Export|Json|Assets)\(/.test(body);
   })());
   // `dtwin list`'s own "next step" hint must not recommend `dtwin pull design --page/--node
   // <id>` — the outDir trap, printed by the tool itself right after the command that
@@ -812,8 +840,8 @@ void (async () => {
   ok("[args] --timeout= (empty) is an ERROR", /positive number/.test(usage(["--timeout="]) || ""));
   ok("[args] --timeout 0 is rejected", /positive number/.test(usage(["--timeout", "0"]) || ""));
   ok("[args] --timeout abc is rejected", /positive number/.test(usage(["--timeout", "abc"]) || ""));
-  ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).exportTimeoutMs === 600000);
-  ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).exportTimeoutMs === 600000);
+  ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).timeoutOverrideMs === 600000);
+  ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).timeoutOverrideMs === 600000);
   // A near-miss flag must not be read as this one: `startsWith("--timeout")` would swallow it.
   // It is refused outright (unknown flag) — stronger than "parsed, but not as --timeout".
   ok("[args] an unrelated --timeout-ish flag is not consumed as --timeout",
@@ -1056,7 +1084,7 @@ void (async () => {
     })());
     ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {
       const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
-      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const run = (args: string[]) => dtwinSync(["init", ...args], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const r = run(["--dry-run", "--mcp"]);
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
     })());
@@ -1065,7 +1093,7 @@ void (async () => {
     // auto-install from the network, no project .env in the server's environment.
     ok("[init] CLI: --mcp registers {command: <this bun>, args: [--no-install, --no-env-file, <abs figma-mcp.ts>]}", (() => {
       const d = mk({});
-      const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--mcp"], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const r = dtwinSync(["init", "--mcp"], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { command: string; args: string[] }> }).mcpServers.designtwin;
       const mcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
       return r.status === 0 && !!e && e.command === init.stableBunPath() && path.isAbsolute(e.command) && fs.realpathSync(e.command) === fs.realpathSync(process.execPath)
@@ -1075,7 +1103,7 @@ void (async () => {
     ok("[init] CLI: --mcp on a Node-era entry of ours: --dry-run prints the repair and leaves the file; the run repairs it", (() => {
       const before = JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/gone/bridge/dist/figma-mcp.js"] } } });
       const d = mk({ ".mcp.json": before });
-      const run = (args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const run = (args: string[]) => dtwinSync(["init", ...args], { cwd: d, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const dry = run(["--mcp", "--dry-run"]);
       const dryOk = dry.status === 0 && /would write \.mcp\.json — REPAIRED the "designtwin" MCP server entry — it runs on Node/.test(dry.stderr) && fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before;
       const real = run(["--mcp"]);
@@ -1086,7 +1114,7 @@ void (async () => {
     // `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
     // filesystem diff after a real `init` and cross-check it against the four paths named in --help.
     ok("[init] --help lists exactly what init creates — a filesystem diff after init matches the help text", (() => {
-      const helpRun = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "init", "--help"], { encoding: "utf8", timeout: 5000 });
+      const helpRun = dtwinSync(["init", "--help"], { timeoutMs: 5000 });
       const help = helpRun.stdout;
       // Never promise to create the hand-owned files that only get written later, on demand.
       if (/Creates:.*codeconnect\.local\.json/s.test(help) || /Creates:.*plan\//s.test(help) || /Creates:.*audit\//s.test(help) || /Creates:.*verify\//s.test(help)) return false;
@@ -1106,19 +1134,21 @@ void (async () => {
   ok("[args] --json is accepted on the printing commands", parse(["--list-clients", "--json"]).json === true && parse(["--list-libraries", "--json"]).json === true && parse(["--list", "--json"]).json === true && parse(["--list"]).json === false);
   ok("[args] --json on an export is refused (it writes files, prints no result)", /--json applies to the commands that PRINT/.test(usage(["--all-pages", "--json"]) || "") && /--json applies/.test(usage(["--json"]) || ""));
   ok("[args] --help prints the usage header and exits 0 without starting a bridge", (() => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = dtwinSync(["--help"], { timeoutMs: 5000 });
     return r.status === 0 && /Usage:/.test(r.stdout) && /--list-libraries/.test(r.stdout) && !/listening/.test(r.stderr);
   })());
   // `dtwin --help` must mention `--client`, the flag
   // every plugin-reaching command needs once two Figma files are connected — otherwise it appears only in
   // bridge/README.md (a clone-only file) and in `list clients`' own table.
   ok("[args] --help mentions --client, pointing at `dtwin list clients`", (() => {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = dtwinSync(["--help"], { timeoutMs: 5000 });
     return r.status === 0 && /--client/.test(r.stdout) && /list clients/.test(r.stdout);
   })());
   ok("[args] default timeout scales with the work (selection < page < all-pages)", (() => {
-    const s = parse(["--selection"]).exportTimeoutMs, p = parse([]).exportTimeoutMs, a = parse(["--all-pages"]).exportTimeoutMs;
-    return s === 120000 && p === 300000 && a === 900000 && s < p && p < a;
+    // The tier is the read plan's (read-plan.ts); the CLI hands it --timeout only, absent here.
+    const budget = (args: string[]): number => { const p = pull.cliReadPlan(parse(args)); return p && "timeout" in p ? p.timeout : -1; };
+    const s = budget(["--selection"]), p = budget([]), a = budget(["--all-pages"]);
+    return parse([]).timeoutOverrideMs === undefined && s === 120000 && p === 300000 && a === 900000 && s < p && p < a;
   })());
 
   // outDir is positional, so every value-taking flag above must be excluded from the search — the
@@ -1204,7 +1234,7 @@ void (async () => {
   ok("[args] --no-assets sets skipAssets", parse(["--no-assets"]).readOpts.skipAssets === true);
   ok("[args] --list implies depth 2, --list-pages depth 1", (() => {
     const l = parse(["--list"]), lp = parse(["--list-pages"]);
-    return l.listOnly && l.listDepth === 2 && lp.listOnly && lp.listDepth === 1;
+    return l.command.id === "list" && l.listDepth === 2 && lp.command.id === "listPages" && lp.listDepth === 1;
   })());
 
   // Scope flags are mutually exclusive and the loser was DISCARDED IN SILENCE: collectFull is
@@ -1215,13 +1245,13 @@ void (async () => {
   ok("[args] --selection + --page is an ERROR", /different scopes/.test(usage(["--selection", "--page", "1:2"]) || ""));
   ok("[args] --selection + --all-pages is an ERROR", /different scopes/.test(usage(["--selection", "--all-pages"]) || ""));
   ok("[args] each scope flag ALONE is still fine", (() => {
-    return parse(["--selection"]).selection && parse(["--all-pages"]).allPages && parse(["--page", "1:2"]).pageSel.length === 1;
+    return parse(["--selection"]).command.id === "selection" && parse(["--all-pages"]).allPages && parse(["--page", "1:2"]).pageSel.length === 1;
   })());
 
   // --design-system: the "just the design system, no page walk" scope. Same exclusivity family as
   // --selection/--all-pages/--page, and — like the list commands — no read options apply, since it
   // never walks a node.
-  ok("[args] --design-system alone parses and sets the flag", parse(["--design-system"]).designSystemOnly === true);
+  ok("[args] --design-system alone parses and sets the flag", parse(["--design-system"]).command.id === "designSystem");
   ok("[args] --design-system + --all-pages is an ERROR", /different scopes/.test(usage(["--design-system", "--all-pages"]) || ""));
   ok("[args] --design-system + --selection is an ERROR", /different scopes/.test(usage(["--design-system", "--selection"]) || ""));
   ok("[args] --design-system + --page is an ERROR", /different scopes/.test(usage(["--design-system", "--page", "1:2"]) || ""));
@@ -1230,7 +1260,7 @@ void (async () => {
   // --variant-visuals is the ONE exception: it enriches the component catalog --design-system/
   // --as-library both build, so it must NOT trip the "no node walk" guard the other five do.
   ok("[args] --design-system + --variant-visuals is ACCEPTED, not refused",
-    parse(["--design-system", "--variant-visuals"]).designSystemOnly === true);
+    parse(["--design-system", "--variant-visuals"]).command.id === "designSystem");
   ok("[args] --design-system + --variant-visuals + --css is STILL an error (css is refused, variant-visuals is not)",
     /node\/page walk/.test(usage(["--design-system", "--variant-visuals", "--css"]) || "") &&
     !/--variant-visuals/.test(usage(["--design-system", "--variant-visuals", "--css"]) || ""));
@@ -1243,7 +1273,7 @@ void (async () => {
   // Read options are ADDITIVE, not scopes — they must keep composing with any one scope flag.
   ok("[args] read options still compose with a scope flag", !!((() => {
     const r = parse(["--page", "1:2", "--no-assets", "--css", "--timeout", "60"]);
-    return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.exportTimeoutMs === 60000;
+    return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.timeoutOverrideMs === 60000;
   })()));
   // …but only with a SCOPE flag. The list ops emit structural fields only — they never serialize a
   // node, so every read option is inert there and must not be discarded without a word. Refused as a
@@ -1267,9 +1297,9 @@ void (async () => {
   // keep composing with them.
   ok("[args] --timeout still composes with --list", (() => {
     const r = parse(["--list", "--timeout", "600"]);
-    return r.listOnly === true && r.listTimeoutMs === 600000;
+    return r.command.id === "list" && r.listTimeoutMs === 600000;
   })());
-  ok("[args] a bare --list is of course still fine", parse(["--list"]).listOnly === true);
+  ok("[args] a bare --list is of course still fine", parse(["--list"]).command.id === "list");
 
   // ---------------------------------------------------------------- figma-pull: --list-libraries
   // The library-discovery member of the cheap-index family. It must join EVERY guard the other two
@@ -1278,11 +1308,11 @@ void (async () => {
   console.log("\nfigma-pull — --list-libraries:");
   ok("[lib] --list-libraries parses as its own command", (() => {
     const r = parse(["--list-libraries"]);
-    return r.listLibraries === true && r.listOnly === false && r.childrenId === null;
+    return r.command.id === "listLibraries" && r.childrenId === null;
   })());
   // The prefix trap: `--list` is matched by exact includes(), so --list-libraries must NOT also read
   // as --list (which would run listPages and print the wrong thing entirely).
-  ok("[lib] --list-libraries is NOT swallowed by --list", parse(["--list-libraries"]).listOnly === false);
+  ok("[lib] --list-libraries is NOT swallowed by --list", parse(["--list-libraries"]).command.id === "listLibraries");
   ok("[lib] it takes the LIST timeout tier, and --timeout raises it", (() => {
     const d = parse(["--list-libraries"]), t = parse(["--list-libraries", "--timeout", "600"]);
     return d.listTimeoutMs === 300000 && t.listTimeoutMs === 600000;
@@ -1313,10 +1343,10 @@ void (async () => {
   // The identity/liveness probe joins the index-command family, so it must inherit every guard that
   // family has — the point of routing it through indexCmds rather than giving it a private branch.
   console.log("\nfigma-pull — --whoami:");
-  ok("[whoami] parses as its own command", parse(["--whoami"]).whoami === true);
-  ok("[whoami] is off by default", parse(["design"]).whoami === false);
+  ok("[whoami] parses as its own command", parse(["--whoami"]).command.id === "whoami");
+  ok("[whoami] is off by default", parse(["design"]).command.id === "pull");
   ok("[whoami] writes no outDir (it prints, like the other index commands)",
-    parse(["--whoami"]).listOnly === false && parse(["--whoami"]).whoami === true);
+    parse(["--whoami"]).command.family === "index" && parse(["--whoami"]).command.id === "whoami");
   ok("[whoami] + an export scope is an ERROR", /cannot be combined/.test(usage(["--whoami", "--all-pages"]) || ""));
   ok("[whoami] + --list is an ERROR (two index commands)", /only one/.test(usage(["--whoami", "--list"]) || ""));
   ok("[whoami] + --list-libraries is an ERROR", /only one/.test(usage(["--whoami", "--list-libraries"]) || ""));
@@ -1352,11 +1382,11 @@ void (async () => {
   })());
   ok("[client] composes with an index command (it addresses WHICH file to list)", (() => {
     const r = parse(["--list", "--client", "c2"]);
-    return r.listOnly === true && r.client === "c2";
+    return r.command.id === "list" && r.client === "c2";
   })());
 
-  ok("[list-clients] parses as its own command", parse(["--list-clients"]).listClients === true);
-  ok("[list-clients] is off by default", parse(["design"]).listClients === false);
+  ok("[list-clients] parses as its own command", parse(["--list-clients"]).command.id === "listClients");
+  ok("[list-clients] is off by default", parse(["design"]).command.id === "pull");
   ok("[list-clients] + an export scope is an ERROR", /cannot be combined/.test(usage(["--list-clients", "--all-pages"]) || ""));
   ok("[list-clients] + --list is an ERROR (two index commands)", /only one/.test(usage(["--list-clients", "--list"]) || ""));
   ok("[list-clients] + --whoami is an ERROR", /only one/.test(usage(["--list-clients", "--whoami"]) || ""));
@@ -1436,9 +1466,8 @@ void (async () => {
   // help naming one that no longer exists).
   {
     const registered = [...libMcpSrc.matchAll(/registerTool\(\s*"([a-z_]+)"/g)].map((m) => must(m[1], "registerTool name capture"));
-    const pullSrcForHelp = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
-    const helpStart = pullSrcForHelp.indexOf('"dtwin mcp\\n\\n"');
-    const helpText = helpStart === -1 ? "" : pullSrcForHelp.slice(helpStart, pullSrcForHelp.indexOf("process.exit(0)", helpStart));
+    // `dtwin mcp --help` prints the mcp verb row's page (cli-commands.ts).
+    const helpText = (await import("../bridge/src/cli-commands.ts")).MCP_HELP;
     const named = (helpText.match(/figma_[a-z_]+\*?/g) || []).filter((t, i, a) => a.indexOf(t) === i);
     // `figma_export_*` is a glob over the export family (prefix match). A bare name that is not itself a
     // tool (the help's `figma_list`) names a family too: it must be the `<name>_` prefix of a real tool.
@@ -1463,19 +1492,23 @@ void (async () => {
   })());
   ok("[mcp-multi] it reads the bridge registry, never the plugin (answers during a long export)", (() => {
     const b = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_clients"'), libMcpSrc.indexOf('"figma_whoami"'));
-    return /bridge\.listClients\(\)/.test(b) && !/bridge\.request/.test(b);
+    return /route\.listClients\(\)/.test(b) && !/route\.request|ask\(/.test(b);
   })());
   ok("[mcp-multi] every plugin-reaching tool accepts a client target", (() => {
-    // One clientShape spread per tool that calls bridge.request, plus the ones that only list.
+    // One clientShape spread per tool that sends a named command through the route, plus the ones that only list.
     const spreads = (libMcpSrc.match(/\.\.\.clientShape/g) || []).length;
-    const requests = (libMcpSrc.match(/bridge\.request\(/g) || []).length;
+    const requests = (libMcpSrc.match(/(?:\bask|route\.request)\("/g) || []).length;
     return spreads >= requests;
   })());
-  ok("[mcp-multi] and every bridge.request forwards it", (() => {
-    // Each call must end with the routing argument; a forgotten one silently ignores `client`.
-    const calls = libMcpSrc.match(/bridge\.request\([^;]*?\);/gs) || [];
-    return calls.length > 0 && calls.every((c) => /a && a\.client/.test(c));
+  ok("[mcp-multi] and every tool's route request forwards it", (() => {
+    // Each call must carry the routing target; a forgotten one silently ignores `client`.
+    const calls = libMcpSrc.match(/(?:\bask|route\.request)\("[^;]*?\);/gs) || [];
+    return calls.length >= 7 && calls.every((c) => /target: a && a\.client/.test(c));
   })());
+  // A named `client` waits up to NAMED_CLIENT_WAIT_MS for its file (the MCP server's connect window is 0, and the
+  // route's named window defaults to it): the server's route must say so. The route's own rule is bridge-route.test.ts's.
+  ok("[mcp-multi] the MCP route gives a named client NAMED_CLIENT_WAIT_MS to land",
+    /createRoute\(holder, \{ connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS \}\)/.test(libMcpSrc));
   ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
     /Several Figma files are connected/.test(libMcpSrc));
   // The whoami description must not claim the bridge holds ONE connection.
@@ -1845,8 +1878,8 @@ void (async () => {
       source: { role: "library", libraryName: "NIMA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
       collections: [collection({ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" })],
       variables: [variable({ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" })],
-      styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [],
-        animation: [{ name: "Entrance", key: "ak1", entries: [{ id: "e1", name: "Fade In", styleId: "as1", duration: 0.3 }] }] },
+      styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [{ name: "Body", key: "tk1" }], effect: [{ name: "Raised", key: "ek1" }],
+        grid: [{ name: "Columns", key: "gk1" }], animation: [{ name: "Entrance", key: "ak1", entries: [{ id: "e1", name: "Fade In", styleId: "as1", duration: 0.3 }] }] },
       // A main consumed from ANOTHER library: not this library's to claim.
       components: [component({ name: "Button", type: "COMPONENT", key: "ck1", publish: "current" }), component({ name: "Foreign", type: "COMPONENT", key: "ck2", remote: true })],
       hygiene: [],
@@ -1874,12 +1907,8 @@ void (async () => {
 
     const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8")) as LibraryManifest;
     ok("[lib-layout] the directory self-describes via index.json", !!(idx.files && idx.files.tokens && idx.counts.variables === 1));
-    const libAnim = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "styles.animation.json"), "utf8")) as AnimationStylesDoc & { source?: { role?: string } };
-    ok("[lib-layout] styles.animation.json holds the custom animation styles (entries kept), stamped like its siblings",
-      libAnim.styles.length === 1 && libAnim.styles[0]?.key === "ak1" && libAnim.styles[0]?.entries?.[0]?.styleId === "as1" &&
-      libAnim.exportedAt === libDoc.exportedAt && libAnim.source?.role === "library");
-    ok("[lib-layout] index.json points at styles.animation.json and counts it",
-      idx.files.stylesAnimation === "libraries/" + dirName + "/styles.animation.json" && idx.counts.stylesAnimation === 1);
+    ok("[lib-layout] every style kind has its own stamped file, a pointer and a count in index.json",
+      styleKindsLanded(base, "libraries/" + dirName + "/", idx, libDoc));
     ok("[lib-layout] index summarises publish status", idx.publish && (idx.publish.current ?? 0) >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
 
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
@@ -1925,27 +1954,29 @@ void (async () => {
   }
 
 
+  const fullDs: DesignSystemDoc = {
+    file: "Demo",
+    exportedAt: "2026-08-12T00:00:00.000Z",
+    colorProfile: "srgb",
+    collections: [collection({ name: "Core", modes: ["Light"] })],
+    variables: [variable({ name: "color/bg", type: "COLOR", values: {} })],
+    styles: { paint: [{ name: "Brand" }], text: [{ name: "Body" }], effect: [{ name: "Raised" }], grid: [{ name: "Columns" }],
+      animation: [{ name: "Entrance", key: "ak1" }, { name: "Exit" }] },
+    components: [
+      { key: "k1", name: "Button", type: "COMPONENT", id: "2:1", page: "Home", pageId: "1:0" },
+      { key: "k2", name: "Card", type: "COMPONENT", remote: true, derivedFrom: "instances" },
+      { key: "k3", name: "Badge", type: "COMPONENT_SET", id: "2:9", page: "Home", pageId: "1:0",
+        variants: [
+          { id: "2:10", name: "Size=Small", key: "vk1", values: { Size: "Small" }, node: node({ type: "COMPONENT", id: "2:10", name: "Size=Small", children: [] }) },
+          { id: "2:11", name: "Size=Large", key: "vk2", values: { Size: "Large" }, node: node({ type: "COMPONENT", id: "2:11", name: "Size=Large", children: [] }) },
+        ] },
+      { key: "k4", name: "NoNodes", type: "COMPONENT_SET", id: "2:12", page: "Home", pageId: "1:0",
+        variants: [{ id: "2:13", name: "State=Default", key: "vk3", values: { State: "Default" } }] },
+    ],
+    hygiene: ["variant explosion: 'Button'"],
+  };
   const full: WriteView = OUT.writeAny(path.join(wdir, "design"), {
-    designSystem: {
-      file: "Demo",
-      exportedAt: "2026-08-12T00:00:00.000Z",
-      colorProfile: "srgb",
-      collections: [collection({ name: "Core", modes: ["Light"] })],
-      variables: [variable({ name: "color/bg", type: "COLOR", values: {} })],
-      styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [], animation: [{ name: "Entrance", key: "ak1" }, { name: "Exit" }] },
-      components: [
-        { key: "k1", name: "Button", type: "COMPONENT", id: "2:1", page: "Home", pageId: "1:0" },
-        { key: "k2", name: "Card", type: "COMPONENT", remote: true, derivedFrom: "instances" },
-        { key: "k3", name: "Badge", type: "COMPONENT_SET", id: "2:9", page: "Home", pageId: "1:0",
-          variants: [
-            { id: "2:10", name: "Size=Small", key: "vk1", values: { Size: "Small" }, node: node({ type: "COMPONENT", id: "2:10", name: "Size=Small", children: [] }) },
-            { id: "2:11", name: "Size=Large", key: "vk2", values: { Size: "Large" }, node: node({ type: "COMPONENT", id: "2:11", name: "Size=Large", children: [] }) },
-          ] },
-        { key: "k4", name: "NoNodes", type: "COMPONENT_SET", id: "2:12", page: "Home", pageId: "1:0",
-          variants: [{ id: "2:13", name: "State=Default", key: "vk3", values: { State: "Default" } }] },
-      ],
-      hygiene: ["variant explosion: 'Button'"],
-    },
+    designSystem: fullDs,
     layersDoc: {
       index: [{ id: "1:2", name: "Hero", type: "FRAME", pageId: "1:0", page: "Home" }],
       layers: [{ id: "1:2", name: "Hero", tree: node({ type: "FRAME", id: "1:2", name: "Hero" }) }],
@@ -1984,19 +2015,16 @@ void (async () => {
   // The catalog is not one flat object: Figma's own model has three separate systems
   // (VariableCollections+Variables / Paint|Text|Effect|Grid|CustomAnimationStyle / Components), and library
   // components are not nodes in this file at all.
-  // The nine parts land in design-system/ — design/tokens.json and design/components.json at the
+  // The parts land in design-system/ — design/tokens.json and design/components.json at the
   // export ROOT are the user's hand-authored, non-regenerable config maps and must not be clobbered.
   const readDS = <T,>(n: string): T => JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", n), "utf8")) as T;
   ok("[ds-split] tokens.json carries the collections + variables, and nothing else's payload",
     // de-any: styles/components are asserted ABSENT from tokens.json — they are not fields of TokensDoc, so they are named here.
     (() => { const t = readDS<TokensDoc & { styles?: unknown; components?: unknown }>("tokens.json");
       return t.collections?.length === 1 && t.variables?.length === 1 && !t.styles && !t.components; })());
-  ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid/animation",
-    (() => { const p = readDS<PaintStylesDoc>("styles.paint.json").styles, t = readDS<TextStylesDoc>("styles.text.json").styles,
-        e = readDS<EffectStylesDoc>("styles.effect.json").styles, g = readDS<GridStylesDoc>("styles.grid.json").styles,
-        a = readDS<AnimationStylesDoc>("styles.animation.json").styles;
-      return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g) &&
-        a.length === 2 && a[0]?.key === "ak1" && a[1]?.name === "Exit"; })());
+  ok("[ds-split] every style kind has its own stamped file, a pointer and a count in design-system.json",
+    styleKindsLanded(path.join(wdir, "design"), "design-system/",
+      JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest, fullDs));
   ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
     (() => { const c = readDS<ComponentsCatalog>("components.local.json").components;
       const c0 = must(c[0], "components.local.json components[0]");
@@ -2020,7 +2048,7 @@ void (async () => {
   ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).files.componentsDir === "design-system/components");
   // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
-  // key: a tool walking `files` verbatim got ENOENT on one entry of nine.
+  // key: a tool walking `files` verbatim got ENOENT on the one entry never written.
   ok("[component-split] and omits componentsDir entirely when no detail file was produced",
     (() => {
       const d2 = path.join(wdir, "nodetail");
@@ -2033,20 +2061,17 @@ void (async () => {
       const c0 = must(c[0], "components.library.json components[0]");
       return c.length === 1 && c0.key === "k2" && c0.remote === true && c0.id === undefined; })());
   ok("[ds-split] hygiene.json is the lint report on its own", readDS<HygieneDoc>("hygiene.json").hygiene.length === 1);
-  ok("[ds-split] every split file repeats the freshness stamp, so drift-lint/figma_status work off any of them",
-    ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json", "styles.animation.json",
-     "components.local.json", "components.library.json", "hygiene.json"]
+  ok("[ds-split] every other split file repeats the freshness stamp too, so drift-lint/figma_status work off any of them",
+    ["tokens.json", "components.local.json", "components.library.json", "hygiene.json"]
       .every((n) => readDS<DesignSystemStamp>(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS<DesignSystemStamp>(n).file === "Demo"));
   ok("[ds-split] design-system.json is a slim manifest: stamp + pointers, no bulk data",
     // de-any: variables/components/styles are asserted ABSENT from the slim manifest — not fields of DesignSystemManifest.
     (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest & { variables?: unknown; components?: unknown; styles?: unknown };
       return m.file === "Demo" && m.colorProfile === "srgb" && m.files.tokens === "design-system/tokens.json" &&
-        m.files.componentsLibrary === "design-system/components.library.json" &&
-        m.files.stylesAnimation === "design-system/styles.animation.json" && !m.variables && !m.components && !m.styles; })());
-  ok("[ds-split] the manifest counts local and library components, and each style bucket, separately",
+        m.files.componentsLibrary === "design-system/components.library.json" && !m.variables && !m.components && !m.styles; })());
+  ok("[ds-split] the manifest counts local and library components separately",
     (() => { const c = (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).counts;
-      return c.variables === 1 && c.components === 3 && c.libraryComponents === 1 && c.hygiene === 1 &&
-        c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0 && c.stylesAnimation === 2; })());
+      return c.variables === 1 && c.components === 3 && c.libraryComponents === 1 && c.hygiene === 1; })());
 
   // --- the --design-system / figma_export_design_system result shape: { designSystem } only, no
   // layersDoc/assets. This is what OUT.writeExport receives on that path (figma-pull.js's
@@ -2283,10 +2308,11 @@ void (async () => {
   // can hold port 8787. These drive it against a FAKE bridge — no Figma, no WebSocket — so the
   // queueing, framing and lifecycle are testable offline, which is where the interesting failures are.
   const daemon = await import("../bridge/src/daemon.ts");
+  const { servedBridge } = await import("../bridge/src/route.ts");
   const D_PORT = 19787; // not 8787: a test must never contend with a real bridge the user is running
 
   const calls: string[] = [];
-  const fakeBridge = {
+  const fakeBridge: DaemonBridge = {
     port: D_PORT,
     isConnected: () => true,
     // The daemon forwards the connected-file listing through __status, so the fake has to answer it
@@ -2300,10 +2326,11 @@ void (async () => {
     // reply shape (the daemon client checks replies against commands.ts before handing them back),
     // tagging `file` with the command so a round-trip can be told apart. It blows up on `write` (the
     // plugin-side failure case) and answers `exportFull { allPages }` with a 4 MB hygiene line (the
-    // reassembly case). No requestWithClient: an older/minimal bridge shape, so the daemon's reply
-    // carries no `client` — which requestWithClient() must report as null, never invent.
-    request: async (cmd: Cmd, args: Record<string, unknown> | undefined, _timeoutMs: number | undefined, client: string | null | undefined) => {
-      if (client) calls.push("client:" + client);
+    // reassembly case). It names no client (null), so the daemon's reply carries none — which
+    // requestWithClient() must report as null, never invent.
+    request: async (cmd, args, o) => {
+      if (o.target) calls.push("client:" + o.target);
+      if (o.waitMs) calls.push("waitMs:" + o.waitMs);
       calls.push(cmd);
       if (cmd === "write") throw new Error("plugin exploded");
       const echo = "echo:" + cmd;
@@ -2312,9 +2339,9 @@ void (async () => {
         whoami: () => ({ instanceId: "fig-fake", file: echo }),
         getSelection: () => [],
         listPages: () => ({ exportedAt: "2026-09-24T00:00:00.000Z", file: echo, depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }),
-        exportFull: () => ({ designSystem: { hygiene: ["x".repeat(args && args.allPages === true ? 4e6 : 0)] }, layersDoc: {}, assets: [] }),
+        exportFull: () => ({ designSystem: { hygiene: ["x".repeat(args && "allPages" in args && args.allPages === true ? 4e6 : 0)] }, layersDoc: {}, assets: [] }),
       };
-      return (replies[cmd] ?? (() => ({})))(); // anything else: an empty object, i.e. NOT that command's shape
+      return fakeSent((replies[cmd] ?? (() => ({})))()); // anything else: an empty object, i.e. NOT that command's shape
     },
   };
 
@@ -2418,11 +2445,11 @@ void (async () => {
     ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
     ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
     ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
-    // A connect window on a bridge with no requestWithClient (the wait lives in server-core's): the
-    // request is still forwarded, at once — the window is not the daemon's to spend.
+    // A connect window is the bridge's to spend (server-core awaitClient), not the daemon's: it is forwarded
+    // with the request, at once.
     calls.length = 0;
     const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
-    ok("[daemon] a connect window on a bridge without requestWithClient still forwards the request", calls.includes("whoami") && afterWindow === "answered");
+    ok("[daemon] a connect window is forwarded to the bridge with the request", calls.includes("waitMs:50") && calls.includes("whoami") && afterWindow === "answered");
     // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
     const cstat = await daemon.status(D_PORT);
     ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
@@ -2478,18 +2505,17 @@ void (async () => {
         port: P_PORT,
         isConnected: () => true,
         close: () => {},
-        request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
-        requestWithClient: async (cmd, _args, _timeoutMs, target, _stallMs, onProgress, _signal, opts) => {
+        request: async (cmd, _args, { target, onProgress, waitMs }) => {
           listeners.push(onProgress ? "yes" : "none");
-          waits.push(`${target ?? "-"}:${opts?.waitMs ?? "none"}`);
+          waits.push(`${target ?? "-"}:${waitMs ?? "none"}`);
           // ping: both ticks, then the reply in the same turn (the tightest ordering case).
-          if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
+          if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return fakeSent({ pong: true, page: "P", file: "ticked" }, row); }
           // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
           // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
-          if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
+          if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return fakeSent({ instanceId: "fig-a", file: "slow" }, row); }
           // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
           await sleep(10); onProgress?.(TICK1); await sleep(1500);
-          return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
+          return fakeSent({ exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, row);
         },
       };
       await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
@@ -2524,7 +2550,7 @@ void (async () => {
       const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
       ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
         noOpt.file === "ticked" && listeners.at(-1) === "none");
-      // The frame's connect window reaches the bridge as requestWithClient's `waitMs`, unchanged (the
+      // The frame's connect window reaches the bridge as the request's `waitMs`, unchanged (the
       // bridge's awaitClient caps a named target itself); a frame without one asks for no wait.
       ok("[daemon] a request with no connect window forwards no waitMs", waits.at(-1) === "-:none");
       await pcli.request({ cmd: "ping", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
@@ -2592,10 +2618,10 @@ void (async () => {
   {
     console.log("\ndaemon.ts — installCrashHandlers:");
     const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
-    const run = (body: string) => spawnSync(process.execPath, ["--input-type=module", "-e",
+    const run = (body: string) => bunSync(["--input-type=module", "-e",
       `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
       `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("cleanup ran"));\n` +
-      `installCrashHandlers((m) => console.error("[second] " + m));\n` + body], { encoding: "utf8" });
+      `installCrashHandlers((m) => console.error("[second] " + m));\n` + body]);
     const rej = run(`Promise.reject(new Error("boom"));\nsetTimeout(() => console.log("still alive"), 50);`);
     const rejLines = rej.stderr.split("\n").filter((l) => l.trim() && !/ExperimentalWarning|--trace-warnings/.test(l));
     ok("[crash] an unhandled rejection is logged as ONE line through errMsg", rejLines.length === 1 && rejLines[0] === "[t] unhandled promise rejection (continuing): boom");
@@ -2605,13 +2631,13 @@ void (async () => {
       exc.status === 1 && exc.stderr.includes("[t] uncaught exception — exiting: kaboom") && !exc.stdout.includes("still alive"));
     ok("[crash] its synchronous cleanup runs before the exit", exc.stdout.includes("cleanup ran"));
     ok("[crash] installed once per process — a second install adds no second handler", !rej.stderr.includes("[second]") && !exc.stderr.includes("[second]"));
-    const two = spawnSync(process.execPath, ["-e",
+    const two = bunSync(["-e",
       `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
       `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("first cleanup"));\n` +
       `const forget = installCrashHandlers(() => {}, () => console.log("dropped cleanup"));\n` +
       `installCrashHandlers(() => {}, () => { throw new Error("a failing cleanup"); });\n` +
       `installCrashHandlers(() => {}, () => console.log("last cleanup"));\n` +
-      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`], { encoding: "utf8" });
+      `forget();\nsetTimeout(() => { throw new Error("kaboom"); }, 10);`]);
     ok("[crash] every install's cleanup runs (the MCP server's and a daemon's), in order, past a failing one — and a forgotten one does not",
       two.status === 1 && /first cleanup\nlast cleanup/.test(two.stdout) && !two.stdout.includes("dropped cleanup"));
   }
@@ -2653,7 +2679,7 @@ void (async () => {
     }
     const serveScript = (name: string, port: number): string =>
       `import * as daemon from ${JSON.stringify(daemonUrl)};\n` +
-      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({}), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
+      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({ reply: {}, client: null }), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
       `fs.writeFileSync(${JSON.stringify(path.join(dir, name + ".ready"))}, String(process.pid));`;
     for (const [name, port, twice] of [["sig-once", 8796, false], ["sig-twice", 8797, true]] as const) {
       const s = await start(name, serveScript(name, port));
@@ -2711,9 +2737,9 @@ void (async () => {
     /cannot be combined with --css/.test(parseThrows(["--stop", "--css"]) || ""));
   ok("[daemon] two daemon commands at once are refused",
     /different commands/.test(parseThrows(["--serve", "--stop"]) || ""));
-  ok("[daemon] a daemon command alone parses", pull.parseArgs(["--serve"]).daemonCmd === "--serve");
+  ok("[daemon] a daemon command alone parses", pull.parseArgs(["--serve"]).command.flag === "--serve");
   ok("[daemon] and an ordinary pull still parses with no daemon command",
-    pull.parseArgs(["design", "--all-pages"]).daemonCmd === null);
+    pull.parseArgs(["design", "--all-pages"]).command.family !== "daemon");
 
 
   // ---------------------------------------------------------------- token-store
@@ -2916,12 +2942,12 @@ void (async () => {
   }
 
   console.log("\nfigma-pull — token command guards:");
-  ok("[token] --token-status parses as a command", pull.parseArgs(["--token-status"]).tokenCmd === "--token-status");
-  ok("[token] --show-token parses as a command", pull.parseArgs(["--show-token"]).tokenCmd === "--show-token");
-  ok("[token] --rotate-token parses as a command", pull.parseArgs(["--rotate-token"]).tokenCmd === "--rotate-token");
-  ok("[token] --forget-token parses as a command", pull.parseArgs(["--forget-token"]).tokenCmd === "--forget-token");
+  ok("[token] --token-status parses as a command", pull.parseArgs(["--token-status"]).command.flag === "--token-status");
+  ok("[token] --show-token parses as a command", pull.parseArgs(["--show-token"]).command.flag === "--show-token");
+  ok("[token] --rotate-token parses as a command", pull.parseArgs(["--rotate-token"]).command.flag === "--rotate-token");
+  ok("[token] --forget-token parses as a command", pull.parseArgs(["--forget-token"]).command.flag === "--forget-token");
   ok("[token] --token-file takes a value and is NOT a command",
-    (() => { const p = pull.parseArgs(["--token-file", "/tmp/t"]); return p.tokenFile === "/tmp/t" && p.tokenCmd === null; })());
+    (() => { const p = pull.parseArgs(["--token-file", "/tmp/t"]); return p.tokenFile === "/tmp/t" && p.command.family !== "token"; })());
   ok("[token] --token-file=<path> form works too", pull.parseArgs(["--token-file=/tmp/t"]).tokenFile === "/tmp/t");
   ok("[token] --token-file with no value is refused",
     /needs a path/.test(parseThrows(["--token-file"]) || ""));
@@ -2942,9 +2968,9 @@ void (async () => {
   ok("[token] and with --forget-token",
     /silently ignored/.test(parseThrows(["--forget-token", "--token-file", "/tmp/t"]) || ""));
   ok("[token] but --token-file IS allowed with --show-token",
-    pull.parseArgs(["--show-token", "--token-file", "/tmp/t"]).tokenCmd === "--show-token");
+    pull.parseArgs(["--show-token", "--token-file", "/tmp/t"]).command.flag === "--show-token");
   ok("[token] an ordinary pull still parses with no token command",
-    pull.parseArgs(["design"]).tokenCmd === null);
+    pull.parseArgs(["design"]).command.family !== "token");
 
   console.log("\nfigma-pull — token commands end to end (subprocess):");
   // Driven as a real subprocess: these commands must work with NO bridge, NO daemon and NO plugin,
@@ -2956,7 +2982,7 @@ void (async () => {
     delete env.FIGMA_BRIDGE_TOKEN;
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
     if (extraEnv.FIGMA_BRIDGE_TOKEN) env.FIGMA_BRIDGE_TOKEN = extraEnv.FIGMA_BRIDGE_TOKEN;
-    return spawnSync(process.execPath, [cli, ...argv], { encoding: "utf8", env });
+    return dtwinSync(argv, { env });
   };
 
   const statusFresh = runCli(["--token-status"]);
@@ -3013,7 +3039,7 @@ void (async () => {
   const bootEnv: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: bootDir };
   delete bootEnv.FIGMA_BRIDGE_TOKEN;
   delete bootEnv.FIGMA_BRIDGE_TOKEN_FILE;
-  const boot = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  const boot = bunSync([bootScript], { env: bootEnv });
   const bootFile = path.join(bootDir, "bridge-token");
   ok("[token-boot] starting a bridge with nothing saved mints and PERSISTS a token", fs.existsSync(bootFile));
   const bootTok = fs.existsSync(bootFile) ? fs.readFileSync(bootFile, "utf8").trim() : "";
@@ -3021,7 +3047,7 @@ void (async () => {
   ok("[token-boot] and says it was saved, so the user knows not to expect it again",
     /saved to/.test(boot.stderr) && /won't be asked to paste it again/.test(boot.stderr));
   // The regression the whole store exists to prevent: the SECOND run must reuse, not re-mint.
-  const boot2 = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  const boot2 = bunSync([bootScript], { env: bootEnv });
   ok("[token-boot] a SECOND bridge start reuses the saved token instead of minting a new one",
     fs.readFileSync(bootFile, "utf8").trim() === bootTok);
   ok("[token-boot] and does NOT reprint the secret into the terminal", !boot2.stderr.includes(bootTok));
@@ -3051,7 +3077,7 @@ void (async () => {
   // The design-to-code scripts an agent probes answer --help with their usage and exit 0 (not
   // "unknown option --help" with exit 1).
   for (const script of ["map-bootstrap", "resolve-screen", "get-component"]) {
-    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { encoding: "utf8", timeout: 5000 });
+    const r = bunSync([path.join(import.meta.dirname, "..", "design-to-code", script + ".ts"), "--help"], { timeoutMs: 5000 });
     ok(`[help] ${script} --help prints its usage to stdout and exits 0`, r.status === 0 && /^usage: /.test(r.stdout) && r.stdout.includes(script));
   }
   ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
@@ -3142,32 +3168,23 @@ void (async () => {
     };
     const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN };
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
-    const child = spawn(process.execPath, [cli, "list", "--timeout", "10"], { env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (b: Buffer) => { stdout += b.toString(); });
-    child.stderr.on("data", (b: Buffer) => { stderr += b.toString(); });
-    const exited = new Promise<number | null>((res) => child.on("exit", (code) => res(code)));
-    // Dial until the CLI's bridge is up (it binds after module load), then answer every command.
-    let plugin: WsClient | null = null;
+    const child = startChild([cli, "list", "--timeout", "10"], { env });
+    const exited = child.done.then((r) => r.status);
+    // Dial until the CLI's bridge is up (it binds after module load), then say hello and answer every command
+    // (listPages with the reply above, anything else with `{}`).
+    let plugin: FakePlugin | null = null;
     for (let i = 0; i < 50 && !plugin; i++) {
       await sleep(100);
-      plugin = await new Promise<WsClient | null>((res) => {
-        const c = new WsClient("ws://127.0.0.1:8789/?token=" + TOKEN, { origin: "null" });
-        c.on("open", () => res(c));
-        c.on("error", () => res(null));
+      const c = fakePlugin(8789, {
+        token: TOKEN, hello: { instanceId: "fig-list", file: "Sectioned App" },
+        on: answerAll((cmd) => (cmd === "listPages" ? listReply : {})),
       });
+      plugin = await c.opened.then(() => c, () => null);
     }
-    if (plugin) {
-      const p = plugin;
-      p.send(JSON.stringify({ type: "hello", instanceId: "fig-list", file: "Sectioned App" }));
-      p.on("message", (b: RawData) => {
-        const m = JSON.parse(b.toString()) as CommandFrame;
-        if (m && m.id) p.send(JSON.stringify({ id: m.id, ok: true, result: m.cmd === "listPages" ? listReply : {} }));
-      });
-    }
-    const timer = setTimeout(() => child.kill(), 20000);
+    const timer = setTimeout(() => child.kill("SIGTERM"), 20000);
     const code = await exited;
     clearTimeout(timer);
+    const stdout = child.stdout(), stderr = child.stderr();
     plugin?.close();
     ok("[list-cli] `dtwin list` against a fake plugin exits 0 and prints the reply", code === 0 && /"Sectioned App"/.test(stdout));
     ok("[list-cli] the per-type breakdown counts layers from pages[].frames (not always empty)",
@@ -3435,7 +3452,7 @@ void (async () => {
     delete env.FIGMA_BRIDGE_TOKEN;
     delete env.FIGMA_BRIDGE_TOKEN_FILE;
     if (!extraEnv.FIGMA_BRIDGE_PORT) delete env.FIGMA_BRIDGE_PORT;
-    return spawnSync(process.execPath, [cli, "doctor", ...argv], { encoding: "utf8", env, cwd: projDir, timeout: 20000 });
+    return dtwinSync(["doctor", ...argv], { env, cwd: projDir, timeoutMs: 20000 });
   };
   // These two assertions need the port to be genuinely free — no daemon, no plugin — which port 8787
   // is NOT when a real dtwin daemon happens to be running on the developer's machine (a live daemon
@@ -3470,7 +3487,7 @@ void (async () => {
     // clients connected. We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
     // --timeout 1: with no plugin to wait for the command fails in ~1 s instead of idling until the 5 s cap kills it
-    spawnSync(process.execPath, [cli, "nonexistent-outdir", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    dtwinSync(["nonexistent-outdir", "--timeout", "1"], { cwd: dir, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
@@ -3482,12 +3499,12 @@ void (async () => {
     fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
     // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
     // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
-    const r = spawnSync(process.execPath, [cli, "design", "--list", "--timeout", "1"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r = dtwinSync(["design", "--list", "--timeout", "1"], { cwd: dir, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] warns when the user-typed outDir already contains export/",
       /warn: design already contains design(\/|\\)export/.test(r.stderr));
     ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
     const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
-    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list", "--timeout", "1"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    const r2 = dtwinSync(["somewhere-else", "--list", "--timeout", "1"], { cwd: clean, timeoutMs: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
@@ -3509,7 +3526,7 @@ void (async () => {
     // has not arrived yet").
     const before = must(b.listClients()[0], "freshly connected client row");
     ok("[identify] freshly connected client starts unidentified", before.identified === false);
-    setTimeout(() => ws1.send(JSON.stringify({ type: "hello", instanceId: "i1", file: "App — Base" })), 60);
+    setTimeout(() => ws1.hello({ instanceId: "i1", file: "App — Base" }), 60);
     await b.awaitClient(null, 2000);
     const after = must(b.listClients()[0], "client row after awaitClient");
     ok("[identify] awaitClient waits for the hello, then returns", after.identified === true && after.file === "App — Base");
@@ -3526,9 +3543,8 @@ void (async () => {
     const b = core.createBridge(port, { settleMs: 700 });
     const dial = async (file: string, afterMs: number) => {
       await sleep(afterMs);
-      const ws = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
-      await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });
-      ws.send(JSON.stringify({ type: "hello", instanceId: "i-" + file, file }));
+      const ws = fakePlugin(port, { token: TOKEN, hello: { instanceId: "i-" + file, file }, unhandled: HANG });
+      await ws.opened;
       return ws;
     };
     const first = dial("File A", 100);
@@ -3559,7 +3575,7 @@ void (async () => {
     // The fake client sends its version in `hello`, exactly like a real plugin's identity relay
     // (figma-plugin/src/bridge.ts's `pluginVersion` -> ui.html's `hello` -> here).
     const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.send(JSON.stringify({ type: "hello", instanceId: "old-1", file: "Old Bundle File", pluginVersion: "0.0.1" }));
+    ws1.hello({ instanceId: "old-1", file: "Old Bundle File", pluginVersion: "0.0.1" });
     await b.awaitClient(null, 1000);
     const row = must(b.listClients()[0], "old-plugin client row");
     ok("[version] a hello's pluginVersion is recorded and surfaced on the client row", row.pluginVersion === "0.0.1");
@@ -3571,7 +3587,7 @@ void (async () => {
     // A pre-327 plugin never sends `pluginVersion` at all — must not be reported stale (it's simply
     // unknown), and must not crash anything downstream.
     const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
+    ws1.hello({ instanceId: "noversion-1", file: "No Version File" });
     await b.awaitClient(null, 1000);
     const row = must(b.listClients()[0], "no-version client row");
     ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (not a crash)",
@@ -3616,7 +3632,7 @@ void (async () => {
     // replies to a command and never sends a progress frame either. This is EXACTLY the shape of a stall:
     // a bridge that IS connected, sitting silent for the full timeout.
     const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-1", file: "Silent File" }));
+    ws1.hello({ instanceId: "silent-1", file: "Silent File" });
     await b.awaitClient(null, 1000);
     const start = Date.now();
     let err: Error | undefined;
@@ -3633,11 +3649,11 @@ void (async () => {
     // genuinely slow (but working) export is never mistaken for a stalled one — a stall detector that
     // fires on ANY export slower than its window would be worse than the bug it fixes.
     const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.send(JSON.stringify({ type: "hello", instanceId: "slow-1", file: "Slow File" }));
+    ws1.hello({ instanceId: "slow-1", file: "Slow File" });
     await b.awaitClient(null, 1000);
     // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
     // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
-    const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch {} }, 100);
+    const ticker = setInterval(() => { try { ws1.progress({ phase: "pages" }); } catch {} }, 100);
     const req = b.request("exportFull", {}, 5000, undefined, 300);
     let rejectedWithStall = false;
     req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
@@ -3664,9 +3680,9 @@ void (async () => {
     // not "ever". A second silent request on a connection that answered progress for an EARLIER
     // request must still stall.
     const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-2", file: "Silent File 2" }));
+    ws1.hello({ instanceId: "silent-2", file: "Silent File 2" });
     await b.awaitClient(null, 1000);
-    ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); // life, but before the request below
+    ws1.progress({ phase: "pages" }); // life, but before the request below
     await sleep(50);
     let err: Error | undefined;
     const start = Date.now();
@@ -3703,36 +3719,25 @@ void (async () => {
   // with a fake plugin that records every frame it receives and never answers.
   console.log("\nserver-core / daemon — cancel frames to the plugin when a request is abandoned:");
   {
-    type Seen = { id?: string; cmd?: string; type?: string };
-    const record = (ws: WsClient, into: Array<Seen | "socket-closed">) => {
-      ws.on("message", (d: RawData) => {
-        const v = JSON.parse(d.toString()) as unknown;
-        if (v !== null && typeof v === "object") into.push(v); // any object is a Seen: every field is optional and read defensively
-      });
-      ws.on("close", () => into.push("socket-closed"));
-    };
-    const frames = (into: Array<Seen | "socket-closed">) => into.filter((f): f is Seen => f !== "socket-closed");
-    const cmdFrames = (into: Array<Seen | "socket-closed">) => frames(into).filter((f) => typeof f.cmd === "string");
-    const cancelsFor = (into: Array<Seen | "socket-closed">, id: string | undefined) =>
-      frames(into).filter((f) => f.type === "cancel" && f.id === id && f.cmd === undefined);
+    // What the fake plugin was sent: its command frames, and the cancel frames for request `id`.
+    const cmdFrames = (p: FakePlugin) => p.commands();
+    const cancelsFor = (p: FakePlugin, id: string | undefined) => p.cancels.filter((c) => c === id);
 
     // (a) the stall check. Pre-change server-core.ts (the stall interval, ~line 797-808) deleted the
     // request and rejected without a word to the plugin — no cancel frame ever reached it.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen: Array<Seen | "socket-closed"> = [];
-      record(ws1, seen);
       // Same setup as the [stall] blocks above: identified, then quiet. Sending in the SAME millisecond
       // as the connect would read the connect itself as "life since send" and disarm the check.
-      ws1.send(JSON.stringify({ type: "hello", instanceId: "cancel-stall", file: "Cancel File" }));
+      ws1.hello({ instanceId: "cancel-stall", file: "Cancel File" });
       await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
       try { await b.request("exportNode", { nodeId: "1:2" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
       await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
-      const sent = cmdFrames(seen)[0];
+      const sent = cmdFrames(ws1)[0];
       ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
-        !!err && /connected but sent nothing/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+        !!err && /connected but sent nothing/.test(err.message) && !!sent && cancelsFor(ws1, sent.id).length === 1);
       ws1.close();
       b.close();
     }
@@ -3740,14 +3745,12 @@ void (async () => {
     // likewise rejected silently.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen: Array<Seen | "socket-closed"> = [];
-      record(ws1, seen);
       let err: Error | undefined;
       try { await b.request("exportFull", {}, 400); } catch (e) { err = asErr(e); }
       await sleep(100);
-      const sent = cmdFrames(seen)[0];
+      const sent = cmdFrames(ws1)[0];
       ok("[cancel] per-command timeout fires → the plugin gets the cancel frame for that id",
-        !!err && /did not answer 'exportFull'/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+        !!err && /did not answer 'exportFull'/.test(err.message) && !!sent && cancelsFor(ws1, sent.id).length === 1);
       ws1.close();
       b.close();
     }
@@ -3755,31 +3758,25 @@ void (async () => {
     // and closed the socket; the plugin saw a close and no cancel for the exact request.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen: Array<Seen | "socket-closed"> = [];
-      record(ws1, seen);
+      // where the socket's close fell among the frames it was sent: how many had arrived by then
+      let closedAt = -1;
+      ws1.ws.on("close", () => { closedAt = ws1.frames.length; });
       let err: Error | undefined;
       const inflight = b.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
       await sleep(60); // let the command land before the close
       b.close();
       await inflight;
       await sleep(300); // the socket's closing handshake
-      const sent = cmdFrames(seen)[0];
-      const cancelAt = seen.findIndex((f) => f !== "socket-closed" && f.type === "cancel" && !!sent && f.id === sent.id);
-      const closedAt = seen.indexOf("socket-closed");
+      const sent = cmdFrames(ws1)[0];
+      const cancelAt = ws1.frames.findIndex(({ frame: f }) => "type" in f && f.type === "cancel" && !!sent && f.id === sent.id);
       ok("[cancel] close() with a request pending → the cancel frame arrives BEFORE the socket closes",
         err?.message === "bridge closed" && cancelAt > 0 && closedAt > cancelAt);
     }
     // (d) the caller's AbortSignal. Pre-change request()/requestWithClient() had no `signal` parameter:
     // the extra argument was ignored, the command stayed pending until its timeout, nothing was cancelled.
     {
-      const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen: Array<Seen | "socket-closed"> = [];
-      record(ws1, seen);
       // Answers only ping, so the same bridge can prove a request after the abort still round-trips.
-      ws1.on("message", (d: RawData) => {
-        const f = JSON.parse(d.toString()) as CommandFrame;
-        if (f.cmd === "ping") ws1.send(JSON.stringify({ id: f.id, ok: true, result: { pong: true, page: "P", file: "F" } }));
-      });
+      const { bridge: b, client: ws1 } = await connectedBridge({ ping: (): PingReply => ({ pong: true, page: "P", file: "F" }) });
       const ac = new AbortController();
       let err: Error | undefined;
       const start = Date.now();
@@ -3790,10 +3787,10 @@ void (async () => {
       // "At once" = well inside the 20 s budget: the abort path is synchronous, so only a request left
       // waiting for its timeout could come near it (no tighter wall-clock bound: a loaded machine is late).
       const abortedMs = Date.now() - start;
-      await until(() => cancelsFor(seen, cmdFrames(seen)[0]?.id).length >= 1);
-      const sent = cmdFrames(seen)[0];
+      await until(() => cancelsFor(ws1, cmdFrames(ws1)[0]?.id).length >= 1);
+      const sent = cmdFrames(ws1)[0];
       ok("[cancel] signal aborted while pending → cancel frame sent, rejects \"request aborted by the caller\" at once",
-        err?.message === "request aborted by the caller" && abortedMs < 20000 && !!sent && cancelsFor(seen, sent.id).length === 1);
+        err?.message === "request aborted by the caller" && abortedMs < 20000 && !!sent && cancelsFor(ws1, sent.id).length === 1);
       // An Error reason of the caller's own is passed through (the daemon names its departed client).
       const ac2 = new AbortController();
       let err2: Error | undefined;
@@ -3812,21 +3809,21 @@ void (async () => {
       ok("[cancel] after aborts the bridge still round-trips, and the settled request left no abort listener behind",
         pong.pong === true && listening === 1 && getEventListeners(ac3.signal, "abort").length === 0);
       // Aborted BEFORE the call: nothing is sent at all.
-      const before = cmdFrames(seen).length;
+      const before = cmdFrames(ws1).length;
       const pre = new AbortController();
       pre.abort();
       let err3: Error | undefined;
       try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, pre.signal); } catch (e) { err3 = asErr(e); }
       await sleep(100);
       ok("[cancel] a signal aborted before the call rejects \"request aborted before it was sent\" and sends no command frame",
-        err3?.message === "request aborted before it was sent" && cmdFrames(seen).length === before);
+        err3?.message === "request aborted before it was sent" && cmdFrames(ws1).length === before);
       // …and one aborted with a reason of the caller's own rejects with that reason, as during a wait.
       const preWhy = new AbortController();
       preWhy.abort(new Error("the caller had already left"));
       let err4: Error | undefined;
       try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, preWhy.signal); } catch (e) { err4 = asErr(e); }
       ok("[cancel] a signal aborted before the call with the caller's own Error rejects with that Error, sending nothing",
-        err4?.message === "the caller had already left" && cmdFrames(seen).length === before);
+        err4?.message === "the caller had already left" && cmdFrames(ws1).length === before);
       ws1.close();
       b.close();
     }
@@ -3853,7 +3850,7 @@ void (async () => {
         "bridge.close();",
       ].join("\n"));
       const t0 = Date.now();
-      const r = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 20000 });
+      const r = bunSync([script], { timeoutMs: 20000 });
       ok("[cancel] an aborted request leaves no timer behind — the process exits on its own promptly",
         r.status === 0 && /REJECTED:request aborted by the caller/.test(r.stdout) && Date.now() - t0 < 10000);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -3865,24 +3862,22 @@ void (async () => {
     if (!daemon.daemonSupported()) console.log("  (skipped: the daemon is not supported on Windows — no daemon socket for a client to leave mid-request)");
     else {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen: Array<Seen | "socket-closed"> = [];
-      record(ws1, seen);
       const C_PORT = 19791; // a socket name only (the bridge above has its own TCP port)
-      const { shutdown } = await daemon.serve(b, { port: C_PORT, signals: false, crashHandlers: false });
+      const { shutdown } = await daemon.serve(servedBridge(b), { port: C_PORT, signals: false, crashHandlers: false });
       const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
         const c = net.createConnection(daemon.sockPath(C_PORT));
         c.on("error", reject);
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
       // In flight: sent, plugin silent, client destroys its socket → the plugin gets the cancel frame.
-      const beforeF = cmdFrames(seen).length;
+      const beforeF = cmdFrames(ws1).length;
       const c1 = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
-      await until(() => cmdFrames(seen).length > beforeF); // forwarded to the plugin
-      const sent = cmdFrames(seen)[beforeF];
+      await until(() => cmdFrames(ws1).length > beforeF); // forwarded to the plugin
+      const sent = cmdFrames(ws1)[beforeF];
       c1.destroy();
-      await until(() => cancelsFor(seen, sent?.id).length >= 1);
+      await until(() => cancelsFor(ws1, sent?.id).length >= 1);
       ok("[cancel-daemon] a client that disconnects while its request is in flight → the plugin gets the cancel frame",
-        !!sent && sent.cmd === "exportFull" && cancelsFor(seen, sent.id).length === 1);
+        !!sent && sent.cmd === "exportFull" && cancelsFor(ws1, sent.id).length === 1);
       // Queued: A in flight on one client (the fake plugin holds it), B queued behind it on another
       // that then disconnects. When A is answered, B must NOT be forwarded. Pre-change B went to the
       // plugin as soon as A released the queue. No timer decides the order: B's
@@ -3896,24 +3891,24 @@ void (async () => {
         c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) resolve(buf); });
         c.on("close", () => resolve(buf));
       });
-      const beforeQ = cmdFrames(seen).length;
+      const beforeQ = cmdFrames(ws1).length;
       const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
       const aReply = replyOn(cA);
-      await until(() => cmdFrames(seen).length > beforeQ);
-      const aSent = cmdFrames(seen)[beforeQ];
+      await until(() => cmdFrames(ws1).length > beforeQ);
+      const aSent = cmdFrames(ws1)[beforeQ];
       const cB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
       cB.end();
       await new Promise((r) => cB.once("close", r));
-      const pagesReply = { pages: [], manifest: {} }; // the minimum listPages reply server-core accepts
-      if (aSent) ws1.send(JSON.stringify({ id: aSent.id, ok: true, result: pagesReply }));
+      const pagesReply = malformed<ListPagesReply>({ pages: [], manifest: {} }); // the minimum listPages reply server-core accepts
+      if (aSent) ws1.send({ id: aSent.id, ok: true, result: pagesReply } satisfies ReplyFrame);
       const aGot = await aReply;
       const cC = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 20000 });
-      await until(() => cmdFrames(seen).length > beforeQ + 1);
-      const cSent = cmdFrames(seen)[beforeQ + 1];
-      if (cSent) ws1.send(JSON.stringify({ id: cSent.id, ok: true, result: pagesReply }));
-      const afterQ = cmdFrames(seen).slice(beforeQ).map((f) => f.cmd);
+      await until(() => cmdFrames(ws1).length > beforeQ + 1);
+      const cSent = cmdFrames(ws1)[beforeQ + 1];
+      if (cSent) ws1.send({ id: cSent.id, ok: true, result: pagesReply } satisfies ReplyFrame);
+      const afterQ = cmdFrames(ws1).slice(beforeQ).map((f) => f.cmd);
       ok("[cancel-daemon] a request still QUEUED when its client disconnects is never forwarded to the plugin",
-        /"ok":true/.test(aGot) && afterQ.join(",") === "listPages,listPages" && cancelsFor(seen, sent?.id).length === 1);
+        /"ok":true/.test(aGot) && afterQ.join(",") === "listPages,listPages" && cancelsFor(ws1, sent?.id).length === 1);
       cC.destroy();
       cA.destroy();
       shutdown();
@@ -3931,11 +3926,10 @@ void (async () => {
       const row = clientRow({ connId: "c1" });
       const blindBridge: DaemonBridge = {
         port: 0, isConnected: () => true, close: () => {},
-        request: async () => ({}),
-        requestWithClient: (cmd) => {
+        request: (cmd) => {
           seenCmds.push(cmd);
-          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r({ reply: {}, client: row }); });
-          return Promise.resolve({ reply: {}, client: row });
+          if (cmd === "listPages") return new Promise((r) => { releaseA = () => r(fakeSent({}, row)); });
+          return Promise.resolve(fakeSent({}, row));
         },
       };
       const F_PORT = 19793; // a socket name only
@@ -3968,39 +3962,28 @@ void (async () => {
   console.log("\nserver-core — per-bridge request ids, reply routing, stall wording, whoami connection:");
   {
     const ABANDONED = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
-    /** Every command frame a fake plugin socket receives. */
-    const commandsOf = (ws: WsClient): CommandFrame[] => {
-      const into: CommandFrame[] = [];
-      ws.on("message", (d: RawData) => {
-        const v = JSON.parse(d.toString()) as unknown;
-        if (v !== null && typeof v === "object" && "cmd" in v && "id" in v && typeof v.id === "string") into.push(v as CommandFrame);
-      });
-      return into;
-    };
-    const pingReply = (file: string) => ({ pong: true, page: "P", file });
+    const pingReply = (file: string): PingReply => ({ pong: true, page: "P", file });
     const settle = <T>(p: Promise<T>): Promise<{ v: T | null; err: Error | null }> => p.then((v) => ({ v, err: null }), (e: unknown) => ({ v: null, err: asErr(e) }));
 
     // two bridges' first wire ids differ. Pre-change both were "r1".
     const A = await connectedBridge();
-    const seenA = commandsOf(A.client);
     const aReq = settle(A.bridge.request("ping", {}, 3000));
     await sleep(80);
-    const idA = seenA[0]?.id;
+    const idA = A.client.commands()[0]?.id;
     A.bridge.close(); // the stalled one-shot CLI goes away with its request unanswered
     await aReq;
     A.client.close();
     const B = await connectedBridge();
-    const seenB = commandsOf(B.client);
     const bReq = settle(B.bridge.request("ping", {}, 3000));
     await sleep(80);
-    const idB = seenB[0]?.id;
+    const idB = B.client.commands()[0]?.id;
     ok("two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
       typeof idA === "string" && typeof idB === "string" && idA !== idB && /^r/.test(idA) && /^r/.test(idB));
     // the plugin first posts the OLD bridge's failure (its run for idA finally threw), then answers
     // the new request. Pre-change idA === idB, so the stale failure rejected the new request.
-    B.client.send(JSON.stringify({ id: idA, ok: false, error: ABANDONED }));
+    B.client.send({ id: idA, ok: false, error: ABANDONED });
     await sleep(50);
-    B.client.send(JSON.stringify({ id: idB, ok: true, result: pingReply("for-B") }));
+    B.client.send({ id: idB, ok: true, result: pingReply("for-B") });
     const rB = await bReq;
     ok("a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
       rB.err === null && rB.v?.file === "for-B");
@@ -4011,16 +3994,15 @@ void (async () => {
     // Pre-change it settled from c2.
     {
       const { bridge: b, client: c1 } = await connectedBridge();
-      const c2 = new WsClient(`ws://127.0.0.1:${b.port}/?token=${TOKEN}`, { origin: "null" });
-      await new Promise((res, rej) => { c2.on("open", res); c2.on("error", rej); });
-      const seen1 = commandsOf(c1);
+      const c2 = fakePlugin(b.port, { token: TOKEN, hello: false, unhandled: HANG });
+      await c2.opened;
       await sleep(30);
       const req = settle(b.request("ping", {}, 3000, "c1"));
       await sleep(80);
-      const sent = seen1[0];
-      c2.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c2") }));
+      const sent = c1.commands()[0];
+      c2.send({ id: sent?.id, ok: true, result: pingReply("from-c2") });
       await sleep(80);
-      c1.send(JSON.stringify({ id: sent?.id, ok: true, result: pingReply("from-c1") }));
+      c1.send({ id: sent?.id, ok: true, result: pingReply("from-c1") });
       const r = await req;
       ok("a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
         !!sent && r.err === null && r.v?.file === "from-c1");
@@ -4044,7 +4026,7 @@ void (async () => {
     // busy — not that a reconnect is what takes the time. Pre-change: the "missing daemon" text.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall-g14", file: "Sample App" }));
+      ws1.hello({ instanceId: "stall-g14", file: "Sample App" });
       await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
@@ -4059,14 +4041,13 @@ void (async () => {
     // the stall disarms and the reply at 600 ms resolves. Same for a `queued` frame.
     for (const phase of ["start", "queued"]) {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen = commandsOf(ws1);
-      ws1.send(JSON.stringify({ type: "hello", instanceId: "stall2-" + phase, file: "Sample App" }));
+      ws1.hello({ instanceId: "stall2-" + phase, file: "Sample App" });
       await b.awaitClient(null, 1000);
       await sleep(20);
       const ticks: ProgressTick[] = [];
       const req = settle(b.request("ping", {}, 10000, undefined, 300, (t) => ticks.push(t)));
-      setTimeout(() => ws1.send(JSON.stringify({ type: "progress", phase })), 100);
-      setTimeout(() => ws1.send(JSON.stringify({ id: seen[0]?.id, ok: true, result: pingReply("late") })), 600);
+      setTimeout(() => ws1.progress({ phase }), 100);
+      setTimeout(() => ws1.send({ id: ws1.commands()[0]?.id, ok: true, result: pingReply("late") }), 600);
       const r = await req;
       ok(`a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
         r.err === null && r.v?.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
@@ -4079,8 +4060,7 @@ void (async () => {
     // "queued"); an id-less frame (page ticks, an older plugin) still reaches both.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      const seen = commandsOf(ws1);
-      ws1.send(JSON.stringify({ type: "hello", instanceId: "l8", file: "Sample App" }));
+      ws1.hello({ instanceId: "l8", file: "Sample App" });
       await b.awaitClient(null, 1000);
       await sleep(20);
       const ticksA: string[] = [], ticksB: string[] = [];
@@ -4088,15 +4068,15 @@ void (async () => {
       await sleep(30);
       const pB = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksB.push(String(t.phase))));
       await sleep(30);
-      const idA = seen[0]?.id, idB = seen[1]?.id;
-      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idA }));
-      ws1.send(JSON.stringify({ type: "progress", phase: "queued", requestId: idB }));
-      ws1.send(JSON.stringify({ type: "progress", phase: "pages" }));
+      const idA = ws1.commands()[0]?.id, idB = ws1.commands()[1]?.id;
+      ws1.progress({ phase: "start", ...ifDefined("requestId", idA) });
+      ws1.progress({ phase: "queued", ...ifDefined("requestId", idB) });
+      ws1.progress({ phase: "pages" });
       await sleep(30);
-      ws1.send(JSON.stringify({ id: idA, ok: true, result: pingReply("A") }));
-      ws1.send(JSON.stringify({ type: "progress", phase: "start", requestId: idB }));
+      ws1.send({ id: idA, ok: true, result: pingReply("A") });
+      ws1.progress({ phase: "start", ...ifDefined("requestId", idB) });
       await sleep(30);
-      ws1.send(JSON.stringify({ id: idB, ok: true, result: pingReply("B") }));
+      ws1.send({ id: idB, ok: true, result: pingReply("B") });
       const [rA, rB] = [await pA, await pB];
       ok(`an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
         typeof idA === "string" && typeof idB === "string" && rA.v?.file === "A" && rB.v?.file === "B" &&
@@ -4117,14 +4097,13 @@ void (async () => {
         port: S_PORT,
         isConnected: () => true,
         close: () => {},
-        request: async () => { throw new Error("never asked through request()"); },
-        requestWithClient: (cmd, _args, _timeoutMs, _target, _stallMs, _onProgress, signal) => new Promise((resolve) => {
+        request: (cmd, _args, { signal }) => new Promise((resolve) => {
           bridgeSaw.push("got:" + cmd);
-          const t = setTimeout(() => resolve({ reply: pingReply("answered"), client: row }), 1500);
+          const t = setTimeout(() => resolve(fakeSent(pingReply("answered"), row)), 1500);
           signal?.addEventListener("abort", () => {
             clearTimeout(t);
             bridgeSaw.push("aborted:" + (signal.reason instanceof Error ? signal.reason.message : String(signal.reason)));
-            resolve({ reply: pingReply("aborted"), client: row });
+            resolve(fakeSent(pingReply("aborted"), row));
           }, { once: true });
         }),
       };

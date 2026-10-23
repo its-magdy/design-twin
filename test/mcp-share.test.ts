@@ -6,39 +6,37 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { startMcp } from "./children.ts";
 import * as daemon from "../bridge/src/daemon.ts";
 import { check, report } from "./assert.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const MCP = path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
 const env = { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "s".repeat(40) };
 const until = async (fn: () => unknown, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(100)) if (fn()) return true; return false; };
 
-/** One MCP server subprocess, with its stdio accumulated and a raw JSON-RPC writer/reader on top. */
+/** One MCP server subprocess (test/children.ts startMcp), read the way these checks read it. */
 interface McpProc {
-  proc: ChildProcessWithoutNullStreams;
-  err: string;
-  out: string;
+  proc: ChildProcess;
+  readonly err: string;
+  readonly out: string;
   /** exit code; undefined while running (null when killed by a signal) */
-  code: number | null | undefined;
+  readonly code: number | null | undefined;
   send(o: { id?: number; method: string; params?: object }): void;
   /** the raw reply line carrying this JSON-RPC id, if it has arrived */
   reply(id: number): string | undefined;
 }
 
 function start(procEnv: NodeJS.ProcessEnv = env): McpProc {
-  const proc = spawn(process.execPath, [MCP], { env: procEnv, stdio: ["pipe", "pipe", "pipe"] });
-  const p: McpProc = {
-    proc, err: "", out: "", code: undefined,
-    send: (o) => { proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n"); },
-    reply: (id) => p.out.split("\n").find((l) => l.includes(`"id":${id}`)),
+  const m = startMcp({ env: procEnv });
+  return {
+    proc: m.child,
+    get err() { return m.stderr(); },
+    get out() { return m.stdout(); },
+    get code() { const e = m.exit(); return e ? e.code : undefined; },
+    send: m.send,
+    reply: m.replyLine,
   };
-  proc.stderr.on("data", (d: Buffer) => (p.err += String(d)));
-  proc.stdout.on("data", (d: Buffer) => (p.out += String(d)));
-  proc.on("exit", (c) => (p.code = c));
-  return p;
 }
 
 const init = { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } };
@@ -78,7 +76,7 @@ async function windows(): Promise<void> {
   // Concurrent first calls: one bridge, both answer. No probe delay holds the window open here (no daemon
   // socket to probe), so this is the plain case.
   const c = start();
-  c.proc.stdin.write([init, { method: "notifications/initialized" },
+  c.proc.stdin?.write([init, { method: "notifications/initialized" },
     { id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } },
     { id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } }]
     .map((o) => JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n").join(""));
@@ -142,7 +140,7 @@ void (async () => {
   const mute = net.createServer(() => { /* accept, never reply */ });
   await new Promise<void>((r) => mute.listen(sock, () => r()));
   const c = start();
-  c.proc.stdin.write([init, { method: "notifications/initialized" },
+  c.proc.stdin?.write([init, { method: "notifications/initialized" },
     { id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } },
     { id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } }]
     .map((o) => JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n").join(""));

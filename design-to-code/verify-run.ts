@@ -39,6 +39,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+import { bindMeasured, measuredText } from "./report-freshness.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
@@ -48,6 +49,7 @@ import { renameOver, tmpSuffix, writeFileAtomic } from "../bridge/src/atomic-wri
 import { LockBusy, acquireFileLock, lockFileOf, processState } from "../bridge/src/file-lock.ts";
 import { EXPORT_DIR, PLAN_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { screenKey, setKey } from "./screen-key.ts";
+import { SET_FILE, isToolOwned, setFile } from "./verify-sets.ts";
 import { STATUS_PHASES, STATUS_SCHEMA, TERMINAL_PHASES, isPhase, liveStatusFile, openRunSets, readStatusFile, runCommands } from "./verify-status.ts";
 import type { OwnRunStamp, ReplacedRun, StatusPhase, StatusWriter, VerifyStatusV2 } from "./verify-status.ts";
 
@@ -70,7 +72,7 @@ const overdue = (o: OwnRunStamp): boolean => Date.parse(o.deadline) < Date.now()
 
 // ---------------------------------------------------------------- files
 /** `<base>.status.json` — the PUBLISHED (durable) status in the verify dir; base is design/verify/<S>. */
-export const statusFile = (base: string): string => base + ".status.json";
+export const statusFile = (base: string): string => setFile(base, "status");
 /** sha256 of a file's bytes, or null when it cannot be read. */
 function sha256File(file: string): string | null {
   try { return sha256Hex(fs.readFileSync(file)); } catch { return null; }
@@ -339,10 +341,7 @@ export function replacedNote(doc: VerifyStatusV2): string | null {
   return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run — recorded as \`replaced\` in run ${doc.runId}'s status` : null;
 }
 
-// Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
-// --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too; --migrate writes
-// its journal as .migrate-<S>.json, which the next --migrate --apply acts on).
-const TOOL_OWNED = /(^\.migrate-.+\.json|\.(expected\.json|report\.json|report\.md|status\.json|prev\.json))$/;
+// Files the verify tools own (verify-sets.ts isToolOwned): a staged copy must never replace them.
 /**
  * --publish in two steps. `prepareStaged` copies every regular file of `stageDir` (top level only) to `<dest>.tmp-<pid>-<random>`
  * IN `destDir` — so the copy may cross filesystems (EXDEV) and the later rename is still atomic; a copy that fails
@@ -357,7 +356,7 @@ export function prepareStaged(stageDir: string, destDir: string): PreparedPublis
   // realpaths: a symlinked or ../ spelling of the verify dir is still the verify dir
   if (canonical(stageDir) === canonical(destDir)) return { error: `--publish ${stageDir} is the verify directory itself — stage outside the project` };
   const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
-  const owned = files.filter((f) => TOOL_OWNED.test(f));
+  const owned = files.filter(isToolOwned);
   if (owned.length) return { error: `--publish refuses ${owned.join(", ")} — expected/report/status files and migration journals are written by verify-screen itself, never copied in` };
   fs.mkdirSync(destDir, { recursive: true });
   const suffix = tmpSuffix(); // one per publish: every copy shares it, so tmpOf(name) is stable between prepare and commit
@@ -441,35 +440,25 @@ function runBase(screen: string, dir: string | undefined, at: RunAt): { base: st
   return { base: path.join(verifyDir, k.name), notes: legacy !== null ? [`note  ${legacy} — verify-screen --migrate renames them to ${k.stem}`] : [] };
 }
 
-/** The measured file's expectationSha256 (and runId, when it names one), or why it has none. */
-function measuredExpectation(file: string): { sha: string; runId?: string } | { error: string } {
-  const r = readJson(file, anyJson);
-  if (!("doc" in r)) return { error: `${file} ${r.error}` };
-  if (!isJsonObject(r.doc)) return { error: `${file} is not a JSON object` };
-  const v = r.doc.expectationSha256, run = r.doc.runId;
-  return typeof v === "string" && v ? { sha: v, ...(typeof run === "string" && run ? { runId: run } : {}) } : { error: `${file} names no expectation (expectationSha256)` };
-}
-
 /** The checks `done` and `measured` apply before recording a measured file as this run's: the current
- *  expectation exists, the file exists and names it, names no other run, and is the file the probe recorded in
- *  this run (when it recorded one). Returns the two shas to record, or the refusal (one line, exit 1). */
+ *  expectation exists, the file exists and is bound to it and to this run (report-freshness.ts bindMeasured: it names
+ *  that expectation, no other run, and is the file the probe recorded in this run when it recorded one). Returns the two
+ *  shas to record, or the refusal (one line, exit 1). */
 function checkMeasured(base: string, measFile: string, runId: string, sameRun: VerifyStatusV2 | null, prev: VerifyStatusV2 | null): { expectationSha256: string; measuredSha256: string } | { refused: string } {
-  const exp = sha256File(base + ".expected.json");
+  const exp = sha256File(setFile(base, "expected"));
   if (!exp) return { refused: `${base}.expected.json does not exist — nothing to be done against` };
   const meas = sha256File(measFile);
   if (!meas) return { refused: `${measFile} does not exist — measure first (the probe on web; on native write it with expectationSha256) (phase stays ${prev ? prev.phase : "unset"})` };
-  const named = measuredExpectation(measFile);
-  if ("error" in named) return { refused: `${named.error} — re-run the probe` };
-  if (named.sha !== exp) return { refused: `${measFile} was measured against expectation ${short(named.sha)}, not the current ${short(exp)} — re-run the probe` };
-  if (named.runId !== undefined && named.runId !== runId) return { refused: `${measFile} was measured in run ${named.runId}, not ${runId} — re-run the probe with --run ${runId}` };
-  if (sameRun && sameRun.measuredSha256 && sameRun.measuredSha256 !== meas) {
-    return { refused: `run ${runId} recorded measured file ${short(sameRun.measuredSha256)} (by the probe), but ${measFile} is ${short(meas)} — measured again outside this run? re-run the probe with --run ${runId}` };
-  }
-  return { expectationSha256: exp, measuredSha256: meas };
+  const r = readJson(measFile, anyJson);
+  if (!("doc" in r)) return { refused: `${measFile} ${r.error} — re-run the probe` };
+  if (!isJsonObject(r.doc)) return { refused: `${measFile} is not a JSON object — re-run the probe` };
+  const why = bindMeasured({ expectationSha256: exp, measured: r.doc, measuredSha256: meas, run: { runId, measuredSha256: sameRun?.measuredSha256 } })[0];
+  if (why === undefined) return { expectationSha256: exp, measuredSha256: meas };
+  const next = why.kind === "no-expectation" || why.kind === "other-expectation" ? "re-run the probe" : `${why.kind === "other-measured" ? "measured again outside this run? " : ""}re-run the probe with --run ${runId}`;
+  return { refused: `${measFile}: ${measuredText(why)} — ${next}` };
 }
 
 const RUN_ID = /^[\w.:-]+$/;
-const short = (sha: string | null | undefined): string => (sha ? `${sha.slice(0, 12)}…` : "none");
 
 export interface StatusFlags { phase?: string | undefined; run?: string | undefined; "new-run"?: boolean | undefined; detail?: string | undefined; dir?: string | undefined; publish?: string | undefined;
   by?: string | undefined }
@@ -546,8 +535,8 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     // it is about — checked BEFORE anything is published: a measured file taken against another expectation,
     // in another run, or not the one the probe measured in this run is not done. measured reads the run's
     // stage dir first (a probe --out there), done the --publish dir; else the verify dir.
-    const staged = phase === "done" ? (f.publish !== undefined ? path.join(f.publish, S + ".measured.json") : null) : path.join(stageDirOf(base, runId), S + ".measured.json");
-    const measFile = staged !== null && fs.existsSync(staged) ? staged : base + ".measured.json";
+    const staged = phase === "done" ? (f.publish !== undefined ? setFile(path.join(f.publish, S), "measured") : null) : setFile(path.join(stageDirOf(base, runId), S), "measured");
+    const measFile = staged !== null && fs.existsSync(staged) ? staged : setFile(base, "measured");
     const checked = checkMeasured(base, measFile, runId, sameRun, prevV2);
     if ("refused" in checked) { console.error(`refused  ${checked.refused}`); return 1; }
     shas.expectationSha256 = checked.expectationSha256;
@@ -561,11 +550,11 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
   }
   if (phase === "done") {
     // the evidence file is this run's only when this run publishes it (an older run's evidence is not hashed)
-    const evName = S + ".evidence.json";
+    const evName = setFile(S, "evidence");
     const ev = prep?.files.includes(evName) ? sha256File(prep.tmpOf(evName))
-      : sameRun?.published?.includes(evName) ? sha256File(base + ".evidence.json") : null;
+      : sameRun?.published?.includes(evName) ? sha256File(setFile(base, "evidence")) : null;
     if (ev) shas.evidenceSha256 = ev;
-    else if (fs.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} — not recorded as this run's evidence`);
+    else if (fs.existsSync(setFile(base, "evidence"))) console.error(`note  ${setFile(base, "evidence")} was not published in run ${runId} — not recorded as this run's evidence`);
   }
   let doc: VerifyStatusV2;
   try {
@@ -620,17 +609,17 @@ export async function waitMain(screen: string | undefined, f: WaitFlags, usage: 
       if (st.phase === "failed" || st.phase === "blocked") { console.error(`run ${st.runId} ${st.phase} (rev ${st.rev}, ${st.at})${st.detail ? `: ${st.detail}` : ""}`); return 1; }
       if (st.phase === "done") {
         // done is written before --publish moves its files in: a file it names that is not on disk yet is still waited for
-        const onDisk = sha256File(base + ".measured.json");
-        const evOnDisk = st.evidenceSha256 ? sha256File(base + ".evidence.json") : null;
+        const onDisk = sha256File(setFile(base, "measured"));
+        const evOnDisk = st.evidenceSha256 ? sha256File(setFile(base, "evidence")) : null;
         if (st.measuredSha256 && onDisk === st.measuredSha256 && evOnDisk === (st.evidenceSha256 ?? null)) {
           // only this run's evidence: the file the status hashed at done
-          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
+          const ev = st.evidenceSha256 ? ` --interactions ${shellArg(setFile(base, "evidence"))}` : "";
           console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
           // (--out the verify directory: --compare names the report by the expectation's set)
-          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(path.dirname(base))}`);
+          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(setFile(base, "expected"))} ${shellArg(setFile(base, "measured"))}${ev} --out ${shellArg(path.dirname(base))}`);
           return 0;
         }
-        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [".evidence.json", evOnDisk, st.evidenceSha256] : [".measured.json", onDisk, st.measuredSha256];
+        const [file, sha, named] = st.measuredSha256 && onDisk === st.measuredSha256 ? [SET_FILE.evidence, evOnDisk, st.evidenceSha256] : [SET_FILE.measured, onDisk, st.measuredSha256];
         const why = `run ${st.runId} says done, but ${base}${file} ${sha ? `is not the file it names (sha ${sha.slice(0, 12)}… vs ${(named || "none").slice(0, 12)}…)` : "does not exist"} — still waiting`;
         if (why !== noted) { console.error(`note  ${why}`); noted = why; }
       }
