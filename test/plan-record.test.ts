@@ -9,12 +9,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
-import { recordPlan, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
+import { recordPlan, recordedEdits, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
 import { checkPlan, verificationContradictions } from "../design-to-code/verify-build.ts";
 import { planStatus } from "../design-to-code/plan-status.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
-import type { ReportRef } from "../design-to-code/verify-build.ts";
+import type { ReportRef } from "../design-to-code/verify-locate.ts";
 import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped, planHash } from "../design-to-code/content-hash.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -539,7 +539,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
       write((_, rec) => { rec.report = target; rec.verdict = "pass"; });
       const t0 = Date.now();
       const p = planOf(root);
-      const out = [verifyBuild.recordedEdits(p, root).length, verifyBuild.recordedReportWarnings(p, root).length, openOf(root) ? 1 : 0];
+      const out = [recordedEdits(p, root).length, verifyBuild.recordedReportWarnings(p, root).length, openOf(root) ? 1 : 0];
       check(`a record naming ${target === fifo ? "a FIFO" : target} → no report read, no hang (no edit block, no sha warning, still closed) in ${Date.now() - t0} ms`,
         JSON.stringify(out) === "[0,0,0]" && Date.now() - t0 < 5000);
     }

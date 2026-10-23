@@ -889,6 +889,89 @@ function percentOpacity(variable, opts) {
 var COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 var commentText = (s) => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// design-to-code/token-naming.ts
+var KEY_TAG_LEN = 8;
+var keyTag = (key) => typeof key === "string" && key ? key.slice(0, KEY_TAG_LEN).toLowerCase() : null;
+var SUFFIX_SEP = { css: "-", native: "_" };
+var disambiguated = (id, suffix, target) => id + SUFFIX_SEP[target] + suffix;
+var varNameCache = /* @__PURE__ */ new Map();
+function cssVarName(tokenName) {
+  const key = String(tokenName || "");
+  let v = varNameCache.get(key);
+  if (v === void 0) varNameCache.set(key, v = "--" + segs(key).join("-").replace(/[^A-Za-z0-9-]/g, "-"));
+  return v;
+}
+var TW_NAMESPACE = { color: "color", dimension: "spacing", radius: "radius", fontSize: "text", fontFamily: "font" };
+var TW_PREFIX = "figma-";
+function twSlug(name) {
+  const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  return slug || "token";
+}
+var tailwindVarName = (tokenName, kind) => "--" + (kind ? TW_NAMESPACE[kind] + "-" : "") + TW_PREFIX + twSlug(tokenName);
+var RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
+var words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
+function nativeIdentifier(parts) {
+  const w = parts.flatMap(words);
+  let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
+  if (!id) id = "token";
+  if (/^[0-9]/.test(id)) id = "n" + id;
+  if (RESERVED.has(id)) id += "Token";
+  return id;
+}
+var CATEGORY_PREFIXES = [.../* @__PURE__ */ new Set([
+  ...Object.values(TW_NAMESPACE),
+  "colors",
+  "space",
+  "rounded",
+  "font-size",
+  "font-weight",
+  "leading",
+  "tracking",
+  "shadow",
+  "bg",
+  "border",
+  "fill",
+  "stroke",
+  "ring",
+  "outline",
+  "gap",
+  "gap-x",
+  "gap-y",
+  "p",
+  "px",
+  "py",
+  "pt",
+  "pr",
+  "pb",
+  "pl",
+  "m",
+  "mx",
+  "my",
+  "mt",
+  "mr",
+  "mb",
+  "ml",
+  "w",
+  "h",
+  "size",
+  "inset",
+  "top",
+  "left",
+  "right",
+  "bottom"
+])].sort((a, b) => b.length - a.length);
+var CATEGORY = new RegExp(`^(${CATEGORY_PREFIXES.join("|")})-`);
+var KEY_TAG = new RegExp(`[${Object.values(SUFFIX_SEP).join("")}][0-9a-f]{${KEY_TAG_LEN}}$`);
+
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
 var PLATFORMS = {
@@ -898,16 +981,7 @@ var PLATFORMS = {
   "react-native": { file: "designTokens.ts" }
 };
 var PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
-var RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
-var words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
-function camel(parts) {
-  const w = parts.flatMap(words);
-  let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
-  if (!id) id = "token";
-  if (/^[0-9]/.test(id)) id = "n" + id;
-  if (RESERVED.has(id)) id += "Token";
-  return id;
-}
+var camel = nativeIdentifier;
 var pascal = (parts) => {
   const c = camel(parts);
   return c.charAt(0).toUpperCase() + c.slice(1);
@@ -1009,7 +1083,7 @@ function model(designSystem, warnings, opts) {
       }
       cands.push({ v, kind, values, id: camel(segs(v.name)) });
     }
-    const tag = (v) => v.key ? String(v.key).slice(0, 8).toLowerCase() : null;
+    const tag = (v) => keyTag(v.key);
     const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}\u2026)` : ""} = ${JSON.stringify(x.v.values || {})}`;
     const byId = /* @__PURE__ */ new Map();
     for (const x of cands) {
@@ -1036,8 +1110,9 @@ function model(designSystem, warnings, opts) {
           names.push(`${label(x)} \u2192 "${id}"`);
           return;
         }
-        let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
-        for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
+        const t = tag(x.v);
+        let next = t ? disambiguated(id, t, "native") : `${id}${i + 1}`;
+        for (let n = 2; ids.has(next) || byId.has(next); n++) next = (t ? disambiguated(id, t, "native") : id) + n;
         ids.add(next);
         x.final = next;
         names.push(`${label(x)} \u2192 "${next}"`);
@@ -1289,32 +1364,15 @@ function toNative(designSystem, platform, opts) {
 import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
-// design-to-code/map-util.ts
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
-}
-
 // design-to-code/tokens.ts
 var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
 var round = (x) => Math.round(x * 1e4) / 1e4;
 var dtcgRef = (tokenName) => "{" + segs(tokenName).join(".") + "}";
-var varNameCache = /* @__PURE__ */ new Map();
-var cssVarName = (tokenName) => {
-  const key = String(tokenName || "");
-  let v = varNameCache.get(key);
-  if (v === void 0) varNameCache.set(key, v = "--" + segs(key).join("-").replace(/[^A-Za-z0-9-]/g, "-"));
-  return v;
-};
-var KEY_SUFFIX_LEN = 8;
 function identityOf(v) {
   if (v && typeof v.key === "string" && v.key) return "k:" + v.key;
   return "n:" + String(v && v.collection || "") + "\0" + String(v && v.name || "");
 }
-var shortKey = (v) => v && typeof v.key === "string" && v.key ? v.key.slice(0, KEY_SUFFIX_LEN).toLowerCase() : null;
+var shortKey = (v) => v ? keyTag(v.key) : null;
 var suffixSlug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 function equivalentVars(a, b, collections) {
   if (a.type !== b.type) return false;
@@ -1684,7 +1742,7 @@ function cssPlan(designSystem) {
   return planIds(
     ds.variables || [],
     (v) => segs(v.name).length ? cssVarName(v.name) : null,
-    (id, s) => id + "-" + s,
+    (id, s) => disambiguated(id, s, "css"),
     ds.collections,
     "tokens.css",
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-")
@@ -1737,7 +1795,7 @@ function planModeScopes(designSystem) {
   for (const g of qualified) {
     const slug = slugOf(g);
     const key = collOfGroup.get(g)?.key;
-    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(keyTag(key)) : "");
     for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n;
     used.add(attr);
     attrOf.set(g, attr);
@@ -1809,16 +1867,7 @@ function toCSS(designSystem, opts, notes) {
   const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
   return out + perMode.render(opts && opts.selector);
 }
-var TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
-var TW_PREFIX = "figma-";
-function twSlug(name) {
-  const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
-  return slug || "token";
-}
-function twName(v, opts) {
-  const kind = twKind(v, opts);
-  return (kind ? TW_NAMESPACE[kind] : "--") + TW_PREFIX + twSlug(v.name);
-}
+var twName = (v, opts) => tailwindVarName(v.name, twKind(v, opts));
 var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
 function twKind(v, opts) {
   if (v.type === "COLOR") return "color";
@@ -1847,7 +1896,7 @@ function toTailwind(designSystem, opts, notes) {
   const plan = planIds(
     vars,
     (v) => segs(v.name).length ? twName(v, opts) : null,
-    (id, s) => id + "-" + s,
+    (id, s) => disambiguated(id, s, "css"),
     collections,
     "theme.css",
     (v) => /^[A-Za-z0-9-]+$/.test(segs(v.name).join("-"))
@@ -1889,7 +1938,7 @@ function toTailwind(designSystem, opts, notes) {
     const unit = numberUnit(v, opts);
     const ref = (n) => {
       const t = aliasTargetId(plan, n, v);
-      return t ? t.id : "--" + TW_PREFIX + twSlug(n);
+      return t ? t.id : tailwindVarName(n, null);
     };
     const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
     const val = (raw) => kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef);
@@ -2340,9 +2389,7 @@ ${USAGE}`);
 }
 if (import.meta.main) runCli(main, { name: "tokens" });
 export {
-  TW_PREFIX,
   WEB_FULL_ROUND,
-  cssVarName,
   emitTokens,
   hexToColorValue,
   lintTokens,

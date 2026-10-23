@@ -8,15 +8,17 @@ import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import type { Writable } from "node:stream";
-import { checkPlan, colorLiterals, arbitraryPx, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
-  scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import { blockerIds } from "../design-to-code/audit.ts";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
-import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
+import { checkPlan, isStale, validatePlanHeader, anchorCoverage, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
+import type { CheckPlanResult } from "../design-to-code/verify-build.ts";
+import { moduleImported, projectGraph } from "../design-to-code/code-scanner.ts";
+import { locateCache, locateExport, locateReports } from "../design-to-code/verify-locate.ts";
+import type { ReportRef } from "../design-to-code/verify-locate.ts";
 import * as verifyBuild from "../design-to-code/verify-build.ts";
 import { planStatus } from "../design-to-code/plan-status.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
@@ -70,35 +72,9 @@ const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server i
 const brand: PlanTokenRow = { value: "#5B5FC7", kind: "color", codeToken: "brand-600", verdict: "exact" };
 const gap16: PlanTokenRow = { value: "16", kind: "spacing", codeToken: "spacing-4", verdict: "exact" };
 
-console.log("literal parsing:");
+console.log("literal parsing (colorLiterals, arbitraryPx: test/code-scanner.test.ts):");
 check("normHex (color.ts) normalises 3/4/6/8-digit hex with or without '#', emits '#', rejects junk", normHex("#abc") === "#aabbcc" && normHex("5B5FC7") === "#5b5fc7" && normHex("#5B5FC7CC") === "#5b5fc7cc" && normHex("#abcd") === "#aabbccdd" && normHex("red") === null && normHex("#12345") === null && normHex(0xabcdef) === null);
 check("[one rule] every hex reader agrees: parseHex takes what normHex takes, '#' optional", parseHex("abc")?.r === 0xaa && parseHex("#abc")?.b === 0xcc && parseHex("#aabbcc80")?.a === 0x80 / 255 && parseHex("#12345") === null);
-check("colorLiterals reads #hex, 0xAARRGGBB and rgb(), keyed rrggbb+alpha", (() => {
-  const c = colorLiterals("a #5B5FC7 b Color(0xFF112233) c rgba(255, 0, 10, 0.5)");
-  // opaque -> "ff"; 0xAARRGGBB puts alpha FIRST, so it must be moved to the end; rgba's 0.5 -> 80.
-  return c.has("#5b5fc7ff") && c.has("#112233ff") && c.has("#ff000a80");
-})());
-// Alpha is part of the key: if it were folded away, #ffffff and #ffffff1a shared one key. The scan then
-// reported whichever spelling it saw first — the live run said "raw literal #ffffff" for a plan row
-// that read #ffffff1a, which looks like a hook bug — and an allowedLiterals entry for one exempted
-// the other. They are different colors (opaque white vs a 10% scrim) and must stay different keys.
-check("[alpha] 8-digit hex keeps its alpha, so it cannot collide with the opaque form", (() => {
-  const c = colorLiterals("bg-[#ffffff1a] and #ffffff");
-  return c.get("#ffffff1a") === "#ffffff1a" && c.get("#ffffffff") === "#ffffff" && c.size === 2;
-})());
-check("[alpha] colorKey normalises every spelling to 8 digits; 3- and 4-digit shorthand expand",
-  colorKey("#abc") === "#aabbccff" && colorKey("#abcd") === "#aabbccdd" && colorKey("#5B5FC7") === "#5b5fc7ff"
-  && colorKey("#5B5FC7CC") === "#5b5fc7cc" && colorKey("red") === null);
-check("[alpha] rgba() percent and decimal alpha land on the SAME key as the #rrggbbaa spelling", (() => {
-  const c = colorLiterals("rgba(255,255,255,0.1) rgb(1,2,3)");
-  return c.has("#ffffff1a") && colorLiterals("rgba(255,255,255,10%)").has("#ffffff1a") && c.has("#010203ff");
-})());
-// rgb() literals go through color.ts parseCssColor, the same reader as the probe: percentage channels and decimal channels
-// are colours too (100% = 255, CSS Color 4 §5.1); a call it cannot read (var(), a template placeholder) is not a literal.
-check("[css] colorLiterals reads rgb(100% 0% 0% / 50%), rgb(10.4, 0, 0) and the modern rgb(0 0 0 / 40%); rgb(var(--x)) and rgba(${c}, 0.5) are skipped", (() => {
-  const c = colorLiterals("rgb(100% 0% 0% / 50%) rgb(10.4, 0, 0) rgb(0 0 0 / 40%) rgb(var(--x)) rgba(${c}, 0.5)");
-  return c.get("#ff000080") === "rgb(100% 0% 0% / 50%)" && c.has("#0a0000ff") && c.has("#00000066") && c.size === 3;
-})());
 check("[alpha] a scrim is not exempted by an allowedLiterals entry for the opaque colour", (() => {
   const scrim = { value: "#ffffff1a", kind: "color", codeToken: "bg-scrim", verdict: "exact" };
   // (theme.css is outside files[]: it only declares --color-scrim, so the undeclared-token check is satisfied)
@@ -107,15 +83,6 @@ check("[alpha] a scrim is not exempted by an allowedLiterals entry for the opaqu
   // …and the message names the spelling that is actually in the code, not the other one.
   const msg = must(pr[0], "pr[0]");
   return pr.length === 1 && /raw colour #ffffff1a\b/.test(msg) && /bg-scrim/.test(msg);
-})());
-check("arbitraryPx reads [Npx] and [Nrem] as px", (() => { const d = arbitraryPx("gap-[14px] p-[1.5rem]"); return d.has(14) && d.has(24); })());
-// Keyed on the number alone, every `rounded-[20px]` was reported as the 20px a
-// fontSize token resolves to — and applying the suggestion ("use text-body-1") would have put a
-// font-size utility on a border-radius, which the gate would then have passed.
-check("[kind] an arbitrary value remembers which utility it was on", (() => {
-  const d = arbitraryPx("rounded-[20px] text-[20px]");
-  const u = (d.get(20) || []).map((e) => e.utility).sort();
-  return u.length === 2 && u[0] === "rounded" && u[1] === "text";
 })());
 check("[kind] a radius literal is NOT reported against a fontSize token of the same number", (() => {
   const fontTok = { value: "20", kind: "fontSize", codeToken: "text-body-1", verdict: "exact" };
@@ -593,24 +560,24 @@ check("transcript filter: a Write spelled with \\u escapes still claims its plan
 // from it, except for a file the run itself has rewritten since (a plan another plan lists).
 check("project graph: checkPlan takes a listed file's text from the graph it is handed (no second read)…", (() => {
   const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
-  const g = verifyBuild.buildGraph(root);
+  const g = projectGraph(root, [planOf(root).files ?? []]);
   fs.writeFileSync(path.join(root, "a.tsx"), "#5B5FC7"); // changed behind the graph's back: the run's snapshot is what is checked
   return checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root, { graph: () => g }).blocking.length === 0;
 })());
 check("…but reads one the run rewrote from disk", (() => {
   const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
-  const g = verifyBuild.buildGraph(root);
+  const g = projectGraph(root, [planOf(root).files ?? []]);
   fs.writeFileSync(path.join(root, "a.tsx"), "#5B5FC7");
   g.rewrote(path.join(root, "a.tsx"));
   return g.cached("a.tsx") === undefined && has(checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root, { graph: () => g }).blocking, /raw colour #5B5FC7/);
 })());
 check("project graph: hashes from its bytes equal hashes read from disk; the plans handed to it are the ones it counts", (() => {
   const root = project({ "a.tsx": "é\u0000bytes", "b.css": "x" }, { status: "pending", files: ["a.tsx", "b.css", "gone.tsx"], verification: STATIC });
-  const g = verifyBuild.buildGraph(root);
+  const g = projectGraph(root, [planOf(root).files ?? []]);
   const viaGraph = hashFiles(["a.tsx", "b.css", "gone.tsx"], root, g.cached), fromDisk = hashFiles(["a.tsx", "b.css", "gone.tsx"], root);
   fs.writeFileSync(path.join(root, "b.css"), "y"); // not re-read: the hash is of the bytes the graph holds
   return JSON.stringify(viaGraph) === JSON.stringify(fromDisk) && viaGraph["gone.tsx"] === null && hashFiles(["b.css"], root, g.cached)["b.css"] === fromDisk["b.css"]
-    && g.listCount.get("a.tsx") === 1 && verifyBuild.buildGraph(root, [], []).listCount.size === 0;
+    && g.listCount.get("a.tsx") === 1 && projectGraph(root, []).listCount.size === 0;
 })());
 check("hook: a plan listed in a later plan's files[] is hashed as the hook rewrote it (the --status that follows says not stale)", (() => {
   const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
@@ -766,16 +733,6 @@ console.log("a hex in a comment or a provenance note is not a literal:");
   check("…the same hex in CODE still blocks — once per literal, naming every token that resolves it",
     r.length === 1 && /#121319/.test(rMsg) && /bg-backgrounds-side-menu/.test(rMsg) && /bg-neutrals-neutral-0/.test(rMsg) && /Header\.tsx/.test(rMsg));
 }
-check("scanText drops //, /* */, JSX {/* */} and <!-- --> comments but keeps code", (() => {
-  const t = scanText("a.tsx", "// #111111\nconst a = 1; /* #222222 */\n<div>{/* #333333 */}</div>\nconst b = '#444444';");
-  const h = scanText("a.vue", "<!-- #555555 -->\n<p style=\"color:#666666\"></p>");
-  return !/#111111|#222222|#333333/.test(t) && /#444444/.test(t) && !/#555555/.test(h) && /#666666/.test(h);
-})());
-check("a prose string (provenance note) is skipped; a style string is not", (() => {
-  const t = scanText("a.tsx", "const note = \"bound to Neutrals/Neutral 0, which is #121319 in Dark\";\nconst c = \"#121319\";\nconst b = '1px solid #121319';\nconst k = 'flex items center bg-[#121319]';");
-  return (t.match(/#121319/g) || []).length === 3 && !/Neutral 0, which/.test(t);
-})());
-check("`https://` in code is not mistaken for a comment", /#777777/.test(scanText("a.ts", "fetch(`https://x.test/a`); const c = '#777777';")));
 
 console.log("exported SVG artwork is not code:");
 {
@@ -786,16 +743,12 @@ console.log("exported SVG artwork is not code:");
   const root = liveProject({ [GP]: plan });
   check("the real calendar-2.svg (stroke=\"#D4D4D4\") in files[] raises no colour block, with no allowedLiterals entry for it",
     /#D4D4D4/i.test(fs.readFileSync(path.join(root, "app/src/assets/calendar-2.svg"), "utf8")) && colourBlocks(checkLive(root, GP)).length === 0);
-  check("isSourceFile: .tsx/.css/.swift/.kt are code; .svg/.json/.md/.png are not",
-    ["a.tsx", "a.css", "A.swift", "A.kt", "a.dart"].every(isSourceFile) && !["a.svg", "tokens.json", "README.md", "x.png"].some(isSourceFile));
 }
 
 console.log("a reused component resolves by module path, not by substring:");
 {
   const gpRoot = liveProject({});
   const byFile = [{ rel: "app/src/features/guided-policies/screens/GuidedPoliciesScreen.tsx", text: fs.readFileSync(path.join(gpRoot, "app/src/features/guided-policies/screens/GuidedPoliciesScreen.tsx"), "utf8") }];
-  check("importsOf reads ES/CJS/dynamic/CSS imports",
-    importsOf("import { A } from '../A';\nimport type { B } from \"@/B\";\nexport { C } from './C';\nconst d = require('d');\nimport('./e');\n@import url('f.css');").join(",") === "../A,@/B,./C,d,./e,f.css");
   check("the real GuidedPoliciesScreen.tsx ('../../../components/PageTitle') satisfies mapModule \"app/src/components/PageTitle.tsx\"",
     moduleImported("app/src/components/PageTitle.tsx", byFile, gpRoot));
   check("…and so does an alias import ('@/components/PageTitle')",
@@ -1786,7 +1739,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   {
     // [variant] a variant's report that names no node and has no expectation beside it is the plan's node's by its set name
     const vroot = project({ "design/verify/Crates__80_1.dark.report.json": JSON.stringify({ verdict: "pass" }), "design/verify/Crates__80_1.report.json": JSON.stringify({ verdict: "pass" }) }, { nodeId: "80:1" });
-    const found = verifyBuild.locateReports(planOf(vroot), path.join(vroot, "design", "plan", "login.json"), vroot, null).map((r) => `${r.rel} ${r.matchedBy}`);
+    const found = locateReports(planOf(vroot), path.join(vroot, "design", "plan", "login.json"), vroot, null).map((r) => `${r.rel} ${r.matchedBy}`);
     check(`[variant] locateReports finds the base report and the .dark variant's by the node id their set names carry (got ${JSON.stringify(found)})`,
       JSON.stringify(found) === JSON.stringify(["design/verify/Crates__80_1.dark.report.json nodeId", "design/verify/Crates__80_1.report.json nodeId"]));
     fs.rmSync(vroot, { recursive: true, force: true });
@@ -1800,7 +1753,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const at = (layers: unknown[]) => project({ [OLD]: doc("Crates"), [NEW]: doc("Crates Renamed"), "design/export/pages/index.json": index(layers) }, { nodeId: "80:1", file: OLD, files: [] });
     const STALE = /^plan\.file names (.*); the index files node 80:1 under (.*) — read \2; re-run plan-skeleton --out to refresh the header$/;
     const moved = at([{ id: "80:1", name: "Crates Renamed", file: "pages/P/Crates_Renamed__80_1.json" }]);
-    const hit = verifyBuild.locateExport(planOf(moved), path.join(moved, "design", "plan", "login.json"), moved);
+    const hit = locateExport(planOf(moved), path.join(moved, "design", "plan", "login.json"), moved);
     const w = checkPlan({ plan: planOf(moved), file: path.join(moved, "design", "plan", "login.json") }, moved).warnings.map((x) => STALE.exec(x)).filter((m) => m !== null);
     check(`[stale-export] the export the index files the plan's node under is read, staleFile names the header's (got ${hit ? `${path.relative(moved, hit.file)} ${String(hit.staleFile)} ${hit.layerName}` : "null"})`,
       !!hit && path.relative(moved, hit.file).split(path.sep).join("/") === NEW && hit.staleFile === OLD && hit.layerName === "Crates Renamed" && hit.row?.id === "80:1");
@@ -1808,7 +1761,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
       w.length === 1 && w[0]?.[1] === OLD && w[0]?.[2] === NEW);
     // the node has no index row (another node's only): the header's file is read as before, no warning
     const unfiled = at([{ id: "90:1", name: "Other", file: "pages/P/Other__90_1.json" }]);
-    const hit2 = verifyBuild.locateExport(planOf(unfiled), path.join(unfiled, "design", "plan", "login.json"), unfiled);
+    const hit2 = locateExport(planOf(unfiled), path.join(unfiled, "design", "plan", "login.json"), unfiled);
     const w2 = checkPlan({ plan: planOf(unfiled), file: path.join(unfiled, "design", "plan", "login.json") }, unfiled).warnings.filter((x) => STALE.test(x));
     check("[stale-export] a plan whose node has no index row reads its `file` header as before, no warning",
       !!hit2 && path.relative(unfiled, hit2.file).split(path.sep).join("/") === OLD && hit2.staleFile === null && hit2.layerName === "Crates" && w2.length === 0);
@@ -1827,7 +1780,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const at = (files: Record<string, string>, layers: unknown[]) => project({ ...files, "design/export/pages/index.json": index(layers) }, { nodeId: "1:2", file: B, files: [] });
     const run = (root: string) => {
       const plan = planOf(root), file = path.join(root, "design", "plan", "login.json");
-      const hit = verifyBuild.locateExport(plan, file, root);
+      const hit = locateExport(plan, file, root);
       return { rel: hit ? path.relative(root, hit.file).split(path.sep).join("/") : null, stale: hit ? hit.staleFile : "none", row: hit?.row?.file ?? null,
         warned: checkPlan({ plan, file }, root).warnings.filter((x) => STALE.test(x)).length };
     };
@@ -1890,7 +1843,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
       { nodeId: "80:1", file: "design/export/pages/p/crates__80_1.json", files: [] });
     if (!fs.existsSync(path.join(root, "DESIGN"))) console.log("  (skipped [stale-export] case-only spelling: this filesystem is case-sensitive)");
     else {
-      const hit = verifyBuild.locateExport(planOf(root), path.join(root, "design", "plan", "login.json"), root);
+      const hit = locateExport(planOf(root), path.join(root, "design", "plan", "login.json"), root);
       check(`[stale-export] a header that differs from the index's file only in case is the same file: no staleFile (got ${String(hit?.staleFile)})`, !!hit && hit.staleFile === null);
     }
     fs.rmSync(root, { recursive: true, force: true });
@@ -1908,7 +1861,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
   const files = { "a.tsx": "", "design/verify/login.png": "png", "design/verify/login.report.json": JSON.stringify(rep) };
   const VER = { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] } } as const;
   const root = project(files, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { tool: "verify-probe", violations: 0 } } });
-  const ref = verifyBuild.locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
+  const ref = locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
   check("[behaviour] locateReports summarises report.behaviour {ran, fail 2, failed ids}", JSON.stringify(ref && "behaviour" in ref ? ref.behaviour : undefined) === JSON.stringify({ ran: true, why: null, fail: 2, warn: 0, failed: ["a11y.axe", "keyboard.focus-visible"] }));
   const r1 = runHook(root);
   check("[behaviour] the hook: exit 0 (never blocked), stderr warns '2 failures (a11y.axe, keyboard.focus-visible)' and the a11y disagreement",
@@ -1920,7 +1873,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const handRep = compare(exp, m0), probeRep = compare(exp, { ...m0, probe: PROBE });
     const at = (r: unknown) => project({ ...files, "design/verify/login.report.json": JSON.stringify(r) }, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { violations: 0 } } });
     const hand = at(handRep), shipped = at(probeRep);
-    const refOf = (root: string) => verifyBuild.locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
+    const refOf = (root: string) => locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
     const hRef = refOf(hand), sRef = refOf(shipped);
     const hw = hRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [hRef]) : null;
     const sw = sRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [sRef]) : null;
@@ -1931,7 +1884,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
       && /login\.report\.json: behaviour\/a11y checks did not run/.test(runHook(shipped).stderr));
   }
   const mal = project({ ...files, "design/verify/login.report.json": JSON.stringify({ ...rep, behaviour: { ran: "maybe" } }) }, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { violations: 0 } } });
-  const ref2 = verifyBuild.locateReports(planOf(mal), path.join(mal, "design", "plan", "login.json"), mal, null).find((r) => r.rel === R);
+  const ref2 = locateReports(planOf(mal), path.join(mal, "design", "plan", "login.json"), mal, null).find((r) => r.rel === R);
   check("[behaviour] a malformed report.behaviour is read as none (the report itself still located)", !!ref2 && "behaviour" in ref2 && ref2.behaviour === null);
 }
 
@@ -2218,7 +2171,7 @@ void build(tmp).then(async () => {
     fs.writeFileSync(path.join(v, "Sample_Screen__1_2.expected.json"), JSON.stringify({ frame: { nodeId: "1:2" } }));
     fs.writeFileSync(path.join(v, "Sample_Screen__1_2.report.json"), rep("pass"));
     const pf = path.join(root, "design", "plan", "login.json");
-    const rels = (): string[] => verifyBuild.locateReports(planOf(root), pf, root, null).map((r) => r.rel);
+    const rels = (): string[] => locateReports(planOf(root), pf, root, null).map((r) => r.rel);
     const got = rels();
     check(`a report whose expectation was retired (.retired) is not located; the canonical one is (got ${JSON.stringify(got)})`,
       !got.includes("design/verify/Nick.report.json") && got.includes("design/verify/Sample_Screen__1_2.report.json"));
@@ -2240,7 +2193,7 @@ void build(tmp).then(async () => {
     const rep = JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass", screen: "Other", why: [], deltas: [], inputs: {} });
     fs.writeFileSync(path.join(v, "Chip_copy__I5_2_30_7.report.json"), rep);
     fs.writeFileSync(path.join(v, "Chip_copy__I5_2.report.json"), rep);
-    const found = (stem: string): string[] => verifyBuild.locateReports({}, path.join(root, "design", "plan", stem + ".json"), root, null).map((r) => `${r.rel} by ${r.matchedBy}`);
+    const found = (stem: string): string[] => locateReports({}, path.join(root, "design", "plan", stem + ".json"), root, null).map((r) => `${r.rel} by ${r.matchedBy}`);
     const inst = found("Chip__I5_2_30_7");
     check(`a plan file name carrying an instance-sublayer id finds the report whose stem carries the same id (got ${JSON.stringify(inst)})`,
       JSON.stringify(inst) === JSON.stringify(["design/verify/Chip_copy__I5_2_30_7.report.json by nodeId"]));
@@ -2274,7 +2227,7 @@ void build(tmp).then(async () => {
     ];
     const pf = (stem: string): string => path.join(root, "design", "plan", stem + ".json");
     const show = (refs: ReportRef[]): string => JSON.stringify(refs.map((r) => [r.rel, r.matchedBy, r.verdict, r.mtimeMs > 0]));
-    const fresh = plans.map(([p, s]) => show(verifyBuild.locateReports(p, pf(s), root, null)));
+    const fresh = plans.map(([p, s]) => show(locateReports(p, pf(s), root, null)));
     const orig = fs.readFileSync;
     let reads = 0;
     const counting = ((...a: Parameters<typeof fs.readFileSync>) => { reads++; return orig(...a); }) as typeof fs.readFileSync;
@@ -2282,11 +2235,11 @@ void build(tmp).then(async () => {
     let shared: string[];
     let uncachedReads: number;
     try {
-      const cache = verifyBuild.locateCache();
-      shared = plans.map(([p, s]) => show(verifyBuild.locateReports(p, pf(s), root, null, cache)));
+      const cache = locateCache();
+      shared = plans.map(([p, s]) => show(locateReports(p, pf(s), root, null, cache)));
       const cachedReads = reads;
       reads = 0;
-      for (const [p, s] of plans) verifyBuild.locateReports(p, pf(s), root, null);
+      for (const [p, s] of plans) locateReports(p, pf(s), root, null);
       uncachedReads = reads;
       reads = cachedReads;
     } finally { fs.readFileSync = orig; }

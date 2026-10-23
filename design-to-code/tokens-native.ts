@@ -44,6 +44,7 @@ import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./c
 // Names, default modes, aliases and units must agree with the DTCG/CSS output, so they come from the
 // same readers tokens.ts uses (tokens-core.ts).
 import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+import { disambiguated, keyTag, nativeIdentifier } from "./token-naming.ts";
 
 /** What toNative takes beside the design system. */
 export interface NativeOpts extends UnitOpts {
@@ -78,21 +79,9 @@ const PLATFORMS: Record<string, { file: string }> = {
 // build-screen profile names → the platform key above.
 const PROFILE_ALIASES: Record<string, string> = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
 
-// Union of the four languages' reserved words that a token path can realistically spell.
-const RESERVED = new Set(("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break," +
-  "continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator," +
-  "typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete," +
-  "export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description").split(","));
-
-const words = (s: string): string[] => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
-function camel(parts: string[]): string {
-  const w = parts.flatMap(words);
-  let id = w.map((x, i) => (i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1))).join("");
-  if (!id) id = "token";
-  if (/^[0-9]/.test(id)) id = "n" + id;
-  if (RESERVED.has(id)) id += "Token";
-  return id;
-}
+// Identifiers (camelCase, legal in all four languages) are token-naming.ts nativeIdentifier's — the Stop hook reads
+// them back with the same module.
+const camel = nativeIdentifier;
 const pascal = (parts: string[]): string => { const c = camel(parts); return c.charAt(0).toUpperCase() + c.slice(1); };
 
 // A font size must scale with the user's setting on Android (sp), a spacing must not (dp). Scopes say
@@ -201,7 +190,7 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
     // Identical in every mode → one field, nothing lost. Otherwise BOTH are real, and neither may win by
     // arriving first: every one of them carries its key (`space4_e26d506e`), so the identifier says which
     // Figma variable it is. A bare counter (`space42`) said nothing and read as a number.
-    const tag = (v: Variable): string | null => (v.key ? String(v.key).slice(0, 8).toLowerCase() : null);
+    const tag = (v: Variable): string | null => keyTag(v.key);
     const label = (x: Candidate): string => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}…)` : ""} = ${JSON.stringify(x.v.values || {})}`;
     const byId = new Map<string, [Candidate, ...Candidate[]]>();
     for (const x of cands) { const list = byId.get(x.id); if (list) list.push(x); else byId.set(x.id, [x]); }
@@ -219,8 +208,9 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       const names: string[] = [];
       distinct.forEach((x, i) => {
         if (x === keeper) { x.final = id; ids.add(id); names.push(`${label(x)} → "${id}"`); return; }
-        let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
-        for (let n = 2; ids.has(next) || byId.has(next); n++) next = (tag(x.v) ? `${id}_${tag(x.v)}` : id) + n;
+        const t = tag(x.v);
+        let next = t ? disambiguated(id, t, "native") : `${id}${i + 1}`;
+        for (let n = 2; ids.has(next) || byId.has(next); n++) next = (t ? disambiguated(id, t, "native") : id) + n;
         ids.add(next);
         x.final = next;
         names.push(`${label(x)} → "${next}"`);
