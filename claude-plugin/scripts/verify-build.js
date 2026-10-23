@@ -2857,7 +2857,14 @@ function blocksOf(text) {
   if (have) return have;
   const out = [], stack = [];
   const stmtStart = [];
-  const headOf = (open) => text.slice(Math.max(text.lastIndexOf("\n", open) + 1, stmtStart[stack.length] ?? 0), open);
+  const headOf = (open) => {
+    const cut = stmtStart[stack.length] ?? 0, lineStart = text.lastIndexOf("\n", open) + 1;
+    if (text.slice(lineStart, open).trim() || lineStart === 0) return text.slice(Math.max(lineStart, cut), open);
+    let end = lineStart - 1;
+    while (end > 0 && !text.slice(text.lastIndexOf("\n", end - 1) + 1, end).trim()) end = text.lastIndexOf("\n", end - 1);
+    const above = text.slice(Math.max(text.lastIndexOf("\n", end - 1) + 1, cut), Math.max(end, 0));
+    return above.trim() ? above : ";";
+  };
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
     if ((c === '"' || c === "'") && text.startsWith(c + c + c, i)) {

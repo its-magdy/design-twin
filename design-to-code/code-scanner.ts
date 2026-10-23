@@ -152,6 +152,7 @@ const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
 // The bracketed blocks of a text — `{…}`, `(…)`, `[…]` — each with its HEAD: the text of its opening line up to the
 // bracket (`data class ColorsTokens(`, `export const colorsTokens = {`, `val ColorsTokensLight = ColorsTokens(`), from
 // after any statement closed earlier on that line at the same depth (a `;` or a `}`): `class A { … } const b = {` → `const b = `.
+// An opener alone on its line takes the line above as its head.
 // Memoised per text: literalUses asks once per occurrence. An unclosed block runs to the end of the text.
 interface Block { open: number; close: number; head: string }
 const CLOSER: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
@@ -161,8 +162,16 @@ function blocksOf(text: string): Block[] {
   if (have) return have;
   const out: Block[] = [], stack: Array<{ open: number; want: string; head: string }> = [];
   const stmtStart: number[] = []; // per depth: where the current statement began (after a `;` or `}` at that depth)
-  const headOf = (open: number): string =>
-    text.slice(Math.max(text.lastIndexOf("\n", open) + 1, stmtStart[stack.length] ?? 0), open);
+  const headOf = (open: number): string => {
+    const cut = stmtStart[stack.length] ?? 0, lineStart = text.lastIndexOf("\n", open) + 1;
+    if (text.slice(lineStart, open).trim() || lineStart === 0) return text.slice(Math.max(lineStart, cut), open);
+    // an opener alone on its line (`=>` then `({`, a brace on its own line) belongs to the line above: its head is that
+    // line's statement; one that ended a statement there (`;`, `}`) opens a bare block, never a value
+    let end = lineStart - 1;
+    while (end > 0 && !text.slice(text.lastIndexOf("\n", end - 1) + 1, end).trim()) end = text.lastIndexOf("\n", end - 1);
+    const above = text.slice(Math.max(text.lastIndexOf("\n", end - 1) + 1, cut), Math.max(end, 0));
+    return above.trim() ? above : ";";
+  };
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
     // a bracket inside a string is not one: skip a quoted string — to its closing quote on the same line (a lone `'` in

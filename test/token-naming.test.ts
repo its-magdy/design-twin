@@ -221,6 +221,19 @@ check("[near] a local inside a function nested in the container is a use, not a 
     && literalUses([{ rel: "theme.ts", text: ts }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "theme.ts"
     && literalUses([{ rel: "tokens.ts", text: nested }], "#5B5FC7", ["colorsTokens.light.brand600"]).usedIn.length === 0;
 })());
+// Review round 8: an opener alone on its line belongs to the line above (`=>` then `({`, a brace on its own line).
+check("[enclosing] an opener alone on its line takes its head from the line above", (() => {
+  const ts = "export const colorsTokens = {\n  make: () =>\n  ({\n    brand600: \"#5B5FC7\",\n  }),\n};";
+  const kt = "object ColorsTokens {\n  fun card()\n  {\n    val brand600 = Color(0xFF5B5FC7)\n  }\n}";
+  const allman = "object AppColors\n{\n  val primary = Color(0xFF5B5FC7)\n}";
+  const array = "export const ColorsTokens = {\n  light: [\n    {\n      brand600: \"#5B5FC7\",\n    },\n  ],\n};";
+  const closed = "class ColorsTokens { a = 1 } const styles =\n{\n  brand600: \"#5B5FC7\",\n};";
+  return literalUses([{ rel: "theme.ts", text: ts }], "#5B5FC7", ["colorsTokens.light.brand600"]).usedIn.join() === "theme.ts"
+    && literalUses([{ rel: "Theme.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Theme.kt"
+    && literalUses([{ rel: "AppColors.kt", text: allman }], "0xFF5B5FC7", ["AppColors.primary"]).usedIn.length === 0
+    && literalUses([{ rel: "tokens.ts", text: array }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.length === 0
+    && literalUses([{ rel: "Card.tsx", text: closed }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.tsx";
+})());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
   const text = "const colorsTokens = useColorsTokens();\nconst styles = {\n  backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  hero: colorsTokens.light.brand600,\n};";
