@@ -44,6 +44,12 @@ export const runOpts: Record<ReadOptName, boolean> = readOptDefaults();
 // hash both miss — costing a second download AND pushing the source bytes into `assets` twice.
 export const imageSizeCache = new Map<string, Promise<{ w: number; h: number } | undefined>>();
 
+// Whether this run's reply delivers assets at all. The design-system-only and library-file replies carry no `assets`
+// field, so an image fill's ORIGINAL bytes read there (getBytesAsync + base64) went nowhere; their collectors clear
+// this so readSourceImage keeps the intrinsic size (it is on the paint record) and skips the bytes. Per run: resetRun
+// sets it back. Not a read option — no caller chooses it; it follows from the reply's shape.
+export const runDelivery = { sourceBytes: true };
+
 // Per-run diagnostics so the agent knows what was and wasn't captured (never silent truncation).
 export let warnings: string[] = [];
 // ONE spelling of the zeroed counters — resetRun() uses the same factory, so adding a counter to
@@ -317,4 +323,5 @@ export function resetRun(): void {
   nodeNameLookup.reset();
   collectionLookup.reset();
   imageSizeCache.clear();
+  runDelivery.sourceBytes = true;
 }

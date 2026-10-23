@@ -197,6 +197,38 @@ export const cases: Case[] = [{
     }
   },
 }, {
+  name: "[SOURCE-BYTES] a reply that delivers no assets reads an image's size, not its original bytes",
+  async run() {
+    // collectDesignSystemOnly / collectLibraryFile replies have no `assets` field: an image fill's original bytes read
+    // there (getBytesAsync + base64) went nowhere. The intrinsic size is on the paint record and must stay.
+    let sizeReads = 0, byteReads = 0;
+    const style = { name: "Brand/Photo", id: "s_photo", key: "photokey", description: "", paints: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "h_src" }] };
+    const w = world({
+      localStyles: { paint: [style] },
+      images: { h_src: { getSizeAsync: async () => { sizeReads++; return { width: 8, height: 6 }; }, getBytesAsync: async () => { byteReads++; return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]); } } },
+    });
+    const { api } = w;
+    const SIZE = '"intrinsicSize":{"w":8,"h":6}';
+    const ds = await api.collectDesignSystemOnly({});
+    ok(`[SOURCE-BYTES] design-system pull: the size is read and kept, the bytes are not read (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 0 && JSON.stringify(ds.designSystem).includes(SIZE));
+    sizeReads = 0; byteReads = 0;
+    const lib = await api.collectLibraryFile({ asLibrary: "Lib" });
+    ok(`[SOURCE-BYTES] library pull: the same (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 0 && JSON.stringify(lib.designSystem).includes(SIZE));
+    sizeReads = 0; byteReads = 0;
+    // a full export delivers assets: there the original bytes are read and shipped as before
+    const full = await api.collectFull({ css: false });
+    ok(`[SOURCE-BYTES] a full export still reads and delivers them (size ${sizeReads}, bytes ${byteReads})`,
+      sizeReads === 1 && byteReads === 1 && full.assets.some((a) => a.kind === "source" && a.id === "img:h_src" && a.format === "png")
+      && JSON.stringify(full.designSystem).includes(SIZE));
+    // and the flag does not leak: a design-system pull followed by a full one in the same plugin session
+    sizeReads = 0; byteReads = 0;
+    await api.collectDesignSystemOnly({});
+    const again = await api.collectFull({ css: false });
+    ok("[SOURCE-BYTES] …also right after a design-system pull (the flag is per run)", byteReads === 1 && again.assets.some((a) => a.kind === "source"));
+  },
+}, {
   name: "[ASSET-RELEASE] a settled run keeps no asset payloads",
   async run() {
     // The dedupe table (assets.ts byContent) holds the same Asset objects the run returned. Emptying

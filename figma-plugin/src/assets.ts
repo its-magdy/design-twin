@@ -2,7 +2,7 @@
 // and Dev-Mode resource links.
 import type { Geometry, DevResource as IrDevResource, AssetFormat, AssetKind } from "../../bridge/src/doc-types.ts";
 import { safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
-import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
+import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts, runDelivery } from "./state";
 import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
@@ -167,11 +167,14 @@ async function readSourceImage(hash: string): Promise<{ w: number; h: number } |
     if (img) {
       const s = await img.getSizeAsync();
       if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-      // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed.
-      try {
-        const bytes = await img.getBytesAsync();
-        if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-      } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
+      // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed. A reply that
+      // delivers no assets (runDelivery, state.ts) has no use for the original bytes: the size above is all it keeps.
+      if (runDelivery.sourceBytes) {
+        try {
+          const bytes = await img.getBytesAsync();
+          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+        } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
+      }
     }
   } catch (e) {
     warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
