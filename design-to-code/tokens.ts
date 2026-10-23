@@ -50,6 +50,7 @@ import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
 import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
 import { toNative, platformOf } from "./tokens-native.ts";
+import { cssVarName, disambiguated, keyTag, tailwindVarName, type TwKind } from "./token-naming.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { runCli } from "./proc.ts";
@@ -122,16 +123,9 @@ export interface EmitResult {
 
 const round = (x: number): number => Math.round(x * 10000) / 10000;
 
-// --- name handling. CSS custom properties ARE case-sensitive, so var names PRESERVE case
-// (only non-[A-Za-z0-9-] is folded) — otherwise "Gray/100" and "gray/100" would collide. ---
+// --- name handling: the CSS / Tailwind / native names (and the key tag) are token-naming.ts's, which the Stop hook
+// reads back with; the DTCG reference is this file's own. ---
 const dtcgRef = (tokenName: string): string => "{" + segs(tokenName).join(".") + "}";
-const varNameCache = new Map<string, string>();
-const cssVarName = (tokenName: string): string => {
-  const key = String(tokenName || "");
-  let v = varNameCache.get(key);
-  if (v === undefined) varNameCache.set(key, (v = "--" + segs(key).join("-").replace(/[^A-Za-z0-9-]/g, "-")));
-  return v;
-};
 
 // --- identity: a Figma variable IS its key, never its name -------------------------------------
 // Names are not unique. One real export held 96 variables with 96 distinct keys and only 94
@@ -149,14 +143,13 @@ const cssVarName = (tokenName: string): string => {
 //   * different keys that fold onto one identifier but resolve to the same value in every mode
 //     (`Space 2` = 8 under Desktop/Tablet/Mobile vs 8 under Mode 1) are emitted ONCE, and reported;
 //   * different keys that fold onto one identifier and DIFFER are ALL emitted, each under the
-//     identifier plus `-<first 8 chars of its key>`, and the warning names every key, its values,
-//     the screens whose slice carries it, and the identifier it landed on.
-const KEY_SUFFIX_LEN = 8;
+//     identifier plus `-<first 8 chars of its key>` (token-naming.ts keyTag / disambiguated), and the warning names
+//     every key, its values, the screens whose slice carries it, and the identifier it landed on.
 function identityOf(v: Variable): string {
   if (v && typeof v.key === "string" && v.key) return "k:" + v.key;
   return "n:" + String((v && v.collection) || "") + "\u0000" + String((v && v.name) || "");
 }
-const shortKey = (v: Variable | null | undefined): string | null => (v && typeof v.key === "string" && v.key ? v.key.slice(0, KEY_SUFFIX_LEN).toLowerCase() : null);
+const shortKey = (v: Variable | null | undefined): string | null => (v ? keyTag(v.key) : null);
 const suffixSlug = (s: string | null | undefined): string => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 // Equivalent = every mode either variable declares resolves to the same value (a mode one side lacks
@@ -651,7 +644,7 @@ function cssValue(raw: VariableValue, unit: string, ref?: (name: string) => stri
 // The tokens.css plan: one custom property per distinct variable (see planIds).
 function cssPlan(designSystem: TokensDoc | null | undefined): IdPlan {
   const ds: TokensDoc = designSystem || {};
-  return planIds(ds.variables || [], (v) => (segs(v.name).length ? cssVarName(v.name) : null), (id, s) => id + "-" + s, ds.collections, "tokens.css",
+  return planIds(ds.variables || [], (v) => (segs(v.name).length ? cssVarName(v.name) : null), (id, s) => disambiguated(id, s, "css"), ds.collections, "tokens.css",
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-"));
 }
 
@@ -725,7 +718,7 @@ function planModeScopes(designSystem: TokensDoc | null | undefined): ModeScopePl
   for (const g of qualified) {
     const slug = slugOf(g);
     const key = collOfGroup.get(g)?.key;
-    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(keyTag(key)) : "");
     for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n; // no key to tell them apart
     used.add(attr);
     attrOf.set(g, attr);
@@ -832,20 +825,8 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 // other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block (per collection
 // when the name is shared — the same planModeScopes selectors as tokens.css). Tailwind's
 // generated utilities read `var(--color-…)`, so they follow the override with no extra work.
-type TwKind = "color" | "dimension" | "radius" | "fontSize" | "fontFamily";
-const TW_NAMESPACE: Record<TwKind, string> = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
-const TW_PREFIX = "figma-";
-
-// The Tailwind key for a token name: kebab-case, lowercased, from the SAME segs() every other
-// emitter uses, so `--color-figma-schemes-on-primary` and the DTCG `schemes.on.primary` describe one token.
-function twSlug(name: string): string {
-  const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
-  return slug || "token";
-}
-function twName(v: Variable, opts?: EmitOpts): string {
-  const kind = twKind(v, opts);
-  return (kind ? TW_NAMESPACE[kind] : "--") + TW_PREFIX + twSlug(v.name);
-}
+// The namespace is decided here (twKind); the name itself is token-naming.ts tailwindVarName's.
+const twName = (v: Variable, opts?: EmitOpts): string => tailwindVarName(v.name, twKind(v, opts));
 
 const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
 function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
@@ -886,7 +867,7 @@ function cssFontFamily(raw: string): string {
 function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, notes?: CollisionNote[]): TailwindResult {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
-  const plan = planIds(vars, (v) => (segs(v.name).length ? twName(v, opts) : null), (id, s) => id + "-" + s, collections, "theme.css",
+  const plan = planIds(vars, (v) => (segs(v.name).length ? twName(v, opts) : null), (id, s) => disambiguated(id, s, "css"), collections, "theme.css",
     (v) => /^[A-Za-z0-9-]+$/.test(segs(v.name).join("-")));
   const warnings: string[] = [];
   if (notes) notes.push(...plan.notes);
@@ -922,7 +903,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
     const unit = numberUnit(v, opts);
     // An alias must point at the TAILWIND name of its target (its own namespace, its own
     // disambiguated name), not the tokens.css one.
-    const ref = (n: string): string => { const t = aliasTargetId(plan, n, v); return t ? t.id : "--" + TW_PREFIX + twSlug(n); };
+    const ref = (n: string): string => { const t = aliasTargetId(plan, n, v); return t ? t.id : tailwindVarName(n, null); };
     const pctRef = (n: string): boolean => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
     const val = (raw: VariableValue): string => (kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef));
     const baseStr = JSON.stringify(base);
@@ -1255,7 +1236,7 @@ function emitTokens(designSystem: TokensDoc | null | undefined, opts?: EmitOpts)
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 
-export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, TW_PREFIX, WEB_FULL_ROUND };
+export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, WEB_FULL_ROUND };
 
 // --- provenance: which catalog a generated file came from, and whether it is still current ---
 // main() puts ONE comment line at the top of every CSS / native file it writes:

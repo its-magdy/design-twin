@@ -1,6 +1,7 @@
 // Offline tests for the design-to-code/ layer. No Figma, no dependencies:  bun test/design-to-code.test.ts
 // Assertions pin VALUES (not just presence) and every confirmed bug has a regression test.
-import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName } from "../design-to-code/tokens.ts";
+import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue } from "../design-to-code/tokens.ts";
+import { cssVarName } from "../design-to-code/token-naming.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
 import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";

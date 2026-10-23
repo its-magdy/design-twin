@@ -51,10 +51,10 @@ import { visibility } from "./plan-skeleton.ts";
 import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
-import { colorKey, formatHex, parseCssColor } from "./color.ts";
+import { colorKey } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict } from "./plan-waivers.ts";
-import { recordedReport, reportRecordNames } from "./report-freshness.ts";
+import { recordedReport } from "./report-freshness.ts";
 import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
 import { anyJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -62,7 +62,10 @@ import type {
   IrNodeType, Plan, PlanAnchor, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc,
 } from "./types.ts";
-import { alnumKey, getOrInit } from "./map-util.ts";
+import { getOrInit } from "./map-util.ts";
+import { arbitraryPx, codeOf, colorLiterals, declaredCustomProps, kindsCompatible, literalUses, moduleImported, projectGraph } from "./code-scanner.ts";
+import type { FileText, ProjectGraph } from "./code-scanner.ts";
+import { requiredCustomProps } from "./token-naming.ts";
 import { parsePlanText, recordedEdits, updatePlan, verificationFacts } from "./plan-record.ts";
 import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "./plan-status.ts";
 import type { StatusResult } from "./plan-status.ts";
@@ -85,7 +88,6 @@ const STDIN_WAIT_MS = (): number => { const n = Number(process.env.DTWIN_HOOK_ST
 let phase = "starting";
 const setPhase = (p: string): void => { phase = p; };
 
-export type { HookPayload, HookRead };
 
 // The Stop-hook JSON (hook-input.ts: read only when stdin is not a terminal, never stalled by a pipe
 // that never closes). The hard deadline sits a little inside the process watchdog, so its (more
@@ -129,191 +131,6 @@ function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
 // must not skip it).
 function isOpen(p: PlanFile, cwd: string): boolean {
   return !isStale(p.file) && planStatus(cwd).open(p.plan);
-}
-
-// ================================================================ source scanning
-
-// Files whose text is CODE. Everything else in files[] (exported .svg artwork, .json data, docs,
-// images, Dockerfiles) is not scanned for literals: a colour there is data, not a styling decision.
-const SOURCE_EXT = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte", "astro", "css", "scss", "sass", "less", "styl", "html", "htm",
-  "swift", "kt", "kts", "java", "dart", "xml", "m", "mm", "h", "cs", "xaml"]);
-// split() always returns at least one element, so pop() is never undefined: `?? ""` is inert.
-const extOf = (rel: string): string => String(rel).toLowerCase().split(".").pop() ?? "";
-const isSourceFile = (rel: string): boolean => SOURCE_EXT.has(extOf(rel));
-
-// A string literal that is prose — a provenance note like "bound to Neutrals/Neutral 0, #121319 in
-// Dark" — rather than a style value. Three plain words in a row is prose; `1px solid #fff`,
-// `bg-[#fff] px-4` and `#fff` are not.
-const PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
-const isProse = (s: string): boolean => PROSE.test(s) && !/-\[|\[#/.test(s);
-
-// The text the literal scan looks at: comments removed; prose strings blanked. Keeps line structure
-// (newlines survive) so per-line definition detection still works.
-function scanText(rel: string, text: string): string {
-  const ext = extOf(rel);
-  const lineComments = !["css", "html", "htm", "xml", "xaml"].includes(ext);
-  const htmlComments = ["html", "htm", "xml", "xaml", "vue", "svelte", "astro"].includes(ext);
-  const strings = !["html", "htm", "xml", "xaml"].includes(ext);
-  let out = "", i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i], d = text[i + 1];
-    if (c === "/" && d === "*") { const j = text.indexOf("*/", i + 2); const end = j === -1 ? n : j + 2; out += text.slice(i, end).replace(/[^\n]/g, " "); i = end; continue; }
-    if (lineComments && c === "/" && d === "/" && text[i - 1] !== ":") { const j = text.indexOf("\n", i); const end = j === -1 ? n : j; out += " ".repeat(end - i); i = end; continue; }
-    if (htmlComments && text.startsWith("<!--", i)) { const j = text.indexOf("-->", i + 4); const end = j === -1 ? n : j + 3; out += text.slice(i, end).replace(/[^\n]/g, " "); i = end; continue; }
-    if (strings && (c === '"' || c === "'" || c === "`")) {
-      let j = i + 1;
-      while (j < n && text[j] !== c && !(c !== "`" && text[j] === "\n")) j += text[j] === "\\" ? 2 : 1;
-      const end = Math.min(n, j + 1);
-      const body = text.slice(i + 1, j);
-      out += isProse(body) ? c + body.replace(/[^\n]/g, " ") + (text[j] === c ? c : "") : text.slice(i, end);
-      i = end;
-      continue;
-    }
-    out += c; i++;
-  }
-  return out;
-}
-
-// Every raw colour literal in the source, keyed by colorKey ("#rrggbbaa", color.ts) -> the spelling found.
-// Alpha is part of the key (live run #25): `#ffffff` and `#ffffff1a` are different colours bound to
-// different tokens, and folding them together cross-contaminated both directions.
-function colorLiterals(source: string): Map<string, string> {
-  const found = new Map<string, string>();
-  const add = (h: string | null, lit: string): void => { if (h && !found.has(h)) found.set(h, lit); };
-  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
-  // Compose / Flutter `Color(0xFF5B5FC7)` — AARRGGBB (alpha FIRST), or bare 0xRRGGBB.
-  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
-    const g = m[1];
-    if (g === undefined) continue; // the group is not optional: set whenever the regex matched
-    const h = g.toLowerCase();
-    add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
-  }
-  // rgb()/rgba() in either CSS syntax, read by color.ts parseCssColor (the probe's own reader); a call it
-  // cannot read (a var(), a template placeholder) is not a literal.
-  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
-    const c = parseCssColor(m[0]);
-    if (c) add(colorKey(formatHex(c)), m[0]);
-  }
-  return found;
-}
-
-// Tailwind arbitrary dimensions: the utility PREFIX says which kind the number is (seen in a live run:
-// `rounded-[20px]` is not the 20px a fontSize token resolves to).
-const UTILITY_KIND: Array<[RegExp, string]> = [
-  [/^rounded(-[a-z]+)?$/, "radius"],
-  [/^text$/, "fontSize"],
-  [/^leading$/, "lineHeight"],
-  [/^tracking$/, "letterSpacing"],
-  [/^(gap|gap-x|gap-y|space-x|space-y)$/, "spacing"],
-  [/^([pm][trblxy]?)$/, "spacing"],
-  [/^(top|right|bottom|left|inset(-[xy])?|start|end)$/, "spacing"],
-  [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
-  [/^border(-[trblxyse]+)?$/, "borderWidth"],
-];
-const KIND_MATCHES: Record<string, string[]> = {
-  radius: ["radius", "borderradius", "cornerradius"],
-  fontSize: ["fontsize", "font-size", "type", "typography"],
-  lineHeight: ["lineheight", "line-height"],
-  letterSpacing: ["letterspacing", "letter-spacing", "tracking"],
-  spacing: ["spacing", "space", "gap", "padding", "margin", "size", "dimension"],
-  size: ["size", "spacing", "space", "dimension", "width", "height"],
-  borderWidth: ["borderwidth", "border-width", "border", "stroke"],
-};
-function utilityKind(utility: string | null | undefined): string | null {
-  const u = String(utility || "").replace(/^-/, "");
-  for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
-  return null;
-}
-function kindsCompatible(utility: string | null | undefined, rowKind: unknown): boolean {
-  const uk = utilityKind(utility);
-  if (!uk) return true;
-  const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
-  if (!rk) return true;
-  return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
-}
-interface PxHit { literal: string; utility: string | null }
-function arbitraryPx(source: string): Map<number, PxHit[]> {
-  const found = new Map<number, PxHit[]>();
-  for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
-    const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry: PxHit = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null }; // ?? null: the group is not optional, so it never applies
-    const list = found.get(px) || [];
-    if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
-    found.set(px, list);
-  }
-  for (const m of source.matchAll(/\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
-    const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
-    if (!found.has(px)) found.set(px, [{ literal: m[0], utility: null }]);
-  }
-  return found;
-}
-
-// ================================================================ imports
-
-// Module specifiers a source file imports: ES `import … from`, bare `import "x"`, `export … from`,
-// dynamic `import("x")`, CommonJS `require("x")`, CSS `@import`.
-function importsOf(text: string): string[] {
-  const out: string[] = [];
-  const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
-  for (const m of text.matchAll(re)) {
-    const spec = m[1] || m[2] || m[3] || m[4]; // each alternative captures a non-empty specifier, so one is always set
-    if (spec !== undefined) out.push(spec);
-  }
-  return out;
-}
-
-const SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart)$/i;
-// "app/src/components/PageTitle.tsx" / "@/components/PageTitle" / "../../../components/PageTitle/index"
-// → ["components", "PageTitle"] style segments, extension and trailing /index dropped, alias
-// prefixes (`@/`, `~/`, `#/`, `@alias/`) and `.`/`..` removed.
-function moduleSegments(spec: unknown): string[] {
-  let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
-  const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
-  const [first] = segs;
-  if (first !== undefined && /^[@~#]$/.test(first)) segs.shift();
-  return segs;
-}
-
-/** One file of a plan's files[] with its text (rel is project-relative). */
-export interface FileText { rel: string; text: string }
-
-// Does any built file import the module a plan row says it reuses? Relative specifiers are resolved
-// against the importing file, then compared with mapModule by path SUFFIX; alias / bare specifiers are
-// compared by suffix directly. A `mapModule` written as a repo path (`app/src/components/PageTitle.tsx`)
-// therefore matches `'../../../components/PageTitle'` and `'@/components/PageTitle'` alike (a plain substring
-// test would be unsatisfiable). Non-JS stacks (Swift/Kotlin/Dart import
-// modules, not files): the component's own name used as an identifier counts.
-// importsOf per file text, memoised: the import graph below asks the same file about every other file.
-const importCache = new Map<string, string[]>();
-const cachedImports = (text: string): string[] => getOrInit(importCache, text, () => importsOf(text));
-
-function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boolean {
-  const want = moduleSegments(mapModule);
-  if (!want.length) return true;
-  const suffixMatch = (have: string[]): boolean => {
-    const k = Math.min(have.length, want.length);
-    if (!k) return false;
-    for (let i = 1; i <= k; i++) {
-      const h = have[have.length - i], w = want[want.length - i]; // i <= k <= both lengths, so both are set
-      if (h === undefined || w === undefined || h.toLowerCase() !== w.toLowerCase()) return false;
-    }
-    return true;
-  };
-  const wantAbs = moduleSegments(path.relative(cwd, path.resolve(cwd, String(mapModule))));
-  for (const f of byFile) {
-    for (const spec of cachedImports(f.text)) {
-      if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path.relative(cwd, path.resolve(cwd, path.dirname(f.rel), spec)));
-        if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
-      } else if (suffixMatch(moduleSegments(spec))) return true;
-    }
-    if (!/\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i.test(f.rel)) {
-      const name = want[want.length - 1];
-      if (name && new RegExp(`\\b${name.replace(/[^A-Za-z0-9_]/g, "")}\\b`).test(f.text)) return true;
-    }
-  }
-  return false;
 }
 
 // ================================================================ the export behind a plan
@@ -636,82 +453,6 @@ function validatePlanHeader(plan: Plan): string[] {
   ];
 }
 
-// Token definitions are not token usages. A DEFINITION line declares the code token itself:
-// `--color-figma-brand-600: #5b5fc7` (web-tailwind's `figma-` namespace, profile web-tailwind.md),
-// `--brand-600: #5b5fc7`, `brand600: "#5b5fc7"`, `val brand600 = Color(0xFF5B5FC7)`. The declared
-// name must be the TOKEN's — `color: #5b5fc7` inside a component declares a CSS property.
-const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-// Strip what differs between a CSS variable and the utility/token that uses it: the category prefix
-// (`--color-`, `bg-`, `text-`, `gap-`, `rounded-` …), the `figma-` namespace, and a `-<8 hex>` key suffix.
-function tokenCore(x: unknown): string {
-  let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
-  s = s.replace(
-    /^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/,
-    "");
-  s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
-  return alnumKey(s);
-}
-// Does a declared name name THIS token? Exactly — after normalising both sides (`--color-x`, `var(--x)`,
-// `bg-x`, the `figma-` namespace, a key suffix all reduce to the same core) — never by substring: with
-// tokens `input` and `border`, `border-color:` is a CSS property, not either token's definition. In a
-// stylesheet only a custom property (`--x:`) declares a token; plain properties never do. Elsewhere a
-// token object key / native constant (`brand600:`, `val brand600 =`) counts, by the same exact match.
-const STYLESHEET_EXT = new Set(["css", "scss", "sass", "less", "styl"]);
-const isStylesheet = (rel: string): boolean => STYLESHEET_EXT.has(extOf(rel));
-// A free-text codeToken ("bg-primary / text-primary/80", "hover:bg-x", "var(--x)", "brand-600") split into
-// the names it stands for — ONE reading, shared by the definition check and the undeclared-token
-// check: split on whitespace, " / " and commas; strip variants (`hover:`), `!` and an opacity
-// modifier (`/80`); `var(--x)` and `--x` name the custom property; a colour utility names `--color-<name>`
-// (`builtin` when <name> is a Tailwind built-in colour, a width or an arbitrary value).
-const COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
-const TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
-const TW_KEYWORD = new Set(["white", "black", "transparent", "current", "inherit"]);
-interface TokenPart { text: string; prop: string | null; builtin: boolean }
-function tokenParts(codeToken: string): TokenPart[] {
-  const out: TokenPart[] = [];
-  // `var(--x, fallback)` → `var(--x)` before splitting on commas
-  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
-    let t = raw.trim().toLowerCase().replace(/!$/, ""); // trailing `!` (Tailwind v4 important)
-    if (!t || t === "/") continue;
-    const v = /^var\((--[\w-]+)\)$/.exec(t);
-    if (v && v[1]) { out.push({ text: v[1], prop: v[1], builtin: false }); continue; }
-    if (t.startsWith("--")) { const n = t.replace(/:$/, ""); out.push({ text: n, prop: n, builtin: false }); continue; }
-    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
-    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t); // Tailwind v4 `bg-(--brand)` reads the property directly
-    if (v4 && v4[1]) { out.push({ text: t, prop: v4[1], builtin: false }); continue; }
-    const name = COLOUR_UTILITY.exec(t)?.[2];
-    if (!name) { out.push({ text: t, prop: null, builtin: false }); continue; }
-    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
-  }
-  return out;
-}
-// Every spelling a declaration of this token may carry: the whole codeToken, each part, each part's property.
-const tokenCandidates = (codeToken: string): string[] => [...new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => (p.prop ? [p.text, p.prop] : [p.text]))])];
-function namesToken(name: string, codeToken: string, stylesheet: boolean): boolean {
-  if (stylesheet && !name.startsWith("--")) return false;
-  const declared = alnumKey(name), dc = tokenCore(name);
-  if (!declared) return false;
-  return tokenCandidates(codeToken).some((c) => { const tc = tokenCore(c); return declared === alnumKey(c) || (!!dc && dc === tc); });
-}
-// Is the occurrence of `literal` at `at` the value of a declaration of `codeToken`?
-function declaresTokenAt(line: string, at: number, codeToken: string, stylesheet: boolean): boolean {
-  const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, stylesheet); // group 2 is not optional: set whenever the regex matched
-}
-// A line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
-// a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the
-// row being checked: `--color-surface: #1d1d1f; --color-canvas: #1d1d1f;` defines two tokens that share
-// a value, and neither definition is a "usage" of the other.
-function definesAny(line: string, literal: string, codeTokens: readonly string[], stylesheet: boolean): boolean {
-  let at = line.indexOf(literal);
-  if (at === -1) return false;
-  while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
-    at = line.indexOf(literal, at + literal.length);
-  }
-  return true;
-}
-
 /** checkPlan()'s optional pre-located inputs (the CLI locates each once and passes them through).
  *  `graph`: the project graph over every plan's files[] (built on first use when absent) — one per hook run. */
 export interface CheckPlanOptions { export?: ExportHit | null; reports?: ReportRef[]; graph?: () => ProjectGraph }
@@ -720,101 +461,11 @@ export interface CheckPlanResult { blocking: string[]; warnings: string[]; tagCo
 
 const isAcknowledged = (row: PlanTokenRow): boolean => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
 
-// `bytes` (when given) receives each file's raw bytes, which the text is decoded from.
-function readFiles(rels: readonly string[], cwd: string, bytes?: Map<string, Buffer>): FileText[] {
-  const out: FileText[] = [];
-  for (const rel of rels) {
-    const abs = path.join(cwd, rel);
-    try {
-      if (!fs.statSync(abs).isFile()) continue;
-      const buf = fs.readFileSync(abs);
-      out.push({ rel, text: buf.toString("utf8") });
-      bytes?.set(rel, buf);
-    } catch { /* absent: reported for its own plan */ }
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------- the project graph
-// Every plan's files[] under design/plan/, read once per hook run: their texts, how many plans list each
-// file, and the import graph between the script files (each file's imports parsed once, then resolved
-// through a path-suffix index — linear in files + imports, not files²).
-const SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
-export interface ProjectGraph {
-  files: FileText[];
-  /** how many plans list each file */
-  listCount: Map<string, number>;
-  kids: Map<string, string[]>;
-  parents: Map<string, string[]>;
-  byRel: Map<string, FileText>;
-  /** the project's .css files and whether it has a tailwind.config.* (walked on first use) */
-  scan: () => { css: FileText[]; tailwindConfig: boolean };
-  /** the bytes the graph read for `rel` — undefined when it did not read it, or the run has since rewritten it */
-  cached: (rel: string) => Buffer | undefined;
-  /** records that the run wrote `file` (a plan), so cached() no longer answers for it */
-  rewrote: (file: string) => void;
-}
+// The project graph (code-scanner.ts) over every plan's files[] under design/plan/, read once per hook run: a shared
+// shell lives in another plan's files, and the import check, the tag count and the declared-token check see it.
 // `plans`: design/plan/'s readable plans when the caller has already parsed them (else they are found here).
-function buildGraph(cwd: string, extra: readonly string[] = [], plans?: readonly PlanFile[]): ProjectGraph {
-  const listCount = new Map<string, number>();
-  for (const p of plans ?? findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
-  const bytes = new Map<string, Buffer>();
-  const files = readFiles([...new Set([...listCount.keys(), ...extra])], cwd, bytes);
-  const byRel = new Map(files.map((f): [string, FileText] => [f.rel, f]));
-  const rewritten = new Set<string>();
-  const cached = (rel: string): Buffer | undefined => (rewritten.has(path.resolve(cwd, rel)) ? undefined : bytes.get(rel));
-  const rewrote = (file: string): void => { rewritten.add(path.resolve(cwd, file)); };
-  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
-  const lower = (segs: string[]): string => segs.map((x) => x.toLowerCase()).join("/");
-  const bySuffix = new Map<string, string[]>(), byFull = new Map<string, string[]>();
-  for (const f of scripts) {
-    const segs = moduleSegments(f.rel);
-    getOrInit(byFull, lower(segs), () => []).push(f.rel);
-    for (let i = 0; i < segs.length; i++) getOrInit(bySuffix, lower(segs.slice(i)), () => []).push(f.rel);
-  }
-  const kids = new Map<string, string[]>(), parents = new Map<string, string[]>();
-  for (const f of scripts) {
-    const found = new Set<string>();
-    for (const spec of cachedImports(f.text)) {
-      const segs = spec.startsWith(".") ? moduleSegments(path.relative(cwd, path.resolve(cwd, path.dirname(f.rel), spec))) : moduleSegments(spec);
-      if (!segs.length) continue;
-      for (const r of bySuffix.get(lower(segs)) || []) found.add(r); // spec is a suffix of the file's path
-      for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r); // the file's path is a suffix of the spec
-    }
-    found.delete(f.rel);
-    kids.set(f.rel, [...found]);
-    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
-  }
-  let scanned: { css: FileText[]; tailwindConfig: boolean } | null = null;
-  // a Tailwind config is looked for directly at the root and at each listed file's package root, not
-  // only by the (capped) walk
-  const scan = (): { css: FileText[]; tailwindConfig: boolean } => {
-    if (scanned) return scanned;
-    const walked = projectScan(cwd);
-    const dirs = new Set([path.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
-    return (scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) });
-  };
-  return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
-}
-
-// The files whose imports count for a plan whose files are `own`: its own files; the files they
-// import (one hop — the shell a screen renders in); every ANCESTOR (a file that transitively imports one of
-// them: App → router → routes → this page); and the files an ancestor imports — except another screen's
-// own file (listed by exactly one plan, not this one): App → Page → {ScreenA, ScreenB} must not let plan A
-// borrow ScreenB's imports, while App → AppShell (listed by several plans) → Sidebar does count. The reverse
-// walk keeps a visited set, so an import cycle cannot loop.
-function reachableFor(g: ProjectGraph, own: readonly string[]): FileText[] {
-  const mine = new Set(own);
-  const ancestors = new Set<string>();
-  const queue = own.filter((r) => g.kids.has(r));
-  for (let i = 0; i < queue.length; i++) {
-    for (const par of g.parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) { ancestors.add(par); queue.push(par); }
-  }
-  const out = new Set<string>([...mine, ...ancestors]);
-  for (const r of mine) for (const k of g.kids.get(r) || []) out.add(k);
-  const steppable = (r: string): boolean => mine.has(r) || (g.listCount.get(r) || 0) !== 1;
-  for (const r of ancestors) for (const k of g.kids.get(r) || []) if (steppable(k)) out.add(k);
-  return [...out].map((r) => g.byRel.get(r)).filter((f): f is FileText => !!f);
+function planGraph(cwd: string, extra: readonly string[] = [], plans?: readonly PlanFile[]): ProjectGraph {
+  return projectGraph(cwd, (plans ?? findPlans(cwd).plans).map((p) => p.plan.files || []), extra);
 }
 
 // ---------------------------------------------------------------- profile and tag coverage
@@ -843,51 +494,6 @@ function tagCoverageOf(plan: Plan, exp: ExportHit | null, files: FileText[]): { 
 }
 
 // ---------------------------------------------------------------- colour tokens nothing declares
-const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "design", ".next", "out", "coverage", ".turbo", ".svelte-kit", ".nuxt", ".output",
-  "Pods", ".venv", "venv", "vendor", "target", "tmp"]);
-const TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
-const hasTwConfig = (dir: string): boolean => { try { return fs.readdirSync(dir).some((n) => TW_CONFIG.test(n)); } catch { return false; } };
-// The package root a file belongs to: the nearest directory up from it (not above cwd) with a package.json.
-function packageDirOf(cwd: string, rel: string): string {
-  const root = path.resolve(cwd);
-  for (let d = path.dirname(path.resolve(cwd, rel)); d.startsWith(root); d = path.dirname(d)) {
-    if (fs.existsSync(path.join(d, "package.json"))) return d;
-    if (d === root) break;
-  }
-  return root;
-}
-// The project's stylesheets, and whether it has a Tailwind v3 config (its colours live there, not in CSS vars).
-function projectScan(cwd: string, limit = 2000): { css: FileText[]; tailwindConfig: boolean } {
-  const css: FileText[] = [];
-  let tailwindConfig = false;
-  const walk = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (css.length >= limit) return;
-      const abs = path.join(dir, e.name);
-      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(abs); }
-      else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
-      else if (e.isFile() && /\.css$/i.test(e.name)) {
-        try { css.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), text: fs.readFileSync(abs, "utf8") }); } catch { /* unreadable: skip */ }
-      }
-    }
-  };
-  walk(cwd);
-  return { css, tailwindConfig };
-}
-// Every CSS custom property DECLARED in a text (`--color-x:`), comments stripped.
-function declaredCustomProps(files: FileText[]): Set<string> {
-  const out = new Set<string>();
-  for (const f of files) {
-    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
-    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) { const n = m[1]; if (n !== undefined) out.add(n.toLowerCase()); }
-  }
-  return out;
-}
-// What a codeToken needs declared (tokenParts): a custom property for `--x` / `var(--x)`, `--color-<name>`
-// for a colour utility that is not a Tailwind built-in. Anything else (a bare name, `Color.brand`) is not checked.
-const requiredCustomProps = (codeToken: string): string[] => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 // A colour row's codeToken whose custom property no file declares — the utility or variable it
 // names renders nothing (a hand-written @theme without the alias). Not checked in a project with a
 // tailwind.config.* (Tailwind v3: colours are configured there, not declared as CSS variables).
@@ -951,32 +557,21 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   // files, and the import check, the tag count and the declared-token check see it. The graph has read
   // this plan's files too, so their text is taken from it rather than read again.
   let built: ProjectGraph | null = null;
-  const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed));
+  const graph = (): ProjectGraph => built || (built = o.graph ? o.graph() : planGraph(cwd, listed));
   const g = graph();
   const isFileNow = (rel: string): boolean => { try { return fs.statSync(path.join(cwd, rel)).isFile(); } catch { return false; } };
   const byFile: FileText[] = listed.filter(isFileNow)
     .map((rel) => (g.cached(rel) !== undefined && g.byRel.get(rel)) || { rel, text: fs.readFileSync(path.join(cwd, rel), "utf8") });
-  const code: FileText[] = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
+  const code: FileText[] = codeOf(byFile);
   const source = code.map((f) => f.text).join("\n");
 
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== undefined).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row: PlanTokenRow, literal: string): boolean => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  // `codeTokens`: every plan token that resolves to this literal's value — a line defining any of them is a definition.
-  function definedOnlyInTokenSource(literal: string, codeTokens: readonly string[]): boolean {
-    if (!literal) return false;
-    let seen = false;
-    for (const f of code) {
-      if (!f.text.includes(literal)) continue;
-      if (allowedFiles.includes(f.rel)) { seen = true; continue; }
-      for (const line of f.text.split("\n")) {
-        if (!line.includes(literal)) continue;
-        if (!definesAny(line, literal, codeTokens, isStylesheet(f.rel))) return false;
-        seen = true;
-      }
-    }
-    return seen;
-  }
+  // Where a literal is USED: `codeTokens` is every plan token that resolves to its value — a line defining any of them is
+  // a definition, not a use — and an allow-listed token file is never a use (code-scanner.ts literalUses).
+  const uses = (literal: string, codeTokens: readonly string[]): { found: boolean; usedIn: string[] } => literalUses(code, literal, codeTokens, allowedFiles);
+  const definedOnly = (literal: string, codeTokens: readonly string[]): boolean => { const u = uses(literal, codeTokens); return u.found && !u.usedIn.length; };
 
   const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
@@ -1013,23 +608,21 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   // BLOCK 1: an unexplained colour literal. One message per LITERAL, however many plan rows resolve it
   // (a doc comment naming one literal would otherwise raise two problems).
   const colors = colorLiterals(source);
-  const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[]; defs: string[] }>();
+  const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[]; where: string[] }>();
   for (const row of live) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
-    if (h && lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, colourTokensOf(h))) {
-      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], defs: colourTokensOf(h) }));
-      if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
-    }
-  }
-  for (const [lit, e] of colourHits) {
+    if (!h || !lit || isAllowed(row, lit)) continue;
     // Name only files that USE the literal — not an allow-listed token file, not a file
     // where every occurrence is a token's own definition line.
-    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel)
-      && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
+    const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], where: uses(lit, colourTokensOf(h)).usedIn }));
+    if (e.where.length && !e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
+  }
+  for (const [lit, e] of colourHits) {
     // A block must name where the literal is used. No such file means every occurrence is a
     // definition or allow-listed — nothing to fix, so nothing to block on.
+    const where = e.where;
     if (!where.length) continue;
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings ` +
       `and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that ` +
@@ -1041,14 +634,14 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
-    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
+    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnly(e.literal, dimTokensOf(n)));
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' ` +
       `— use the token (or add it to allowedLiterals with a reason)`);
   }
 
   const sharedByFile = (): FileText[] => graph().files.filter((f) => !listed.includes(f.rel));
   let reach: FileText[] | null = null;
-  const reachable = (): FileText[] => reach || (reach = reachableFor(graph(), listed));
+  const reachable = (): FileText[] => reach || (reach = graph().reachable(listed));
 
   const mapped = loadMapKeys(cwd);
   const seenModule = new Set<string>();
@@ -1056,7 +649,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
-      // See reachableFor — this plan's files, what they import, and the app shell that renders them.
+      // See code-scanner.ts ProjectGraph.reachable — this plan's files, what they import, and the app shell that renders them.
       if (!moduleImported(row.mapModule, byFile, cwd) && !moduleImported(row.mapModule, reachable(), cwd))
         warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (neither this plan's files, nor a plan file they import, nor one that renders them — an ` +
           `app shell — or its direct imports; compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused? If it is rendered by a ` +
@@ -1100,7 +693,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const reason = optOut && optOut.off === true && typeof optOut.reason === "string" ? optOut.reason.trim() : "";
     if (optOut && optOut.off === true && !reason) warnings.push("`tagging.off` is set with no `reason` — the opt-out is ignored until it says why this project cannot carry data-dt-node tags");
     if (!reason && listed.length) { // no files[] at all is the "`files` is empty" warning, not a tag block
-      const tagged = tagCoverageOf(plan, exp, [...code, ...sharedByFile().filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }))]);
+      const tagged = tagCoverageOf(plan, exp, [...code, ...codeOf(sharedByFile())]);
       if (tagged.anchored > 0) {
         tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
         const pct = Math.round((100 * tagged.tagged) / tagged.anchored);
@@ -1604,7 +1197,7 @@ async function main(argv: string[]): Promise<number> {
   const locate = locateCache();
   for (const { p, cwd } of all) {
     // the hook's own cwd has its plans parsed already (findPlans above); a plan named on the command line is found again
-    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)), locate);
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => planGraph(cwd, [], cwd === hookCwd ? hookPlans : undefined)), locate);
     const name = path.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
@@ -1626,13 +1219,13 @@ async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
+// The hook's checks, exported for the tests that drive each one directly. Source scanning is code-scanner.ts's and token
+// names are token-naming.ts's; the locate / record / status functions are imported from their own modules.
 export {
-  checkPlan, locateCache, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, recordedReportWarnings, recordedEdits, reportRecordNames, legacySetWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, deviationConflicts, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
-  colorLiterals, arbitraryPx, colorKey, isStale, readHookInput, main, USAGE,
-  forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, buildGraph,
+  checkPlan, anchorCoverage, validatePlanHeader, auditGateWarnings, legacySetWarnings, deviationWarnings, deviationConflicts,
+  verificationWarnings, recordedReportWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings,
+  isStale, ownPlans, forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, main,
 };
-export type { ExportHit, ReportMatch, ReportRef } from "./verify-locate.ts";
 
 if (import.meta.main) {
   // A step that hangs: say so and end, with what was printed so far flushed first (exitFlushed, capped — never a bare

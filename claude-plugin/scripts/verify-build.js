@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-build.ts
-import fs16 from "node:fs";
-import path17 from "node:path";
+import fs17 from "node:fs";
+import path18 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/errmsg.ts
@@ -190,7 +190,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path18, ancestors, under, beneath) {
+  (function go(node, parentHidden, path19, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -204,7 +204,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path18,
+      path: path19,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -219,7 +219,7 @@ function walk(root, fn, prune, opts) {
     if (!kids.length) return;
     const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path18 ? path18 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path19 ? path19 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkWithHidden(root, fn, opts) {
@@ -1243,7 +1243,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path18, message) => errors.push({ path: path18, message });
+  const err = (path19, message) => errors.push({ path: path19, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -2555,15 +2555,499 @@ function visibility(doc) {
 }
 if (false) runCli5(main, { name: "plan-skeleton" });
 
-// design-to-code/plan-status.ts
-import path16 from "node:path";
-
-// design-to-code/verify-locate.ts
+// design-to-code/code-scanner.ts
 import fs14 from "node:fs";
 import path15 from "node:path";
+
+// design-to-code/token-naming.ts
+var KEY_TAG_LEN = 8;
+var SUFFIX_SEP = { css: "-", native: "_" };
+var TW_NAMESPACE = { color: "color", dimension: "spacing", radius: "radius", fontSize: "text", fontFamily: "font" };
+var TW_PREFIX = "figma-";
+var RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
+var CATEGORY_PREFIXES = [.../* @__PURE__ */ new Set([
+  ...Object.values(TW_NAMESPACE),
+  "colors",
+  "space",
+  "rounded",
+  "font-size",
+  "font-weight",
+  "leading",
+  "tracking",
+  "shadow",
+  "bg",
+  "border",
+  "fill",
+  "stroke",
+  "ring",
+  "outline",
+  "gap",
+  "gap-x",
+  "gap-y",
+  "p",
+  "px",
+  "py",
+  "pt",
+  "pr",
+  "pb",
+  "pl",
+  "m",
+  "mx",
+  "my",
+  "mt",
+  "mr",
+  "mb",
+  "ml",
+  "w",
+  "h",
+  "size",
+  "inset",
+  "top",
+  "left",
+  "right",
+  "bottom"
+])].sort((a, b) => b.length - a.length);
+var CATEGORY = new RegExp(`^(${CATEGORY_PREFIXES.join("|")})-`);
+var KEY_TAG = new RegExp(`[${Object.values(SUFFIX_SEP).join("")}][0-9a-f]{${KEY_TAG_LEN}}$`);
+function tokenCore(x) {
+  let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
+  s = s.replace(CATEGORY, "");
+  s = s.replace(new RegExp(`^${TW_PREFIX}`), "").replace(KEY_TAG, "");
+  return alnumKey(s);
+}
+var COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
+var TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
+var TW_KEYWORD = /* @__PURE__ */ new Set(["white", "black", "transparent", "current", "inherit"]);
+function tokenParts(codeToken) {
+  const out = [];
+  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
+    let t = raw.trim().toLowerCase().replace(/!$/, "");
+    if (!t || t === "/") continue;
+    const v = /^var\((--[\w-]+)\)$/.exec(t);
+    if (v && v[1]) {
+      out.push({ text: v[1], prop: v[1], builtin: false });
+      continue;
+    }
+    if (t.startsWith("--")) {
+      const n = t.replace(/:$/, "");
+      out.push({ text: n, prop: n, builtin: false });
+      continue;
+    }
+    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
+    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t);
+    if (v4 && v4[1]) {
+      out.push({ text: t, prop: v4[1], builtin: false });
+      continue;
+    }
+    const name = COLOUR_UTILITY.exec(t)?.[2];
+    if (!name) {
+      out.push({ text: t, prop: null, builtin: false });
+      continue;
+    }
+    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
+  }
+  return out;
+}
+var MEMBER = /[\w)\]>!?]\.([A-Za-z_$][\w$]*)$/;
+var memberOf = (raw) => {
+  const m = MEMBER.exec(raw.trim());
+  return m && m[1] && !/(^|[^\w])\d+\.\w+$/.test(raw.trim()) ? m[1] : null;
+};
+function tokenCandidates(codeToken) {
+  const out = [codeToken];
+  for (const p of tokenParts(codeToken)) {
+    out.push(p.text);
+    if (p.prop) out.push(p.prop);
+  }
+  for (const raw of codeToken.split(/\s+/)) {
+    const m = memberOf(raw);
+    if (m) out.push(m);
+  }
+  return [...new Set(out)];
+}
+function namesToken(declared, codeToken, opts) {
+  if (opts.stylesheet && !declared.startsWith("--")) return false;
+  const exact = alnumKey(declared), core = tokenCore(declared);
+  if (!exact) return false;
+  return tokenCandidates(codeToken).some((c) => exact === alnumKey(c) || !!core && core === tokenCore(c));
+}
+var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
+
+// design-to-code/code-scanner.ts
+var SOURCE_EXT = /* @__PURE__ */ new Set([
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "mjs",
+  "cjs",
+  "vue",
+  "svelte",
+  "astro",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "styl",
+  "html",
+  "htm",
+  "swift",
+  "kt",
+  "kts",
+  "java",
+  "dart",
+  "xml",
+  "m",
+  "mm",
+  "h",
+  "cs",
+  "xaml"
+]);
+var extOf = (rel) => String(rel).toLowerCase().split(".").pop() ?? "";
+var isSourceFile = (rel) => SOURCE_EXT.has(extOf(rel));
+var STYLESHEET_EXT = /* @__PURE__ */ new Set(["css", "scss", "sass", "less", "styl"]);
+var isStylesheet = (rel) => STYLESHEET_EXT.has(extOf(rel));
+var PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
+var isProse = (s) => PROSE.test(s) && !/-\[|\[#/.test(s);
+function scanText(rel, text) {
+  const ext = extOf(rel);
+  const lineComments = !["css", "html", "htm", "xml", "xaml"].includes(ext);
+  const htmlComments = ["html", "htm", "xml", "xaml", "vue", "svelte", "astro"].includes(ext);
+  const strings = !["html", "htm", "xml", "xaml"].includes(ext);
+  let out = "", i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i], d = text[i + 1];
+    if (c === "/" && d === "*") {
+      const j = text.indexOf("*/", i + 2);
+      const end = j === -1 ? n : j + 2;
+      out += text.slice(i, end).replace(/[^\n]/g, " ");
+      i = end;
+      continue;
+    }
+    if (lineComments && c === "/" && d === "/" && text[i - 1] !== ":") {
+      const j = text.indexOf("\n", i);
+      const end = j === -1 ? n : j;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    if (htmlComments && text.startsWith("<!--", i)) {
+      const j = text.indexOf("-->", i + 4);
+      const end = j === -1 ? n : j + 3;
+      out += text.slice(i, end).replace(/[^\n]/g, " ");
+      i = end;
+      continue;
+    }
+    if (strings && (c === '"' || c === "'" || c === "`")) {
+      let j = i + 1;
+      while (j < n && text[j] !== c && !(c !== "`" && text[j] === "\n")) j += text[j] === "\\" ? 2 : 1;
+      const end = Math.min(n, j + 1);
+      const body = text.slice(i + 1, j);
+      out += isProse(body) ? c + body.replace(/[^\n]/g, " ") + (text[j] === c ? c : "") : text.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+var codeOf = (files) => files.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
+function colorLiterals(source) {
+  const found = /* @__PURE__ */ new Map();
+  const add = (h, lit) => {
+    if (h && !found.has(h)) found.set(h, lit);
+  };
+  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
+  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
+    const g = m[1];
+    if (g === void 0) continue;
+    const h = g.toLowerCase();
+    add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
+  }
+  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
+    const c = parseCssColor(m[0]);
+    if (c) add(colorKey(formatHex(c)), m[0]);
+  }
+  return found;
+}
+var UTILITY_KIND = [
+  [/^rounded(-[a-z]+)?$/, "radius"],
+  [/^text$/, "fontSize"],
+  [/^leading$/, "lineHeight"],
+  [/^tracking$/, "letterSpacing"],
+  [/^(gap|gap-x|gap-y|space-x|space-y)$/, "spacing"],
+  [/^([pm][trblxy]?)$/, "spacing"],
+  [/^(top|right|bottom|left|inset(-[xy])?|start|end)$/, "spacing"],
+  [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
+  [/^border(-[trblxyse]+)?$/, "borderWidth"]
+];
+var KIND_MATCHES = {
+  radius: ["radius", "borderradius", "cornerradius"],
+  fontSize: ["fontsize", "font-size", "type", "typography"],
+  lineHeight: ["lineheight", "line-height"],
+  letterSpacing: ["letterspacing", "letter-spacing", "tracking"],
+  spacing: ["spacing", "space", "gap", "padding", "margin", "size", "dimension"],
+  size: ["size", "spacing", "space", "dimension", "width", "height"],
+  borderWidth: ["borderwidth", "border-width", "border", "stroke"]
+};
+function utilityKind(utility) {
+  const u = String(utility || "").replace(/^-/, "");
+  for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
+  return null;
+}
+function kindsCompatible(utility, rowKind) {
+  const uk = utilityKind(utility);
+  if (!uk) return true;
+  const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!rk) return true;
+  return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
+}
+function arbitraryPx(source) {
+  const found = /* @__PURE__ */ new Map();
+  for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
+    const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
+    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null };
+    const list = found.get(px) || [];
+    if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
+    found.set(px, list);
+  }
+  for (const m of source.matchAll(/\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
+    const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
+    if (!found.has(px)) found.set(px, [{ literal: m[0], utility: null }]);
+  }
+  return found;
+}
+var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
+function declaresTokenAt(line, at, codeToken, stylesheet) {
+  const m = DECLARATION.exec(line.slice(0, at));
+  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet });
+}
+function definesAny(line, literal, codeTokens, stylesheet) {
+  let at = line.indexOf(literal);
+  if (at === -1) return false;
+  while (at !== -1) {
+    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
+    at = line.indexOf(literal, at + literal.length);
+  }
+  return true;
+}
+function literalUses(code, literal, codeTokens, exempt = []) {
+  let found = false;
+  const usedIn = [];
+  if (!literal) return { found, usedIn };
+  for (const f of code) {
+    if (!f.text.includes(literal)) continue;
+    found = true;
+    if (exempt.includes(f.rel)) continue;
+    const stylesheet = isStylesheet(f.rel);
+    if (f.text.split("\n").some((line) => line.includes(literal) && !definesAny(line, literal, codeTokens, stylesheet))) usedIn.push(f.rel);
+  }
+  return { found, usedIn };
+}
+function declaredCustomProps(files) {
+  const out = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
+    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) {
+      const n = m[1];
+      if (n !== void 0) out.add(n.toLowerCase());
+    }
+  }
+  return out;
+}
+function importsOf(text) {
+  const out = [];
+  const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
+  for (const m of text.matchAll(re)) {
+    const spec = m[1] || m[2] || m[3] || m[4];
+    if (spec !== void 0) out.push(spec);
+  }
+  return out;
+}
+var SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart)$/i;
+function moduleSegments(spec) {
+  let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
+  const segs2 = s.split("/").filter((x) => x && x !== "." && x !== "..");
+  const [first] = segs2;
+  if (first !== void 0 && /^[@~#]$/.test(first)) segs2.shift();
+  return segs2;
+}
+var importCache = /* @__PURE__ */ new Map();
+var cachedImports = (text) => getOrInit(importCache, text, () => importsOf(text));
+function moduleImported(mapModule, files, cwd) {
+  const want = moduleSegments(mapModule);
+  if (!want.length) return true;
+  const suffixMatch = (have) => {
+    const k = Math.min(have.length, want.length);
+    if (!k) return false;
+    for (let i = 1; i <= k; i++) {
+      const h = have[have.length - i], w = want[want.length - i];
+      if (h === void 0 || w === void 0 || h.toLowerCase() !== w.toLowerCase()) return false;
+    }
+    return true;
+  };
+  const wantAbs = moduleSegments(path15.relative(cwd, path15.resolve(cwd, String(mapModule))));
+  for (const f of files) {
+    for (const spec of cachedImports(f.text)) {
+      if (spec.startsWith(".")) {
+        const resolved = moduleSegments(path15.relative(cwd, path15.resolve(cwd, path15.dirname(f.rel), spec)));
+        if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
+      } else if (suffixMatch(moduleSegments(spec))) return true;
+    }
+    if (!/\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i.test(f.rel)) {
+      const name = want[want.length - 1];
+      if (name && new RegExp(`\\b${name.replace(/[^A-Za-z0-9_]/g, "")}\\b`).test(f.text)) return true;
+    }
+  }
+  return false;
+}
+function readFiles(rels, cwd, bytes) {
+  const out = [];
+  for (const rel of rels) {
+    const abs = path15.join(cwd, rel);
+    try {
+      if (!fs14.statSync(abs).isFile()) continue;
+      const buf = fs14.readFileSync(abs);
+      out.push({ rel, text: buf.toString("utf8") });
+      bytes?.set(rel, buf);
+    } catch {
+    }
+  }
+  return out;
+}
+var SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
+function projectGraph(cwd, lists, extra = []) {
+  const listCount = /* @__PURE__ */ new Map();
+  for (const list of lists) for (const f of new Set(list)) listCount.set(f, (listCount.get(f) || 0) + 1);
+  const bytes = /* @__PURE__ */ new Map();
+  const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd, bytes);
+  const byRel = new Map(files.map((f) => [f.rel, f]));
+  const rewritten = /* @__PURE__ */ new Set();
+  const cached = (rel) => rewritten.has(path15.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
+  const rewrote = (file) => {
+    rewritten.add(path15.resolve(cwd, file));
+  };
+  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
+  const lower = (segs2) => segs2.map((x) => x.toLowerCase()).join("/");
+  const bySuffix = /* @__PURE__ */ new Map(), byFull = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const segs2 = moduleSegments(f.rel);
+    getOrInit(byFull, lower(segs2), () => []).push(f.rel);
+    for (let i = 0; i < segs2.length; i++) getOrInit(bySuffix, lower(segs2.slice(i)), () => []).push(f.rel);
+  }
+  const kids = /* @__PURE__ */ new Map(), parents = /* @__PURE__ */ new Map();
+  for (const f of scripts) {
+    const found = /* @__PURE__ */ new Set();
+    for (const spec of cachedImports(f.text)) {
+      const segs2 = spec.startsWith(".") ? moduleSegments(path15.relative(cwd, path15.resolve(cwd, path15.dirname(f.rel), spec))) : moduleSegments(spec);
+      if (!segs2.length) continue;
+      for (const r of bySuffix.get(lower(segs2)) || []) found.add(r);
+      for (let i = 1; i < segs2.length; i++) for (const r of byFull.get(lower(segs2.slice(i))) || []) found.add(r);
+    }
+    found.delete(f.rel);
+    kids.set(f.rel, [...found]);
+    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
+  }
+  let scanned = null;
+  const scan = () => {
+    if (scanned) return scanned;
+    const walked = projectScan(cwd);
+    const dirs = /* @__PURE__ */ new Set([path15.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
+    return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
+  };
+  const reachable = (own) => {
+    const mine = new Set(own);
+    const ancestors = /* @__PURE__ */ new Set();
+    const queue = own.filter((r) => kids.has(r));
+    for (let i = 0; i < queue.length; i++) {
+      for (const par of parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) {
+        ancestors.add(par);
+        queue.push(par);
+      }
+    }
+    const out = /* @__PURE__ */ new Set([...mine, ...ancestors]);
+    for (const r of mine) for (const k of kids.get(r) || []) out.add(k);
+    const steppable = (r) => mine.has(r) || (listCount.get(r) || 0) !== 1;
+    for (const r of ancestors) for (const k of kids.get(r) || []) if (steppable(k)) out.add(k);
+    return [...out].map((r) => byRel.get(r)).filter((f) => !!f);
+  };
+  return { files, listCount, byRel, scan, cached, rewrote, reachable };
+}
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  "dist",
+  "build",
+  ".git",
+  "design",
+  ".next",
+  "out",
+  "coverage",
+  ".turbo",
+  ".svelte-kit",
+  ".nuxt",
+  ".output",
+  "Pods",
+  ".venv",
+  "venv",
+  "vendor",
+  "target",
+  "tmp"
+]);
+var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
+var hasTwConfig = (dir) => {
+  try {
+    return fs14.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+  } catch {
+    return false;
+  }
+};
+function packageDirOf(cwd, rel) {
+  const root = path15.resolve(cwd);
+  for (let d = path15.dirname(path15.resolve(cwd, rel)); d.startsWith(root); d = path15.dirname(d)) {
+    if (fs14.existsSync(path15.join(d, "package.json"))) return d;
+    if (d === root) break;
+  }
+  return root;
+}
+function projectScan(cwd, limit = 2e3) {
+  const css = [];
+  let tailwindConfig = false;
+  const walk2 = (dir) => {
+    let entries;
+    try {
+      entries = fs14.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (css.length >= limit) return;
+      const abs = path15.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk2(abs);
+      } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
+      else if (e.isFile() && /\.css$/i.test(e.name)) {
+        try {
+          css.push({ rel: path15.relative(cwd, abs).split(path15.sep).join("/"), text: fs14.readFileSync(abs, "utf8") });
+        } catch {
+        }
+      }
+    }
+  };
+  walk2(cwd);
+  return { css, tailwindConfig };
+}
+
+// design-to-code/plan-status.ts
+import path17 from "node:path";
+
+// design-to-code/verify-locate.ts
+import fs15 from "node:fs";
+import path16 from "node:path";
 function exportDirOf(cwd) {
-  const e = path15.join(cwd, EXPORT_DIR);
-  return fs14.existsSync(path15.join(e, "pages")) ? e : path15.join(cwd, DESIGN_DIR);
+  const e = path16.join(cwd, EXPORT_DIR);
+  return fs15.existsSync(path16.join(e, "pages")) ? e : path16.join(cwd, DESIGN_DIR);
 }
 var locateCache = () => ({ reports: /* @__PURE__ */ new Map(), indexes: /* @__PURE__ */ new Map() });
 function exportIndexOf(exportDir, cache) {
@@ -2576,7 +3060,7 @@ function exportIndexOf(exportDir, cache) {
   return ix;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
-var sameFile = (a, b) => path15.resolve(a) === path15.resolve(b) || canonical(a) === canonical(b);
+var sameFile = (a, b) => path16.resolve(a) === path16.resolve(b) || canonical(a) === canonical(b);
 function sourceOf(doc) {
   const exp = screenExportOf(doc);
   const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
@@ -2598,7 +3082,7 @@ function locateExport(plan, planFile, cwd, cache) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path15.resolve(cwd, rel), path15.resolve(exportDir, rel)]) {
+    for (const f of [path16.resolve(cwd, rel), path16.resolve(exportDir, rel)]) {
       const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
@@ -2659,21 +3143,21 @@ function behaviourRef(x) {
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function reportEntries(dir) {
-  if (!fs14.existsSync(dir)) return null;
+  if (!fs15.existsSync(dir)) return null;
   const out = [];
-  for (const f of fs14.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
-    const abs = path15.join(dir, f);
+  for (const f of fs15.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
+    const abs = path16.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = setBaseOf(f, "report") ?? f;
-    if (!fs14.existsSync(setFile(path15.join(dir, stem), "expected")) && fs14.existsSync(setFile(path15.join(dir, stem), "retired"))) continue;
+    if (!fs15.existsSync(setFile(path16.join(dir, stem), "expected")) && fs15.existsSync(setFile(path16.join(dir, stem), "retired"))) continue;
     out.push({ f, abs, stem, r, facts: null, mtimeMs: null });
   }
   return out;
 }
-var factsOf = (dir, x) => x.facts ??= setFactsOf(readJsonOrNull(setFile(path15.join(dir, x.stem), "expected"), isJsonObject), x.r);
+var factsOf = (dir, x) => x.facts ??= setFactsOf(readJsonOrNull(setFile(path16.join(dir, x.stem), "expected"), isJsonObject), x.r);
 function locateReports(plan, planFile, cwd, exp, cache) {
-  const dir = path15.join(cwd, VERIFY_DIR);
+  const dir = path16.join(cwd, VERIFY_DIR);
   let entries = cache ? cache.reports.get(dir) : void 0;
   if (entries === void 0) {
     entries = reportEntries(dir);
@@ -2682,9 +3166,9 @@ function locateReports(plan, planFile, cwd, exp, cache) {
   if (entries === null) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd, cache) : exp;
   const stems = new Set([
-    plan.file ? path15.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path15.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path15.basename(planFile, ".json") : null,
+    plan.file ? path16.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path16.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path16.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
   const nodeId = planNode(plan, planFile);
@@ -2700,12 +3184,12 @@ function locateReports(plan, planFile, cwd, exp, cache) {
     if (x.mtimeMs === null) {
       x.mtimeMs = 0;
       try {
-        x.mtimeMs = fs14.statSync(abs).mtimeMs;
+        x.mtimeMs = fs15.statSync(abs).mtimeMs;
       } catch {
       }
     }
     out.push({
-      rel: path15.relative(cwd, abs).split(path15.sep).join("/"),
+      rel: path16.relative(cwd, abs).split(path16.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
@@ -2736,8 +3220,8 @@ function storedComputed(doc) {
   return s !== null && COMPUTED_STORED.has(s.trim().toLowerCase()) ? s : null;
 }
 function rootOfPlan(file, fallback) {
-  const dir = path16.dirname(path16.resolve(file));
-  if (dir.endsWith(path16.sep + PLAN_DIR)) return path16.dirname(path16.dirname(dir));
+  const dir = path17.dirname(path17.resolve(file));
+  if (dir.endsWith(path17.sep + PLAN_DIR)) return path17.dirname(path17.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
@@ -2848,7 +3332,7 @@ function planStatus(root, o = {}) {
 }
 
 // design-to-code/hook-input.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 function parseHookPayload(raw) {
   if (!raw.trim()) return {};
   try {
@@ -2862,13 +3346,13 @@ function readHookInput(opts) {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs15.fstatSync(0);
+    st = fs16.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parseHookPayload(fs15.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parseHookPayload(fs16.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -3044,204 +3528,16 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs16.statSync(file).mtimeMs > cutoff;
+    return now - fs17.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function findPlans(cwd) {
-  return nodeArtefacts(cwd, { planDir: path17.join(cwd, PLAN_DIR) }).plans();
+  return nodeArtefacts(cwd, { planDir: path18.join(cwd, PLAN_DIR) }).plans();
 }
 function isOpen(p, cwd) {
   return !isStale2(p.file) && planStatus(cwd).open(p.plan);
-}
-var SOURCE_EXT = /* @__PURE__ */ new Set([
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "mjs",
-  "cjs",
-  "vue",
-  "svelte",
-  "astro",
-  "css",
-  "scss",
-  "sass",
-  "less",
-  "styl",
-  "html",
-  "htm",
-  "swift",
-  "kt",
-  "kts",
-  "java",
-  "dart",
-  "xml",
-  "m",
-  "mm",
-  "h",
-  "cs",
-  "xaml"
-]);
-var extOf = (rel) => String(rel).toLowerCase().split(".").pop() ?? "";
-var isSourceFile = (rel) => SOURCE_EXT.has(extOf(rel));
-var PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
-var isProse = (s) => PROSE.test(s) && !/-\[|\[#/.test(s);
-function scanText(rel, text) {
-  const ext = extOf(rel);
-  const lineComments = !["css", "html", "htm", "xml", "xaml"].includes(ext);
-  const htmlComments = ["html", "htm", "xml", "xaml", "vue", "svelte", "astro"].includes(ext);
-  const strings = !["html", "htm", "xml", "xaml"].includes(ext);
-  let out = "", i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i], d = text[i + 1];
-    if (c === "/" && d === "*") {
-      const j = text.indexOf("*/", i + 2);
-      const end = j === -1 ? n : j + 2;
-      out += text.slice(i, end).replace(/[^\n]/g, " ");
-      i = end;
-      continue;
-    }
-    if (lineComments && c === "/" && d === "/" && text[i - 1] !== ":") {
-      const j = text.indexOf("\n", i);
-      const end = j === -1 ? n : j;
-      out += " ".repeat(end - i);
-      i = end;
-      continue;
-    }
-    if (htmlComments && text.startsWith("<!--", i)) {
-      const j = text.indexOf("-->", i + 4);
-      const end = j === -1 ? n : j + 3;
-      out += text.slice(i, end).replace(/[^\n]/g, " ");
-      i = end;
-      continue;
-    }
-    if (strings && (c === '"' || c === "'" || c === "`")) {
-      let j = i + 1;
-      while (j < n && text[j] !== c && !(c !== "`" && text[j] === "\n")) j += text[j] === "\\" ? 2 : 1;
-      const end = Math.min(n, j + 1);
-      const body = text.slice(i + 1, j);
-      out += isProse(body) ? c + body.replace(/[^\n]/g, " ") + (text[j] === c ? c : "") : text.slice(i, end);
-      i = end;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-function colorLiterals(source) {
-  const found = /* @__PURE__ */ new Map();
-  const add = (h, lit) => {
-    if (h && !found.has(h)) found.set(h, lit);
-  };
-  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
-  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
-    const g = m[1];
-    if (g === void 0) continue;
-    const h = g.toLowerCase();
-    add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
-  }
-  for (const m of source.matchAll(/rgba?\([^()]*\)/g)) {
-    const c = parseCssColor(m[0]);
-    if (c) add(colorKey(formatHex(c)), m[0]);
-  }
-  return found;
-}
-var UTILITY_KIND = [
-  [/^rounded(-[a-z]+)?$/, "radius"],
-  [/^text$/, "fontSize"],
-  [/^leading$/, "lineHeight"],
-  [/^tracking$/, "letterSpacing"],
-  [/^(gap|gap-x|gap-y|space-x|space-y)$/, "spacing"],
-  [/^([pm][trblxy]?)$/, "spacing"],
-  [/^(top|right|bottom|left|inset(-[xy])?|start|end)$/, "spacing"],
-  [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
-  [/^border(-[trblxyse]+)?$/, "borderWidth"]
-];
-var KIND_MATCHES = {
-  radius: ["radius", "borderradius", "cornerradius"],
-  fontSize: ["fontsize", "font-size", "type", "typography"],
-  lineHeight: ["lineheight", "line-height"],
-  letterSpacing: ["letterspacing", "letter-spacing", "tracking"],
-  spacing: ["spacing", "space", "gap", "padding", "margin", "size", "dimension"],
-  size: ["size", "spacing", "space", "dimension", "width", "height"],
-  borderWidth: ["borderwidth", "border-width", "border", "stroke"]
-};
-function utilityKind(utility) {
-  const u = String(utility || "").replace(/^-/, "");
-  for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
-  return null;
-}
-function kindsCompatible(utility, rowKind) {
-  const uk = utilityKind(utility);
-  if (!uk) return true;
-  const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
-  if (!rk) return true;
-  return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
-}
-function arbitraryPx(source) {
-  const found = /* @__PURE__ */ new Map();
-  for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
-    const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null };
-    const list = found.get(px) || [];
-    if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
-    found.set(px, list);
-  }
-  for (const m of source.matchAll(/\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
-    const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
-    if (!found.has(px)) found.set(px, [{ literal: m[0], utility: null }]);
-  }
-  return found;
-}
-function importsOf(text) {
-  const out = [];
-  const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
-  for (const m of text.matchAll(re)) {
-    const spec = m[1] || m[2] || m[3] || m[4];
-    if (spec !== void 0) out.push(spec);
-  }
-  return out;
-}
-var SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart)$/i;
-function moduleSegments(spec) {
-  let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
-  const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
-  const [first] = segs;
-  if (first !== void 0 && /^[@~#]$/.test(first)) segs.shift();
-  return segs;
-}
-var importCache = /* @__PURE__ */ new Map();
-var cachedImports = (text) => getOrInit(importCache, text, () => importsOf(text));
-function moduleImported(mapModule, byFile, cwd) {
-  const want = moduleSegments(mapModule);
-  if (!want.length) return true;
-  const suffixMatch = (have) => {
-    const k = Math.min(have.length, want.length);
-    if (!k) return false;
-    for (let i = 1; i <= k; i++) {
-      const h = have[have.length - i], w = want[want.length - i];
-      if (h === void 0 || w === void 0 || h.toLowerCase() !== w.toLowerCase()) return false;
-    }
-    return true;
-  };
-  const wantAbs = moduleSegments(path17.relative(cwd, path17.resolve(cwd, String(mapModule))));
-  for (const f of byFile) {
-    for (const spec of cachedImports(f.text)) {
-      if (spec.startsWith(".")) {
-        const resolved = moduleSegments(path17.relative(cwd, path17.resolve(cwd, path17.dirname(f.rel), spec)));
-        if (resolved.join("/").toLowerCase() === wantAbs.join("/").toLowerCase() || suffixMatch(resolved)) return true;
-      } else if (suffixMatch(moduleSegments(spec))) return true;
-    }
-    if (!/\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i.test(f.rel)) {
-      const name = want[want.length - 1];
-      if (name && new RegExp(`\\b${name.replace(/[^A-Za-z0-9_]/g, "")}\\b`).test(f.text)) return true;
-    }
-  }
-  return false;
 }
 var anchored = (a) => !!a && typeof a === "object" && ["mapModule", "file", "symbol", "omitted"].some((k) => {
   const v = a[k];
@@ -3294,7 +3590,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path17.join(cwd, MAP_FILE), path17.join(cwd, LEGACY_MAP_FILE)]) {
+  for (const f of [path18.join(cwd, MAP_FILE), path18.join(cwd, LEGACY_MAP_FILE)]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -3321,7 +3617,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs16.existsSync(path17.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs17.existsSync(path18.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -3363,12 +3659,12 @@ function recordedShadowWarnings(plan) {
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
 var json = (x) => siblingFile(x, "reportMd", "report");
-var slash2 = (x) => x.split(path17.sep).join("/").split("\\").join("/");
+var slash2 = (x) => x.split(path18.sep).join("/").split("\\").join("/");
 function recordedReportRel(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
   const named = rec.report.trim();
-  return json(slash2(cwd === void 0 ? named : path17.relative(cwd, path17.resolve(cwd, named))).replace(/^\.\//, ""));
+  return json(slash2(cwd === void 0 ? named : path18.relative(cwd, path18.resolve(cwd, named))).replace(/^\.\//, ""));
 }
 var measuredMs = (r) => {
   const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
@@ -3386,13 +3682,13 @@ function a11yReportOf(named, reports, ctx = {}) {
   const want = slash2(named.trim());
   const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== void 0) {
-    rels.add(json(slash2(path17.relative(ctx.cwd, path17.resolve(ctx.cwd, named.trim())))));
-    if (ctx.planFile !== void 0) rels.add(json(slash2(path17.relative(ctx.cwd, path17.resolve(path17.dirname(path17.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+    rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(path18.dirname(path18.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
   }
   const exact = reports.find((r) => rels.has(r.rel));
   if (exact) return { ref: exact };
-  const base = json(path17.posix.basename(want));
-  const byBase = reports.filter((r) => path17.posix.basename(r.rel) === base);
+  const base = json(path18.posix.basename(want));
+  const byBase = reports.filter((r) => path18.posix.basename(r.rel) === base);
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
   return { ref: null, missing: want };
 }
@@ -3477,152 +3773,15 @@ function validatePlanHeader(plan) {
     `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`
   ];
 }
-var DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-function tokenCore(x) {
-  let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
-  s = s.replace(
-    /^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/,
-    ""
-  );
-  s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
-  return alnumKey(s);
-}
-var STYLESHEET_EXT = /* @__PURE__ */ new Set(["css", "scss", "sass", "less", "styl"]);
-var isStylesheet = (rel) => STYLESHEET_EXT.has(extOf(rel));
-var COLOUR_UTILITY = /^(bg|text|border|ring|fill|stroke|outline|divide|placeholder|decoration|accent|caret|from|via|to|shadow)-(.+)$/;
-var TW_PALETTE = /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
-var TW_KEYWORD = /* @__PURE__ */ new Set(["white", "black", "transparent", "current", "inherit"]);
-function tokenParts(codeToken) {
-  const out = [];
-  for (const raw of codeToken.replace(/var\(\s*(--[\w-]+)\s*,[^)]*\)/g, "var($1)").split(/[\s,]+/)) {
-    let t = raw.trim().toLowerCase().replace(/!$/, "");
-    if (!t || t === "/") continue;
-    const v = /^var\((--[\w-]+)\)$/.exec(t);
-    if (v && v[1]) {
-      out.push({ text: v[1], prop: v[1], builtin: false });
-      continue;
-    }
-    if (t.startsWith("--")) {
-      const n = t.replace(/:$/, "");
-      out.push({ text: n, prop: n, builtin: false });
-      continue;
-    }
-    t = t.slice(t.lastIndexOf(":") + 1).replace(/^!/, "").replace(/\/[\w.[\]%]+$/, "");
-    const v4 = /^[a-z-]+-\((--[\w-]+)\)$/.exec(t);
-    if (v4 && v4[1]) {
-      out.push({ text: t, prop: v4[1], builtin: false });
-      continue;
-    }
-    const name = COLOUR_UTILITY.exec(t)?.[2];
-    if (!name) {
-      out.push({ text: t, prop: null, builtin: false });
-      continue;
-    }
-    out.push({ text: t, prop: `--color-${name}`, builtin: TW_KEYWORD.has(name) || TW_PALETTE.test(name) || /^[\d.]+$|^\[/.test(name) });
-  }
-  return out;
-}
-var tokenCandidates = (codeToken) => [.../* @__PURE__ */ new Set([codeToken, ...tokenParts(codeToken).flatMap((p) => p.prop ? [p.text, p.prop] : [p.text])])];
-function namesToken(name, codeToken, stylesheet) {
-  if (stylesheet && !name.startsWith("--")) return false;
-  const declared = alnumKey(name), dc = tokenCore(name);
-  if (!declared) return false;
-  return tokenCandidates(codeToken).some((c) => {
-    const tc = tokenCore(c);
-    return declared === alnumKey(c) || !!dc && dc === tc;
-  });
-}
-function declaresTokenAt(line, at, codeToken, stylesheet) {
-  const m = DECLARATION.exec(line.slice(0, at));
-  return !!m && namesToken(m[2] ?? "", codeToken, stylesheet);
-}
-function definesAny(line, literal, codeTokens, stylesheet) {
-  let at = line.indexOf(literal);
-  if (at === -1) return false;
-  while (at !== -1) {
-    if (!codeTokens.some((t) => declaresTokenAt(line, at, t, stylesheet))) return false;
-    at = line.indexOf(literal, at + literal.length);
-  }
-  return true;
-}
 var isAcknowledged = (row) => typeof row.acknowledged === "string" && !!row.acknowledged.trim();
-function readFiles(rels, cwd, bytes) {
-  const out = [];
-  for (const rel of rels) {
-    const abs = path17.join(cwd, rel);
-    try {
-      if (!fs16.statSync(abs).isFile()) continue;
-      const buf = fs16.readFileSync(abs);
-      out.push({ rel, text: buf.toString("utf8") });
-      bytes?.set(rel, buf);
-    } catch {
-    }
-  }
-  return out;
-}
-var SCRIPT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro)$/i;
-function buildGraph(cwd, extra = [], plans) {
-  const listCount = /* @__PURE__ */ new Map();
-  for (const p of plans ?? findPlans(cwd).plans) for (const f of new Set(p.plan.files || [])) listCount.set(f, (listCount.get(f) || 0) + 1);
-  const bytes = /* @__PURE__ */ new Map();
-  const files = readFiles([.../* @__PURE__ */ new Set([...listCount.keys(), ...extra])], cwd, bytes);
-  const byRel = new Map(files.map((f) => [f.rel, f]));
-  const rewritten = /* @__PURE__ */ new Set();
-  const cached = (rel) => rewritten.has(path17.resolve(cwd, rel)) ? void 0 : bytes.get(rel);
-  const rewrote = (file) => {
-    rewritten.add(path17.resolve(cwd, file));
-  };
-  const scripts = files.filter((f) => SCRIPT_RE.test(f.rel));
-  const lower = (segs) => segs.map((x) => x.toLowerCase()).join("/");
-  const bySuffix = /* @__PURE__ */ new Map(), byFull = /* @__PURE__ */ new Map();
-  for (const f of scripts) {
-    const segs = moduleSegments(f.rel);
-    getOrInit(byFull, lower(segs), () => []).push(f.rel);
-    for (let i = 0; i < segs.length; i++) getOrInit(bySuffix, lower(segs.slice(i)), () => []).push(f.rel);
-  }
-  const kids = /* @__PURE__ */ new Map(), parents = /* @__PURE__ */ new Map();
-  for (const f of scripts) {
-    const found = /* @__PURE__ */ new Set();
-    for (const spec of cachedImports(f.text)) {
-      const segs = spec.startsWith(".") ? moduleSegments(path17.relative(cwd, path17.resolve(cwd, path17.dirname(f.rel), spec))) : moduleSegments(spec);
-      if (!segs.length) continue;
-      for (const r of bySuffix.get(lower(segs)) || []) found.add(r);
-      for (let i = 1; i < segs.length; i++) for (const r of byFull.get(lower(segs.slice(i))) || []) found.add(r);
-    }
-    found.delete(f.rel);
-    kids.set(f.rel, [...found]);
-    for (const r of found) getOrInit(parents, r, () => []).push(f.rel);
-  }
-  let scanned = null;
-  const scan = () => {
-    if (scanned) return scanned;
-    const walked = projectScan(cwd);
-    const dirs = /* @__PURE__ */ new Set([path17.resolve(cwd), ...files.map((f) => packageDirOf(cwd, f.rel))]);
-    return scanned = { css: walked.css, tailwindConfig: walked.tailwindConfig || [...dirs].some(hasTwConfig) };
-  };
-  return { files, listCount, kids, parents, byRel, scan, cached, rewrote };
-}
-function reachableFor(g, own) {
-  const mine = new Set(own);
-  const ancestors = /* @__PURE__ */ new Set();
-  const queue = own.filter((r) => g.kids.has(r));
-  for (let i = 0; i < queue.length; i++) {
-    for (const par of g.parents.get(queue[i] ?? "") || []) if (!mine.has(par) && !ancestors.has(par)) {
-      ancestors.add(par);
-      queue.push(par);
-    }
-  }
-  const out = /* @__PURE__ */ new Set([...mine, ...ancestors]);
-  for (const r of mine) for (const k of g.kids.get(r) || []) out.add(k);
-  const steppable = (r) => mine.has(r) || (g.listCount.get(r) || 0) !== 1;
-  for (const r of ancestors) for (const k of g.kids.get(r) || []) if (steppable(k)) out.add(k);
-  return [...out].map((r) => g.byRel.get(r)).filter((f) => !!f);
+function planGraph(cwd, extra = [], plans) {
+  return projectGraph(cwd, (plans ?? findPlans(cwd).plans).map((p) => p.plan.files || []), extra);
 }
 function profileOf(plan, cwd) {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path17.join(cwd, TARGET_FILE), isJsonObject);
+  const doc = readJsonOrNull(path18.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
@@ -3637,81 +3796,6 @@ function tagCoverageOf(plan, exp, files) {
   const untagged = attribute ? ids.filter((id) => !files.some((f) => f.text.includes(`"${id}"`) || f.text.includes(`'${id}'`) || f.text.includes("`" + id + "`"))) : ids;
   return { tagged: ids.length - untagged.length, anchored: ids.length, attribute, untagged };
 }
-var SKIP_DIRS = /* @__PURE__ */ new Set([
-  "node_modules",
-  "dist",
-  "build",
-  ".git",
-  "design",
-  ".next",
-  "out",
-  "coverage",
-  ".turbo",
-  ".svelte-kit",
-  ".nuxt",
-  ".output",
-  "Pods",
-  ".venv",
-  "venv",
-  "vendor",
-  "target",
-  "tmp"
-]);
-var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
-var hasTwConfig = (dir) => {
-  try {
-    return fs16.readdirSync(dir).some((n) => TW_CONFIG.test(n));
-  } catch {
-    return false;
-  }
-};
-function packageDirOf(cwd, rel) {
-  const root = path17.resolve(cwd);
-  for (let d = path17.dirname(path17.resolve(cwd, rel)); d.startsWith(root); d = path17.dirname(d)) {
-    if (fs16.existsSync(path17.join(d, "package.json"))) return d;
-    if (d === root) break;
-  }
-  return root;
-}
-function projectScan(cwd, limit = 2e3) {
-  const css = [];
-  let tailwindConfig = false;
-  const walk2 = (dir) => {
-    let entries;
-    try {
-      entries = fs16.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (css.length >= limit) return;
-      const abs = path17.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name)) walk2(abs);
-      } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
-      else if (e.isFile() && /\.css$/i.test(e.name)) {
-        try {
-          css.push({ rel: path17.relative(cwd, abs).split(path17.sep).join("/"), text: fs16.readFileSync(abs, "utf8") });
-        } catch {
-        }
-      }
-    }
-  };
-  walk2(cwd);
-  return { css, tailwindConfig };
-}
-function declaredCustomProps(files) {
-  const out = /* @__PURE__ */ new Set();
-  for (const f of files) {
-    const text = isSourceFile(f.rel) ? scanText(f.rel, f.text) : f.text;
-    for (const m of text.matchAll(/(--[\w-]+)\s*:/g)) {
-      const n = m[1];
-      if (n !== void 0) out.add(n.toLowerCase());
-    }
-  }
-  return out;
-}
-var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 function undeclaredColourTokens(live, g) {
   const colour = [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color").map((r) => String(r.codeToken).trim()))];
   const wanted = colour.map((t) => ({ t, props: requiredCustomProps(t) })).filter((x) => x.props.length);
@@ -3780,42 +3864,30 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed2 = plan.files || [];
-  const absent = listed2.filter((f) => !fs16.existsSync(path17.join(cwd, f)));
+  const absent = listed2.filter((f) => !fs17.existsSync(path18.join(cwd, f)));
   if (!listed2.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
-  const graph = () => built || (built = o.graph ? o.graph() : buildGraph(cwd, listed2));
+  const graph = () => built || (built = o.graph ? o.graph() : planGraph(cwd, listed2));
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs16.statSync(path17.join(cwd, rel)).isFile();
+      return fs17.statSync(path18.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs16.readFileSync(path17.join(cwd, rel), "utf8") });
-  const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
+  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs17.readFileSync(path18.join(cwd, rel), "utf8") });
+  const code = codeOf(byFile);
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  function definedOnlyInTokenSource(literal, codeTokens) {
-    if (!literal) return false;
-    let seen = false;
-    for (const f of code) {
-      if (!f.text.includes(literal)) continue;
-      if (allowedFiles.includes(f.rel)) {
-        seen = true;
-        continue;
-      }
-      for (const line of f.text.split("\n")) {
-        if (!line.includes(literal)) continue;
-        if (!definesAny(line, literal, codeTokens, isStylesheet(f.rel))) return false;
-        seen = true;
-      }
-    }
-    return seen;
-  }
+  const uses = (literal, codeTokens) => literalUses(code, literal, codeTokens, allowedFiles);
+  const definedOnly = (literal, codeTokens) => {
+    const u = uses(literal, codeTokens);
+    return u.found && !u.usedIn.length;
+  };
   const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
   const colourTokensOf = (key) => [...new Set(live.filter((r) => hasToken(r) && String(r.kind).toLowerCase() === "color" && colorKey(r.value) === key).map((r) => String(r.codeToken)))];
@@ -3846,13 +3918,12 @@ function checkPlan({ plan, file }, cwd, opts) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
-    if (h && lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, colourTokensOf(h))) {
-      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], defs: colourTokensOf(h) }));
-      if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
-    }
+    if (!h || !lit || isAllowed(row, lit)) continue;
+    const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [], where: uses(lit, colourTokensOf(h)).usedIn }));
+    if (e.where.length && !e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
   }
   for (const [lit, e] of colourHits) {
-    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => definesAny(l, lit, e.defs, isStylesheet(f.rel)))).map((f) => f.rel);
+    const where = e.where;
     if (!where.length) continue;
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
   }
@@ -3861,12 +3932,12 @@ function checkPlan({ plan, file }, cwd, opts) {
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
-    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, dimTokensOf(n)));
+    const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnly(e.literal, dimTokensOf(n)));
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
   }
   const sharedByFile = () => graph().files.filter((f) => !listed2.includes(f.rel));
   let reach = null;
-  const reachable = () => reach || (reach = reachableFor(graph(), listed2));
+  const reachable = () => reach || (reach = graph().reachable(listed2));
   const mapped = loadMapKeys(cwd);
   const seenModule = /* @__PURE__ */ new Set();
   for (const row of plan.components || []) {
@@ -3887,7 +3958,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     if (exp.staleFile) {
-      const now = path17.relative(cwd, exp.file).split(path17.sep).join("/");
+      const now = path18.relative(cwd, exp.file).split(path18.sep).join("/");
       warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
     }
     const cov = anchorCoverage(plan, exp.doc);
@@ -3905,7 +3976,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     const reason = optOut && optOut.off === true && typeof optOut.reason === "string" ? optOut.reason.trim() : "";
     if (optOut && optOut.off === true && !reason) warnings.push("`tagging.off` is set with no `reason` \u2014 the opt-out is ignored until it says why this project cannot carry data-dt-node tags");
     if (!reason && listed2.length) {
-      const tagged = tagCoverageOf(plan, exp, [...code, ...sharedByFile().filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }))]);
+      const tagged = tagCoverageOf(plan, exp, [...code, ...codeOf(sharedByFile())]);
       if (tagged.anchored > 0) {
         tagCoverage = { tagged: tagged.tagged, anchored: tagged.anchored };
         const pct = Math.round(100 * tagged.tagged / tagged.anchored);
@@ -3932,7 +4003,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp, planFile) {
-  const screenFile = plan.file ? path17.resolve(cwd, plan.file) : null;
+  const screenFile = plan.file ? path18.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || exp && exp.layerName || null;
   let g;
   try {
@@ -3967,7 +4038,7 @@ function auditGateWarnings(plan, cwd, exp, planFile) {
 function legacySetWarnings(plan, planFile, reports) {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = setBaseOf(path17.posix.basename(r.rel), "report") ?? path17.posix.basename(r.rel);
+    const set = setBaseOf(path18.posix.basename(r.rel), "report") ?? path18.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
 }
@@ -4003,12 +4074,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs16.openSync(file, "r");
+  const fd = fs17.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(chunk);
     let carry = [];
     for (; ; ) {
-      const n = fs16.readSync(fd, buf, 0, chunk, null);
+      const n = fs17.readSync(fd, buf, 0, chunk, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -4022,7 +4093,7 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs16.closeSync(fd);
+    fs17.closeSync(fd);
   }
 }
 var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
@@ -4079,9 +4150,9 @@ function planSkeletonOuts(cmd, powershell = false) {
 function sameFile2(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
   if (!c) return false;
-  const want = path17.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path17.posix.normalize(c).toLowerCase().endsWith("/" + path17.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path17.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  const want = path18.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path18.posix.normalize(c).toLowerCase().endsWith("/" + path18.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path18.resolve(w.base || cwd, c).replace(/\\/g, "/");
   return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
 }
 function ownPlans(open, input, all, cwd) {
@@ -4098,7 +4169,7 @@ function ownPlans(open, input, all, cwd) {
   const listers = /* @__PURE__ */ new Map();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => {
-    const planRel = path17.relative(cwd, path17.resolve(p.file));
+    const planRel = path18.relative(cwd, path18.resolve(p.file));
     if (writes.some((w) => sameFile2(w, planRel, cwd))) return true;
     return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile2(w, f, cwd)));
   };
@@ -4109,7 +4180,7 @@ function ownPlans(open, input, all, cwd) {
 function ownBadPlans(bad, scan, cwd) {
   if (!scan) return [];
   return bad.filter((b) => {
-    const rel = path17.relative(cwd, path17.resolve(b.file));
+    const rel = path18.relative(cwd, path18.resolve(b.file));
     return scan.writes.some((w) => sameFile2(w, rel, cwd)) && !closedStatusOf(b);
   });
 }
@@ -4160,13 +4231,13 @@ var USAGE2 = [
 function checkAndRecord(p, cwd, graph, locate) {
   const exp = locateExport(p.plan, p.file, cwd, locate);
   const reports = locateReports(p.plan, p.file, cwd, exp, locate);
-  setPhase(`checking ${path17.basename(p.file)}`);
+  setPhase(`checking ${path18.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const cleared = storedComputed(plan);
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path17.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path18.basename(p.file)}`);
   const cached = graph ? graph().cached : void 0;
   const hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -4185,7 +4256,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs16.statSync(p.file);
+        const s = fs17.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -4196,7 +4267,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs16.utimesSync(p.file, was.times[0], was.times[1]);
+        fs17.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
@@ -4204,7 +4275,7 @@ function checkAndRecord(p, cwd, graph, locate) {
     const v = { ...plan.verification };
     delete v.hook;
     recorded = { ...plan, verification: v };
-    warnings.push(`the hook record was not written into ${path17.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
+    warnings.push(`the hook record was not written into ${path18.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file);
   const st = planStatus(cwd, { cached }).status(recorded, { planFile: p.file, export: exp, reports });
@@ -4224,10 +4295,10 @@ async function main(argv) {
   const statusMode = !!flags.status, json2 = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path17.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path18.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     const show = (f) => {
-      const r = path17.relative(process.cwd(), f);
+      const r = path18.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
     for (const b of bad) {
@@ -4248,10 +4319,10 @@ async function main(argv) {
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read2 = planArgs.map((f) => readPlan(path17.resolve(f)));
+    const read2 = planArgs.map((f) => readPlan(path18.resolve(f)));
     const bad = read2.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path17.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path18.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read2.filter(isPlanFile);
@@ -4281,7 +4352,7 @@ async function main(argv) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path17.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path18.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -4297,16 +4368,16 @@ async function main(argv) {
     const own = ownPlans(open, input, plans, cwd);
     const badOwn = ownBadPlans(bad, own.scan, cwd);
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path17.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path18.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of badOwn) {
-      const rel = path17.relative(cwd, b.file);
-      blockedOut.push(`# ${path17.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
+      const rel = path18.relative(cwd, b.file);
+      blockedOut.push(`# ${path18.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (!open.length && !badOwn.length) return 0;
     if (own.scope === "none-named" && !badOwn.length) {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type) && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
-        const names = open.map((p) => path17.relative(cwd, p.file).replace(/\\/g, "/"));
+        const names = open.map((p) => path18.relative(cwd, p.file).replace(/\\/g, "/"));
         console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
@@ -4318,8 +4389,8 @@ async function main(argv) {
   const graphs = /* @__PURE__ */ new Map();
   const locate = locateCache();
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => buildGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)), locate);
-    const name = path17.basename(p.file);
+    const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => planGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)), locate);
+    const name = path18.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) {
@@ -4351,37 +4422,21 @@ if (import.meta.main) {
   runCli(main, { name: "verify-build" });
 }
 export {
-  USAGE2 as USAGE,
   anchorCoverage,
-  arbitraryPx,
   auditGateWarnings,
   behaviourWarnings,
-  buildGraph,
   checkPlan,
-  checkVerification,
-  colorKey,
-  colorLiterals,
   deviationConflicts,
   deviationWarnings,
   forEachLine,
-  importsOf,
-  isSourceFile,
   isStale2 as isStale,
   legacySetWarnings,
-  locateCache,
-  locateExport,
-  locateReports,
   main,
   mayHoldToolUse,
-  moduleImported,
   ownPlans,
   planSkeletonOuts,
-  readHookInput2 as readHookInput,
-  recordedEdits,
   recordedReportWarnings,
   recordedShadowWarnings,
-  reportRecordNames,
-  scanText,
   transcriptActions,
   validatePlanHeader,
   verificationContradictions,
