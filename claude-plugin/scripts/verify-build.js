@@ -2665,11 +2665,13 @@ function memberRefs(codeToken) {
   return out;
 }
 var escapeRe = (s) => s.replace(/[$]/g, "\\$");
-function headNames(head, container) {
+var BINDING = "(?:^|[^\\w$.])(?:const|val|var|let|final|static)\\s";
+function headNames(rawHead, container) {
+  const head = rawHead.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
   const names = container.startsWith("Local") && container.length > 5 ? [container, container.slice(5)] : [container];
   return names.some((n) => {
     const c = escapeRe(n);
-    return new RegExp(`\\b(?:class|struct|object|interface|enum|extension)\\s+${c}(?![\\w$])`).test(head) || new RegExp(`=\\s*${c}\\s*$`).test(head) || new RegExp(`(?:^|[^\\w$.])(?:const|val|var|let|final)\\s+${c}(?![\\w$])[^=]*=\\s*$`).test(head);
+    return new RegExp(`\\b(?:class|struct|object|interface|enum|extension)\\s+${c}(?![\\w$])`).test(head) || new RegExp(`${BINDING}[^=(]*=\\s*${c}\\s*$`).test(head) || new RegExp(`${BINDING}(?:[\\w$]+\\s+)*${c}(?![\\w$])[^=]*=\\s*(?:[A-Z][\\w$]*)?\\s*$`).test(head);
   });
 }
 function tokenCandidates(codeToken) {
@@ -2849,6 +2851,11 @@ function blocksOf(text) {
   const headOf = (open) => text.slice(text.lastIndexOf("\n", open) + 1, open);
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
+    if ((c === '"' || c === "'") && text.startsWith(c + c + c, i)) {
+      const end = text.indexOf(c + c + c, i + 3);
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
     if (c === '"' || c === "'" || c === "`") {
       let j = i + 1;
       while (j < text.length && text.charAt(j) !== c && (c === "`" || text.charAt(j) !== "\n")) j += text.charAt(j) === "\\" ? 2 : 1;

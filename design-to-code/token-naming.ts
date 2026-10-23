@@ -149,20 +149,24 @@ function memberRefs(codeToken: string): MemberRef[] {
   }
   return out;
 }
-// Is a block the container's own? Its head must DECLARE the container (`data class ColorsTokens`, `public struct
-// ColorsTokens: …`, `object SpacingTokens`), CONSTRUCT it into a binding (`val ColorsTokensLight = ColorsTokens`, `static const light =
-// ColorsTokens`) or INITIALISE a binding of that name (`export const colorsTokens: Record<…> = `) — the shapes the
-// generated files have. A head that only mentions it is a local override (`ColorsTokens.light.copy`,
-// `extension<ColorsTokens>()!.copyWith`, `const o: Partial<ColorsTokens> = `) — a hand-picked value. Compose's
-// `LocalColorsTokens` provides `ColorsTokens` instances, so a `Local<C>` container also accepts C's blocks.
+// Is a block the container's own? Its head (string contents blanked: they are not code) must DECLARE the container
+// (`data class ColorsTokens`, `public struct ColorsTokens: …`, `object SpacingTokens`), CONSTRUCT it into a binding
+// (`val ColorsTokensLight = ColorsTokens`, `static const light = ColorsTokens`) or INITIALISE a binding of that name,
+// with a literal or a construction (`export const colorsTokens: Record<…> = `, `val ColorsTokensLight = ColorsTokens`) —
+// the shapes the generated files have. A head that only mentions it is a local override (`ColorsTokens.light.copy`,
+// `extension<ColorsTokens>()!.copyWith`, `const o: Partial<ColorsTokens> = `) and a construction outside a binding is an
+// argument or a default (`Card(colors = ColorsTokens`, `fun Card(t: ColorsTokens = ColorsTokens`) — hand-picked values.
+// Compose's `LocalColorsTokens` provides `ColorsTokens` instances, so a `Local<C>` container also accepts C's blocks.
 const escapeRe = (s: string): string => s.replace(/[$]/g, "\\$");
-function headNames(head: string, container: string): boolean {
+const BINDING = "(?:^|[^\\w$.])(?:const|val|var|let|final|static)\\s";
+function headNames(rawHead: string, container: string): boolean {
+  const head = rawHead.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
   const names = container.startsWith("Local") && container.length > 5 ? [container, container.slice(5)] : [container];
   return names.some((n) => {
     const c = escapeRe(n);
     return new RegExp(`\\b(?:class|struct|object|interface|enum|extension)\\s+${c}(?![\\w$])`).test(head)
-      || new RegExp(`=\\s*${c}\\s*$`).test(head)
-      || new RegExp(`(?:^|[^\\w$.])(?:const|val|var|let|final)\\s+${c}(?![\\w$])[^=]*=\\s*$`).test(head);
+      || new RegExp(`${BINDING}[^=(]*=\\s*${c}\\s*$`).test(head)
+      || new RegExp(`${BINDING}(?:[\\w$]+\\s+)*${c}(?![\\w$])[^=]*=\\s*(?:[A-Z][\\w$]*)?\\s*$`).test(head);
   });
 }
 // Every spelling a declaration of this token may carry, whatever file it is in: the whole codeToken, each part, each

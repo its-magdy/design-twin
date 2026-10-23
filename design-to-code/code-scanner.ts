@@ -163,7 +163,12 @@ function blocksOf(text: string): Block[] {
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
     // a bracket inside a string is not one: skip a quoted string — to its closing quote on the same line (a lone `'` in
-    // prose, `don't`, is no string), a template literal to its closing backtick
+    // prose, `don't`, is no string), a template literal to its closing backtick, a `"""`/`'''` string to its closing triple
+    if ((c === '"' || c === "'") && text.startsWith(c + c + c, i)) {
+      const end = text.indexOf(c + c + c, i + 3);
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
     if (c === '"' || c === "'" || c === "`") {
       let j = i + 1;
       while (j < text.length && text.charAt(j) !== c && (c === "`" || text.charAt(j) !== "\n")) j += text.charAt(j) === "\\" ? 2 : 1;

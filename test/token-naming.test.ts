@@ -26,13 +26,18 @@ check("[key] a colliding identifier carries the tag: `-` on the web, `_` in nati
   disambiguated("--Space-4", "e26d506e", "css") === "--Space-4-e26d506e" && disambiguated("space4", "e26d506e", "native") === "space4_e26d506e");
 
 // ---------------------------------------------------------------- the round trip
-// One design system with every naming path in it: a two-mode colour, a name with a space, two different variables
-// sharing a name (each emitted with its key tag), a radius, a font size, a font family and a unitless opacity.
+// One design system with every naming path in it: a two-mode colour, a name with a space, two different colours and two
+// different spacings sharing a name (each emitted with its key tag), a single-mode colour collection, a radius, a font
+// size, a font family and a unitless opacity.
 const ds = tokens({
-  collections: [{ name: "Colors", modes: ["Light", "Dark"], default: "Light" }, { name: "Spacing", modes: ["Mode 1"], default: "Mode 1" }],
+  collections: [{ name: "Colors", modes: ["Light", "Dark"], default: "Light" }, { name: "Spacing", modes: ["Mode 1"], default: "Mode 1" },
+    { name: "Brand Palette", modes: ["Mode 1"], default: "Mode 1" }],
   variables: [
     { name: "Brand/600", type: "COLOR", collection: "Colors", key: "aaaa1111bbbb", values: { Light: "#5B5FC7", Dark: "#112233" } },
     { name: "Schemes/On Primary", type: "COLOR", collection: "Colors", key: "bbbb2222cccc", values: { Light: "#FFFFFF", Dark: "#1B1B21" } },
+    { name: "Accent", type: "COLOR", collection: "Colors", key: "cccc1111aaaa", values: { Light: "#FF3B30", Dark: "#FF453A" } },
+    { name: "Accent", type: "COLOR", collection: "Colors", key: "dddd2222bbbb", values: { Light: "#34C759", Dark: "#30D158" } },
+    { name: "Primary", type: "COLOR", collection: "Brand Palette", key: "eeee3333cccc", values: { "Mode 1": "#0A84FF" } },
     { name: "Space 4", type: "FLOAT", collection: "Spacing", key: "e26d506eaaaa", values: { "Mode 1": 24 } },
     { name: "Space 4", type: "FLOAT", collection: "Spacing", key: "f00dbabe1111", values: { "Mode 1": 16 } },
     { name: "Radius/XL", type: "FLOAT", collection: "Spacing", key: "cccc3333dddd", scopes: ["CORNER_RADIUS"], values: { "Mode 1": 12 } },
@@ -43,34 +48,42 @@ const ds = tokens({
 });
 
 // What each variable is called on each target, and how a builder spells it in a plan's codeToken there.
-interface Row { name: string; hexes: string[]; css: string; tw: string; native: string; twSpellings: string[] }
+type Collection = "colors" | "spacing" | "brand";
+interface Row { name: string; coll: Collection; hexes: string[]; css: string; tw: string; native: string; twSpellings: string[] }
 const ROWS: Row[] = [
-  { name: "Brand/600", hexes: ["#5B5FC7", "#112233"], css: "--Brand-600", tw: "--color-figma-brand-600", native: "brand600",
+  { name: "Brand/600", coll: "colors", hexes: ["#5B5FC7", "#112233"], css: "--Brand-600", tw: "--color-figma-brand-600", native: "brand600",
     twSpellings: ["bg-figma-brand-600", "text-figma-brand-600/80", "hover:border-figma-brand-600", "bg-(--color-figma-brand-600)", "var(--color-figma-brand-600)", "figma-brand-600"] },
-  { name: "Schemes/On Primary", hexes: ["#FFFFFF", "#1B1B21"], css: "--Schemes-On-Primary", tw: "--color-figma-schemes-on-primary", native: "schemesOnPrimary",
+  { name: "Schemes/On Primary", coll: "colors", hexes: ["#FFFFFF", "#1B1B21"], css: "--Schemes-On-Primary", tw: "--color-figma-schemes-on-primary", native: "schemesOnPrimary",
     twSpellings: ["text-figma-schemes-on-primary", "fill-figma-schemes-on-primary!"] },
-  { name: "Space 4 (24)", hexes: [], css: "--Space-4-e26d506e", tw: "--spacing-figma-space-4-e26d506e", native: "space4_e26d506e",
+  { name: "Accent (red)", coll: "colors", hexes: ["#FF3B30", "#FF453A"], css: "--Accent-cccc1111", tw: "--color-figma-accent-cccc1111", native: "accent_cccc1111",
+    twSpellings: ["bg-figma-accent-cccc1111", "text-figma-accent-cccc1111"] },
+  { name: "Accent (green)", coll: "colors", hexes: ["#34C759", "#30D158"], css: "--Accent-dddd2222", tw: "--color-figma-accent-dddd2222", native: "accent_dddd2222",
+    twSpellings: ["border-figma-accent-dddd2222"] },
+  { name: "Primary", coll: "brand", hexes: ["#0A84FF"], css: "--Primary", tw: "--color-figma-primary", native: "primary", twSpellings: ["bg-figma-primary", "ring-figma-primary"] },
+  { name: "Space 4 (24)", coll: "spacing", hexes: [], css: "--Space-4-e26d506e", tw: "--spacing-figma-space-4-e26d506e", native: "space4_e26d506e",
     twSpellings: ["p-figma-space-4-e26d506e", "gap-figma-space-4-e26d506e", "gap-x-figma-space-4-e26d506e", "space-figma-space-4-e26d506e"] },
-  { name: "Space 4 (16)", hexes: [], css: "--Space-4-f00dbabe", tw: "--spacing-figma-space-4-f00dbabe", native: "space4_f00dbabe",
+  { name: "Space 4 (16)", coll: "spacing", hexes: [], css: "--Space-4-f00dbabe", tw: "--spacing-figma-space-4-f00dbabe", native: "space4_f00dbabe",
     twSpellings: ["px-figma-space-4-f00dbabe", "gap-y-figma-space-4-f00dbabe"] },
-  { name: "Radius/XL", hexes: [], css: "--Radius-XL", tw: "--radius-figma-radius-xl", native: "radiusXL", twSpellings: ["rounded-figma-radius-xl"] },
-  { name: "Type/Body Size", hexes: [], css: "--Type-Body-Size", tw: "--text-figma-type-body-size", native: "typeBodySize", twSpellings: ["text-figma-type-body-size"] },
-  { name: "Font/Body", hexes: [], css: "--Font-Body", tw: "--font-figma-font-body", native: "fontBody", twSpellings: ["font-figma-font-body"] },
-  { name: "Opacity/Disabled", hexes: [], css: "--Opacity-Disabled", tw: "--figma-opacity-disabled", native: "opacityDisabled", twSpellings: ["var(--figma-opacity-disabled)"] },
+  { name: "Radius/XL", coll: "spacing", hexes: [], css: "--Radius-XL", tw: "--radius-figma-radius-xl", native: "radiusXL", twSpellings: ["rounded-figma-radius-xl"] },
+  { name: "Type/Body Size", coll: "spacing", hexes: [], css: "--Type-Body-Size", tw: "--text-figma-type-body-size", native: "typeBodySize", twSpellings: ["text-figma-type-body-size"] },
+  { name: "Font/Body", coll: "spacing", hexes: [], css: "--Font-Body", tw: "--font-figma-font-body", native: "fontBody", twSpellings: ["font-figma-font-body"] },
+  { name: "Opacity/Disabled", coll: "spacing", hexes: [], css: "--Opacity-Disabled", tw: "--figma-opacity-disabled", native: "opacityDisabled", twSpellings: ["var(--figma-opacity-disabled)"] },
 ];
 const cssSpellings = (r: Row): string[] => [r.css, `var(${r.css})`, `var(${r.css}, #000)`];
 // A native token is read through what its platform's file declares for its collection — the collection's type,
-// instance or theme extension; the member is the token. Each platform's own reading paths, per collection:
+// instance or theme extension; the member is the token. Each platform's own reading paths, per collection. `modes`:
+// a single mode's instance (Compose's `ColorsTokensLight`), which defines only that mode's values.
 type Platform = "swiftui" | "compose" | "flutter" | "react-native";
-const NATIVE_PATHS: Record<Platform, { colors: string[]; spacing: string[] }> = {
-  swiftui: { colors: ["ColorsTokens.light"], spacing: ["SpacingTokens"] },
-  compose: { colors: ["LocalColorsTokens.current"], spacing: ["SpacingTokens"] },
-  flutter: { colors: ["Theme.of(context).extension<ColorsTokens>()!", "ColorsTokens.light"], spacing: ["SpacingTokens"] },
-  "react-native": { colors: ["colorsTokens.light"], spacing: ["spacingTokens"] },
+const NATIVE_PATHS: Record<Platform, Record<Collection, string[]> & { modes: string[] }> = {
+  swiftui: { colors: ["ColorsTokens.light"], spacing: ["SpacingTokens"], brand: ["BrandPaletteTokens"], modes: [] },
+  compose: { colors: ["LocalColorsTokens.current"], spacing: ["SpacingTokens"], brand: ["BrandPaletteTokens"], modes: ["ColorsTokensLight"] },
+  flutter: { colors: ["Theme.of(context).extension<ColorsTokens>()!", "ColorsTokens.light"], spacing: ["SpacingTokens"], brand: ["BrandPaletteTokens"], modes: [] },
+  "react-native": { colors: ["colorsTokens.light"], spacing: ["spacingTokens"], brand: ["brandPaletteTokens"], modes: [] },
 };
-// the colour rows are the Colors collection, every other row the Spacing one
-const nativeSpellingsOf = (platform: Platform) => (r: Row): string[] =>
-  [r.native, ...NATIVE_PATHS[platform][r.hexes.length ? "colors" : "spacing"].map((p) => `${p}.${r.native}`)];
+const nativeSpellingsOf = (platform: Platform) => (r: Row): string[] => [r.native, ...NATIVE_PATHS[platform][r.coll].map((p) => `${p}.${r.native}`)];
+// …and, for the declaration round trip (where any one declaration of the member counts), the mode instances too
+const nativeDeclSpellingsOf = (platform: Platform) => (r: Row): string[] =>
+  [...nativeSpellingsOf(platform)(r), ...(r.coll === "colors" ? NATIVE_PATHS[platform].modes.map((p) => `${p}.${r.native}`) : [])];
 
 const tokensCss = toCSS(ds);
 const themeCss = must(toTailwind(ds)).text;
@@ -90,7 +103,7 @@ for (const r of ROWS) {
   check(`[css] ${r.css} is the definition of ${cssSpellings(r).join(" | ")}`, cssSpellings(r).every((s) => namesToken(r.css, s, { stylesheet: true })));
   check(`[tailwind] ${r.tw} is the definition of ${r.twSpellings.join(" | ")}`, r.twSpellings.every((s) => namesToken(r.tw, s, { stylesheet: true })));
   for (const platform of ["swiftui", "compose", "flutter", "react-native"] satisfies Platform[]) {
-    const spell = nativeSpellingsOf(platform)(r);
+    const spell = nativeDeclSpellingsOf(platform)(r);
     // through the gate's own reading of the generated file: some declaration of the identifier there defines the token
     const file = { rel: NATIVE[platform].file, text: NATIVE[platform].text };
     const values = [...file.text.matchAll(new RegExp(`\\b${r.native}\\b\\s*[:=]\\s*`, "g"))].map((m) => (m.index ?? 0) + m[0].length);
@@ -175,6 +188,20 @@ check("[enclosing] a bracket inside a string does not open a block: the token ob
   const text = "object ColorsTokens {\n  val sep = \"(\"\n}\nfun Card() {\n  val brand600 = Color(0xFF5B5FC7)\n}";
   return literalUses([{ rel: "Card.kt", text }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
     && JSON.stringify(enclosingHeads(text, text.indexOf("0xFF5B5FC7")).slice(0, 1)) === JSON.stringify(["fun Card() "]);
+})());
+// Review round 5: a construction counts only into a binding (not a named argument or a default parameter); a head's
+// string contents are not code; a multi-line string's brackets are not blocks.
+check("[near] constructing the container as an argument or a default is a use, not a definition", (() => {
+  const use = (rel: string, text: string): boolean => literalUses([{ rel, text }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === rel;
+  return use("Card.kt", "Card(colors = ColorsTokens(\n  brand600 = Color(0xFF5B5FC7)))")
+    && use("Card.kt", "fun Card(t: ColorsTokens = ColorsTokens(\n  brand600 = Color(0xFF5B5FC7))) {}")
+    && use("Card.kt", "Box(Modifier.testTag(\"object ColorsTokens\")) {\n  val brand600 = Color(0xFF5B5FC7)\n}");
+})());
+check("[enclosing] a bracket inside a multi-line string (\"\"\" or ''') does not open a block", (() => {
+  const kt = "object ColorsTokens {\n  val doc = \"\"\"\n  a { b\n  \"\"\"\n}\nfun Card() {\n  val brand600 = Color(0xFF5B5FC7)\n}";
+  const dart = "class ColorsTokens {\n  static const doc = '''\n  a { b\n  ''';\n}\nWidget card() {\n  const brand600 = Color(0xFF5B5FC7);\n}";
+  return literalUses([{ rel: "Card.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
+    && literalUses([{ rel: "card.dart", text: dart }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "card.dart";
 })());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
