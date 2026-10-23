@@ -163,14 +163,17 @@ function blocksOf(text: string): Block[] {
   const out: Block[] = [], stack: Array<{ open: number; want: string; head: string }> = [];
   const stmtStart: number[] = []; // per depth: where the current statement began (after a `;` or `}` at that depth)
   const headOf = (open: number): string => {
-    const cut = stmtStart[stack.length] ?? 0, lineStart = text.lastIndexOf("\n", open) + 1;
+    // the statement starts after a `;`/`}` at this depth, and never before the enclosing block's own bracket
+    const stmt = stmtStart[stack.length] ?? 0, parent = (stack.at(-1)?.open ?? -1) + 1;
+    const cut = Math.max(stmt, parent), lineStart = text.lastIndexOf("\n", open) + 1;
     if (text.slice(lineStart, open).trim() || lineStart === 0) return text.slice(Math.max(lineStart, cut), open);
     // an opener alone on its line (`=>` then `({`, a brace on its own line) belongs to the line above: its head is that
-    // line's statement; one that ended a statement there (`;`, `}`) opens a bare block, never a value
+    // line's statement; one right after its parent's bracket (`light: [` then `{`) has none, a value in a value; one
+    // after a statement ended there (`;`, `}`) opens a bare block, never a value
     let end = lineStart - 1;
     while (end > 0 && !text.slice(text.lastIndexOf("\n", end - 1) + 1, end).trim()) end = text.lastIndexOf("\n", end - 1);
     const above = text.slice(Math.max(text.lastIndexOf("\n", end - 1) + 1, cut), Math.max(end, 0));
-    return above.trim() ? above : ";";
+    return above.trim() ? above : stmt > parent ? ";" : "";
   };
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);

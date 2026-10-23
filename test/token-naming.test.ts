@@ -166,7 +166,7 @@ check("[member] a member counts only inside a block that names the reference's c
 check("[enclosing] the heads of the blocks around a position, outermost first; a closed block is not around it", (() => {
   const text = "object ColorsTokens {\n  val a = Color(0xFF000000)\n}\nfun Card() {\n  Text(color = Color(0xFF5B5FC7))\n}";
   const around = enclosingHeads(text, text.indexOf("0xFF5B5FC7"));
-  return JSON.stringify(around) === JSON.stringify(["fun Card() ", "  Text", "  Text(color = Color"]) && enclosingHeads(text, text.indexOf("0xFF000000"))[0] === "object ColorsTokens ";
+  return JSON.stringify(around) === JSON.stringify(["fun Card() ", "  Text", "color = Color"]) && enclosingHeads(text, text.indexOf("0xFF000000"))[0] === "object ColorsTokens ";
 })());
 // Review round 4: a block head only counts when it declares the container, constructs it, or initialises a binding of
 // that name — a local OVERRIDE (`.copy(`, `.copyWith(`, `Partial<C> = {`, a style array) is a hand-picked colour.
@@ -240,6 +240,12 @@ check("[near] a ternary or other expression ending in `:` is not a value head", 
   const quoted = "export const ColorsTokens = {\n  \"light\": [{\n    brand600: \"#5B5FC7\",\n  }, {\n    brand600: \"#5B5FC7\",\n  }],\n};";
   return literalUses([{ rel: "theme.ts", text: ternary }], "#5B5FC7", ["colorsTokens.light.brand600"]).usedIn.join() === "theme.ts"
     && literalUses([{ rel: "tokens.ts", text: quoted }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.length === 0;
+})());
+// Review round 10: a block opened on its parent's line has only the text after the parent's bracket as its head.
+check("[enclosing] a nested opener on its parent's line does not inherit the parent's head", (() => {
+  const kt = "object ColorsTokens { fun Card() {\n  val brand600 = Color(0xFF5B5FC7)\n  Text(color = brand600)\n}}";
+  return JSON.stringify(enclosingHeads("object A { fun b() { x", 21)) === JSON.stringify(["object A ", " fun b() "])
+    && literalUses([{ rel: "Card.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt";
 })());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {

@@ -2858,12 +2858,13 @@ function blocksOf(text) {
   const out = [], stack = [];
   const stmtStart = [];
   const headOf = (open) => {
-    const cut = stmtStart[stack.length] ?? 0, lineStart = text.lastIndexOf("\n", open) + 1;
+    const stmt = stmtStart[stack.length] ?? 0, parent = (stack.at(-1)?.open ?? -1) + 1;
+    const cut = Math.max(stmt, parent), lineStart = text.lastIndexOf("\n", open) + 1;
     if (text.slice(lineStart, open).trim() || lineStart === 0) return text.slice(Math.max(lineStart, cut), open);
     let end = lineStart - 1;
     while (end > 0 && !text.slice(text.lastIndexOf("\n", end - 1) + 1, end).trim()) end = text.lastIndexOf("\n", end - 1);
     const above = text.slice(Math.max(text.lastIndexOf("\n", end - 1) + 1, cut), Math.max(end, 0));
-    return above.trim() ? above : ";";
+    return above.trim() ? above : stmt > parent ? ";" : "";
   };
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
