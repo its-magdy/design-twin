@@ -10,6 +10,7 @@ import { check, report } from "./assert.ts";
 import { ALLOWED_PORTS, parsePortEnv, bridgePortOrExit } from "../bridge/src/ports.ts";
 import { resolvePort } from "../bridge/src/doctor.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { pipeName } from "../bridge/src/daemon-auth.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -74,10 +75,11 @@ console.log("\nthe daemon socket is named after the port server-core binds:");
 {
   const t = fs.mkdtempSync(path.join(os.tmpdir(), "dt-ports-"));
   try {
-    const at = (env: NodeJS.ProcessEnv) => daemon.sockPath(undefined, { env, tmpdir: t, uid: undefined });
+    // platform pinned: these are the POSIX socket's names on every host (on win32 the daemon is a pipe — below).
+    const at = (env: NodeJS.ProcessEnv) => daemon.sockPath(undefined, { env, tmpdir: t, uid: undefined, platform: "linux" });
     check("unset: the default port's socket", at({}) === path.join(t, `designtwin-${ALLOWED_PORTS[0]}.sock`));
     check("a padded value names the same socket as the bare one", at({ FIGMA_BRIDGE_PORT: " 8788 " }) === path.join(t, "designtwin-8788.sock"));
-    check("an explicit port wins over the env", daemon.sockPath(8789, { env: { FIGMA_BRIDGE_PORT: "8788" }, tmpdir: t, uid: undefined }) === path.join(t, "designtwin-8789.sock"));
+    check("an explicit port wins over the env", daemon.sockPath(8789, { env: { FIGMA_BRIDGE_PORT: "8788" }, tmpdir: t, uid: undefined, platform: "linux" }) === path.join(t, "designtwin-8789.sock"));
     const realExit = process.exit;
     const realError = console.error;
     let code: number | undefined;
@@ -96,6 +98,29 @@ console.log("\nthe daemon socket is named after the port server-core binds:");
   } finally {
     fs.rmSync(t, { recursive: true, force: true });
   }
+}
+
+console.log("\non win32 the daemon is a pipe named after the same port (and the token):");
+{
+  const win = (env: NodeJS.ProcessEnv, token: string | null = "tok") => ({ env, platform: "win32" as const, token });
+  check("unset: the default port's pipe", daemon.sockPath(undefined, win({})) === pipeName("tok", ALLOWED_PORTS[0]));
+  check("a padded value names the same pipe as the bare one", daemon.sockPath(undefined, win({ FIGMA_BRIDGE_PORT: " 8788 " })) === pipeName("tok", 8788));
+  check("an explicit port wins over the env", daemon.sockPath(8789, win({ FIGMA_BRIDGE_PORT: "8788" })) === pipeName("tok", 8789));
+  check("…and two ports are two pipes", pipeName("tok", 8788) !== pipeName("tok", 8789));
+  const realExit = process.exit;
+  const realError = console.error;
+  let code: number | undefined;
+  const printed: string[] = [];
+  const exited = new Error("exited");
+  process.exit = (c?: number) => { code = c; throw exited; };
+  console.error = (...a: unknown[]) => { printed.push(a.map(String).join(" ")); };
+  let named: string | null = null;
+  try { named = daemon.sockPath(undefined, win({ FIGMA_BRIDGE_PORT: "9999" })); } catch (e) { if (e !== exited) throw e; } finally {
+    process.exit = realExit;
+    console.error = realError;
+  }
+  check("an invalid value exits 1 with server-core's message instead of naming a pipe",
+    named === null && code === 1 && /^\[bridge\] FIGMA_BRIDGE_PORT=9999 is not one of/.test(printed[0] ?? ""));
 }
 
 report();
