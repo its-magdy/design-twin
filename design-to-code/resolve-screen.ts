@@ -48,22 +48,19 @@
 // a folded or text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
 // resolve by node id — never as `resolved`. This is what "never take a near-match" / "do not make
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
-import fs from "node:fs";
 import path from "node:path";
 import type { IndexRow, ResolveScreenResult, ResolveStageKind, ScreenCandidate } from "./types.ts";
-import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
-import { readJsonOrNull } from "./read-json.ts";
+import { findExportRoot, hasExportIndex, readExportIndex } from "./export-index.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { getOrInit } from "./map-util.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { runCli } from "./proc.ts";
-import { EXPORT_DIR, EXPORT_SUBDIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 
-// Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
-// doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
+// The rows resolved against are export-index.ts's (every screen the export indexes); design/plan/*.json is read through
+// node-artefacts.ts. A file that is absent, unreadable or not that kind of document contributes no rows.
 
 // A Figma node id looks like "1234:5678", or for a layer inside an instance "I20173:137670;72:3148" (what
 // a --node/--selection pull of such a layer files under). A query in either colon form is an id query
@@ -85,37 +82,6 @@ function queryIds(q: string): string[] {
   const t = toNodeId(q);
   if (t !== q && isNodeId(t)) out.push(t);
   return out;
-}
-
-// The export root a mistaken dir points at: the first ancestor holding pages/index.json, else one that sits
-// just below (`<dir>/export`, `<dir>/design/export`). null when there is none.
-function findExportRoot(dir: string): string | null {
-  const has = (d: string): boolean => fs.existsSync(path.join(d, "pages", "index.json"));
-  const abs = path.resolve(dir);
-  for (let d = path.dirname(abs); ; d = path.dirname(d)) {
-    if (has(d)) return d;
-    if (path.dirname(d) === d) break;
-  }
-  for (const sub of [EXPORT_SUBDIR, EXPORT_DIR]) {
-    if (has(path.join(abs, sub))) return path.join(abs, sub);
-  }
-  return null;
-}
-
-// Every screen row this export knows about, wherever it is indexed. Prefers the root index's
-// flattened `layers` (the file every skill is told to read); falls back to walking each
-// page's own index.json for an export written before that field existed.
-function allRows(exportDir: string): IndexRow[] {
-  const rootFile = path.join(exportDir, "pages", "index.json");
-  const root = readJsonOrNull(rootFile, isPagesRootIndex);
-  if (!root) return [];
-  if (root.layers) return root.layers;
-  const rows: IndexRow[] = [];
-  for (const pd of root.pageDirs) {
-    const idx = pd.dir ? readJsonOrNull(path.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
-    if (idx) rows.push(...idx.layers);
-  }
-  return rows;
 }
 
 /** The plan header fields resolveScreen consults (design/plan/<screen>.json). */
@@ -194,14 +160,15 @@ function compactKeys(q: string): string[] {
 // Never throws on a query that matches nothing or matches many — that is the expected, handled case.
 function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: string | null }): ResolveScreenResult {
   const options = opts || {};
-  const rows = allRows(exportDir);
+  // every screen the export indexes (export-index.ts): the root index's rows and every page index's
+  const rows = readExportIndex(exportDir).rows;
   const q = String(query || "").trim();
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
 
   // Nothing to resolve against: <dir> is not an export root (no pages/index.json). Say so, and name the root
   // when it is one level off — an empty "Known layers:" list reads as "this screen does not exist".
-  if (!fs.existsSync(path.join(exportDir, "pages", "index.json"))) {
+  if (!hasExportIndex(exportDir)) {
     return { status: "not-found", candidates: [], noIndex: { dir: exportDir, hint: findExportRoot(exportDir) } };
   }
 
@@ -299,7 +266,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   return Object.assign<Extract<ResolveScreenResult, { status: "not-found" }>, { noTitles: true } | null>({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
 
-export { resolveScreen, allRows, planRows, describe };
+export { resolveScreen, planRows, describe };
 export type { ResolveStageKind };
 
 // CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]

@@ -68,6 +68,7 @@ import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, updatePlan
 import { reportRecordNames } from "./report-freshness.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
+import { hasExportIndex } from "./export-index.ts";
 import { MAX_SLUG, RESERVED_SLUGS, allSets, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
 import { nodeArtefacts, planNode } from "./node-artefacts.ts";
@@ -361,7 +362,7 @@ export function planMigration(d: Dirs): MigrateStep[] {
   const legacy = live.filter((n) => parseSetName(n) === null);
   if (!legacy.length) return [];
   const steps: MigrateStep[] = [];
-  const hasIndex = exists(path.join(d.exportDir, "pages", "index.json"));
+  const hasIndex = hasExportIndex(d.exportDir);
 
   // node id of each legacy set: the one id it carries (node-artefacts.ts setIds — its name's, its expectation's frame,
   // its report's), else its name resolved; two ids are skipped, never one picked

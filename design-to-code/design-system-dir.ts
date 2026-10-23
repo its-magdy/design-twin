@@ -9,7 +9,8 @@ import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
-import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { isComponentsCatalog, isLibrariesIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
 import { DESIGN_SYSTEM_FILES, STYLE_KIND_ROWS } from "../bridge/src/design-system-layout.ts";
 import { nodeIdFromSafe, safe } from "../bridge/src/pages-layout.ts";
 import { COMPONENTS as LIBRARY_COMPONENTS, INDEX as LIBRARIES_INDEX, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
@@ -164,15 +165,13 @@ const catalogSetLine = (sources: readonly CatalogSource[]): string =>
 export interface FrameTexts { all: string[]; shallow: string[] }
 /** What the export knows about frames OTHER than the audited one, read off disk. */
 export interface ExportNeighbours {
-  /** every row of pages/index.json (id, name, page/pageId, title, texts) */
+  /** every frame the export indexes (export-index.ts: the root index's rows and every page index's — id, name,
+   *  page/pageId, title, texts); a node is exported when one of these names it */
   layers: IndexRow[];
   /** a row's own texts, read on demand (only when a state is not found) and cached; null if unreadable */
   textsOf?: (row: IndexRow) => FrameTexts | null;
   /** node ids of frames screenshotted into assets/ (<id>_ref.png / <id>_shot@Nx.png) with no index row */
   unexportedShots: string[];
-  /** the id of every exported frame — the root index's rows and every page index's (pages/<dir>/index.json),
-   *  which can list frames the root's `layers` does not. Absent: read `layers` alone. */
-  exportedIds?: Set<string>;
 }
 // Disk only — the audit-design skill runs without Figma by default, and "is this state drawn
 // somewhere else?" is mostly answerable from the index's titles/texts and the orphan screenshots.
@@ -190,17 +189,16 @@ function readFrameTexts(file: string): FrameTexts | null {
   return { all, shallow };
 }
 function findExportNeighbours(screenFile: string): ExportNeighbours | null {
-  const pages = path.dirname(path.dirname(screenFile));
-  if (path.basename(pages) !== "pages") return null;
-  const root = path.dirname(pages);
-  const index = readJsonOrNull(path.join(pages, "index.json"), isPagesRootIndex);
-  if (!index) return null;
-  const layers = index.layers || [];
+  const root = exportRootOfScreen(screenFile);
+  if (root === null) return null;
+  const ix = readExportIndex(root);
+  if (!ix.indexed) return null;
+  const layers = [...ix.rows];
   const cache = new Map<string, FrameTexts | null>();
   const textsOf = (row: IndexRow): FrameTexts | null => {
-    const f = row.file;
-    if (!f || path.isAbsolute(f) || f.split(/[\\/]/).includes("..")) return null; // a path inside the export only
-    if (!cache.has(f)) cache.set(f, readFrameTexts(path.join(root, f)));
+    const f = ix.fileOf(row); // a path inside the export only
+    if (f === null) return null;
+    if (!cache.has(f)) cache.set(f, readFrameTexts(f));
     return cache.get(f) ?? null;
   };
   const known = new Set(layers.map((l) => safe(l.id)));
@@ -215,14 +213,7 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
     const id = m && m[1] && !known.has(m[1]) ? nodeIdFromSafe(m[1]) : null;
     if (id) shots.add(id);
   }
-  // a prototype target is "exported" when ANY index lists it. Page rows are not added to `layers` (the
-  // same-page state sweep above reads those, and a page index's rows would change what it offers).
-  const exportedIds = new Set(layers.map((l) => l.id));
-  for (const pd of index.pageDirs) {
-    if (!pd.dir || /[\\/]/.test(pd.dir) || pd.dir === "..") continue; // a directory inside pages/ only
-    for (const l of readJsonOrNull(path.join(pages, pd.dir, "index.json"), isPageIndex)?.layers ?? []) exportedIds.add(l.id);
-  }
-  return { layers, unexportedShots: [...shots].sort(), textsOf, exportedIds };
+  return { layers, unexportedShots: [...shots].sort(), textsOf };
 }
 
 export { readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };

@@ -1079,7 +1079,7 @@ function heavyAssets(ac: AuditCtx): void {
 function prototypeLinks(ac: AuditCtx): void {
   const { opts, navigations, nodesById, hiddenIds, add } = ac;
   const nb = opts.neighbours;
-  const exportedIds = nb ? nb.exportedIds ?? new Set(nb.layers.map((l) => l.id)) : null;
+  const exportedIds = nb ? new Set(nb.layers.map((l) => l.id)) : null;
   const shotIds = new Set((nb && nb.unexportedShots) || []);
   const unexportedTargets = new Map<string, Array<{ n: NavRow; id: string }>>();
   for (const n of navigations.values()) {

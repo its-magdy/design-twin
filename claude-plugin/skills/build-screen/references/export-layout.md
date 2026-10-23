@@ -113,6 +113,10 @@ layer list).
   the disambiguating suffix on `dir`.
 - Flow: find the Figma PAGE you want → open its `index` (its `layers[]`: names/ids, each with a
   `file` pointer) → read ONLY that layer's file.
+- **A page walk rewrites the root.** `--page`/`--all-pages` replace `pageDirs[]` and `layers[]` with that walk's
+  pages only; a page an earlier walk exported keeps its own `pages/<dir>/index.json` and files, listed by the root no
+  longer. The shipped scripts (resolve-screen, audit, cross-check, verify) read the root and every page index on disk;
+  when a screen you expect is missing from the root, look for its page's own index before re-pulling.
 - **Both `index` and `file` are already relative to the export dir.** The path to open is
   `design/export/<pointer>` — do NOT prepend `pages/<dir>/` a second time, and do not reassemble
   either path from `dir` (that only works on the CLI layout, not the browser-download one).

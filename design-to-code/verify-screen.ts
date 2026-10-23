@@ -42,7 +42,7 @@ import type { ReportFreshness } from "./report-freshness.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
-  isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
+  isInteractionEvidenceList, isMeasuredComponentList, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
   readableMeasured,
 } from "./doc-guards.ts";
 import { isPassingVerdict } from "./plan-waivers.ts";
@@ -54,12 +54,13 @@ import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import type { ArtifactCheck, CodeInputs, IndexRow, InteractionEvidence, JsonValue, MeasuredComponent, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import type { ArtifactCheck, CodeInputs, InteractionEvidence, JsonValue, MeasuredComponent, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
+import { readExportIndex, rootIndexFile } from "./export-index.ts";
 import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
@@ -341,28 +342,16 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   const slugWhy = variant === undefined ? null : variantProblem(variant);
   if (slugWhy !== null) { console.error(`error  --variant: ${slugWhy}`); return 2; }
   const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
-  // the export's own index (relative to the project root) tells which destinations were exported
-  const indexFile = path.join(EXPORT_DIR, "pages", "index.json");
-  const idx = readJson(indexFile, isPagesRootIndex);
-  if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} — interaction destinations are checked against the given export(s) only`);
-  // The root index is REPLACED by a page walk (only single-screen pulls merge into it), so the frames an earlier
-  // walk exported live on only in their page's own pages/<dir>/index.json: read every one on disk too, or a
-  // destination exported by the first walk reads as "never exported" after the second.
-  const pagesDir = path.join(EXPORT_DIR, "pages");
-  const pageRows: IndexRow[] = [];
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* no pages dir */ }
-  for (const d of dirs) {
-    const pi = readJson(path.join(pagesDir, d, "index.json"), isPageIndex);
-    if ("doc" in pi) pageRows.push(...pi.doc.layers);
-  }
-  const rootRows: IndexRow[] = "doc" in idx ? idx.doc.layers || [] : [];
-  const seen = new Set(rootRows.map((l) => `${l.id}\u0000${l.sourceFile ?? ""}`));
-  const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
+  // the export's own index (relative to the project root) tells which destinations were exported: every screen it
+  // indexes (export-index.ts) — a page walk replaces the root index, so a destination an earlier walk exported is in
+  // its page's own index only
+  const ix = readExportIndex(EXPORT_DIR);
+  if (ix.rootProblem !== null) console.error(`note  ${rootIndexFile(EXPORT_DIR)} ${ix.rootProblem} — interaction destinations are checked against the given export(s) only`);
+  const layers = [...ix.rows];
   // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in)
   // sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
   const exportRoot = EXPORT_DIR;
-  const readSibling = (file: string): ScreenDoc | null => readJsonOrNull(path.join(exportRoot, file), isScreenDoc);
+  const readSibling = (file: string): ScreenDoc | null => { const f = ix.fileOf({ file }); return f === null ? null : readJsonOrNull(f, isScreenDoc); };
   // the plan's interactions[] — the plan --compare will pick too (choosePlan)
   let flagged: { file: string; plan: Plan } | undefined;
   if (planFlag !== undefined) {
@@ -386,7 +375,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   };
   const ds = readJsonOrNull(path.join(exportRoot, "design-system.json"), isJsonObject);
   const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
-  const expOpts: ExpectOptions = { ...("doc" in idx || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile };
+  const expOpts: ExpectOptions = { ...(ix.indexed || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile };
   const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
   const pi = exp.planInteractions;
   if (pi) {

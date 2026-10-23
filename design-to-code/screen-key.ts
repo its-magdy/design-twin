@@ -11,11 +11,10 @@
 // screenKey resolves a query to (node id, stem) through resolve-screen's exact stages only — node id (1), the exact
 // union of layer name / title / plan header (2–4) and an id the query carries (4b). A whitespace-insensitive (4c) or a
 // text-search (5) hit never names a set: a writer that took one could write a screen's evidence under another screen.
-import fs from "node:fs";
-import path from "node:path";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { isNodeId } from "../bridge/src/node-id.ts";
 import { resolveScreen } from "./resolve-screen.ts";
+import { hasExportIndex } from "./export-index.ts";
 import { STEM_RE, parseSetName, verifySets } from "./verify-sets.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 import type { Claim, ClaimOpts } from "./node-artefacts.ts";
@@ -75,7 +74,7 @@ export function screenKey(query: unknown, opts: ScreenKeyOpts = {}): ScreenKey {
   const q = String(query ?? "").trim();
   const claim = claimSet(opts);
   const exportDir = opts.exportDir ?? null;
-  if (exportDir && fs.existsSync(path.join(exportDir, "pages", "index.json"))) {
+  if (exportDir && hasExportIndex(exportDir)) {
     const r = resolveScreen(exportDir, q, { planDir: opts.planDir ?? null });
     if (r.status !== "resolved") {
       const why = r.status === "ambiguous" ? `'${q}' matches ${r.candidates.length} screens at the '${r.stage}' stage — pass the node id`
