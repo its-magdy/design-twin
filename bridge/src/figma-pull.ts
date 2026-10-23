@@ -1074,7 +1074,7 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: 
   console.error(`[dtwin] plugin connected — pulling ${plan.label}… (timeout ${Math.round(plan.timeout / 1000)}s)`);
 
   // WHICH connected Figma file this pull talked to — the client the bridge's own
-  // resolveClient() picked for --client, handed back with the reply (server-core requestWithClient;
+  // resolveClient() picked for --client, handed back with the reply (server-core request;
   // a daemon relays it). A screen export result has no field of its own naming its source file
   // (unlike design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could
   // only ever report whichever file's export happened to sort first, attributing every screen to it.

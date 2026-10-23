@@ -44,7 +44,7 @@ function bridges({ held: heldAt = false, bindMs = 0 }: { held?: boolean | "once"
       closes: 0,
       listenError: false,
       isConnected: () => false,
-      requestWithClient: () => Promise.reject(new Error("no plugin in this suite")),
+      request: () => Promise.reject(new Error("no plugin in this suite")),
       awaitClient: () => Promise.resolve(),
       connectionInfo: () => CONNECTION,
       listClients: () => [],
@@ -79,7 +79,6 @@ function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = nul
   const conn: DaemonConnection = {
     sock: "/tmp/fake-daemon.sock",
     request: () => Promise.reject(new Error("unused")),
-    requestWithClient: () => Promise.reject(new Error("unused")),
   };
   const side: DaemonSide = {
     async connect() { connects++; return live ? conn : null; },

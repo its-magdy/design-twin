@@ -68,7 +68,7 @@ const TMP_ROOT = process.platform === "win32" ? os.tmpdir() : fs.realpathSync.na
   check("handshake: the daemon serves on this platform's address for the port", h.sock === daemon.sockPath(PORT, P));
   const conn = await daemon.connect(PORT, P);
   check("…a client holding the token finds it", conn !== null);
-  check("…and a request round-trips through it", conn !== null && (await conn.request({ cmd: "ping", timeoutMs: 5000 }, 5000)).pong === true && calls.join() === "ping");
+  check("…and a request round-trips through it", conn !== null && (await conn.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000 })).reply.pong === true && calls.join() === "ping");
   check("…so does __status", (await daemon.status(PORT, P))?.daemon === true);
   const framesBefore = h.activity().frames;
   check("a client with a DIFFERENT token finds no daemon there", (await daemon.connect(PORT, { handshake: true, token: OTHER })) === null);

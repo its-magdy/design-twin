@@ -14,7 +14,7 @@
 //     per request (the daemon waits inside each one);
 //   - the never-connected guard: a one-shot route whose window ran out with no plugin EVER connected says so
 //     in its own words, rather than resolveClient's "not connected" (which is right for one that left);
-//   - the stall check (server-core requestWithClient `stallMs`): one-shot, own bridge, export-class commands
+//   - the stall check (server-core request `stallMs`): one-shot, own bridge, export-class commands
 //     only — the case where a freshly opened bridge can sit on a plugin too busy to answer at all. A daemon's
 //     or a long-lived server's connection is warm, so they never pay for it;
 //   - progress: only an export-class command hears ticks (a ping or a page list has none worth hearing);
@@ -89,14 +89,14 @@ export interface Upstream {
 
 /** What the own adapter and servedBridge use of a bridge this process holds (server-core's createBridge result) —
  *  the narrow face the bridge holder hands them, and what a suite's fake bridge implements. */
-export type HeldBridge = Pick<Bridge, "port" | "isConnected" | "requestWithClient" | "awaitClient" | "connectionInfo" | "listClients" | "close">;
+export type HeldBridge = Pick<Bridge, "port" | "isConnected" | "request" | "awaitClient" | "connectionInfo" | "listClients" | "close">;
 
-/** The own adapter: server-core's positional requestWithClient, behind the seam. */
+/** The own adapter: the bridge takes the request shape as it is. */
 export function ownUpstream(bridge: HeldBridge): Upstream {
   return {
     kind: "own",
     address: "ws://localhost:" + bridge.port,
-    request: (cmd, args, o) => bridge.requestWithClient(cmd, args, o.timeoutMs ?? TIMEOUTS.command, o.target, o.stallMs, o.onProgress, o.signal, ifDefined("waitMs", o.waitMs)),
+    request: (cmd, args, o) => bridge.request(cmd, args, o),
     async awaitClient(target, waitMs) {
       await bridge.awaitClient(target, waitMs);
       return { everConnected: bridge.connectionInfo().connectionsThisRun > 0 };
@@ -115,8 +115,8 @@ export function daemonUpstream(conn: DaemonConnection, status: () => Promise<Dae
     request(cmd, args, o) {
       const timeoutMs = o.timeoutMs ?? TIMEOUTS.command;
       const waitMs = o.waitMs && o.waitMs > 0 ? o.waitMs : 0;
-      return conn.requestWithClient({ cmd, args, timeoutMs, ...ifDefined("client", o.target ?? undefined), ...(waitMs > 0 ? { waitForConnection: waitMs } : {}) },
-        daemonGuardMs(timeoutMs, waitMs), o.onProgress, o.signal);
+      return conn.request({ cmd, args, timeoutMs, ...ifDefined("client", o.target ?? undefined), ...(waitMs > 0 ? { waitForConnection: waitMs } : {}) },
+        { guardMs: daemonGuardMs(timeoutMs, waitMs), onProgress: o.onProgress, signal: o.signal });
     },
     awaitClient: async () => null,
     listClients: async () => (await status())?.clients || [],
@@ -135,7 +135,7 @@ export function servedBridge(bridge: HeldBridge, close: () => void = () => bridg
   return {
     port: bridge.port,
     isConnected: () => bridge.isConnected(),
-    request: ownUpstream(bridge).request,
+    request: ownUpstream(bridge).request, // a frame's args as they arrived (absent forwarded as absent)
     close,
     listClients: () => bridge.listClients(),
     connectionInfo: () => bridge.connectionInfo(),

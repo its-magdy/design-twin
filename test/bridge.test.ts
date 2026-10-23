@@ -333,7 +333,7 @@ async function connectedBridge(on: Handlers = {}) {
 async function disconnectErr(code: number, reason: string) {
   const { bridge, client } = await connectedBridge();
   let err: Error | undefined;
-  const inflight = bridge.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
+  const inflight = bridge.request("exportFull", {}, { timeoutMs: 20000 }).catch((e: unknown) => { err = asErr(e); });
   await sleep(60); // let the request register before the close lands
   client.close(code, reason);
   await inflight;
@@ -346,7 +346,7 @@ void (async () => {
   const { bridge, client } = await connectedBridge();
 
   let err: Error | undefined;
-  try { await bridge.request("exportFull", {}, 1100); } catch (e) { err = asErr(e); } // client never answers
+  try { await bridge.request("exportFull", {}, { timeoutMs: 1100 }); } catch (e) { err = asErr(e); } // client never answers
   client.close();
   bridge.close();
 
@@ -368,7 +368,7 @@ void (async () => {
     // It answers every command with `answer`, which is mostly not that command's reply.
     let answer: unknown = { nope: true };
     const { bridge: b, client: c } = await connectedBridge(answerAll(() => answer));
-    const shapeErr = async (cmd: Cmd) => { try { await b.request(cmd, {}, 2000); return null; } catch (e) { return asErr(e).message; } };
+    const shapeErr = async (cmd: Cmd) => { try { await b.request(cmd, {}, { timeoutMs: 2000 }); return null; } catch (e) { return asErr(e).message; } };
     console.log("\nserver-core — reply shape check:");
     ok("[shape] a listPages reply with no `pages` is rejected, naming the command and the field",
       /plugin replied with an unexpected shape for listPages: `pages` is missing/.test((await shapeErr("listPages")) ?? ""));
@@ -381,10 +381,10 @@ void (async () => {
     answer = { pages: "x", manifest: {} };
     ok("[shape] a field of the wrong kind is named", /`pages` is not an array/.test((await shapeErr("listPages")) ?? ""));
     answer = { exportedAt: "2026-09-24T00:00:00.000Z", file: "F", depth: 1, pages: [], manifest: { pages: 0, warnings: [] } };
-    const good = await b.request("listPages", { depth: 1 }, 2000);
-    ok("[shape] the real shape resolves, typed", good.pages.length === 0 && good.manifest.pages === 0);
-    ok("[shape] requestWithClient also names the connection the reply came from",
-      (await b.requestWithClient("listPages", { depth: 1 }, 2000)).client.connId === "c1");
+    const good = await b.request("listPages", { depth: 1 }, { timeoutMs: 2000 });
+    ok("[shape] the real shape resolves, typed", good.reply.pages.length === 0 && good.reply.manifest.pages === 0);
+    ok("[shape] request also names the connection the reply came from",
+      (await b.request("listPages", { depth: 1 }, { timeoutMs: 2000 })).client.connId === "c1");
     c.close();
     b.close();
   }
@@ -431,7 +431,7 @@ void (async () => {
     });
     // `ping` takes no args (NoArgs is {}, so any object passes); the pad is a payload the plugin side of this test
     // reads back, not a real argument.
-    const big = await b.request("ping", { pad: "x".repeat(20 * MiB) }, 30000).then((r) => r, (e: unknown) => asErr(e));
+    const big = await b.request("ping", { pad: "x".repeat(20 * MiB) }, { timeoutMs: 30000 }).then((o) => o.reply, (e: unknown) => asErr(e));
     console.log("\nserver-core — frames past 16 MiB:");
     ok("[payload] a 20 MiB command frame reaches the plugin whole", argsLen === 20 * MiB);
     ok("[payload] a 40 MiB reply is received whole (no 16 MiB cap)",
@@ -461,7 +461,7 @@ void (async () => {
     else process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB = before;
     c.ws.on("error", () => {});
     let capErr: Error | undefined;
-    try { await b.request("ping", {}, 10000); } catch (e) { capErr = asErr(e); }
+    try { await b.request("ping", {}, { timeoutMs: 10000 }); } catch (e) { capErr = asErr(e); }
     ok("[payload] a reply over FIGMA_BRIDGE_MAX_PAYLOAD_MB fails its request at once, not at the timeout", !!capErr && /disconnected before replying/.test(capErr.message));
     ok("[payload] and the diagnosis names the 1 MB limit and the knob that raises it",
       !!capErr && /exceeded the 1 MB frame limit/.test(capErr.message) && /FIGMA_BRIDGE_MAX_PAYLOAD_MB/.test(capErr.message));
@@ -577,12 +577,12 @@ void (async () => {
     dead.on("ping", () => { deadPings++; });
     dead.on("close", () => { deadPingsAtClose = deadPings; });
     const fence = async (): Promise<boolean> => {
-      try { await bridge.request("ping", {}, 5000, "c1"); return true; } catch { return false; }
+      try { await bridge.request("ping", {}, { timeoutMs: 5000, target: "c1" }); return true; } catch { return false; }
     };
     ok("[heartbeat] both clients are registered at first", bridge.listClients().length === 2);
     // An in-flight request on the dead client must fail on termination, not wait out its budget.
     let hbErr: Error | undefined;
-    const inflight = bridge.request("exportFull", {}, 20000, "c2").catch((e: unknown) => { hbErr = asErr(e); });
+    const inflight = bridge.request("exportFull", {}, { timeoutMs: 20000, target: "c2" }).catch((e: unknown) => { hbErr = asErr(e); });
     bridge.heartbeatTick();
     const pinged = await until(() => alivePings === 1 && deadPings === 1);
     const fenced = await fence();
@@ -635,7 +635,7 @@ void (async () => {
       },
     });
     const ticks: ProgressTick[] = [];
-    await b.request("ping", {}, 2000, null, undefined, (t) => ticks.push(t));
+    await b.request("ping", {}, { timeoutMs: 2000, onProgress: (t) => ticks.push(t) });
     console.log("\nserver-core — progress listener:");
     ok("[progress] every tick sent while the request was in flight reaches onProgress", ticks.length === 2);
     const tick0 = must(ticks[0], "first progress tick");
@@ -676,8 +676,8 @@ void (async () => {
     ok("[multi] the hello announcement is recorded", one0.file === "App — Base" && one0.fileKey === "KEYBASE");
     ok("[multi] and it is marked identified", one0.identified === true);
     // With ONE client, an unaddressed request must still work — every existing call site relies on it.
-    const soloRes = await bridge.request("ping", {}, 5000);
-    ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.file === "base");
+    const soloRes = await bridge.request("ping", {}, { timeoutMs: 5000 });
+    ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.reply.file === "base");
 
     // The second file connects. It coexists with the first; nothing is terminated.
     const lib = await open({ pong: true, page: "Tokens", file: "lib" });
@@ -692,10 +692,10 @@ void (async () => {
     ok("[multi] connectionInfo reports the client count", bridge.connectionInfo().clientsConnected === 2);
 
     // Addressing: by connId, by fileKey, and by a substring of the file name.
-    ok("[multi] routes by connId", (await bridge.request("ping", {}, 5000, "c2")).file === "lib");
-    ok("[multi] routes by fileKey", (await bridge.request("ping", {}, 5000, "KEYBASE")).file === "base");
+    ok("[multi] routes by connId", (await bridge.request("ping", {}, { timeoutMs: 5000, target: "c2" })).reply.file === "lib");
+    ok("[multi] routes by fileKey", (await bridge.request("ping", {}, { timeoutMs: 5000, target: "KEYBASE" })).reply.file === "base");
     ok("[multi] routes by file-name substring (case-insensitive)",
-      (await bridge.request("ping", {}, 5000, "nima")).file === "lib");
+      (await bridge.request("ping", {}, { timeoutMs: 5000, target: "nima" })).reply.file === "lib");
 
     // awaitClient: a NAMED target whose window has not redialled yet (two files open, the other
     // one landed first — seen live) is waited for, bounded; an unknown name times out quietly and
@@ -705,7 +705,7 @@ void (async () => {
     const tw = Date.now() - tw0;
     ok("[multi] awaitClient for a name nobody has returns quietly after its window (no throw)", tw >= 280 && tw < 1500);
     let stillErr: Error | undefined;
-    try { await bridge.request("ping", {}, 5000, "nobody-has-this-name"); } catch (e) { stillErr = asErr(e); }
+    try { await bridge.request("ping", {}, { timeoutMs: 5000, target: "nobody-has-this-name" }); } catch (e) { stillErr = asErr(e); }
     ok("[multi] …and the request afterwards still gets the unchanged 'no connected Figma file matches' text",
       !!stillErr && stillErr.message.startsWith("no connected Figma file matches 'nobody-has-this-name'. Connected:\n  c1  \"App — Base\"  fileKey KEYBASE"));
     const waited = bridge.awaitClient("Docs", 3000);
@@ -715,15 +715,15 @@ void (async () => {
     await waited;
     const tl = Date.now() - tl0;
     ok("[multi] awaitClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
-    ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, 5000, "Docs")).file === "docs");
+    ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, { timeoutMs: 5000, target: "Docs" })).reply.file === "docs");
     // Raced against a timer shorter than its own 3 s window: a wait that only ended at the window loses.
     ok("[multi] awaitClient resolves at once for a name already connected",
       await Promise.race([bridge.awaitClient("nima", 3000).then(() => "resolved"), new Promise((r) => setTimeout(() => r("window"), 2000))]) === "resolved");
     // The same wait through a request's `waitMs`: a late named window is waited for, then routed to.
-    const viaWait = bridge.request("ping", {}, 5000, "Late Named", undefined, undefined, undefined, { waitMs: 3000 });
+    const viaWait = bridge.request("ping", {}, { timeoutMs: 5000, target: "Late Named", waitMs: 3000 });
     let lateNamed: FakePlugin | undefined;
     setTimeout(() => { void open({ pong: true, page: "P", file: "late-named" }).then((c) => { lateNamed = c; identify(c, { instanceId: "fig-late", file: "Late Named File", fileKey: null, page: "P" }); }); }, 200);
-    ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).file === "late-named");
+    ok("[multi] a request with waitMs waits for its late named target, then routes to it", (await viaWait).reply.file === "late-named");
     lateNamed?.close();
     // A caller that gives up during the wait: rejected at once with its own reason, and nothing is sent —
     // not even to the file it named, whose hello lands just after the abort.
@@ -732,7 +732,7 @@ void (async () => {
     setTimeout(() => acWait.abort(new Error("the caller left during the wait")), 100);
     setTimeout(() => identify(pendingMatch, { instanceId: "fig-pending", file: "Pending Match File", fileKey: null, page: "P" }), 200);
     const ta0 = Date.now();
-    const abandonedWait = await bridge.request("ping", {}, 5000, "Pending Match", undefined, undefined, acWait.signal, { waitMs: 3000 }).then(() => "answered", (e: unknown) => asErr(e).message);
+    const abandonedWait = await bridge.request("ping", {}, { timeoutMs: 5000, target: "Pending Match", signal: acWait.signal, waitMs: 3000 }).then(() => "answered", (e: unknown) => asErr(e).message);
     const abandonedMs = Date.now() - ta0;
     await sleep(250); // past the hello: a request that survived its abort would be sent now
     ok("[multi] a request aborted during its wait rejects at once with the caller's reason", abandonedWait === "the caller left during the wait" && abandonedMs < 1500);
@@ -744,14 +744,14 @@ void (async () => {
     // Ambiguity must REFUSE, not guess. Silently picking one would export the wrong file and look
     // entirely successful — the adb "more than one device" call.
     let ambErr: Error | undefined;
-    try { await bridge.request("ping", {}, 5000); } catch (e) { ambErr = asErr(e); }
+    try { await bridge.request("ping", {}, { timeoutMs: 5000 }); } catch (e) { ambErr = asErr(e); }
     ok("[multi] an unaddressed request with two files connected is REFUSED", !!ambErr);
     ok("[multi] the refusal lists both files so the caller can choose",
       !!ambErr && /App — Base/.test(ambErr.message) && /NIMA Library/.test(ambErr.message));
     ok("[multi] and names the flags that fix it", !!ambErr && /--client/.test(ambErr.message));
 
     let missErr: Error | undefined;
-    try { await bridge.request("ping", {}, 5000, "nope"); } catch (e) { missErr = asErr(e); }
+    try { await bridge.request("ping", {}, { timeoutMs: 5000, target: "nope" }); } catch (e) { missErr = asErr(e); }
     ok("[multi] an unmatched target is refused and lists what IS connected",
       !!missErr && /no connected Figma file matches/.test(missErr.message) && /c1/.test(missErr.message));
 
@@ -760,7 +760,7 @@ void (async () => {
     identify(dupA, { instanceId: "fig-d", file: "Untitled", fileKey: null, page: "Page 1" });
     await sleep(60);
     let dupErr: Error | undefined;
-    try { await bridge.request("ping", {}, 5000, "e"); } catch (e) { dupErr = asErr(e); }
+    try { await bridge.request("ping", {}, { timeoutMs: 5000, target: "e" }); } catch (e) { dupErr = asErr(e); }
     ok("[multi] an ambiguous name match is refused, not resolved to the first",
       !!dupErr && /matches \d+ connected files/.test(dupErr.message));
     dupA.close();
@@ -773,14 +773,14 @@ void (async () => {
     await sleep(60);
     const slowId = bridge.listClients().find((c) => !c.identified)?.connId;
     let slowErr: Error | undefined;
-    const slowReq = bridge.request("exportFull", {}, 20000, slowId).catch((e: unknown) => { slowErr = asErr(e); });
-    const liveReq = bridge.request("ping", {}, 5000, "c1"); // base file, still healthy
+    const slowReq = bridge.request("exportFull", {}, { timeoutMs: 20000, target: slowId }).catch((e: unknown) => { slowErr = asErr(e); });
+    const liveReq = bridge.request("ping", {}, { timeoutMs: 5000, target: "c1" }); // base file, still healthy
     await sleep(60);
     slow.close(1001, "");
     await slowReq;
     const liveRes = await liveReq;
     ok("[multi] a closing client fails ITS OWN in-flight request", !!slowErr);
-    ok("[multi] and does NOT abort another file's in-flight request", liveRes.file === "base");
+    ok("[multi] and does NOT abort another file's in-flight request", liveRes.reply.file === "base");
     ok("[multi] the closed client leaves the registry", !bridge.listClients().some((c) => c.connId === slowId));
     ok("[multi] while the others remain", bridge.listClients().length === 2);
 
@@ -2329,7 +2329,7 @@ void (async () => {
     // tagging `file` with the command so a round-trip can be told apart. It blows up on `write` (the
     // plugin-side failure case) and answers `exportFull { allPages }` with a 4 MB hygiene line (the
     // reassembly case). It names no client (null), so the daemon's reply carries none — which
-    // requestWithClient() must report as null, never invent.
+    // request() must report as null, never invent.
     request: async (cmd, args, o) => {
       if (o.target) calls.push("client:" + o.target);
       if (o.waitMs) calls.push("waitMs:" + o.waitMs);
@@ -2395,9 +2395,9 @@ void (async () => {
 
     const dcli = await daemon.connect(D_PORT);
     if (!dcli) throw new Error("daemon.connect() returned null right after serve()");
-    ok("[daemon] a request round-trips", (await dcli.request({ cmd: "listPages", timeoutMs: 5000 }, 5000)).file === "echo:listPages");
+    ok("[daemon] a request round-trips", (await dcli.request({ cmd: "listPages", timeoutMs: 5000 }, { guardMs: 5000 })).reply.file === "echo:listPages");
     let dReqErr: Error | undefined;
-    try { await dcli.request({ cmd: "write", args: { ops: [] }, timeoutMs: 5000 }, 5000); } catch (e) { dReqErr = asErr(e); }
+    try { await dcli.request({ cmd: "write", args: { ops: [] }, timeoutMs: 5000 }, { guardMs: 5000 }); } catch (e) { dReqErr = asErr(e); }
     ok("[daemon] a plugin-side failure propagates to the client as an error, not a silent empty result",
       !!dReqErr && /plugin exploded/.test(dReqErr.message));
 
@@ -2406,9 +2406,9 @@ void (async () => {
     // and the cancel section below shows a request reaching the bridge while another is held.
     const three = ["first", "second", "third"];
     calls.length = 0;
-    const got = await Promise.all(three.map(() => dcli.request({ cmd: "exportFull", args: {}, timeoutMs: 5000 }, 5000)));
+    const got = await Promise.all(three.map(() => dcli.request({ cmd: "exportFull", args: {}, timeoutMs: 5000 }, { guardMs: 5000 })));
     ok("[daemon] concurrent client exports each round-trip",
-      got.length === 3 && got.every((r) => isRecord(r.designSystem)) && calls.filter((c) => c === "exportFull").length === 3);
+      got.length === 3 && got.every((r) => isRecord(r.reply.designSystem)) && calls.filter((c) => c === "exportFull").length === 3);
 
     // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` is not
     // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` does not reach setTimeout as NaN.
@@ -2443,14 +2443,14 @@ void (async () => {
     // if `client` were dropped in the unix-socket frame the command would silently run against whichever
     // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
     calls.length = 0;
-    const routed = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, 5000);
+    const routed = await dcli.request({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000 }, { guardMs: 5000 });
     ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NIMA Library"));
     ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
     ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
     // A connect window is the bridge's to spend (server-core awaitClient), not the daemon's: it is forwarded
     // with the request, at once.
     calls.length = 0;
-    const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
+    const afterWindow = await dcli.request({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, { guardMs: 5000 }).then(() => "answered", (e: unknown) => asErr(e).message);
     ok("[daemon] a connect window is forwarded to the bridge with the request", calls.includes("waitMs:50") && calls.includes("whoami") && afterWindow === "answered");
     // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
     const cstat = await daemon.status(D_PORT);
@@ -2459,12 +2459,12 @@ void (async () => {
 
     // Newline-delimited framing has to survive a payload that arrives in many chunks — a real export is
     // megabytes, and reassembling it wrongly would corrupt every large pull.
-    const big = await dcli.request({ cmd: "exportFull", args: { allPages: true }, timeoutMs: 30000 }, 30000);
-    ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.designSystem.hygiene?.[0]?.length === 4e6);
+    const big = await dcli.request({ cmd: "exportFull", args: { allPages: true }, timeoutMs: 30000 }, { guardMs: 30000 });
+    ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.reply.designSystem.hygiene?.[0]?.length === 4e6);
     // The daemon client re-checks the relayed reply's shape (an older daemon build may not have): a
     // bridge answering `listChildren` with a listPages-shaped reply is a named error, not a typed lie.
     let shapeErr: Error | undefined;
-    try { await dcli.request({ cmd: "listChildren", args: { nodeId: "1:1" }, timeoutMs: 5000 }, 5000); } catch (e) { shapeErr = asErr(e); }
+    try { await dcli.request({ cmd: "listChildren", args: { nodeId: "1:1" }, timeoutMs: 5000 }, { guardMs: 5000 }); } catch (e) { shapeErr = asErr(e); }
     ok("[daemon] a relayed reply of the wrong shape is refused by the client, naming the command",
       !!shapeErr && /relayed an unexpected shape for listChildren: `id` is missing/.test(shapeErr.message));
 
@@ -2476,12 +2476,12 @@ void (async () => {
     ok("[daemon] a client probe counts as activity — idleForMs stays small while in use",
       (dstat?.idleForMs ?? NaN) < 60000);
 
-    // A bridge with no requestWithClient cannot take a progress listener (the shape an older bridge has):
+    // A bridge whose request never reports progress (the shape an older bridge has):
     // a client that asks for progress still gets its reply, and simply no ticks.
     let noTicks = 0;
-    const optedNoSource = await dcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, () => { noTicks++; });
+    const optedNoSource = await dcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, onProgress: () => { noTicks++; } });
     ok("[daemon-progress] a listener against a bridge with no progress source still gets the reply, and no ticks",
-      optedNoSource.file === "echo:ping" && noTicks === 0);
+      optedNoSource.reply.file === "echo:ping" && noTicks === 0);
 
     ok("[daemon] --stop stops it", (await daemon.stop(D_PORT)) === true);
     ok("[daemon] and removes the socket file, so the next --serve is not blocked",
@@ -2492,7 +2492,7 @@ void (async () => {
     // An MCP export routed through a daemon owes its caller notifications/progress (MCP spec 2025-06-18,
     // basic/utilities/progress) just as one that holds the bridge does, so the daemon relays the
     // bridge's ticks as `{ id, progress }` frames ahead of the reply — to a client that opted in only.
-    // A second daemon, over a fake bridge WITH requestWithClient that emits ticks through its listener.
+    // A second daemon, over a fake bridge whose request emits ticks through its listener.
     {
       const P_PORT = 19788; // a socket name only: the fake bridge binds no TCP port
       const TICKS: ProgressTick[] = [
@@ -2527,7 +2527,7 @@ void (async () => {
       // Typed client, opted in: both ticks, exact values, in order, and before the promise settles.
       const events: string[] = [];
       const got: ProgressTick[] = [];
-      const withTicks = await pcli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => { got.push(t); events.push("tick"); });
+      const withTicks = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, onProgress: (t) => { got.push(t); events.push("tick"); } });
       events.push("reply");
       ok("[daemon-progress] an opted-in client receives both ticks, exact values, in order",
         JSON.stringify(got) === JSON.stringify(TICKS));
@@ -2549,23 +2549,23 @@ void (async () => {
         plain.length === 1 && plain[0] === JSON.stringify({ ok: true, id: "n1", result: { pong: true, page: "P", file: "ticked" }, client: row })
         && listeners.at(-2) === "none"
         && opted.length === 3 && opted[0] === JSON.stringify({ id: "y1", progress: TICKS[0] }) && opted[1] === JSON.stringify({ id: "y1", progress: TICKS[1] }));
-      const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
+      const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000 });
       ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
-        noOpt.file === "ticked" && listeners.at(-1) === "none");
+        noOpt.reply.file === "ticked" && listeners.at(-1) === "none");
       // The frame's connect window reaches the bridge as the request's `waitMs`, unchanged (the
       // bridge's awaitClient caps a named target itself); a frame without one asks for no wait.
       ok("[daemon] a request with no connect window forwards no waitMs", waits.at(-1) === "-:none");
-      await pcli.request({ cmd: "ping", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+      await pcli.request({ cmd: "ping", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 90000 }, { guardMs: 5000 });
       ok("[daemon] a request's connect window is forwarded to the bridge as waitMs, with its target", waits.at(-1) === "NIMA Library:90000");
-      await pcli.request({ cmd: "ping", client: "c2", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+      await pcli.request({ cmd: "ping", client: "c2", timeoutMs: 5000, waitForConnection: 4000 }, { guardMs: 5000 });
       ok("[daemon] …for a connId target too (the bridge decides it never waits for a name)", waits.at(-1) === "c2:4000");
 
       // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
       let slowTicks = 0;
-      const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, 400, () => { slowTicks++; }).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, { guardMs: 400, onProgress: () => { slowTicks++; } }).then((r) => r.reply.file, (e: unknown) => "rejected: " + asErr(e).message);
       ok("[daemon-progress] ticks keep a request alive past the client's guard (each one re-arms it)", slow === "slow" && slowTicks === 4);
       const t0 = Date.now();
-      const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, 400, () => {}).then(() => "resolved", (e: unknown) => asErr(e).message);
+      const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, { guardMs: 400, onProgress: () => {} }).then(() => "resolved", (e: unknown) => asErr(e).message);
       ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
         /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
       await sleep(1400); // let the late listPages answer before stopping the daemon
@@ -2601,10 +2601,10 @@ void (async () => {
       const fcli = await daemon.connect(F_PORT);
       if (!fcli) throw new Error("daemon.connect() returned null against the hand-rolled daemon");
       const fgot: ProgressTick[] = [];
-      const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => fgot.push(t)).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, onProgress: (t) => fgot.push(t) }).then((r) => r.reply.file, (e: unknown) => "rejected: " + asErr(e).message);
       ok("[daemon-progress] malformed progress frames are dropped — the reply still arrives, and only the well-formed tick is delivered",
         fr === "fake" && JSON.stringify(fgot) === JSON.stringify([TICKS[1]]));
-      const fr2 = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+      const fr2 = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000 }).then((r) => r.reply.file, (e: unknown) => "rejected: " + asErr(e).message);
       const optIn = seenFrames.map((f) => typeof f === "object" && f !== null && "progress" in f ? f.progress : "absent");
       ok("[daemon-progress] the client opts in on the wire only with a listener, and copes with frames it never asked for",
         fr2 === "fake" && optIn.join(",") === "true,absent");
@@ -3540,7 +3540,7 @@ void (async () => {
   }
 
   {
-    // requestWithClient on a bridge with nothing connected yet, given a connect window that ends inside
+    // request on a bridge with nothing connected yet, given a connect window that ends inside
     // the settle (the first file lands at 100 ms, the second at 450 ms, the window is 300 ms): the wait
     // runs to the end of the settle, so the second file is seen and the request is refused, not sent to
     // the first.
@@ -3555,7 +3555,7 @@ void (async () => {
     const first = dial("File A", 100);
     const second = dial("File B", 450);
     const t0 = Date.now();
-    const outcome = await b.requestWithClient("ping", {}, 3000, null, undefined, undefined, undefined, { waitMs: 300 }).then(() => "sent", (e: unknown) => asErr(e).message);
+    const outcome = await b.request("ping", {}, { timeoutMs: 3000, waitMs: 300 }).then(() => "sent", (e: unknown) => asErr(e).message);
     ok("[settle-request] a connect window that ends inside the settle does not cut the settle short: the second file is seen",
       Date.now() - t0 >= 440 && /^2 Figma files are connected to the bridge/.test(outcome));
     (await first).close();
@@ -3641,7 +3641,7 @@ void (async () => {
     await b.awaitClient(null, 1000);
     const start = Date.now();
     let err: Error | undefined;
-    try { await b.request("exportNode", { nodeId: "7314:87192" }, 60000, undefined, 300); }
+    try { await b.request("exportNode", { nodeId: "7314:87192" }, { timeoutMs: 60000, stallMs: 300 }); }
     catch (e) { err = asErr(e); }
     const elapsed = Date.now() - start;
     ok("[stall] a client that never answers and never reports progress is aborted by the STALL timeout, not the full one",
@@ -3659,7 +3659,7 @@ void (async () => {
     // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
     // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
     const ticker = setInterval(() => { try { ws1.progress({ phase: "pages" }); } catch {} }, 100);
-    const req = b.request("exportFull", {}, 5000, undefined, 300);
+    const req = b.request("exportFull", {}, { timeoutMs: 5000, stallMs: 300 });
     let rejectedWithStall = false;
     req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
     await sleep(900); // 3x the stall window, with progress the whole time
@@ -3691,7 +3691,7 @@ void (async () => {
     await sleep(50);
     let err: Error | undefined;
     const start = Date.now();
-    try { await b.request("exportFull", {}, 60000, undefined, 300); }
+    try { await b.request("exportFull", {}, { timeoutMs: 60000, stallMs: 300 }); }
     catch (e) { err = asErr(e); }
     ok("[stall] activity from BEFORE the command was sent does not disarm the check: a request with no life since send still stalls",
       !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
@@ -3708,7 +3708,7 @@ void (async () => {
     const { bridge: b, client: ws1 } = await connectedBridge();
     let err: Error | undefined;
     const start = Date.now();
-    try { await b.request("exportFull", {}, 60000, undefined, 300); }
+    try { await b.request("exportFull", {}, { timeoutMs: 60000, stallMs: 300 }); }
     catch (e) { err = asErr(e); }
     ok("[stall] a client that connected in the same instant as the send and sent nothing since still stalls (frame count, not clock)",
       !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
@@ -3738,7 +3738,7 @@ void (async () => {
       await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
-      try { await b.request("exportNode", { nodeId: "1:2" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
+      try { await b.request("exportNode", { nodeId: "1:2" }, { timeoutMs: 10000, stallMs: 300 }); } catch (e) { err = asErr(e); }
       await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
       const sent = cmdFrames(ws1)[0];
       ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
@@ -3746,12 +3746,12 @@ void (async () => {
       ws1.close();
       b.close();
     }
-    // (b) the per-command timeout. Pre-change (the setTimeout in requestWithClient, ~line 772-784)
+    // (b) the per-command timeout. Pre-change (the setTimeout in request, ~line 772-784)
     // likewise rejected silently.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
       let err: Error | undefined;
-      try { await b.request("exportFull", {}, 400); } catch (e) { err = asErr(e); }
+      try { await b.request("exportFull", {}, { timeoutMs: 400 }); } catch (e) { err = asErr(e); }
       await sleep(100);
       const sent = cmdFrames(ws1)[0];
       ok("[cancel] per-command timeout fires → the plugin gets the cancel frame for that id",
@@ -3767,7 +3767,7 @@ void (async () => {
       let closedAt = -1;
       ws1.ws.on("close", () => { closedAt = ws1.frames.length; });
       let err: Error | undefined;
-      const inflight = b.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
+      const inflight = b.request("exportFull", {}, { timeoutMs: 20000 }).catch((e: unknown) => { err = asErr(e); });
       await sleep(60); // let the command land before the close
       b.close();
       await inflight;
@@ -3777,7 +3777,7 @@ void (async () => {
       ok("[cancel] close() with a request pending → the cancel frame arrives BEFORE the socket closes",
         err?.message === "bridge closed" && cancelAt > 0 && closedAt > cancelAt);
     }
-    // (d) the caller's AbortSignal. Pre-change request()/requestWithClient() had no `signal` parameter:
+    // (d) the caller's AbortSignal. Pre-change request() had no `signal` parameter:
     // the extra argument was ignored, the command stayed pending until its timeout, nothing was cancelled.
     {
       // Answers only ping, so the same bridge can prove a request after the abort still round-trips.
@@ -3785,7 +3785,7 @@ void (async () => {
       const ac = new AbortController();
       let err: Error | undefined;
       const start = Date.now();
-      const inflight = b.request("exportFull", {}, 20000, undefined, undefined, undefined, ac.signal).catch((e: unknown) => { err = asErr(e); });
+      const inflight = b.request("exportFull", {}, { timeoutMs: 20000, signal: ac.signal }).catch((e: unknown) => { err = asErr(e); });
       await sleep(60);
       ac.abort();
       await inflight;
@@ -3799,7 +3799,7 @@ void (async () => {
       // An Error reason of the caller's own is passed through (the daemon names its departed client).
       const ac2 = new AbortController();
       let err2: Error | undefined;
-      const inflight2 = b.request("exportFull", {}, 20000, undefined, undefined, undefined, ac2.signal).catch((e: unknown) => { err2 = asErr(e); });
+      const inflight2 = b.request("exportFull", {}, { timeoutMs: 20000, signal: ac2.signal }).catch((e: unknown) => { err2 = asErr(e); });
       await sleep(30);
       ac2.abort(new Error("caller-specific reason"));
       await inflight2;
@@ -3808,17 +3808,17 @@ void (async () => {
       // still answers the next request after the aborted ones.
       const ac3 = new AbortController();
       // One listener while in flight, none once settled.
-      const pinging = b.request("ping", {}, 2000, undefined, undefined, undefined, ac3.signal);
+      const pinging = b.request("ping", {}, { timeoutMs: 2000, signal: ac3.signal });
       const listening = getEventListeners(ac3.signal, "abort").length;
       const pong = await pinging;
       ok("[cancel] after aborts the bridge still round-trips, and the settled request left no abort listener behind",
-        pong.pong === true && listening === 1 && getEventListeners(ac3.signal, "abort").length === 0);
+        pong.reply.pong === true && listening === 1 && getEventListeners(ac3.signal, "abort").length === 0);
       // Aborted BEFORE the call: nothing is sent at all.
       const before = cmdFrames(ws1).length;
       const pre = new AbortController();
       pre.abort();
       let err3: Error | undefined;
-      try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, pre.signal); } catch (e) { err3 = asErr(e); }
+      try { await b.request("exportFull", {}, { timeoutMs: 20000, signal: pre.signal }); } catch (e) { err3 = asErr(e); }
       await sleep(100);
       ok("[cancel] a signal aborted before the call rejects \"request aborted before it was sent\" and sends no command frame",
         err3?.message === "request aborted before it was sent" && cmdFrames(ws1).length === before);
@@ -3826,7 +3826,7 @@ void (async () => {
       const preWhy = new AbortController();
       preWhy.abort(new Error("the caller had already left"));
       let err4: Error | undefined;
-      try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, preWhy.signal); } catch (e) { err4 = asErr(e); }
+      try { await b.request("exportFull", {}, { timeoutMs: 20000, signal: preWhy.signal }); } catch (e) { err4 = asErr(e); }
       ok("[cancel] a signal aborted before the call with the caller's own Error rejects with that Error, sending nothing",
         err4?.message === "the caller had already left" && cmdFrames(ws1).length === before);
       ws1.close();
@@ -3846,7 +3846,7 @@ void (async () => {
         `const ws = new WsClient("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
         'await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });',
         "const ac = new AbortController();",
-        'const p = bridge.request("exportFull", {}, 60000, undefined, undefined, undefined, ac.signal).catch((e) => console.log("REJECTED:" + e.message));',
+        'const p = bridge.request("exportFull", {}, { timeoutMs: 60000, signal: ac.signal }).catch((e) => console.log("REJECTED:" + e.message));',
         "setTimeout(() => ac.abort(), 50);",
         "await p;",
         // Closed only AFTER the request settled, so close() finds nothing pending to clear: a timer the
@@ -3981,24 +3981,24 @@ void (async () => {
       const errOf = (p: Promise<unknown>) => p.then(() => "answered", (e: unknown) => asErr(e).message);
 
       // Alpha's export: forwarded, and held by the plugin.
-      const aDone = gcli.request({ cmd: "exportFull", client: "Alpha", args: {}, timeoutMs: 20000 }, 20000);
+      const aDone = gcli.request({ cmd: "exportFull", client: "Alpha", args: {}, timeoutMs: 20000 }, { guardMs: 20000 });
       await until(() => alpha.commands("exportFull").length === 1);
       let aSettled = false;
       void aDone.then(() => { aSettled = true; }, () => { aSettled = true; });
 
-      const who = await gcli.requestWithClient({ cmd: "whoami", client: "Bravo", timeoutMs: 5000 }, 5000);
+      const who = await gcli.request({ cmd: "whoami", client: "Bravo", timeoutMs: 5000 }, { guardMs: 5000 });
       ok("[two-files] a read of file B answers while file A's export is still running",
         who.reply.file === "File Bravo" && who.client?.file === "File Bravo" && !aSettled);
       // A listing of B: B's plugin has nothing running, so it answers now (A's plugin would hold one of A's).
-      const pagesB = await errOf(gcli.request({ cmd: "listPages", client: "KEYBRAVO", args: { depth: 1 }, timeoutMs: 20000 }, 20000));
+      const pagesB = await errOf(gcli.request({ cmd: "listPages", client: "KEYBRAVO", args: { depth: 1 }, timeoutMs: 20000 }, { guardMs: 20000 }));
       ok("[two-files] …and so does a page list of file B", pagesB === "answered" && !aSettled);
-      const pingA = await gcli.request({ cmd: "ping", client: "Alpha", timeoutMs: 5000 }, 5000);
-      ok("[two-files] …and a ping of file A itself (the plugin answers it during its own export)", pingA.file === "File Alpha" && !aSettled);
+      const pingA = await gcli.request({ cmd: "ping", client: "Alpha", timeoutMs: 5000 }, { guardMs: 5000 });
+      ok("[two-files] …and a ping of file A itself (the plugin answers it during its own export)", pingA.reply.file === "File Alpha" && !aSettled);
       ok("[two-files] an unaddressed read with two files connected is still refused as ambiguous — at once, not after A",
-        /2 Figma files are connected to the bridge — say which one to use/.test(await errOf(gcli.request({ cmd: "whoami", timeoutMs: 5000 }, 5000))) && !aSettled);
+        /2 Figma files are connected to the bridge — say which one to use/.test(await errOf(gcli.request({ cmd: "whoami", timeoutMs: 5000 }, { guardMs: 5000 }))) && !aSettled);
 
       // An export of file B too: two files' exports run side by side, each in its own plugin.
-      const bOut = await errOf(gcli.request({ cmd: "exportFull", client: "Bravo", args: {}, timeoutMs: 20000 }, 20000));
+      const bOut = await errOf(gcli.request({ cmd: "exportFull", client: "Bravo", args: {}, timeoutMs: 20000 }, { guardMs: 20000 }));
       ok("[two-files] an export of file B runs and answers while file A's export runs", bOut === "answered" && bravo.commands("exportFull").length === 1 && !aSettled);
 
       // Reconnect: Bravo's window goes away and comes back as a new connection. A named read issued in the
@@ -4006,7 +4006,7 @@ void (async () => {
       const oldBravo = must(b.listClients().find((c) => c.file === "File Bravo"), "Bravo's first connection").connId;
       bravo.stop();
       await until(() => !b.listClients().some((c) => c.connId === oldBravo));
-      const whoAfter = gcli.requestWithClient({ cmd: "whoami", client: "Bravo", timeoutMs: 5000, waitForConnection: 4000 }, 8000);
+      const whoAfter = gcli.request({ cmd: "whoami", client: "Bravo", timeoutMs: 5000, waitForConnection: 4000 }, { guardMs: 8000 });
       await sleep(150);
       bravo = two("fig-bravo", "File Bravo", "KEYBRAVO", bravoOn);
       const reWho = await whoAfter;
@@ -4016,7 +4016,7 @@ void (async () => {
       // Cancellation: a read in flight to Bravo (it never answers ping) whose client leaves
       // → Bravo gets the cancel frame for exactly that request; Alpha's export is not touched.
       const ac = new AbortController();
-      const lc = errOf(gcli.request({ cmd: "ping", client: "Bravo", timeoutMs: 20000 }, 20000, undefined, ac.signal));
+      const lc = errOf(gcli.request({ cmd: "ping", client: "Bravo", timeoutMs: 20000 }, { guardMs: 20000, signal: ac.signal }));
       await until(() => bravo.commands("ping").length === 1);
       const lcId = bravo.commands("ping")[0]?.id;
       ac.abort();
@@ -4026,7 +4026,7 @@ void (async () => {
         !!lcId && bravo.cancels.join(",") === lcId && alpha.cancels.length === 0 && !aSettled);
       // …and one whose client leaves during its connect wait (no such file yet) is never forwarded anywhere.
       const ac2 = new AbortController();
-      const ghost = errOf(gcli.request({ cmd: "whoami", client: "File Charlie", timeoutMs: 5000, waitForConnection: 4000 }, 8000, undefined, ac2.signal));
+      const ghost = errOf(gcli.request({ cmd: "whoami", client: "File Charlie", timeoutMs: 5000, waitForConnection: 4000 }, { guardMs: 8000, signal: ac2.signal }));
       await sleep(150);
       ac2.abort();
       await ghost;
@@ -4058,14 +4058,14 @@ void (async () => {
 
     // two bridges' first wire ids differ. Pre-change both were "r1".
     const A = await connectedBridge();
-    const aReq = settle(A.bridge.request("ping", {}, 3000));
+    const aReq = settle(A.bridge.request("ping", {}, { timeoutMs: 3000 }));
     await sleep(80);
     const idA = A.client.commands()[0]?.id;
     A.bridge.close(); // the stalled one-shot CLI goes away with its request unanswered
     await aReq;
     A.client.close();
     const B = await connectedBridge();
-    const bReq = settle(B.bridge.request("ping", {}, 3000));
+    const bReq = settle(B.bridge.request("ping", {}, { timeoutMs: 3000 }));
     await sleep(80);
     const idB = B.client.commands()[0]?.id;
     ok("two bridges' first request ids differ (per-bridge nonce), and stay opaque strings starting \"r\"",
@@ -4077,7 +4077,7 @@ void (async () => {
     B.client.send({ id: idB, ok: true, result: pingReply("for-B") });
     const rB = await bReq;
     ok("a reply carrying the previous bridge's id does not settle the new request — B resolves with its own reply",
-      rB.err === null && rB.v?.file === "for-B");
+      rB.err === null && rB.v?.reply.file === "for-B");
     B.client.close();
     B.bridge.close();
 
@@ -4088,7 +4088,7 @@ void (async () => {
       const c2 = fakePlugin(b.port, { token: TOKEN, hello: false, unhandled: HANG });
       await c2.opened;
       await sleep(30);
-      const req = settle(b.request("ping", {}, 3000, "c1"));
+      const req = settle(b.request("ping", {}, { timeoutMs: 3000, target: "c1" }));
       await sleep(80);
       const sent = c1.commands()[0];
       c2.send({ id: sent?.id, ok: true, result: pingReply("from-c2") });
@@ -4096,7 +4096,7 @@ void (async () => {
       c1.send({ id: sent?.id, ok: true, result: pingReply("from-c1") });
       const r = await req;
       ok("a reply for c1's request that arrives on c2 is ignored; c1's own reply resolves it",
-        !!sent && r.err === null && r.v?.file === "from-c1");
+        !!sent && r.err === null && r.v?.reply.file === "from-c1");
       // the connection named by connId, not the first live one. Pre-change connectionInfo()
       // took no target and connectionFor did not exist.
       const rows = b.listClients();
@@ -4121,7 +4121,7 @@ void (async () => {
       await b.awaitClient(null, 1000);
       await sleep(20);
       let err: Error | undefined;
-      try { await b.request("exportNode", { nodeId: "5:6" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
+      try { await b.request("exportNode", { nodeId: "5:6" }, { timeoutMs: 10000, stallMs: 300 }); } catch (e) { err = asErr(e); }
       ok("the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
         !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 5:6\) in 0s/.test(err.message) &&
         /dtwin serve/.test(err.message) && !/reconnect/i.test(err.message));
@@ -4136,12 +4136,12 @@ void (async () => {
       await b.awaitClient(null, 1000);
       await sleep(20);
       const ticks: ProgressTick[] = [];
-      const req = settle(b.request("ping", {}, 10000, undefined, 300, (t) => ticks.push(t)));
+      const req = settle(b.request("ping", {}, { timeoutMs: 10000, stallMs: 300, onProgress: (t) => ticks.push(t) }));
       setTimeout(() => ws1.progress({ phase }), 100);
       setTimeout(() => ws1.send({ id: ws1.commands()[0]?.id, ok: true, result: pingReply("late") }), 600);
       const r = await req;
       ok(`a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
-        r.err === null && r.v?.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
+        r.err === null && r.v?.reply.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
       ws1.close();
       b.close();
     }
@@ -4155,9 +4155,9 @@ void (async () => {
       await b.awaitClient(null, 1000);
       await sleep(20);
       const ticksA: string[] = [], ticksB: string[] = [];
-      const pA = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksA.push(String(t.phase))));
+      const pA = settle(b.request("ping", {}, { timeoutMs: 5000, onProgress: (t) => ticksA.push(String(t.phase)) }));
       await sleep(30);
-      const pB = settle(b.request("ping", {}, 5000, undefined, undefined, (t) => ticksB.push(String(t.phase))));
+      const pB = settle(b.request("ping", {}, { timeoutMs: 5000, onProgress: (t) => ticksB.push(String(t.phase)) }));
       await sleep(30);
       const idA = ws1.commands()[0]?.id, idB = ws1.commands()[1]?.id;
       ws1.progress({ phase: "start", ...ifDefined("requestId", idA) });
@@ -4170,7 +4170,7 @@ void (async () => {
       ws1.send({ id: idB, ok: true, result: pingReply("B") });
       const [rA, rB] = [await pA, await pB];
       ok(`an id-carrying start/queued frame reaches only its own request; an id-less tick reaches both (A saw ${ticksA.join(",")} | B saw ${ticksB.join(",")})`,
-        typeof idA === "string" && typeof idB === "string" && rA.v?.file === "A" && rB.v?.file === "B" &&
+        typeof idA === "string" && typeof idB === "string" && rA.v?.reply.file === "A" && rB.v?.reply.file === "B" &&
         ticksA.join(",") === "start,pages" && ticksB.join(",") === "queued,pages,start");
       ws1.close();
       b.close();
@@ -4186,7 +4186,7 @@ void (async () => {
       await b.awaitClient(null, 1000);
       await sleep(20);
       // queued at once, `start` at 300 ms of a 400 ms budget, the reply at 600 ms: inside the budget counted from start.
-      const pRun = settle(b.request("ping", {}, 400));
+      const pRun = settle(b.request("ping", {}, { timeoutMs: 400 }));
       await sleep(20);
       const idRun = ws1.commands()[0]?.id;
       ws1.progress({ phase: "queued", ...ifDefined("requestId", idRun) });
@@ -4197,10 +4197,10 @@ void (async () => {
       const rRun = await pRun;
       // pre-change: fails — the 400 ms timer armed at send fired mid-run, at 400 ms.
       ok("a request's own `start` frame re-arms its budget: queued 300 ms of a 400 ms budget, it still answers 300 ms into its run",
-        rRun.err === null && rRun.v?.file === "ran");
+        rRun.err === null && rRun.v?.reply.file === "ran");
       // …but the budget still bounds a run that starts and then goes quiet, and a wait with no start at all.
       const t0 = Date.now();
-      const pQuiet = settle(b.request("ping", {}, 400));
+      const pQuiet = settle(b.request("ping", {}, { timeoutMs: 400 }));
       await sleep(20);
       const idQuiet = ws1.commands()[1]?.id;
       await sleep(180);
@@ -4211,12 +4211,12 @@ void (async () => {
       ok(`…a run that starts and never answers times out one budget after its start (${quietMs} ms)`,
         /did not answer 'ping' within 0s/.test(rQuiet.err?.message ?? "") && quietMs >= 560 && ws1.cancels.includes(idQuiet ?? "?"));
       const t1 = Date.now();
-      const rWait = await settle(b.request("ping", {}, 300));
+      const rWait = await settle(b.request("ping", {}, { timeoutMs: 300 }));
       ok(`…and a request that never starts times out one budget after the send (${Date.now() - t1} ms)`,
         /did not answer 'ping'/.test(rWait.err?.message ?? "") && Date.now() - t1 < 550);
       // An id-less `start` (an older plugin, or another request's) re-arms nothing.
       const t2 = Date.now();
-      const pOld = settle(b.request("ping", {}, 300));
+      const pOld = settle(b.request("ping", {}, { timeoutMs: 300 }));
       await sleep(150);
       ws1.progress({ phase: "start" });
       const rOld = await pOld;
@@ -4252,7 +4252,7 @@ void (async () => {
       if (!scli) throw new Error("daemon.connect() returned null right after serve() (signal daemon)");
       const ac = new AbortController();
       const t0 = Date.now();
-      const pending = settle(scli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac.signal));
+      const pending = settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, signal: ac.signal }));
       setTimeout(() => ac.abort(), 100);
       const r = await pending;
       const elapsed = Date.now() - t0;
@@ -4263,24 +4263,24 @@ void (async () => {
         bridgeSaw.join("|") === "got:ping|aborted:the daemon's client disconnected before the reply");
       // An Error reason of the caller's own is the rejection; an already-aborted signal sends nothing.
       const ac2 = new AbortController();
-      const p2 = settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac2.signal));
+      const p2 = settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, signal: ac2.signal }));
       setTimeout(() => ac2.abort(new Error("caller went away")), 50);
       const r2 = await p2;
       await sleep(150);
       const pre = new AbortController();
       pre.abort();
       const before = bridgeSaw.length;
-      const r3 = await settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, pre.signal));
+      const r3 = await settle(scli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, signal: pre.signal }));
       await sleep(100);
       ok("…an Error reason passes through; an already-aborted signal rejects \"request aborted before it was sent\" and forwards nothing",
         r2.err?.message === "caller went away" && r3.err?.message === "request aborted before it was sent" && bridgeSaw.length === before);
       // A request that settles normally leaves no abort listener behind on a long-lived signal.
       const ac4 = new AbortController();
-      const p4 = scli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, undefined, ac4.signal);
+      const p4 = scli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, signal: ac4.signal });
       const listening = getEventListeners(ac4.signal, "abort").length;
       const r4 = await p4;
       ok("…a request that settles normally answers and removes its abort listener",
-        r4.file === "answered" && listening === 1 && getEventListeners(ac4.signal, "abort").length === 0);
+        r4.reply.file === "answered" && listening === 1 && getEventListeners(ac4.signal, "abort").length === 0);
       shutdown();
     }
   }
