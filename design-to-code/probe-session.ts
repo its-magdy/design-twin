@@ -184,8 +184,8 @@ export function openSession<B extends Pick<Browser, "newContext">>(browser: B, o
         try {
           return await spec.act(opened.reached);
         } finally {
-          if (spec.beforeClose) await spec.beforeClose();
-          await opened.context.close().catch(() => undefined);
+          // the context closes even when beforeClose throws (its throw then goes to spec.failed)
+          try { if (spec.beforeClose) await spec.beforeClose(); } finally { await opened.context.close().catch(() => undefined); }
         }
       })().catch((e: unknown) => spec.failed(e));
       return raceBudget(work, spec.ms, held, spec.onCut);

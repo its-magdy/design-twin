@@ -163,6 +163,23 @@ console.log("a unit:");
   check(`an act that throws: beforeClose, the close, then failed(e) — the context is closed by the time it is asked (saw ${JSON.stringify(f.log)})`,
     !r.cut && r.value === -1 && u.failedWith[0] === boom && JSON.stringify(f.log.slice(-4)) === JSON.stringify(["act", "beforeClose", "close", "failed (after 1 close)"]));
 }
+{
+  const f = fakeBrowser();
+  const hookBoom = new Error("cleanup failed");
+  const u = spec(f, async () => 1, -1, { beforeClose: async () => { throw hookBoom; } });
+  const r = await sessionOf(f).unit(u);
+  check(`a beforeClose that throws still closes the context, then failed(its error) (saw ${JSON.stringify(f.log.slice(-2))})`,
+    !r.cut && r.value === -1 && u.failedWith[0] === hookBoom && JSON.stringify(f.log.slice(-2)) === JSON.stringify(["close", "failed (after 1 close)"]));
+}
+{
+  const f = fakeBrowser();
+  let acted = false;
+  const u = spec(f, async () => { acted = true; return 1; }, 0, { prepare: async () => { f.log.push("prepare"); throw new Error("routeWebSocket: Target closed"); } });
+  const r = await sessionOf(f).unit(u);
+  check(`a prepare that throws: unreached, the context closed, no page and no act (saw ${JSON.stringify([f.log, u.unreachedWith])})`,
+    !r.cut && r.value === 0 && !acted && !f.log.includes("newPage") && f.closes === 1
+    && JSON.stringify(u.unreachedWith) === JSON.stringify([{ why: "could not reach the screen — routeWebSocket: Target closed" }]));
+}
 
 // ---------------------------------------------------------------- the race: cut, settle, wedge
 console.log("the race:");
@@ -193,11 +210,15 @@ console.log("the race:");
   const alive = fakeBrowser({ closeAfterMs: SLOW_CLOSE_MS });
   // a browser that never answers newContext: nothing to close, nothing ends
   const silent = fakeBrowser({ contextNever: true });
-  const [lateR, wedgedR, aliveR, silentR] = await Promise.all([
+  // the act finished, but its context's close never returns: the unit's own close holds it past its share
+  const closeHung = fakeBrowser({ closeNever: true });
+  let closeHungActed = false;
+  const [lateR, wedgedR, aliveR, silentR, closeHungR] = await Promise.all([
     lateS.unit(spec(late, async () => 1, 0, { ms: 50 })).then((r) => ({ ...r, ms: Date.now() - tw })),
     sessionOf(wedged).unit(spec(wedged, () => never<number>(), 0, { ms: 20 })).then((r) => ({ ...r, ms: Date.now() - tw })),
     sessionOf(alive).unit(spec(alive, async () => { await alive.closed; return 1; }, 0, { ms: 20 })).then((r) => ({ ...r, ms: Date.now() - tw })),
     sessionOf(silent).unit(spec(silent, async () => 1, 0, { ms: 20 })).then((r) => ({ ...r, ms: Date.now() - tw })),
+    sessionOf(closeHung).unit(spec(closeHung, async () => { closeHungActed = true; return 1; }, 0, { ms: 50 })).then((r) => ({ ...r, ms: Date.now() - tw })),
   ]);
   clearInterval(keepAlive);
   check(`a context that arrives after the cut is closed as it arrives, so the cut settles well inside CUT_SETTLE_MS (saw ${JSON.stringify(lateR)})`,
@@ -207,6 +228,8 @@ console.log("the race:");
   check(`a slow close that returns inside CUT_SETTLE_MS → a settled cut, not a wedge (saw ${JSON.stringify(aliveR)})`,
     aliveR.cut && aliveR.settled && aliveR.ms >= SLOW_CLOSE_MS && aliveR.ms < CUT_SETTLE_MS);
   check(`a newContext that never answers → a cut that did not settle (saw ${JSON.stringify(silentR)})`, silentR.cut && !silentR.settled && silent.closes === 0);
+  check(`an act that finished but whose context close never returns → a cut that did not settle (a wedge), at CUT_SETTLE_MS (saw ${JSON.stringify(closeHungR)})`,
+    closeHungActed && closeHungR.cut && !closeHungR.settled && closeHungR.ms >= CUT_SETTLE_MS && closeHungR.ms < CUT_SETTLE_MS + 3_000);
 }
 {
   // a finished unit leaves no ref'd timer behind (its deadline is cleared however the race ends)

@@ -3400,8 +3400,11 @@ function openSession(browser, o) {
         try {
           return await spec.act(opened.reached);
         } finally {
-          if (spec.beforeClose) await spec.beforeClose();
-          await opened.context.close().catch(() => void 0);
+          try {
+            if (spec.beforeClose) await spec.beforeClose();
+          } finally {
+            await opened.context.close().catch(() => void 0);
+          }
         }
       })().catch((e) => spec.failed(e));
       return raceBudget(work, spec.ms, held, spec.onCut);
