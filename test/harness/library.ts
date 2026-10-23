@@ -3,8 +3,8 @@
 // [LIB-FILE], the export run inside the library file itself (--as-library).
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
-import type { FakeNode, FakeTeamLibrary } from "../fake-figma.ts";
-import { flatPaint, type Case } from "./helpers.ts";
+import { skipAwareInstance, type FakeNode, type FakeTeamLibrary } from "../fake-figma.ts";
+import { ABANDONED, flatPaint, settle, type Case } from "./helpers.ts";
 import { world, type Fixtures } from "./scene.ts";
 
 // ---- [LIB] team libraries: the half of the design system that lives in another file ----
@@ -156,6 +156,83 @@ export const cases: Case[] = [{
       vb && vb.node && vb.node.fills && flatPaint(must(vb.node.fills[0], "vb.node.fills[0]")).color === "#006600"));
     ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",!!(
       va && va.node && va.node.props === undefined));
+  },
+}, {
+  // ---- [VARIANTVIS-HIDDEN] hidden layers inside nested instances survive the variant walk ----
+  // The catalog scan turns figma.skipInvisibleInstanceChildren on for its findAllWithCriteria. A standalone
+  // COMPONENT's tree was serialized INSIDE that scan, so Figma dropped the hidden layers of every instance
+  // nested in it, while a set's variants (walked after the flag is restored) kept theirs.
+  name: "[VARIANTVIS-HIDDEN] standalone components and set variants both keep hidden instance children",
+  async run() {
+    // A COMPONENT whose child is an INSTANCE holding one shown and one hidden layer — the hidden one is a
+    // real design state (a toggled-off badge), exported as hidden, never silently dropped.
+    const hostOf = (id: string, name: string, skipping: () => boolean, extra: Record<string, unknown> = {}): FakeNode => ({
+      type: "COMPONENT", id, name, key: "key_" + id, visible: true, width: 40, height: 40, layoutMode: "NONE", ...extra,
+      children: [skipAwareInstance({
+        type: "INSTANCE", id: id + ":i", name: "Glyph", visible: true, width: 20, height: 20, layoutMode: "NONE",
+        findOne: () => null, getMainComponentAsync: async () => null,
+        children: [
+          { type: "FRAME", id: id + ":on", name: "Shown", visible: true, width: 8, height: 8, layoutMode: "NONE", children: [] },
+          { type: "FRAME", id: id + ":off", name: "Badge", visible: false, width: 8, height: 8, layoutMode: "NONE", children: [] },
+        ],
+      }, skipping)],
+    });
+    const build = (initial: boolean) => {
+      let skipping = (): boolean => false;
+      const solo = hostOf("hs:solo", "Solo", () => skipping(), { parent: null, componentPropertyDefinitions: {} });
+      const set: FakeNode = { type: "COMPONENT_SET", id: "hs:set", name: "Toggle", key: "key_set",
+        componentPropertyDefinitions: { State: { type: "VARIANT", variantOptions: ["On"] } } };
+      const variant = hostOf("hs:v", "State=On", () => skipping(), { parent: set });
+      let pagesRead = 0;
+      let scanSkipped: boolean | null = null; // the flag as the catalog scan itself saw it
+      const page = { name: "Hidden", id: "p:hs", loadAsync: async () => {},
+        findAllWithCriteria: ({ types }: { types: string[] }) => {
+          if (types.indexOf("COMPONENT_SET") === -1) return []; // the library scan's INSTANCE walk: none here
+          pagesRead++;
+          scanSkipped = skipping();
+          return [set, variant, solo];
+        } };
+      const w = world({ pages: [page] });
+      skipping = () => w.figma.skipInvisibleInstanceChildren === true;
+      w.figma.skipInvisibleInstanceChildren = initial;
+      return { w, solo, pagesRead: () => pagesRead, scanSkipped: () => scanSkipped };
+    };
+    const kidIds = (n: { children?: { id: string; hidden?: boolean; children?: unknown[] }[] } | undefined): string =>
+      JSON.stringify((n?.children?.[0] as { children?: { id: string; hidden?: boolean }[] } | undefined)?.children?.map((c) => c.id + (c.hidden ? "(hidden)" : "")) ?? null);
+
+    // Design mode (the flag defaults to false): both shapes keep the hidden layer, marked hidden.
+    const off = build(false);
+    const dsOff = await off.w.api.collectDesignSystemOnly({ variantVisuals: true });
+    const soloOff = dsOff.designSystem.components.find((c) => c.id === "hs:solo");
+    const setOff = dsOff.designSystem.components.find((c) => c.id === "hs:set");
+    // pre-change: fails — the standalone tree was serialized with the scan's flag on: ["hs:solo:on"] only.
+    ok("[VARIANTVIS-HIDDEN] a standalone COMPONENT keeps its nested instance's hidden layer, marked hidden",
+      kidIds(soloOff?.node) === '["hs:solo:on","hs:solo:off(hidden)"]');
+    ok("[VARIANTVIS-HIDDEN] …exactly as a set variant does",
+      kidIds(setOff?.variants?.[0]?.node) === '["hs:v:on","hs:v:off(hidden)"]');
+    ok("[VARIANTVIS-HIDDEN] …the scan itself still ran (once) with the flag ON, and the flag is back to false afterwards",
+      off.pagesRead() === 1 && off.scanSkipped() === true && off.w.figma.skipInvisibleInstanceChildren === false);
+
+    // Dev Mode (the flag defaults to true): the caller's own policy applies to both shapes alike.
+    const on = build(true);
+    const dsOn = await on.w.api.collectDesignSystemOnly({ variantVisuals: true });
+    const soloOn = dsOn.designSystem.components.find((c) => c.id === "hs:solo");
+    const setOn = dsOn.designSystem.components.find((c) => c.id === "hs:set");
+    ok("[VARIANTVIS-HIDDEN] with the flag already on (Dev Mode's default), standalone and set variant agree",
+      kidIds(soloOn?.node) === '["hs:solo:on"]' && kidIds(setOn?.variants?.[0]?.node) === '["hs:v:on"]');
+    ok("[VARIANTVIS-HIDDEN] …and the flag is left on", on.w.figma.skipInvisibleInstanceChildren === true);
+
+    // An abandon armed inside the standalone walk: the run rejects, and the flag is still the caller's.
+    for (const initial of [false, true]) {
+      const c = build(initial);
+      const handler = must(c.w.figma.ui.onmessage, "figma.ui.onmessage");
+      const solo = c.solo;
+      const inner = must(solo.children, "solo.children");
+      Object.defineProperty(solo, "children", { configurable: true, get() { void handler({ type: "cancel", id: "hs-ds" }); return inner; } });
+      const r = await settle(c.w.api.serializeRun(() => c.w.api.collectDesignSystemOnly({ variantVisuals: true }), { source: "bridge", label: "exportDesignSystem", requestId: "hs-ds" }));
+      ok("[VARIANTVIS-HIDDEN] an abandon inside the standalone walk rejects and leaves the flag at its prior value (" + initial + ")",
+        r.v === null && r.err?.message === ABANDONED && c.w.figma.skipInvisibleInstanceChildren === initial);
+    }
   },
 }, {
   // A user-maintained registry is the ONLY honest attribution route.

@@ -2501,6 +2501,7 @@
     const seenNames = /* @__PURE__ */ new Set();
     const variantsBySet = /* @__PURE__ */ new Map();
     const entriesBySetId = /* @__PURE__ */ new Map();
+    const standalone = [];
     const prevSkip = figma.skipInvisibleInstanceChildren;
     try {
       try {
@@ -2582,14 +2583,7 @@
           }
           if (asLibrary) pendingPublish.push({ entry, node: n });
           if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
-          if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize2) {
-            try {
-              const node = await serializeVariant(n, serialize2);
-              if (node) entry.node = node;
-            } catch (e) {
-              warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
-            }
-          }
+          if (runOpts.variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
           components.push(entry);
         }
       }
@@ -2597,6 +2591,16 @@
       try {
         figma.skipInvisibleInstanceChildren = prevSkip;
       } catch (e) {
+      }
+    }
+    if (serialize2) {
+      for (const { entry, node: n } of standalone) {
+        try {
+          const node = await serializeVariant(n, serialize2);
+          if (node) entry.node = node;
+        } catch (e) {
+          warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
+        }
       }
     }
     if (runOpts.variantVisuals && serialize2 && variantsBySet.size) {
