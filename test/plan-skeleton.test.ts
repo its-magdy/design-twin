@@ -232,6 +232,18 @@ check("wrong arity is refused (exit 2)", run([screen(JR)]).status === 2);
   check("a missing design-system dir (single-screen pull) still works — values from the screen's own .vars.json, no catalog, and stderr says so",
     nods.status === 0 && /no design-system directory/.test(nods.stderr) && p.tokens.length === 45 && p.components.every((c) => c.catalog === null) && p.tokens.every((t) => t.designSystem === null));
 }
+{
+  // a --as-library export's dir (libraries/<dir>/: its catalog is components.json) is read as a design system too
+  const lib = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-lib-"));
+  fs.copyFileSync(path.join(DS, "components.local.json"), path.join(lib, "components.json"));
+  fs.copyFileSync(path.join(DS, "tokens.json"), path.join(lib, "tokens.json"));
+  const lr = run([screen(JR), vars(JR), lib]);
+  const lp = planOf(lr.stdout);
+  const libMatched = new Set(lp.components.filter((c) => c.catalog && c.catalog.by !== "ambiguous").map((c) => c.name));
+  check(`a library export's dir: its components.json is the catalog matched against (${libMatched.size} matched, as with design-system/: ${matched.size})`,
+    lr.status === 0 && libMatched.size === matched.size && libMatched.size > 0);
+  fs.rmSync(lib, { recursive: true, force: true });
+}
 check("the shipped bundle runs from outside the repo", (() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
   fs.copyFileSync(BUNDLE, path.join(dir, "plan-skeleton.js"));

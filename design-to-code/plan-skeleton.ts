@@ -64,7 +64,7 @@ import { parsePlanText, updatePlan } from "./plan-record.ts";
 import { runCli } from "./proc.ts";
 import { findMapFile } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
-import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { designSystemFiles } from "./design-system-dir.ts";
 
 const USAGE = [
   `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>] [--seed-from <plan.json>]...`,
@@ -80,7 +80,8 @@ const USAGE = [
   "  You fill in: codeToken, mapModule, verdict, decision, route, deviations[] (and files[], architecture,",
   "  verification as you build).",
   "",
-  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json). A missing",
+  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json), or a library",
+  "                       export's design/export/libraries/<dir> (its catalog is components.json). A missing",
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted — stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
@@ -685,17 +686,18 @@ export function main(argv: string[]): number {
   const doc = screen.doc, vars = varsRead.doc;
   const hasDs = dsDir && fs.existsSync(dsDir) && fs.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} — token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
-  // A split file that is absent is fine (a partial design system); one that is there but broken is not.
+  // A split file that is absent is fine (a partial design system); one that is there but broken is not. Either layout
+  // (design-system-dir.ts designSystemFiles): a --as-library export's catalog is its components.json.
   const optional = <T,>(file: string, guard: DocGuard<T>): { doc: T | null } | { error: string } => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path.join(dsDir, file), guard);
+    const r = readJson(file, guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
-  const { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY } = DESIGN_SYSTEM_FILES;
-  const dsRead = optional(TOKENS, isTokensDoc), catRead = optional(COMPONENTS_LOCAL, isComponentsCatalog), libRead = optional(COMPONENTS_LIBRARY, isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path.join(dsDir, TOKENS), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path.join(dsDir, COMPONENTS_LOCAL), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path.join(dsDir, COMPONENTS_LIBRARY), libRead.error);
+  const dsFiles = designSystemFiles(dsDir);
+  const dsRead = optional(dsFiles.tokens, isTokensDoc), catRead = optional(dsFiles.components, isComponentsCatalog), libRead = optional(dsFiles.componentsLibrary, isComponentsCatalog);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", dsFiles.tokens, dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", dsFiles.components, catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", dsFiles.componentsLibrary, libRead.error);
   const mapAt = findMapFile(process.cwd());
   const mapFile = mapFlag || (mapAt.missing ? undefined : mapAt.rel);
   let mapKeys = new Map<string, MapKeyEntry>();

@@ -32,22 +32,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { visibleInstances, matchByNameAndSignature, nameVerdict, isRekeyed } from "./component-match.ts";
 import { findingIds } from "./finding-id.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
-import { readJson, readJsonOrNull } from "./read-json.ts";
-import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
+import { crossCheckInputOf, readScreenInputs } from "./screen-inputs.ts";
 // Every walk here is visible-tree.ts's walkVisible: a layer with `hidden: true` and its whole subtree are skipped,
 // and the contrast checks read the backdrop it works out (the same one the audit reads).
 import { paintedOver, walkVisible } from "./visible-tree.ts";
 import { outermostControl, isDisabledLayer } from "./control-kind.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
-import { readDocFile } from "./catalog-input.ts";
-import { readDesignSystemDir } from "./design-system-dir.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
-import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
-import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
+import { screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
   CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, TokenPairRow, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   BlockerCode, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
@@ -55,8 +50,6 @@ import type {
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
 import { runCli } from "./proc.ts";
-import { findMapFile, findExportDir } from "../bridge/src/project-layout.ts";
-import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 
 export const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -1040,31 +1033,6 @@ function labelProposals(rekey: MatchResult, visible: ReturnType<typeof visibleIn
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 
-// The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json; every screen its index
-// knows about — export-index.ts), minus the files being checked. A thunk: nothing is read until a report has proposals
-// to label. null when a file is not inside such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
-function exportSiblings(files: readonly string[]): (() => CrossCheckScreen[]) | null {
-  const checked = new Set(files.map((f) => path.resolve(f)));
-  const roots = new Set<string>();
-  for (const f of checked) { const root = exportRootOfScreen(f); if (root !== null) roots.add(root); }
-  if (!roots.size) return null;
-  return () => {
-    const out: CrossCheckScreen[] = [];
-    const seen = new Set<string>(checked);
-    for (const root of roots) {
-      const ix = readExportIndex(root);
-      for (const row of ix.rows) {
-        const file = ix.fileOf(row); // a path inside the export only
-        if (file === null || seen.has(file)) continue;
-        seen.add(file);
-        const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path.basename(file, ".json") });
-      }
-    }
-    return out;
-  };
-}
-
 // ---------------------------------------------------------------- contrast (WCAG 2.2: color.ts)
 // WCAG AA for body text. Large text is 3:1, but the export does not reliably say which is which and
 // over-reporting a heading is far cheaper than missing an unreadable nav label.
@@ -1510,7 +1478,7 @@ function toMarkdown(res: CrossCheckReport): string {
   return L.join("\n") + "\n";
 }
 
-export { crossCheck, toMarkdown, composedRgba, exportSiblings, ABSURD_NUMBER, WRONG_CATALOG_PCT };
+export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: bun design-to-code/cross-check.ts <screen.json>... [--design-system design/export/design-system]
 //        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]
@@ -1529,55 +1497,15 @@ export function main(argv: string[]): number {
   const { "design-system": dsDir, variables: varsFile, map: mapFlag, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate;
 
-  // Optional inputs are read only when present: the whole point is that this runs on a project that
-  // has a screen and nothing else, and SAYS which checks it could not do (notChecked) rather than
-  // dying on a missing design system. One that IS there but is not what it should be fails loud.
-  // The screen's own slice (<Screen>.vars.json) and the merged union are discovered by the SAME code
-  // audit.ts uses (slice-sources.ts variablesContext): the union is the export root's variables.json,
-  // never a stale design/variables.json above design/export/, and the token-collision check reads each
-  // screen's own slice.
-  const ctx = variablesContext(files, varsFile);
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) return 2;
-  const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
-  // Without the flag: the design-system dir of this project's export, current layout or legacy flat one (findExportDir).
-  const dsBase = dsDir || path.join(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
-  const { variablesPath, variablesDoc } = ctx;
-  if (variablesPath) console.error(`variables: ${variablesPath}`);
-  // A stale legacy-layout `design/variables.json` next to `design/export/` is
-  // never auto-read, but a user should be told it exists and was NOT the file used, since it can
-  // carry a different, older set of slices than the one actually checked.
-  if (ctx.staleLegacy) {
-    console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
-  }
-  // design-system/ or a library export's libraries/<dir>/ (components.json) — design-system-dir.ts, shared with audit.ts
-  const ds = readDesignSystemDir(dsBase);
-  // The component map only LABELS proposals (alreadyMapped). --map is checked like any named input;
-  // the default (design/codeconnect.local.json, else ./codeconnect.local.json — plan-skeleton's discovery)
-  // is optional, so a broken one is a warning, never a failed check.
-  let map: CodeConnectMap | null = null;
-  if (mapFlag) map = readDocFile(mapFlag, "component map", isCodeConnectMap);
-  else {
-    const mapAt = findMapFile(process.cwd());
-    const found = mapAt.missing ? undefined : mapAt.rel;
-    const r = found ? readJson(found, isCodeConnectMap) : null;
-    if (found && r && "doc" in r) { map = r.doc; console.error(`map: ${found}`); }
-    else if (found && r && "error" in r) console.error(`warn  ${found} ${r.error} — proposals are not labelled alreadyMapped (pass --map to fail on it)`);
-  }
-  const res = crossCheck({
-    screens,
-    sliceSources: ctx.sliceSources,
-    variables: variablesDoc,
-    variablesPath,
-    tokens: ds.tokens,
-    components: ds.components,
-    componentsLibrary: ds.componentsLibrary,
-    stylesText: ds.stylesText,
-    componentsFile: ds.componentsFile,
-    designSystemIsLibrary: ds.isLibrary,
-    map,
-    siblings: exportSiblings(files),
-  });
+  // A screen plus what surrounds it — its own slice, the variables union, the design system (either layout; found beside
+  // the export when not given), the component map, the export's other screens — assembled by screen-inputs.ts, shared
+  // with audit.ts. Optional inputs are read only when present: the whole point is that this runs on a project that has a
+  // screen and nothing else, and SAYS which checks it could not do (notChecked) rather than dying on a missing design
+  // system. One that IS there but is not what it should be fails loud; a broken map that was only found is a warning.
+  const read = readScreenInputs(files, { variables: varsFile, designSystem: dsDir, map: mapFlag, mapFlag: true });
+  if ("errors" in read) { for (const e of read.errors) console.error(e); return 2; }
+  for (const n of read.inputs.notes) console.error(n);
+  const res = crossCheck(crossCheckInputOf(read.inputs));
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {

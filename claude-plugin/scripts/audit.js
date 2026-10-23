@@ -2,7 +2,7 @@
 
 
 // design-to-code/audit.ts
-import fs12 from "node:fs";
+import fs13 from "node:fs";
 import path12 from "node:path";
 
 // bridge/src/hex-color.ts
@@ -270,9 +270,6 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
-// design-to-code/cross-check.ts
-import path7 from "node:path";
-
 // bridge/src/json-util.ts
 function nullProto() {
   return /* @__PURE__ */ Object.create(null);
@@ -511,14 +508,158 @@ function findingIds(findings) {
   });
 }
 
-// design-to-code/cli-args.ts
+// design-to-code/screen-inputs.ts
+import fs7 from "node:fs";
+import path7 from "node:path";
+
+// bridge/src/project-layout.ts
+import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path.join(cwd, EXPORT_DIR);
+  const legacy2 = path.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
+function findMapFile(cwd) {
+  const modern = path.join(cwd, MAP_FILE);
+  if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy2 = path.join(cwd, LEGACY_MAP_FILE);
+  if (fs.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+function listPlans(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
+
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
+}
+var isObjectLike = (x) => !!x && typeof x === "object";
+var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+var sameFigmaFile = (l, entry) => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
+var notSameRow = (entry) => (l) => {
+  if (!isObjectLike(l)) return !!l;
+  if (l.file === entry.file) return false;
+  if (l.id !== entry.id) return true;
+  return !sameFigmaFile(l, entry);
+};
+var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
+
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// design-to-code/catalog-input.ts
+import fs3 from "node:fs";
+
+// design-to-code/read-json.ts
+import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs2.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
 
 // bridge/src/stdio.ts
 import { format, inspect } from "node:util";
@@ -677,136 +818,6 @@ function runCli(main2, o, argv = process.argv.slice(2)) {
 // design-to-code/proc.ts
 var pause = new Int32Array(new SharedArrayBuffer(4));
 
-// design-to-code/cli-args.ts
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
-function joinNegativeValues(argv, options) {
-  const out = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i], next = argv[i + 1];
-    if (tok === void 0) continue;
-    if (tok === "--") {
-      out.push(...argv.slice(i));
-      break;
-    }
-    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
-    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
-      out.push(`${tok}=${next}`);
-      i++;
-    } else out.push(tok);
-  }
-  return out;
-}
-function badShortWords(args, options) {
-  const shorts = /* @__PURE__ */ new Map();
-  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
-  const bad = [];
-  let takesNext = false;
-  for (const a of args) {
-    if (a === "--") break;
-    if (takesNext) {
-      takesNext = false;
-      continue;
-    }
-    if (a.startsWith("--")) {
-      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
-      continue;
-    }
-    if (!/^-[^-]/.test(a)) continue;
-    let ok = true;
-    for (const [i, c] of [...a.slice(1)].entries()) {
-      const type = shorts.get(c);
-      if (type === void 0) {
-        ok = false;
-        break;
-      }
-      if (type === "string") {
-        takesNext = i === a.length - 2;
-        break;
-      }
-    }
-    if (!ok) bad.push(a);
-  }
-  return bad;
-}
-function cliParse(tool, argv, options, usage, exitCode, parse) {
-  const args = joinNegativeValues(argv, options);
-  const unknownFlags = () => {
-    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
-    const short = badShortWords(args, options);
-    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
-    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
-    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
-${usage}`;
-  };
-  let failure;
-  try {
-    const parsed = parse(args);
-    if (!badShortWords(args, options).length) return parsed;
-    failure = unknownFlags();
-  } catch (e) {
-    const code = errCode(e);
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      failure = unknownFlags();
-    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const msg = e instanceof Error ? e.message : "";
-      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
-      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
-      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`;
-    } else {
-      failure = `${tool}: ${errMsg(e)}
-${usage}`;
-    }
-  }
-  console.error(failure);
-  exitCli(exitCode);
-}
-
-// design-to-code/catalog-input.ts
-import fs2 from "node:fs";
-
-// design-to-code/read-json.ts
-import fs from "node:fs";
-var anyJson = (_x) => true;
-function readFailure(e) {
-  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-  if (code === "ENOENT") return { error: "does not exist", missing: true };
-  return {
-    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
-  };
-}
-function readJson(file, guard) {
-  let buf;
-  try {
-    buf = fs.readFileSync(file);
-  } catch (e) {
-    return readFailure(e);
-  }
-  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
-    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
-  }
-  let raw = buf.toString("utf8");
-  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
-  let parsed;
-  try {
-    const value = JSON.parse(raw);
-    parsed = value;
-  } catch (e) {
-    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
-  }
-  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
-  return { doc: parsed };
-}
-function readJsonOrNull(file, guard) {
-  const r = readJson(file, guard);
-  return "doc" in r ? r.doc : null;
-}
-
 // design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
@@ -833,7 +844,7 @@ function readDocFile(file, what, guard, hint) {
   exitCli(2);
 }
 function readOptionalDoc(file, what, guard) {
-  return fs2.existsSync(file) ? readDocFile(file, what, guard) : null;
+  return fs3.existsSync(file) ? readDocFile(file, what, guard) : null;
 }
 function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   const doc = readJsonFile(file, what, hint);
@@ -843,210 +854,9 @@ function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   exitCli(2);
 }
 
-// design-to-code/map-validate.ts
-var STATUSES = ["active", "deprecated", "needs-review"];
-var KEYS = {
-  root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
-  figma: ["key", "id", "name", "unstable"],
-  code: ["module", "export", "targets"],
-  target: ["module", "export"],
-  vo: ["when", "code"],
-  voCode: ["module", "export"],
-  children: ["layerNamePattern", "slot"],
-  prop: Object.assign(nullProto(), {
-    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
-    boolean: ["kind", "codeProp", "default", "omitDefault"],
-    string: ["kind", "codeProp"],
-    instance: ["kind", "codeProp", "slot"]
-  })
-};
-var PROP_KINDS = Object.keys(KEYS.prop);
-var isStr = (v) => typeof v === "string";
-var isBool = (v) => typeof v === "boolean";
-var noExtra = (obj, allowed, at, err) => {
-  if (!Array.isArray(allowed)) return;
-  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
-};
-var optStrings = (obj, keys, at, err) => {
-  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
-};
-function validateMap(map) {
-  const errors = [];
-  const err = (path13, message) => errors.push({ path: path13, message });
-  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
-  noExtra(map, KEYS.root, "", err);
-  if (map.version !== 1) err("version", "must be 1");
-  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isRecord(map.components)) {
-    err("components", "must be an object");
-    return { ok: false, errors };
-  }
-  for (const key of Object.keys(map.components)) {
-    const e = map.components[key];
-    const at = `components.${key}`;
-    if (!isRecord(e)) {
-      err(at, "entry must be an object");
-      continue;
-    }
-    noExtra(e, KEYS.entry, at, err);
-    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
-    else {
-      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
-      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
-      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
-      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
-    }
-    if (!isRecord(e.code)) err(`${at}.code`, "required object");
-    else {
-      noExtra(e.code, KEYS.code, `${at}.code`, err);
-      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
-      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
-      if (e.code.targets !== void 0) {
-        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
-        else for (const t of Object.keys(e.code.targets)) {
-          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isRecord(tv)) err(ta, "must be an object");
-          else {
-            noExtra(tv, KEYS.target, ta, err);
-            optStrings(tv, ["module", "export"], ta, err);
-          }
-        }
-      }
-    }
-    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
-    optStrings(e, ["note"], at, err);
-    if (e.props !== void 0) {
-      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
-      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
-    }
-    if (e.variantOverrides !== void 0) {
-      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
-      else e.variantOverrides.forEach((vo, i) => {
-        const va = `${at}.variantOverrides[${i}]`;
-        if (!isRecord(vo)) {
-          err(va, "must be an object");
-          return;
-        }
-        noExtra(vo, KEYS.vo, va, err);
-        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
-        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
-        else {
-          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
-          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
-          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
-        }
-      });
-    }
-    if (e.childrenByLayer !== void 0) {
-      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
-      else {
-        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
-        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
-      }
-    }
-  }
-  return { ok: errors.length === 0, errors };
-}
-function validateProp(p, at, err) {
-  if (!isRecord(p)) {
-    err(at, "prop must be an object");
-    return;
-  }
-  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
-  if (!Array.isArray(allowed)) {
-    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
-    return;
-  }
-  noExtra(p, allowed, at, err);
-  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
-  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
-  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
-  if (p.kind === "enum") {
-    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
-      const t = typeof p.values[k];
-      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
-    }
-    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
-  }
-  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
-  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
-}
-function isCodeConnectMap(x) {
-  return validateMap(x).ok;
-}
-isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
-
-// design-to-code/export-index.ts
-import fs4 from "node:fs";
+// design-to-code/design-system-dir.ts
+import fs5 from "node:fs";
 import path4 from "node:path";
-
-// bridge/src/project-layout.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path2.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path2.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path2.join(DESIGN_DIR, "codeconnect.local.json");
-var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path2.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path2.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path2.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path2.join(DESIGN_DIR, ".sync");
-var MERGED_VARIABLES_FILE = "variables.json";
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path2.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-function findMapFile(cwd) {
-  const modern = path2.join(cwd, MAP_FILE);
-  if (fs3.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy2 = path2.join(cwd, LEGACY_MAP_FILE);
-  if (fs3.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
-  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
-}
-function listPlans(dir) {
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
-}
-
-// bridge/src/pages-layout.ts
-function safe(id) {
-  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-}
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
-function screenStem(name, id) {
-  return safe(name || "layer") + "__" + safe(id);
-}
-var isObjectLike = (x) => !!x && typeof x === "object";
-var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
-var sameFigmaFile = (l, entry) => {
-  if (l.sourceFile && entry.sourceFile) {
-    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
-  }
-  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
-  return samePage(l, entry);
-};
-var notSameRow = (entry) => (l) => {
-  if (!isObjectLike(l)) return !!l;
-  if (l.file === entry.file) return false;
-  if (l.id !== entry.id) return true;
-  return !sameFigmaFile(l, entry);
-};
-var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1261,8 +1071,12 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/verify-shared.ts
+// design-to-code/export-index.ts
+import fs4 from "node:fs";
 import path3 from "node:path";
+
+// design-to-code/verify-shared.ts
+import path2 from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1328,8 +1142,8 @@ function normFamily(v) {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 function resolveInside(base, rel, within = base) {
-  const root = path3.resolve(within), file = path3.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path3.sep) ? file : null;
+  const root = path2.resolve(within), file = path2.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path2.sep) ? file : null;
 }
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
@@ -1387,27 +1201,30 @@ var MEASURED_KEYS_DOC = {
 // design-to-code/export-index.ts
 var PAGES = "pages";
 var INDEX = "index.json";
-var rootIndexFile = (exportRoot) => path4.join(exportRoot, PAGES, INDEX);
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
+var rootIndexFile = (exportRoot) => path3.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
 function pagesRootOfScreen(screenFile) {
-  const pages = path4.dirname(path4.dirname(path4.resolve(screenFile)));
-  return path4.basename(pages) === PAGES ? path4.dirname(pages) : null;
+  const pages = path3.dirname(path3.dirname(path3.resolve(screenFile)));
+  return path3.basename(pages) === PAGES ? path3.dirname(pages) : null;
 }
 function exportRootOfScreen(screenFile) {
   const root = pagesRootOfScreen(screenFile);
   return root !== null && hasExportIndex(root) ? root : null;
 }
-var inside = (root, rel) => rel && !path4.isAbsolute(rel) ? resolveInside(root, rel) : null;
+var inside = (root, rel) => rel && !path3.isAbsolute(rel) ? resolveInside(root, rel) : null;
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(path4.resolve(f))) files.push(path4.resolve(f));
+    if (f !== null && !files.includes(path3.resolve(f))) files.push(path3.resolve(f));
   };
-  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path4.join(root, PAGES, dir, INDEX) : null;
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path3.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs4.readdirSync(path4.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs4.readdirSync(path3.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -1488,71 +1305,6 @@ function readExportIndex(exportRoot) {
   };
 }
 
-// design-to-code/control-kind.ts
-var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
-function controlKind(name) {
-  const s = String(name || "");
-  const toggle = TOGGLE_WORD.test(s);
-  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
-  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
-  if (toggle) return "toggle";
-  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
-  if (/\blink\b/i.test(s)) return "link";
-  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
-  return null;
-}
-var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
-  const k = controlKind(l);
-  return k === "input" || k === "select" || k === "toggle";
-});
-function outermostControl(near) {
-  for (let i = 0; i < near.length; i++) {
-    const a = near[i];
-    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
-  }
-  for (let i = near.length - 1; i >= 0; i--) {
-    const a = near[i];
-    if (a && isBoundaryKind(a)) return i;
-  }
-  return -1;
-}
-var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
-var ON_VALUE = /^(true|yes|on)$/i;
-function isDisabledLayer(layer) {
-  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
-    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
-    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
-  }
-  for (const [k, v] of Object.entries(layer.props || {})) {
-    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
-    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
-  }
-  return false;
-}
-
-// design-to-code/design-system-dir.ts
-import fs5 from "node:fs";
-import path5 from "node:path";
-
-// bridge/src/design-system-layout.ts
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
-
 // bridge/src/library-layout.ts
 var ROOT = "libraries";
 var INDEX2 = "index.json";
@@ -1563,38 +1315,49 @@ var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPON
 // design-to-code/design-system-dir.ts
 var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
-function readDesignSystemDir(dir) {
-  const local = path5.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path5.join(dir, COMPONENTS));
+function designSystemFiles(dir) {
+  const local = path4.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path4.join(dir, COMPONENTS));
   return {
-    tokens: readOptionalDoc(path5.join(dir, TOKENS3), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path5.join(dir, COMPONENTS) : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path5.join(dir, COMPONENTS_LIBRARY2), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path5.join(dir, STYLES_TEXT), "text styles", isTextStylesDoc),
+    tokens: path4.join(dir, TOKENS3),
+    components: isLibrary ? path4.join(dir, COMPONENTS) : local,
+    componentsLibrary: path4.join(dir, COMPONENTS_LIBRARY2),
+    stylesText: path4.join(dir, STYLES_TEXT),
     componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
     isLibrary
+  };
+}
+function readDesignSystemDir(dir) {
+  const f = designSystemFiles(dir);
+  return {
+    tokens: readOptionalDoc(f.tokens, "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(f.components, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(f.componentsLibrary, "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(f.stylesText, "text styles", isTextStylesDoc),
+    componentsFile: f.componentsFile,
+    isLibrary: f.isLibrary
   };
 }
 function exportRootOf(screenFile, dsDir) {
   const roots = [];
   if (screenFile) {
-    const pages = path5.dirname(path5.dirname(screenFile));
-    if (path5.basename(pages) === "pages") roots.push(path5.dirname(pages));
+    const pages = path4.dirname(path4.dirname(screenFile));
+    if (path4.basename(pages) === "pages") roots.push(path4.dirname(pages));
   }
   if (dsDir) {
-    const parent = path5.dirname(path5.normalize(dsDir));
-    roots.push(path5.basename(parent) === ROOT ? path5.dirname(parent) : parent);
+    const parent = path4.dirname(path4.normalize(dsDir));
+    roots.push(path4.basename(parent) === ROOT ? path4.dirname(parent) : parent);
   }
-  return roots.find((r) => fs5.existsSync(path5.join(r, ROOT, INDEX2))) ?? null;
+  return roots.find((r) => fs5.existsSync(path4.join(r, ROOT, INDEX2))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
   if (!root) return [];
-  const index = readJsonOrNull(path5.join(root, ROOT, INDEX2), isLibrariesIndex);
+  const index = readJsonOrNull(path4.join(root, ROOT, INDEX2), isLibrariesIndex);
   if (!index) return [];
   return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path5.join(root, ROOT, r.dir).split(path5.sep).join("/");
-    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path5.join(rel, COMPONENTS), isComponentsCatalog) };
+    const rel = path4.join(root, ROOT, r.dir).split(path4.sep).join("/");
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path4.join(rel, COMPONENTS), isComponentsCatalog) };
   });
 }
 function readFrameTexts(file) {
@@ -1626,7 +1389,7 @@ function findExportNeighbours(screenFile) {
   const shots = /* @__PURE__ */ new Set();
   let files = [];
   try {
-    files = fs5.readdirSync(path5.join(root, "assets"));
+    files = fs5.readdirSync(path4.join(root, "assets"));
   } catch {
     files = [];
   }
@@ -1637,6 +1400,236 @@ function findExportNeighbours(screenFile) {
   }
   return { layers, unexportedShots: [...shots].sort(), textsOf };
 }
+
+// design-to-code/cli-args.ts
+import path5 from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path5.join(path5.dirname(SELF), name + path5.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  exitCli(exitCode);
+}
+
+// design-to-code/map-validate.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path13, message) => errors.push({ path: path13, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/slice-sources.ts
 import fs6 from "node:fs";
@@ -1680,7 +1673,7 @@ function variablesContext(screenFiles, varsFile, opts) {
     return null;
   };
   const files = screenFiles || [];
-  const own = files.map((f) => readTokens(String(f).replace(/\.json$/, ".vars.json")));
+  const own = files.map((f) => readTokens(screenSiblingFile(String(f), "vars")));
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
@@ -1689,7 +1682,7 @@ function variablesContext(screenFiles, varsFile, opts) {
     const sibling = path6.join(path6.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs6.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs6.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
@@ -1698,6 +1691,154 @@ function variablesContext(screenFiles, varsFile, opts) {
     if (fs6.existsSync(legacy2) && path6.resolve(legacy2) !== path6.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
+}
+
+// design-to-code/screen-inputs.ts
+function exportSiblings(files) {
+  const checked = new Set(files.map((f) => path7.resolve(f)));
+  const roots = /* @__PURE__ */ new Set();
+  for (const f of checked) {
+    const root = exportRootOfScreen(f);
+    if (root !== null) roots.add(root);
+  }
+  if (!roots.size) return null;
+  return () => {
+    const out = [];
+    const seen = new Set(checked);
+    for (const root of roots) {
+      const ix = readExportIndex(root);
+      for (const row of ix.rows) {
+        const file = ix.fileOf(row);
+        if (file === null || seen.has(file)) continue;
+        seen.add(file);
+        const doc = readJsonOrNull(file, isScreenDoc);
+        if (doc) out.push({ doc, label: path7.basename(file, ".json") });
+      }
+    }
+    return out;
+  };
+}
+function designSystemDirOf(firstFile, named) {
+  if (named) return { dir: named, given: true };
+  const shown = (abs) => {
+    const rel = path7.relative(process.cwd(), abs);
+    return rel && !rel.startsWith("..") && !path7.isAbsolute(rel) ? rel.split(path7.sep).join("/") : abs;
+  };
+  const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
+  const dir = root !== null ? path7.join(root, DESIGN_SYSTEM_DIR) : path7.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
+}
+function readScreenInputs(files, flags = {}) {
+  const ctx = variablesContext(files, flags.variables, { sliceFallback: true });
+  if (ctx.invalid.length) return { errors: ctx.invalid.map((bad) => `error  variables: '${bad.file}' ${bad.error}`) };
+  const notes = [];
+  if (ctx.variablesPath) notes.push(`variables: ${ctx.variablesPath}`);
+  else notes.push("note  no variables: no variables.json at the export root or beside the screen (pass --variables)");
+  if (ctx.staleLegacy) notes.push(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
+  const screens = files.map((f, i) => ({
+    file: f,
+    doc: readDocFile(f, "screen export", isScreenDoc),
+    label: path7.basename(f, ".json"),
+    ...ctx.own[i] ? { vars: ctx.own[i] } : {},
+    assets: readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc)
+  }));
+  const firstFile = files[0];
+  const at = designSystemDirOf(firstFile, flags.designSystem);
+  const designSystem = at === null ? null : { ...readDesignSystemDir(at.dir), ...at };
+  if (at === null) notes.push(`note  no design system: none given, and no ${DESIGN_SYSTEM_DIR}/ beside the export (pass --design-system)`);
+  else if (at.given && !fs7.existsSync(at.dir)) notes.push(`note  --design-system ${at.dir} does not exist \u2014 no design system was read`);
+  else notes.push(`design system: ${at.dir}${at.given ? "" : " (found beside the export; pass --design-system to choose another)"}`);
+  const libraries = findLibraryExports(firstFile, at?.dir);
+  let map = null, mapFile = null;
+  if (flags.map) {
+    map = readDocFile(flags.map, "component map", isCodeConnectMap);
+    mapFile = flags.map;
+  } else {
+    const found = findMapFile(process.cwd());
+    const r = found.missing ? null : readJson(found.rel, isCodeConnectMap);
+    if (r && "doc" in r) {
+      map = r.doc;
+      mapFile = found.rel;
+      notes.push(`map: ${found.rel}`);
+    } else if (r) notes.push(`warn  ${found.rel} ${r.error} \u2014 proposals are not labelled alreadyMapped${flags.mapFlag ? " (pass --map to fail on it)" : ""}`);
+  }
+  return {
+    inputs: {
+      screens,
+      variables: ctx.variablesDoc,
+      variablesPath: ctx.variablesPath,
+      sliceSources: ctx.sliceSources,
+      designSystem,
+      libraries,
+      map,
+      mapFile,
+      siblings: exportSiblings(files),
+      notes
+    }
+  };
+}
+function withCatalog(ds, catalog) {
+  if (ds === null || catalog === void 0) return ds;
+  return { ...ds, components: ds.given ? ds.components || catalog : catalog };
+}
+function crossCheckInputOf(c, fallback = {}) {
+  const ds = c.designSystem;
+  return {
+    screens: c.screens,
+    variables: c.variables ?? null,
+    variablesPath: c.variablesPath ?? null,
+    sliceSources: c.sliceSources ?? null,
+    tokens: ds?.tokens ?? null,
+    components: ds?.components || fallback.components || null,
+    componentsLibrary: ds?.componentsLibrary ?? null,
+    stylesText: ds?.stylesText ?? null,
+    ...ds?.componentsFile !== void 0 ? { componentsFile: ds.componentsFile } : {},
+    ...ds?.isLibrary !== void 0 ? { designSystemIsLibrary: ds.isLibrary } : {},
+    map: c.map ?? null,
+    siblings: c.siblings ?? null
+  };
+}
+
+// design-to-code/control-kind.ts
+var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
+function controlKind(name) {
+  const s = String(name || "");
+  const toggle = TOGGLE_WORD.test(s);
+  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
+  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
+  if (toggle) return "toggle";
+  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
+  if (/\blink\b/i.test(s)) return "link";
+  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
+  return null;
+}
+var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
+  const k = controlKind(l);
+  return k === "input" || k === "select" || k === "toggle";
+});
+function outermostControl(near) {
+  for (let i = 0; i < near.length; i++) {
+    const a = near[i];
+    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
+  }
+  for (let i = near.length - 1; i >= 0; i--) {
+    const a = near[i];
+    if (a && isBoundaryKind(a)) return i;
+  }
+  return -1;
+}
+var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
+var ON_VALUE = /^(true|yes|on)$/i;
+function isDisabledLayer(layer) {
+  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
+    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
+    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
+  }
+  for (const [k, v] of Object.entries(layer.props || {})) {
+    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
+    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
+  }
+  return false;
 }
 
 // design-to-code/cross-check.ts
@@ -2357,30 +2498,6 @@ function labelProposals(rekey, visible, map, siblings) {
   const rank = (p) => p.alreadyMapped ? 2 : (p.sharedWith || 0) > 0 ? 0 : 1;
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
-function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path7.resolve(f)));
-  const roots = /* @__PURE__ */ new Set();
-  for (const f of checked) {
-    const root = exportRootOfScreen(f);
-    if (root !== null) roots.add(root);
-  }
-  if (!roots.size) return null;
-  return () => {
-    const out = [];
-    const seen = new Set(checked);
-    for (const root of roots) {
-      const ix = readExportIndex(root);
-      for (const row of ix.rows) {
-        const file = ix.fileOf(row);
-        if (file === null || seen.has(file)) continue;
-        seen.add(file);
-        const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path7.basename(file, ".json") });
-      }
-    }
-    return out;
-  };
-}
 var MIN_CONTRAST = 4.5;
 function composedRgba(color, opacity) {
   if (!color || opacity === null || !Number.isFinite(opacity)) return null;
@@ -2663,19 +2780,19 @@ function isRasterShell(rasters, paths) {
 }
 
 // design-to-code/node-artefacts.ts
-import fs11 from "node:fs";
+import fs12 from "node:fs";
 import path11 from "node:path";
 
 // design-to-code/verify-sets.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 import path10 from "node:path";
 
 // design-to-code/verify-status.ts
 import path9 from "node:path";
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 
 // design-to-code/run-cache.ts
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import os from "node:os";
 import path8 from "node:path";
 
@@ -2684,12 +2801,12 @@ import crypto from "node:crypto";
 var sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 // bridge/src/file-lock.ts
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 var LIVE_STALE_MS = 2 * 6e4;
 var PID_NS = (() => {
   if (process.platform !== "linux") return "";
   try {
-    return fs7.readlinkSync("/proc/self/ns/pid");
+    return fs8.readlinkSync("/proc/self/ns/pid");
   } catch {
     return "";
   }
@@ -2702,20 +2819,20 @@ var RUN_CACHE_SEGMENTS = ["node_modules", ".cache", CACHE_NAME];
 var shortSha = (s) => sha256Hex(s).slice(0, 16);
 var isDir = (p) => {
   try {
-    return fs8.statSync(p).isDirectory();
+    return fs9.statSync(p).isDirectory();
   } catch {
     return false;
   }
 };
-var exists = (p) => fs8.existsSync(p);
+var exists = (p) => fs9.existsSync(p);
 function realpath(p) {
-  if (typeof fs8.realpathSync.native === "function") {
+  if (typeof fs9.realpathSync.native === "function") {
     try {
-      return fs8.realpathSync.native(p);
+      return fs9.realpathSync.native(p);
     } catch {
     }
   }
-  return fs8.realpathSync(p);
+  return fs9.realpathSync(p);
 }
 function canonical(p) {
   const abs = path8.resolve(p);
@@ -2800,7 +2917,7 @@ function runCommands(base, open) {
 function openRunSets(verifyDir) {
   let files;
   try {
-    files = fs9.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
+    files = fs10.readdirSync(runCacheDir(verifyDir), { withFileTypes: true });
   } catch {
     return [];
   }
@@ -2862,7 +2979,7 @@ var namedBy = (f) => {
 function allSets(verifyDir) {
   let files;
   try {
-    files = fs10.readdirSync(verifyDir);
+    files = fs11.readdirSync(verifyDir);
   } catch {
     return [];
   }
@@ -2961,7 +3078,7 @@ function nodeArtefacts(root, dirs = {}) {
   function auditReports() {
     let files;
     try {
-      files = fs11.readdirSync(abs(auditDir)).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")).sort();
+      files = fs12.readdirSync(abs(auditDir)).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")).sort();
     } catch {
       return [];
     }
@@ -2975,10 +3092,10 @@ function nodeArtefacts(root, dirs = {}) {
   const auditNamesNode = (r) => r.nodeIds !== null || nodeIdFromStem(r.stem) !== null;
   const auditsOf = (nodeId) => auditReports().filter((r) => auditNodeIs(r, nodeId)).map((r) => spell(auditDir, r.f));
   function auditFor(nodeId, hints = {}) {
-    if (!fs11.existsSync(abs(auditDir))) return null;
+    if (!fs12.existsSync(abs(auditDir))) return null;
     if (hints.screenFile) {
       const own = path11.basename(hints.screenFile, ".json") + ".json";
-      if (fs11.existsSync(path11.join(abs(auditDir), own))) return spell(auditDir, own);
+      if (fs12.existsSync(path11.join(abs(auditDir), own))) return spell(auditDir, own);
     }
     if (nodeId) {
       const held = auditsOf(nodeId)[0];
@@ -3944,22 +4061,7 @@ function crossFilePass(ac) {
   const crossOrigin = /* @__PURE__ */ new Map();
   let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
-    crossFile = crossCheck({
-      // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
-      // check is about the variables THIS screen carries, not the merged union's (without
-      // them this gate would raise another screen's `Space 4` blocker against this one).
-      screens: docs,
-      variables: opts.variables || null,
-      sliceSources: opts.sliceSources || null,
-      tokens: opts.designSystem && opts.designSystem.tokens || null,
-      components: opts.designSystem && opts.designSystem.components || opts.catalog || null,
-      componentsLibrary: opts.designSystem && opts.designSystem.componentsLibrary || null,
-      stylesText: opts.designSystem && opts.designSystem.stylesText || null,
-      ...ifDefined("componentsFile", opts.designSystem && opts.designSystem.componentsFile),
-      ...ifDefined("designSystemIsLibrary", opts.designSystem && opts.designSystem.isLibrary),
-      map: opts.map || null,
-      siblings: opts.siblings || null
-    });
+    crossFile = crossCheck(crossCheckInputOf({ ...opts, screens: docs }, { components: opts.catalog }));
     const crossIds = findingIds(crossFile.findings);
     crossFile.findings.forEach((f, i) => {
       const id = crossIds[i];
@@ -3982,7 +4084,7 @@ function crossFilePass(ac) {
       findings: [],
       coverage: null,
       notChecked: [
-        `the whole cross-FILE pass \u2014 no design system was given. Every token-binding percentage below means "resolves to some variable in this screen's own file", NOT "matches your design system". Re-run with --design-system design/export/design-system to tell the two apart.`
+        `the whole cross-FILE pass \u2014 no design system was given, and none was found beside the export. Every token-binding percentage below means "resolves to some variable in this screen's own file", NOT "matches your design system". Re-run with --design-system design/export/design-system to tell the two apart.`
       ],
       inputs: {}
     };
@@ -4125,10 +4227,10 @@ function toMarkdown(res) {
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs13 = res.findings.filter((f) => f.severity === sev);
-    if (!fs13.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs13.length})`, "");
-    for (const f of fs13) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    const fs14 = res.findings.filter((f) => f.severity === sev);
+    if (!fs14.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs14.length})`, "");
+    for (const f of fs14) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -4159,9 +4261,10 @@ function main(argv) {
   --overrides defaults to <out>.overrides.json when it exists: { overrides: [{ code, nodeId?, token?,
   component?, severity, reason, decidedBy?, decidedAt? }] } \u2014 the user's severity decisions, applied to
   BOTH the .json and the .md (never hand-edit severities in the .md).
-  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
-  It takes design/export/design-system or a library export, design/export/libraries/<dir>.
-  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
+  A design system turns on the cross-FILE pass (does this screen come from that design system?): --design-system
+  takes design/export/design-system or a library export, design/export/libraries/<dir>; without it, the
+  design-system/ of the export the screen sits in is used when there is one (stderr names it). With none, every
+  token-binding % below means "binds SOME variable", not "matches your design system".
   --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
   name the export gave the screen file, so re-auditing the same screen always lands on the same
   report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
@@ -4200,44 +4303,36 @@ function main(argv) {
     console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`);
     return 2;
   }
-  const ctx = variablesContext(files, varsFile, { sliceFallback: true });
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) return 2;
-  const inputs = files.map((f, i) => ({
-    doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path12.basename(f, ".json"),
-    ...ifDefined("vars", ctx.own[i]),
-    // own[i] is set: own is files.map(...)
-    assets: readJsonOrNull(f.replace(/\.json$/, ".assets.json"), isScreenAssetsDoc)
-  }));
+  const read = readScreenInputs(files, { variables: varsFile, designSystem: dsDir });
+  if ("errors" in read) {
+    for (const e of read.errors) console.error(e);
+    return 2;
+  }
+  const ctx = read.inputs;
+  for (const n of ctx.notes) console.error(n);
+  const inputs = ctx.screens;
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
-  const dsRead = dsDir ? readDesignSystemDir(dsDir) : null;
-  const designSystem = dsRead ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText, componentsFile: dsRead.componentsFile, isLibrary: dsRead.isLibrary } : void 0;
-  const libraries = findLibraryExports(firstFile, dsDir);
+  const ds = ctx.designSystem;
+  const designSystem = withCatalog(ds, catalog) ?? void 0;
   const neighbours = findExportNeighbours(firstFile);
-  const variables = ctx.variablesDoc;
-  if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   const outBase = out || path12.join(AUDIT_DIR, path12.basename(firstFile, ".json"));
   const ownOverrides = outBase + ".overrides.json";
   const stem = path12.basename(outBase), dot = stem.indexOf(".");
   const parentOverrides = dot > 0 ? path12.join(path12.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs12.existsSync(ownOverrides) && parentOverrides && fs12.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const overridesFile = flags.overrides || (!fs13.existsSync(ownOverrides) && parentOverrides && fs13.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
-  const mapAt = findMapFile(process.cwd());
-  const mapFound = mapAt.missing ? void 0 : mapAt.rel;
-  const mapRead = mapFound ? readJson(mapFound, isCodeConnectMap) : null;
-  if (mapFound && mapRead && "error" in mapRead) console.error(`warn  ${mapFound} ${mapRead.error} \u2014 cross-file proposals are not labelled alreadyMapped`);
   const res = audit(inputs, {
-    ...mapRead && "doc" in mapRead ? { map: mapRead.doc } : {},
-    siblings: exportSiblings(files),
+    map: ctx.map,
+    siblings: ctx.siblings,
     ...overridesDoc ? { overrides: overridesDoc.overrides } : {},
     ...ifDefined("platform", platform),
     ...ifDefined("catalog", catalog),
     ...ifDefined("designSystem", designSystem),
-    ...ifDefined("designSystemDir", dsDir),
-    libraries,
+    ...ifDefined("designSystemDir", ds?.dir),
+    libraries: ctx.libraries,
     neighbours,
-    variables,
+    variables: ctx.variables,
+    variablesPath: ctx.variablesPath,
     sliceSources: ctx.sliceSources,
     ...ifDefined("grid", grid)
   });
@@ -4252,9 +4347,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs12.mkdirSync(path12.dirname(outBase), { recursive: true });
-    fs12.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs12.writeFileSync(outBase + ".md", md);
+    fs13.mkdirSync(path12.dirname(outBase), { recursive: true });
+    fs13.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs13.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);

@@ -45,19 +45,17 @@ import type { Backdrop, WalkContext, WalkFrame } from "./visible-tree.ts";
 import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
-import { SEVERITY_ORDER, crossCheck, exportSiblings } from "./cross-check.ts";
+import { SEVERITY_ORDER, crossCheck } from "./cross-check.ts";
+import { crossCheckInputOf, readScreenInputs, withCatalog } from "./screen-inputs.ts";
 import { controlKind, outermostControl, isDisabledLayer, DISABLED_WORD } from "./control-kind.ts";
 import type { CrossCheckScreen } from "./cross-check.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
 import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
-import { findExportNeighbours, findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
+import { findExportNeighbours } from "./design-system-dir.ts";
 import type { ExportNeighbours, LibraryExport } from "./design-system-dir.ts";
-import { isAuditOverridesDoc, isComponentsCatalog, isScreenAssetsDoc } from "./doc-guards.ts";
-import { readJson, readJsonOrNull } from "./read-json.ts";
+import { isAuditOverridesDoc, isComponentsCatalog } from "./doc-guards.ts";
 import { findingIds } from "./finding-id.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
-import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
@@ -69,7 +67,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey } from "./map-util.ts";
 import { runCli } from "./proc.ts";
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
-import { AUDIT_DIR, findMapFile } from "../bridge/src/project-layout.ts";
+import { AUDIT_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
 import { safe } from "../bridge/src/pages-layout.ts";
@@ -225,6 +223,8 @@ export interface AuditOptions {
   /** the --as-library exports beside the export (design-system-dir.ts findLibraryExports) */
   libraries?: LibraryExport[];
   variables?: TokensDoc | null;
+  /** where `variables` was read from (the cross-file pass's "no collections" note names it) */
+  variablesPath?: string | null;
   sliceSources?: SliceSources | null;
   /** The other frames in the export (pages/index.json) and orphan screenshots */
   neighbours?: ExportNeighbours | null;
@@ -1200,22 +1200,10 @@ function crossFilePass(ac: AuditCtx): { crossFile: AuditCrossFile; crossOrigin: 
   const crossOrigin = new Map<AuditFinding, AuditCrossFile["findings"][number]>(); // merged copy -> crossFile's own finding
   let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
-    crossFile = crossCheck({
-      // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
-      // check is about the variables THIS screen carries, not the merged union's (without
-      // them this gate would raise another screen's `Space 4` blocker against this one).
-      screens: docs,
-      variables: opts.variables || null,
-      sliceSources: opts.sliceSources || null,
-      tokens: (opts.designSystem && opts.designSystem.tokens) || null,
-      components: (opts.designSystem && opts.designSystem.components) || opts.catalog || null,
-      componentsLibrary: (opts.designSystem && opts.designSystem.componentsLibrary) || null,
-      stylesText: (opts.designSystem && opts.designSystem.stylesText) || null,
-      ...ifDefined("componentsFile", opts.designSystem && opts.designSystem.componentsFile),
-      ...ifDefined("designSystemIsLibrary", opts.designSystem && opts.designSystem.isLibrary),
-      map: opts.map || null,
-      siblings: opts.siblings || null,
-    });
+    // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision check is about the
+    // variables THIS screen carries, not the merged union's (without them this gate would raise another screen's
+    // `Space 4` blocker against this one). The rest is the audit's own context, handed over as is (screen-inputs.ts).
+    crossFile = crossCheck(crossCheckInputOf({ ...opts, screens: docs }, { components: opts.catalog }));
     // Every cross-check finding carries its id (cross-check.ts writes it; an older crossCheck result is
     // filled here over the SAME list), and the merged copy keeps it — so one finding has one id in both files.
     const crossIds = findingIds(crossFile.findings);
@@ -1234,7 +1222,7 @@ function crossFilePass(ac: AuditCtx): { crossFile: AuditCrossFile; crossOrigin: 
       findings: [],
       coverage: null,
       notChecked: [
-        "the whole cross-FILE pass — no design system was given. Every token-binding percentage below means " +
+        "the whole cross-FILE pass — no design system was given, and none was found beside the export. Every token-binding percentage below means " +
           "\"resolves to some variable in this screen's own file\", NOT \"matches your design system\". " +
           "Re-run with --design-system design/export/design-system to tell the two apart.",
       ],
@@ -1460,9 +1448,10 @@ export function main(argv: string[]): number {
     "  --overrides defaults to <out>.overrides.json when it exists: { overrides: [{ code, nodeId?, token?,\n" +
     "  component?, severity, reason, decidedBy?, decidedAt? }] } — the user's severity decisions, applied to\n" +
     "  BOTH the .json and the .md (never hand-edit severities in the .md).\n" +
-    "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
-    "  It takes design/export/design-system or a library export, design/export/libraries/<dir>.\n" +
-    "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
+    "  A design system turns on the cross-FILE pass (does this screen come from that design system?): --design-system\n" +
+    "  takes design/export/design-system or a library export, design/export/libraries/<dir>; without it, the\n" +
+    "  design-system/ of the export the screen sits in is used when there is one (stderr names it). With none, every\n" +
+    "  token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
     "  --out defaults to design/audit/<input file's own basename> — the same <LayerName>__<node-id>\n" +
     "  name the export gave the screen file, so re-auditing the same screen always lands on the same\n" +
     "  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same\n" +
@@ -1481,33 +1470,22 @@ export function main(argv: string[]): number {
   // A non-numeric `--grid` is refused, not turned into NaN and the 4px default without a word.
   const grid = gridArg === undefined ? undefined : Number(gridArg);
   if (grid !== undefined && !(Number.isFinite(grid) && grid > 0)) { console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`); return 2; }
-  // Variables discovery is shared with cross-check.ts (slice-sources.ts variablesContext): the union
-  // at the export root (or --variables), and each screen's own slice beside it.
-  const ctx = variablesContext(files, varsFile, { sliceFallback: true });
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) return 2;
-  // Each screen's <Screen>.assets.json beside it (heavy assets); optional, and never fatal — it is advice.
-  const inputs: AuditInput[] = files.map((f, i) => ({
-    doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]), // own[i] is set: own is files.map(...)
-    assets: readJsonOrNull(f.replace(/\.json$/, ".assets.json"), isScreenAssetsDoc),
-  }));
+  // A screen plus what surrounds it — each screen's own slice and .assets.json, the variables union, the design system
+  // (either layout: design-system/ or a --as-library export's libraries/<dir>/; found beside the export when not given),
+  // the --as-library exports beside it, the component map and the export's other screens — assembled by screen-inputs.ts,
+  // shared with cross-check.ts, so the embedded crossFile is the cross-check run on the same screen. Optional by design:
+  // a project that only ever pulled one screen has no design-system/ at all, and the audit must still run there — it just
+  // says which checks it could not do (crossFile.notChecked). A file that IS there but is not what it should be fails loud.
+  const read = readScreenInputs(files, { variables: varsFile, designSystem: dsDir });
+  if ("errors" in read) { for (const e of read.errors) console.error(e); return 2; }
+  const ctx = read.inputs;
+  for (const n of ctx.notes) console.error(n);
+  const inputs: AuditInput[] = ctx.screens;
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : undefined;
-  // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
-  // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
-  // A split file that IS there but is not what it should be fails loud (readOptionalDoc).
-  // readDesignSystemDir reads either layout: design-system/ or a --as-library export's libraries/<dir>/.
-  const dsRead = dsDir ? readDesignSystemDir(dsDir) : null;
-  const designSystem: AuditDesignSystem | undefined = dsRead
-    ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText, componentsFile: dsRead.componentsFile, isLibrary: dsRead.isLibrary }
-    : undefined;
-  // The --as-library exports beside the export (libraries/index.json), found from the screen's own
-  // path or the design-system dir's — never a directory the user did not already pull into.
-  const libraries = findLibraryExports(firstFile, dsDir);
+  const ds = ctx.designSystem;
+  // --catalog stands in for a named design system's catalog, and beats a found one's (screen-inputs.ts withCatalog)
+  const designSystem: AuditDesignSystem | undefined = withCatalog(ds, catalog) ?? undefined;
   const neighbours = findExportNeighbours(firstFile);
-  // `variables` is the merged union (what the screen's collections are checked against); each input
-  // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
-  const variables = ctx.variablesDoc;
-  if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
   // The user's severity decisions for this report pair, beside it (or --overrides). Present but
   // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.
   const outBase = out || path.join(AUDIT_DIR, path.basename(firstFile, ".json"));
@@ -1517,18 +1495,13 @@ export function main(argv: string[]): number {
   const parentOverrides = dot > 0 ? path.join(path.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
   const overridesFile = flags.overrides || (!fs.existsSync(ownOverrides) && parentOverrides && fs.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
-  // Cross-check's default map discovery (design/codeconnect.local.json, else ./codeconnect.local.json) and
-  // the export's other screens, so the embedded crossFile's proposals carry the same alreadyMapped/sharedWith
-  // labels as a cross-check run. Labels only — a broken default map is a warning, never a failed audit.
-  const mapAt = findMapFile(process.cwd());
-  const mapFound = mapAt.missing ? undefined : mapAt.rel;
-  const mapRead = mapFound ? readJson(mapFound, isCodeConnectMap) : null;
-  if (mapFound && mapRead && "error" in mapRead) console.error(`warn  ${mapFound} ${mapRead.error} — cross-file proposals are not labelled alreadyMapped`);
+  // The map and the export's other screens label the embedded crossFile's proposals alreadyMapped/sharedWith, as a
+  // cross-check run does. Labels only — a broken map that was only found is a warning (in the notes), never a failed audit.
   const res = audit(inputs, {
-    ...(mapRead && "doc" in mapRead ? { map: mapRead.doc } : {}), siblings: exportSiblings(files),
+    map: ctx.map, siblings: ctx.siblings,
     ...(overridesDoc ? { overrides: overridesDoc.overrides } : {}),
-    ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), ...ifDefined("designSystemDir", dsDir),
-    libraries, neighbours, variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),
+    ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), ...ifDefined("designSystemDir", ds?.dir),
+    libraries: ctx.libraries, neighbours, variables: ctx.variables, variablesPath: ctx.variablesPath, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   // Without a derived default, one screen ended up under FIVE different report basenames across runs because the

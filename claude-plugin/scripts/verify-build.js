@@ -272,16 +272,143 @@ function legacyBlockerIds(findings) {
   return findings.filter((f) => f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
 }
 
-// design-to-code/cli-args.ts
-import path2 from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+// bridge/src/project-layout.ts
+import fs from "node:fs";
+import path from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+function listPlans(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
+
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
+}
+var isObjectLike = (x) => !!x && typeof x === "object";
+var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+var sameFigmaFile = (l, entry) => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
+var notSameRow = (entry) => (l) => {
+  if (!isObjectLike(l)) return !!l;
+  if (l.file === entry.file) return false;
+  if (l.id !== entry.id) return true;
+  return !sameFigmaFile(l, entry);
+};
+var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// design-to-code/read-json.ts
+import fs2 from "node:fs";
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs2.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readRegularFile(file) {
+  try {
+    if (!fs2.statSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  let fd;
+  try {
+    fd = fs2.openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    return fs2.fstatSync(fd).isFile() ? fs2.readFileSync(fd) : null;
+  } catch {
+    return null;
+  } finally {
+    fs2.closeSync(fd);
+  }
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
 
 // design-to-code/proc.ts
 import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
+import fs3 from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 
 // bridge/src/stdio.ts
 import { format, inspect } from "node:util";
@@ -450,7 +577,7 @@ function exitFlushed(code, capMs = 2e3) {
 // design-to-code/proc.ts
 var readBytes = (f) => {
   try {
-    return fs.readFileSync(f);
+    return fs3.readFileSync(f);
   } catch {
     return Buffer.alloc(0);
   }
@@ -477,32 +604,32 @@ function syncOnce(cmd, args, o, attempt) {
   };
   let dir = null;
   if (o.capture !== "pipe") try {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
+    dir = fs3.mkdtempSync(path2.join(os.tmpdir(), "dt-spawn-"));
   } catch {
   }
   if (dir === null) return piped();
-  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
+  const outF = path2.join(dir, "out"), errF = path2.join(dir, "err");
   try {
     let out = null, err = null;
     try {
-      out = fs.openSync(outF, "wx+");
-      err = fs.openSync(errF, "wx+");
+      out = fs3.openSync(outF, "wx+");
+      err = fs3.openSync(errF, "wx+");
     } catch {
-      if (out !== null) fs.closeSync(out);
+      if (out !== null) fs3.closeSync(out);
       return piped();
     }
     let s;
     try {
       s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
     } finally {
-      fs.closeSync(out);
-      fs.closeSync(err);
+      fs3.closeSync(out);
+      fs3.closeSync(err);
     }
     const bytes = readBytes(outF);
     return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
   } finally {
     try {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs3.rmSync(dir, { recursive: true, force: true });
     } catch {
     }
   }
@@ -511,7 +638,7 @@ function runSync(cmd, args, o = {}) {
   const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
   let r = syncOnce(cmd, args, o, 1);
   if (!valid(r) && r.status === 0 && !r.error) {
-    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path2.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
 `);
     r = syncOnce(cmd, args, o, 2);
   }
@@ -519,350 +646,6 @@ function runSync(cmd, args, o = {}) {
   return r;
 }
 var pause = new Int32Array(new SharedArrayBuffer(4));
-
-// design-to-code/cli-args.ts
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
-function joinNegativeValues(argv, options) {
-  const out = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i], next = argv[i + 1];
-    if (tok === void 0) continue;
-    if (tok === "--") {
-      out.push(...argv.slice(i));
-      break;
-    }
-    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
-    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
-      out.push(`${tok}=${next}`);
-      i++;
-    } else out.push(tok);
-  }
-  return out;
-}
-function badShortWords(args, options) {
-  const shorts = /* @__PURE__ */ new Map();
-  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
-  const bad = [];
-  let takesNext = false;
-  for (const a of args) {
-    if (a === "--") break;
-    if (takesNext) {
-      takesNext = false;
-      continue;
-    }
-    if (a.startsWith("--")) {
-      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
-      continue;
-    }
-    if (!/^-[^-]/.test(a)) continue;
-    let ok = true;
-    for (const [i, c] of [...a.slice(1)].entries()) {
-      const type = shorts.get(c);
-      if (type === void 0) {
-        ok = false;
-        break;
-      }
-      if (type === "string") {
-        takesNext = i === a.length - 2;
-        break;
-      }
-    }
-    if (!ok) bad.push(a);
-  }
-  return bad;
-}
-function cliParse(tool, argv, options, usage, exitCode, parse) {
-  const args = joinNegativeValues(argv, options);
-  const unknownFlags = () => {
-    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
-    const short = badShortWords(args, options);
-    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
-    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
-    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
-${usage}`;
-  };
-  let failure;
-  try {
-    const parsed = parse(args);
-    if (!badShortWords(args, options).length) return parsed;
-    failure = unknownFlags();
-  } catch (e) {
-    const code = errCode(e);
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      failure = unknownFlags();
-    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const msg = e instanceof Error ? e.message : "";
-      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
-      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
-      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`;
-    } else {
-      failure = `${tool}: ${errMsg(e)}
-${usage}`;
-    }
-  }
-  console.error(failure);
-  exitCli(exitCode);
-}
-
-// design-to-code/read-json.ts
-import fs2 from "node:fs";
-var anyJson = (_x) => true;
-function readFailure(e) {
-  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-  if (code === "ENOENT") return { error: "does not exist", missing: true };
-  return {
-    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
-  };
-}
-function readJson(file, guard) {
-  let buf;
-  try {
-    buf = fs2.readFileSync(file);
-  } catch (e) {
-    return readFailure(e);
-  }
-  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
-    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
-  }
-  let raw = buf.toString("utf8");
-  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
-  let parsed;
-  try {
-    const value = JSON.parse(raw);
-    parsed = value;
-  } catch (e) {
-    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
-  }
-  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
-  return { doc: parsed };
-}
-function readRegularFile(file) {
-  try {
-    if (!fs2.statSync(file).isFile()) return null;
-  } catch {
-    return null;
-  }
-  let fd;
-  try {
-    fd = fs2.openSync(file, "r");
-  } catch {
-    return null;
-  }
-  try {
-    return fs2.fstatSync(fd).isFile() ? fs2.readFileSync(fd) : null;
-  } catch {
-    return null;
-  } finally {
-    fs2.closeSync(fd);
-  }
-}
-function readJsonOrNull(file, guard) {
-  const r = readJson(file, guard);
-  return "doc" in r ? r.doc : null;
-}
-
-// design-to-code/map-validate.ts
-var STATUSES = ["active", "deprecated", "needs-review"];
-var KEYS = {
-  root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
-  figma: ["key", "id", "name", "unstable"],
-  code: ["module", "export", "targets"],
-  target: ["module", "export"],
-  vo: ["when", "code"],
-  voCode: ["module", "export"],
-  children: ["layerNamePattern", "slot"],
-  prop: Object.assign(nullProto(), {
-    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
-    boolean: ["kind", "codeProp", "default", "omitDefault"],
-    string: ["kind", "codeProp"],
-    instance: ["kind", "codeProp", "slot"]
-  })
-};
-var PROP_KINDS = Object.keys(KEYS.prop);
-var isStr = (v) => typeof v === "string";
-var isBool = (v) => typeof v === "boolean";
-var noExtra = (obj, allowed, at, err) => {
-  if (!Array.isArray(allowed)) return;
-  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
-};
-var optStrings = (obj, keys, at, err) => {
-  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
-};
-function validateMap(map) {
-  const errors = [];
-  const err = (path18, message) => errors.push({ path: path18, message });
-  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
-  noExtra(map, KEYS.root, "", err);
-  if (map.version !== 1) err("version", "must be 1");
-  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isRecord(map.components)) {
-    err("components", "must be an object");
-    return { ok: false, errors };
-  }
-  for (const key of Object.keys(map.components)) {
-    const e = map.components[key];
-    const at = `components.${key}`;
-    if (!isRecord(e)) {
-      err(at, "entry must be an object");
-      continue;
-    }
-    noExtra(e, KEYS.entry, at, err);
-    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
-    else {
-      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
-      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
-      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
-      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
-    }
-    if (!isRecord(e.code)) err(`${at}.code`, "required object");
-    else {
-      noExtra(e.code, KEYS.code, `${at}.code`, err);
-      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
-      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
-      if (e.code.targets !== void 0) {
-        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
-        else for (const t of Object.keys(e.code.targets)) {
-          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isRecord(tv)) err(ta, "must be an object");
-          else {
-            noExtra(tv, KEYS.target, ta, err);
-            optStrings(tv, ["module", "export"], ta, err);
-          }
-        }
-      }
-    }
-    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
-    optStrings(e, ["note"], at, err);
-    if (e.props !== void 0) {
-      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
-      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
-    }
-    if (e.variantOverrides !== void 0) {
-      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
-      else e.variantOverrides.forEach((vo, i) => {
-        const va = `${at}.variantOverrides[${i}]`;
-        if (!isRecord(vo)) {
-          err(va, "must be an object");
-          return;
-        }
-        noExtra(vo, KEYS.vo, va, err);
-        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
-        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
-        else {
-          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
-          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
-          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
-        }
-      });
-    }
-    if (e.childrenByLayer !== void 0) {
-      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
-      else {
-        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
-        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
-      }
-    }
-  }
-  return { ok: errors.length === 0, errors };
-}
-function validateProp(p, at, err) {
-  if (!isRecord(p)) {
-    err(at, "prop must be an object");
-    return;
-  }
-  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
-  if (!Array.isArray(allowed)) {
-    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
-    return;
-  }
-  noExtra(p, allowed, at, err);
-  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
-  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
-  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
-  if (p.kind === "enum") {
-    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
-      const t = typeof p.values[k];
-      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
-    }
-    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
-  }
-  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
-  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
-}
-function isCodeConnectMap(x) {
-  return validateMap(x).ok;
-}
-isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
-
-// design-to-code/export-index.ts
-import fs4 from "node:fs";
-import path5 from "node:path";
-
-// bridge/src/project-layout.ts
-import fs3 from "node:fs";
-import path3 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
-var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path3.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-function listPlans(dir) {
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
-}
-
-// bridge/src/pages-layout.ts
-function safe(id) {
-  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-}
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
-function screenStem(name, id) {
-  return safe(name || "layer") + "__" + safe(id);
-}
-var isObjectLike = (x) => !!x && typeof x === "object";
-var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
-var sameFigmaFile = (l, entry) => {
-  if (l.sourceFile && entry.sourceFile) {
-    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
-  }
-  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
-  return samePage(l, entry);
-};
-var notSameRow = (entry) => (l) => {
-  if (!isObjectLike(l)) return !!l;
-  if (l.file === entry.file) return false;
-  if (l.id !== entry.id) return true;
-  return !sameFigmaFile(l, entry);
-};
-var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1105,8 +888,12 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/verify-shared.ts
+// design-to-code/export-index.ts
+import fs4 from "node:fs";
 import path4 from "node:path";
+
+// design-to-code/verify-shared.ts
+import path3 from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1172,8 +959,8 @@ function normFamily(v) {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 function resolveInside(base, rel, within = base) {
-  const root = path4.resolve(within), file = path4.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path4.sep) ? file : null;
+  const root = path3.resolve(within), file = path3.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path3.sep) ? file : null;
 }
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
@@ -1231,18 +1018,18 @@ var MEASURED_KEYS_DOC = {
 // design-to-code/export-index.ts
 var PAGES = "pages";
 var INDEX = "index.json";
-var rootIndexFile = (exportRoot) => path5.join(exportRoot, PAGES, INDEX);
-var inside = (root, rel) => rel && !path5.isAbsolute(rel) ? resolveInside(root, rel) : null;
+var rootIndexFile = (exportRoot) => path4.join(exportRoot, PAGES, INDEX);
+var inside = (root, rel) => rel && !path4.isAbsolute(rel) ? resolveInside(root, rel) : null;
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(path5.resolve(f))) files.push(path5.resolve(f));
+    if (f !== null && !files.includes(path4.resolve(f))) files.push(path4.resolve(f));
   };
-  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path5.join(root, PAGES, dir, INDEX) : null;
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path4.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs4.readdirSync(path5.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs4.readdirSync(path4.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -1323,25 +1110,6 @@ function readExportIndex(exportRoot) {
   };
 }
 
-// bridge/src/design-system-layout.ts
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
-
 // bridge/src/library-layout.ts
 var INDEX2 = "index.json";
 var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
@@ -1351,6 +1119,236 @@ var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPON
 // design-to-code/design-system-dir.ts
 var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
+
+// design-to-code/cli-args.ts
+import path5 from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path5.join(path5.dirname(SELF), name + path5.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  exitCli(exitCode);
+}
+
+// design-to-code/map-validate.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path18, message) => errors.push({ path: path18, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/cross-check.ts
 if (false) runCli3(main, { name: "cross-check" });
@@ -2506,7 +2504,8 @@ var USAGE = [
   "  You fill in: codeToken, mapModule, verdict, decision, route, deviations[] (and files[], architecture,",
   "  verification as you build).",
   "",
-  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json). A missing",
+  "  <design-system dir>  design/export/design-system (tokens.json, components.local.json), or a library",
+  "                       export's design/export/libraries/<dir> (its catalog is components.json). A missing",
   "                       directory is allowed (single-screen pull): values then come from the screen's",
   "                       own .vars.json and no catalog match is attempted \u2014 stderr says so.",
   "  --out <file>         write the plan there (default: stdout). An existing plan is MERGED, never",
