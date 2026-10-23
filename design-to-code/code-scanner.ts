@@ -203,7 +203,9 @@ export function isDefinitionAt(file: FileText, index: number, codeToken: string)
   const lineStart = file.text.lastIndexOf("\n", index - 1) + 1;
   const m = DECLARATION.exec(file.text.slice(lineStart, index));
   // group 2 is not optional: set whenever the regex matched
-  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, index) });
+  // the blocks around the declared NAME, not its value: `Color(` in `val brand600 = Color(0xFF…)` is not around it
+  const at = m ? lineStart + m.index + (m[1] ?? "").length : index;
+  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, at) });
 }
 // A line is a DEFINITION line for `literal` when EVERY occurrence of it on the line is the value of
 // a declaration of one of `codeTokens` — every plan token that resolves to this literal, not only the

@@ -2691,8 +2691,16 @@ function namesToken(declared, codeToken, opts) {
   const refs = opts.enclosing ? memberRefs(codeToken).filter((m) => same(m.member)) : [];
   if (!refs.length || !opts.enclosing) return false;
   const heads = opts.enclosing();
-  return refs.some((m) => m.containers.some((c) => heads.some((h) => headNames(h, c))));
+  return refs.some((m) => m.containers.some((c) => {
+    for (let i = heads.length - 1; i >= 0; i--) {
+      const h = heads[i] ?? "";
+      if (headNames(h, c)) return true;
+      if (!VALUE_HEAD.test(h)) return false;
+    }
+    return false;
+  }));
 }
+var VALUE_HEAD = /(?:^|[:=,([{])\s*$/;
 var requiredCustomProps = (codeToken) => [...new Set(tokenParts(codeToken).filter((p) => p.prop && !p.builtin).map((p) => String(p.prop)))];
 
 // design-to-code/code-scanner.ts
@@ -2886,7 +2894,8 @@ var enclosingHeads = (text, index) => blocksOf(text).filter((b) => b.open < inde
 function isDefinitionAt(file, index, codeToken) {
   const lineStart = file.text.lastIndexOf("\n", index - 1) + 1;
   const m = DECLARATION.exec(file.text.slice(lineStart, index));
-  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, index) });
+  const at = m ? lineStart + m.index + (m[1] ?? "").length : index;
+  return !!m && namesToken(m[2] ?? "", codeToken, { stylesheet: isStylesheet(file.rel), enclosing: () => enclosingHeads(file.text, at) });
 }
 function definesAny(file, lineStart, line, literal, codeTokens) {
   let at = line.indexOf(literal);

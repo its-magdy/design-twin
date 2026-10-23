@@ -212,6 +212,15 @@ check("[enclosing] a statement closed earlier on the opener's line is not part o
     && literalUses([{ rel: "Card.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
     && literalUses([{ rel: "AppColors.kt", text: kept }], "0xFF5B5FC7", ["AppColors.primary"]).usedIn.length === 0;
 })());
+// Review round 7: a function inside the container is not the container — its locals are uses.
+check("[near] a local inside a function nested in the container is a use, not a member", (() => {
+  const kt = "object ColorsTokens {\n  @Composable fun Card() {\n    val brand600 = Color(0xFF5B5FC7)\n    Text(\"Hi\", color = brand600)\n  }\n}";
+  const ts = "export const ColorsTokens = {\n  make: () => ({\n    brand600: \"#5B5FC7\",\n  }),\n};";
+  const nested = "export const colorsTokens = {\n  light: {\n    brand600: \"#5B5FC7\",\n  },\n};";
+  return literalUses([{ rel: "Theme.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Theme.kt"
+    && literalUses([{ rel: "theme.ts", text: ts }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "theme.ts"
+    && literalUses([{ rel: "tokens.ts", text: nested }], "#5B5FC7", ["colorsTokens.light.brand600"]).usedIn.length === 0;
+})());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
   const text = "const colorsTokens = useColorsTokens();\nconst styles = {\n  backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  hero: colorsTokens.light.brand600,\n};";

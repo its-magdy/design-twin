@@ -185,7 +185,7 @@ function tokenCandidates(codeToken: string): string[] {
  *  never by substring: with tokens `input` and `border`, `border-color:` is a CSS property, not either token's
  *  definition. In a stylesheet only a custom property (`--x:`) declares a token. `enclosing` gives the heads of the
  *  blocks around the declaration (code-scanner.ts enclosingHeads): a qualified native reference's member counts only
- *  inside a block that names its container. */
+ *  inside a block that names its container, with only value blocks between them (never a function's body). */
 export function namesToken(declared: string, codeToken: string, opts: { stylesheet: boolean; enclosing?: () => readonly string[] }): boolean {
   if (opts.stylesheet && !declared.startsWith("--")) return false;
   const exact = alnumKey(declared), core = tokenCore(declared);
@@ -195,8 +195,20 @@ export function namesToken(declared: string, codeToken: string, opts: { styleshe
   const refs = opts.enclosing ? memberRefs(codeToken).filter((m) => same(m.member)) : [];
   if (!refs.length || !opts.enclosing) return false;
   const heads = opts.enclosing();
-  return refs.some((m) => m.containers.some((c) => heads.some((h) => headNames(h, c))));
+  return refs.some((m) => m.containers.some((c) => {
+    // innermost out: the nearest head naming the container, reached only through value heads (`light: {`, `= [`) —
+    // a function, a call or a control block in between makes the declaration a local of that code, not a member
+    for (let i = heads.length - 1; i >= 0; i--) {
+      const h = heads[i] ?? "";
+      if (headNames(h, c)) return true;
+      if (!VALUE_HEAD.test(h)) return false;
+    }
+    return false;
+  }));
 }
+// The head of a bracket that opens a value inside a value: nothing before it on its line, or a key, an `=`, a `,` or
+// another bracket.
+const VALUE_HEAD = /(?:^|[:=,([{])\s*$/;
 
 /** The custom properties `codeToken` needs declared (lower-cased): `--x` for `--x` / `var(--x)`, `--color-<name>` for a
  *  colour utility that is not a Tailwind built-in. Anything else (a bare name, `Color.brand`) needs none. */
