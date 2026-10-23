@@ -34,17 +34,27 @@ export interface DesignSystemDir {
   /** the dir is a --as-library export */
   isLibrary: boolean;
 }
-function readDesignSystemDir(dir: string): DesignSystemDir {
+/** Where each part of a design-system dir is, whichever layout it is (the files need not exist). */
+export interface DesignSystemFiles { tokens: string; components: string; componentsLibrary: string; stylesText: string; componentsFile: string; isLibrary: boolean }
+function designSystemFiles(dir: string): DesignSystemFiles {
   const local = path.join(dir, COMPONENTS_LOCAL);
   // a --as-library export: components.json and no components.local.json
   const isLibrary = !fs.existsSync(local) && fs.existsSync(path.join(dir, LIBRARY_COMPONENTS));
   return {
-    tokens: readOptionalDoc(path.join(dir, TOKENS), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(isLibrary ? path.join(dir, LIBRARY_COMPONENTS) : local, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path.join(dir, COMPONENTS_LIBRARY), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path.join(dir, STYLES_TEXT), "text styles", isTextStylesDoc),
-    componentsFile: isLibrary ? LIBRARY_COMPONENTS : COMPONENTS_LOCAL,
-    isLibrary,
+    tokens: path.join(dir, TOKENS), components: isLibrary ? path.join(dir, LIBRARY_COMPONENTS) : local,
+    componentsLibrary: path.join(dir, COMPONENTS_LIBRARY), stylesText: path.join(dir, STYLES_TEXT),
+    componentsFile: isLibrary ? LIBRARY_COMPONENTS : COMPONENTS_LOCAL, isLibrary,
+  };
+}
+function readDesignSystemDir(dir: string): DesignSystemDir {
+  const f = designSystemFiles(dir);
+  return {
+    tokens: readOptionalDoc(f.tokens, "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(f.components, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(f.componentsLibrary, "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(f.stylesText, "text styles", isTextStylesDoc),
+    componentsFile: f.componentsFile,
+    isLibrary: f.isLibrary,
   };
 }
 
@@ -216,4 +226,4 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
   return { layers, unexportedShots: [...shots].sort(), textsOf };
 }
 
-export { readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };
+export { designSystemFiles, readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };

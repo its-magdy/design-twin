@@ -38,6 +38,8 @@
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.
+import { hasExportIndex, pagesRootOfScreen, rootIndexFile } from "./export-index.ts";
+import { screenSiblingFile } from "./screen-inputs.ts";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -721,23 +723,18 @@ function siblingFilesOf(f: string): string[] {
     return out;
   }
   // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
-  // exact same stem (bridge/src/pages-layout.ts's naming — see design/README.md's template).
-  const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
-  if (m) {
-    for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path.join(dir, m + suf);
+  // exact same stem (screen-inputs.ts screenSiblingFile — bridge/src/pages-layout.ts's naming).
+  if (/\.json$/i.test(base)) {
+    for (const kind of ["vars", "assets"] as const) {
+      const p = screenSiblingFile(abs, kind);
       if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
     }
   }
-  // pages/index.json — the root index one level above the <Page> directory a screen file lives in.
+  // pages/index.json — the root index of the pages/ tree the screen file lives in (export-index.ts).
   // Read-only evidence for the diff to consult, never a diff TARGET on its own, but worth having a
   // baseline for so a future consumer can tell whether this screen is indexed differently than in the baseline.
-  const pageDir = dir;
-  const pagesDir = path.dirname(pageDir);
-  if (path.basename(pagesDir) === "pages") {
-    const idx = path.join(pagesDir, "index.json");
-    if (fs.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
-  }
+  const pagesRoot = pagesRootOfScreen(abs);
+  if (pagesRoot !== null && hasExportIndex(pagesRoot)) out.push(path.relative(process.cwd(), rootIndexFile(pagesRoot)));
   return out;
 }
 

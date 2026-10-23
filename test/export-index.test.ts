@@ -12,7 +12,7 @@ import { node } from "./fixtures.ts";
 import type { LayersDoc, LayersDocLayer } from "../bridge/src/doc-types.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import { locateExport } from "../design-to-code/verify-locate.ts";
-import { exportSiblings } from "../design-to-code/cross-check.ts";
+import { exportSiblings } from "../design-to-code/screen-inputs.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
 import { exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readExportIndex } from "../design-to-code/export-index.ts";
 import type { IndexRow } from "../design-to-code/types.ts";

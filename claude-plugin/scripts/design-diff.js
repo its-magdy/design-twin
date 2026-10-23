@@ -2,9 +2,52 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
 
 
-// design-to-code/design-diff.ts
-import fs6 from "node:fs";
-import path4 from "node:path";
+// design-to-code/export-index.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+
+// bridge/src/project-layout.ts
+import fs from "node:fs";
+import path from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+}
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
@@ -14,463 +57,6 @@ function isJsonObject(x) {
 function bag(o) {
   const u = o;
   return u;
-}
-
-// design-to-code/export-shape.ts
-function isIrNode(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
-}
-function isScreenExport(x) {
-  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
-}
-function isLayerFile(x) {
-  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
-}
-function isScreenDoc(x) {
-  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
-}
-isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
-function screenRoots(doc) {
-  if (isScreenExport(doc)) return doc.nodes;
-  if (isLayerFile(doc)) return [doc.tree];
-  if (isIrNode(doc)) return [doc];
-  return [];
-}
-function manifestOf(doc) {
-  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
-}
-
-// design-to-code/read-json.ts
-import fs from "node:fs";
-
-// bridge/src/errmsg.ts
-var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
-var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-
-// design-to-code/read-json.ts
-var anyJson = (_x) => true;
-function readFailure(e) {
-  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-  if (code === "ENOENT") return { error: "does not exist", missing: true };
-  return {
-    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
-  };
-}
-function readJson(file, guard) {
-  let buf;
-  try {
-    buf = fs.readFileSync(file);
-  } catch (e) {
-    return readFailure(e);
-  }
-  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
-    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
-  }
-  let raw = buf.toString("utf8");
-  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
-  let parsed;
-  try {
-    const value = JSON.parse(raw);
-    parsed = value;
-  } catch (e) {
-    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
-  }
-  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
-  return { doc: parsed };
-}
-function readJsonOrNull(file, guard) {
-  const r = readJson(file, guard);
-  return "doc" in r ? r.doc : null;
-}
-
-// design-to-code/proc.ts
-import { spawn, spawnSync } from "node:child_process";
-import fs2 from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-// bridge/src/stdio.ts
-import { format, inspect } from "node:util";
-function installQueuedConsole(o = {}) {
-  trackWrites(process.stdout);
-  trackWrites(process.stderr);
-  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
-  const err = process.stderr;
-  let indent = "";
-  const write = (s, text) => {
-    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
-  };
-  const line = (s) => (...a) => {
-    write(s, format(...a));
-  };
-  console.log = console.info = console.debug = line(out);
-  console.warn = console.error = line(err);
-  console.dir = (item, options) => {
-    write(out, inspect(item, { customInspect: false, ...options }));
-  };
-  console.dirxml = line(out);
-  console.table = (data) => {
-    write(out, inspect(data));
-  };
-  console.write = (...data) => {
-    let n = 0;
-    for (const d of data) {
-      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
-      if (b.length) {
-        out.write(b);
-        n += b.length;
-      }
-    }
-    return n;
-  };
-  console.clear = () => {
-    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
-  };
-  console.trace = (...a) => {
-    const e = new Error(format(...a));
-    e.name = "Trace";
-    Error.captureStackTrace(e, console.trace);
-    write(err, e.stack ?? `Trace: ${e.message}`);
-  };
-  console.assert = (cond, ...a) => {
-    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
-  };
-  console.group = console.groupCollapsed = (...a) => {
-    if (a.length) write(out, format(...a));
-    indent += "  ";
-  };
-  console.groupEnd = () => {
-    indent = indent.slice(0, -2);
-  };
-  const counts = /* @__PURE__ */ new Map();
-  console.count = (label = "default") => {
-    const n = (counts.get(label) ?? 0) + 1;
-    counts.set(label, n);
-    write(out, `${label}: ${n}`);
-  };
-  console.countReset = (label = "default") => {
-    counts.delete(label);
-  };
-  const timers = /* @__PURE__ */ new Map();
-  const elapsed = (label) => {
-    const t = timers.get(label);
-    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
-  };
-  console.time = (label = "default") => {
-    timers.set(label, performance.now());
-  };
-  console.timeLog = (label = "default", ...a) => {
-    const e = elapsed(label);
-    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
-    else write(out, [e, ...a.map((x) => format(x))].join(" "));
-  };
-  console.timeEnd = (label = "default") => {
-    const e = elapsed(label);
-    timers.delete(label);
-    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
-  };
-}
-var inFlight = /* @__PURE__ */ new Map();
-function trackWrites(s) {
-  if (inFlight.has(s)) return;
-  const st = { n: 0, idle: [] };
-  inFlight.set(s, st);
-  const write = s.write.bind(s);
-  const settle = () => {
-    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
-  };
-  s.write = (chunk, encoding, cb) => {
-    const done = typeof encoding === "function" ? encoding : cb;
-    const enc = typeof encoding === "function" ? void 0 : encoding;
-    if (chunk.length === 0) return write(chunk, enc, done);
-    st.n++;
-    let called = false;
-    return write(chunk, enc, (err) => {
-      if (!called) {
-        called = true;
-        settle();
-      }
-      done?.(err);
-    });
-  };
-}
-var CliExit = class extends Error {
-  code;
-  constructor(code) {
-    super(`exit ${code}`);
-    this.name = "CliExit";
-    this.code = code;
-  }
-};
-var cliDepth = 0;
-function exitCli(code) {
-  if (cliDepth > 0) throw new CliExit(code);
-  process.exit(code);
-}
-function runCli(main2, o, argv = process.argv.slice(2)) {
-  installQueuedConsole();
-  const done = o.done ?? ((code) => {
-    process.exitCode = code;
-  });
-  const fail = (e) => {
-    if (e instanceof CliExit) return done(e.code);
-    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
-    done(o.errorCode ?? 1);
-  };
-  cliDepth++;
-  let settled = false;
-  const leave = () => {
-    if (!settled) {
-      settled = true;
-      cliDepth--;
-    }
-  };
-  try {
-    const r = main2(argv);
-    if (typeof r === "number") {
-      leave();
-      done(r);
-    } else r.then((c) => {
-      leave();
-      done(c);
-    }, (e) => {
-      leave();
-      fail(e);
-    });
-  } catch (e) {
-    leave();
-    fail(e);
-  }
-}
-
-// design-to-code/proc.ts
-var readBytes = (f) => {
-  try {
-    return fs2.readFileSync(f);
-  } catch {
-    return Buffer.alloc(0);
-  }
-};
-function syncOnce(cmd, args, o, attempt) {
-  const t0 = Date.now();
-  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
-  const stdin = o.input !== void 0 ? "pipe" : "ignore";
-  const done = (s, stdout, stderr) => ({
-    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
-    signal: s.signal ?? null,
-    stdout,
-    stderr,
-    ms: Date.now() - t0,
-    ...s.error ? { error: s.error } : {},
-    ...s.pid ? { pid: s.pid } : {},
-    timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
-    attempts: attempt
-  });
-  const piped = () => {
-    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
-    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
-    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
-  };
-  let dir = null;
-  if (o.capture !== "pipe") try {
-    dir = fs2.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
-  } catch {
-  }
-  if (dir === null) return piped();
-  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
-  try {
-    let out = null, err = null;
-    try {
-      out = fs2.openSync(outF, "wx+");
-      err = fs2.openSync(errF, "wx+");
-    } catch {
-      if (out !== null) fs2.closeSync(out);
-      return piped();
-    }
-    let s;
-    try {
-      s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
-    } finally {
-      fs2.closeSync(out);
-      fs2.closeSync(err);
-    }
-    const bytes = readBytes(outF);
-    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
-  } finally {
-    try {
-      fs2.rmSync(dir, { recursive: true, force: true });
-    } catch {
-    }
-  }
-}
-function runSync(cmd, args, o = {}) {
-  const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
-  let r = syncOnce(cmd, args, o, 1);
-  if (!valid(r) && r.status === 0 && !r.error) {
-    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
-`);
-    r = syncOnce(cmd, args, o, 2);
-  }
-  if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
-  return r;
-}
-var pause = new Int32Array(new SharedArrayBuffer(4));
-
-// design-to-code/catalog-input.ts
-function readJsonFile(file, what, hint) {
-  return readDocFile(file, what, anyJson, hint);
-}
-function readDocFile(file, what, guard, hint) {
-  const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
-  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
-  exitCli(2);
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-function compositeOver(fg, bg) {
-  return {
-    r: fg.r * fg.a + bg.r * (1 - fg.a),
-    g: fg.g * fg.a + bg.g * (1 - fg.a),
-    b: fg.b * fg.a + bg.b * (1 - fg.a),
-    a: 1
-  };
-}
-
-// design-to-code/visible-tree.ts
-var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
-var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-var WHITE = { r: 255, g: 255, b: 255, a: 1 };
-var NOTHING = { color: null, complex: false, token: null };
-var paintToken = (p) => {
-  const t = p.tokens && p.tokens.color;
-  const s = Array.isArray(t) ? t[0] : t;
-  return typeof s === "string" && s ? s : null;
-};
-function paintOver(base, n) {
-  if (n.type === "TEXT") return base;
-  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
-  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
-  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
-  let { color, complex, token } = base;
-  for (const f of fills) {
-    if (f.opacity === 0 || f.visible === false) continue;
-    if (f.type !== "solid") {
-      complex = true;
-      token = null;
-      continue;
-    }
-    const c = parseHex(f.color);
-    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
-    if (!c) {
-      token = tok;
-      continue;
-    }
-    if (c.a <= 0) continue;
-    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
-    if (c.a >= 1) {
-      complex = false;
-      token = tok;
-    } else token = null;
-  }
-  return { color, complex, token };
-}
-var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
-function isIconInk(n) {
-  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
-  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
-}
-function overlaps(a, b) {
-  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
-function beneathOf(parent, kids, i) {
-  const child = kids[i];
-  if (!child) return [];
-  const stacks = !parent.layout || parent.layout.mode === "absolute";
-  if (!stacks && !child.absolute) return [];
-  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
-}
-function memo(fn) {
-  let cell = null;
-  return () => (cell ??= { v: fn() }).v;
-}
-function walk(root, fn, prune, opts) {
-  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path5, ancestors, under, beneath) {
-    if (!node || typeof node !== "object") return;
-    const hidden = isHidden(node, parentHidden);
-    if (hidden && prune) return;
-    const backdrop = memo(() => beneath().reduce(paintOver, under()));
-    const parentFrame = ancestors[ancestors.length - 1];
-    const frame = { node, hidden, get backdrop() {
-      return backdrop();
-    }, get beneath() {
-      return beneath();
-    } };
-    fn(node, {
-      hidden,
-      parentHidden: !!parentHidden,
-      path: path5,
-      parent: parentFrame ? parentFrame.node : null,
-      depth: ancestors.length,
-      ancestors,
-      get backdrop() {
-        return backdrop();
-      },
-      get beneath() {
-        return beneath();
-      }
-    });
-    const kids = Array.isArray(node.children) ? node.children : [];
-    if (!kids.length) return;
-    const inside = memo(() => paintOver(backdrop(), node));
-    const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path5 ? path5 + " > " : "") + pathOf(kid, i), chain, inside, memo(() => beneathOf(node, kids, i)));
-  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
-}
-function walkWithHidden(root, fn, opts) {
-  walk(root, fn, false, opts);
-}
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
-}
-function ifDefined(key, v) {
-  const o = {};
-  if (v !== void 0) o[key] = v;
-  return o;
 }
 
 // design-to-code/doc-guards.ts
@@ -683,23 +269,673 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/map-util.ts
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
+// design-to-code/read-json.ts
+import fs2 from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs2.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
 }
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const leg = RGB_LEGACY.exec(t);
+  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+
+// design-to-code/verify-shared.ts
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
+}
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
+
+// design-to-code/export-index.ts
+var PAGES = "pages";
+var INDEX = "index.json";
+var rootIndexFile = (exportRoot) => path2.join(exportRoot, PAGES, INDEX);
+var hasExportIndex = (exportRoot) => fs3.existsSync(rootIndexFile(exportRoot));
+function pagesRootOfScreen(screenFile) {
+  const pages = path2.dirname(path2.dirname(path2.resolve(screenFile)));
+  return path2.basename(pages) === PAGES ? path2.dirname(pages) : null;
+}
+
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// design-to-code/proc.ts
+import { spawn, spawnSync } from "node:child_process";
+import fs4 from "node:fs";
+import os from "node:os";
+import path3 from "node:path";
+
+// bridge/src/stdio.ts
+import { format, inspect } from "node:util";
+function installQueuedConsole(o = {}) {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
+  const err = process.stderr;
+  let indent = "";
+  const write = (s, text) => {
+    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
+  };
+  const line = (s) => (...a) => {
+    write(s, format(...a));
+  };
+  console.log = console.info = console.debug = line(out);
+  console.warn = console.error = line(err);
+  console.dir = (item, options) => {
+    write(out, inspect(item, { customInspect: false, ...options }));
+  };
+  console.dirxml = line(out);
+  console.table = (data) => {
+    write(out, inspect(data));
+  };
+  console.write = (...data) => {
+    let n = 0;
+    for (const d of data) {
+      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
+      if (b.length) {
+        out.write(b);
+        n += b.length;
+      }
+    }
+    return n;
+  };
+  console.clear = () => {
+    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
+  };
+  console.trace = (...a) => {
+    const e = new Error(format(...a));
+    e.name = "Trace";
+    Error.captureStackTrace(e, console.trace);
+    write(err, e.stack ?? `Trace: ${e.message}`);
+  };
+  console.assert = (cond, ...a) => {
+    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
+  };
+  console.group = console.groupCollapsed = (...a) => {
+    if (a.length) write(out, format(...a));
+    indent += "  ";
+  };
+  console.groupEnd = () => {
+    indent = indent.slice(0, -2);
+  };
+  const counts = /* @__PURE__ */ new Map();
+  console.count = (label = "default") => {
+    const n = (counts.get(label) ?? 0) + 1;
+    counts.set(label, n);
+    write(out, `${label}: ${n}`);
+  };
+  console.countReset = (label = "default") => {
+    counts.delete(label);
+  };
+  const timers = /* @__PURE__ */ new Map();
+  const elapsed = (label) => {
+    const t = timers.get(label);
+    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
+  };
+  console.time = (label = "default") => {
+    timers.set(label, performance.now());
+  };
+  console.timeLog = (label = "default", ...a) => {
+    const e = elapsed(label);
+    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
+    else write(out, [e, ...a.map((x) => format(x))].join(" "));
+  };
+  console.timeEnd = (label = "default") => {
+    const e = elapsed(label);
+    timers.delete(label);
+    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
+  };
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  let settled = false;
+  const leave = () => {
+    if (!settled) {
+      settled = true;
+      cliDepth--;
+    }
+  };
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") {
+      leave();
+      done(r);
+    } else r.then((c) => {
+      leave();
+      done(c);
+    }, (e) => {
+      leave();
+      fail(e);
+    });
+  } catch (e) {
+    leave();
+    fail(e);
+  }
+}
+
+// design-to-code/proc.ts
+var readBytes = (f) => {
+  try {
+    return fs4.readFileSync(f);
+  } catch {
+    return Buffer.alloc(0);
+  }
+};
+function syncOnce(cmd, args, o, attempt) {
+  const t0 = Date.now();
+  const opts = { cwd: o.cwd, env: o.env, input: o.input, timeout: o.timeoutMs, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 256 * 1024 * 1024, shell: false };
+  const stdin = o.input !== void 0 ? "pipe" : "ignore";
+  const done = (s, stdout, stderr) => ({
+    status: s.error !== void 0 && !s.pid ? null : s.status ?? null,
+    signal: s.signal ?? null,
+    stdout,
+    stderr,
+    ms: Date.now() - t0,
+    ...s.error ? { error: s.error } : {},
+    ...s.pid ? { pid: s.pid } : {},
+    timedOut: s.error !== void 0 && "code" in s.error && s.error.code === "ETIMEDOUT",
+    attempts: attempt
+  });
+  const piped = () => {
+    const s = spawnSync(cmd, args, { ...opts, stdio: [stdin, "pipe", "pipe"] });
+    const bytes = Buffer.isBuffer(s.stdout) ? s.stdout : Buffer.from(String(s.stdout ?? ""));
+    return { ...done(s, bytes.toString("utf8"), String(s.stderr ?? "")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  };
+  let dir = null;
+  if (o.capture !== "pipe") try {
+    dir = fs4.mkdtempSync(path3.join(os.tmpdir(), "dt-spawn-"));
+  } catch {
+  }
+  if (dir === null) return piped();
+  const outF = path3.join(dir, "out"), errF = path3.join(dir, "err");
+  try {
+    let out = null, err = null;
+    try {
+      out = fs4.openSync(outF, "wx+");
+      err = fs4.openSync(errF, "wx+");
+    } catch {
+      if (out !== null) fs4.closeSync(out);
+      return piped();
+    }
+    let s;
+    try {
+      s = spawnSync(cmd, args, { ...opts, stdio: [stdin, out, err] });
+    } finally {
+      fs4.closeSync(out);
+      fs4.closeSync(err);
+    }
+    const bytes = readBytes(outF);
+    return { ...done(s, bytes.toString("utf8"), readBytes(errF).toString("utf8")), ...o.binary ? { stdoutBytes: bytes } : {} };
+  } finally {
+    try {
+      fs4.rmSync(dir, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+function runSync(cmd, args, o = {}) {
+  const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
+  let r = syncOnce(cmd, args, o, 1);
+  if (!valid(r) && r.status === 0 && !r.error) {
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path3.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+`);
+    r = syncOnce(cmd, args, o, 2);
+  }
+  if (!valid(r)) r.lost = `output failed its check after ${r.attempts} run(s) (stdout ${r.stdout.length} B, status ${r.status})`;
+  return r;
+}
+var pause = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  exitCli(2);
+}
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function manifestOf(doc) {
+  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
+}
+
+// design-to-code/visible-tree.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+var WHITE = { r: 255, g: 255, b: 255, a: 1 };
+var NOTHING = { color: null, complex: false, token: null };
+var paintToken = (p) => {
+  const t = p.tokens && p.tokens.color;
+  const s = Array.isArray(t) ? t[0] : t;
+  return typeof s === "string" && s ? s : null;
+};
+function paintOver(base, n) {
+  if (n.type === "TEXT") return base;
+  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
+  let { color, complex, token } = base;
+  for (const f of fills) {
+    if (f.opacity === 0 || f.visible === false) continue;
+    if (f.type !== "solid") {
+      complex = true;
+      token = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
+    if (!c) {
+      token = tok;
+      continue;
+    }
+    if (c.a <= 0) continue;
+    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
+    if (c.a >= 1) {
+      complex = false;
+      token = tok;
+    } else token = null;
+  }
+  return { color, complex, token };
+}
+var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+function isIconInk(n) {
+  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
+  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
+}
+function overlaps(a, b) {
+  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
+function beneathOf(parent, kids, i) {
+  const child = kids[i];
+  if (!child) return [];
+  const stacks = !parent.layout || parent.layout.mode === "absolute";
+  if (!stacks && !child.absolute) return [];
+  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
+}
+function memo(fn) {
+  let cell = null;
+  return () => (cell ??= { v: fn() }).v;
+}
+function walk(root, fn, prune, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path6, ancestors, under, beneath) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    if (hidden && prune) return;
+    const backdrop = memo(() => beneath().reduce(paintOver, under()));
+    const parentFrame = ancestors[ancestors.length - 1];
+    const frame = { node, hidden, get backdrop() {
+      return backdrop();
+    }, get beneath() {
+      return beneath();
+    } };
+    fn(node, {
+      hidden,
+      parentHidden: !!parentHidden,
+      path: path6,
+      parent: parentFrame ? parentFrame.node : null,
+      depth: ancestors.length,
+      ancestors,
+      get backdrop() {
+        return backdrop();
+      },
+      get beneath() {
+        return beneath();
+      }
+    });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    if (!kids.length) return;
+    const inside = memo(() => paintOver(backdrop(), node));
+    const chain = [...ancestors, frame];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), chain, inside, memo(() => beneathOf(node, kids, i)));
+  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
+}
+function walkWithHidden(root, fn, opts) {
+  walk(root, fn, false, opts);
+}
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX2 = "index.json";
+var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
+
 // design-to-code/cli-args.ts
-import path2 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -784,12 +1020,167 @@ ${usage}`;
   exitCli(exitCode);
 }
 
+// design-to-code/map-validate.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path6, message) => errors.push({ path: path6, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) runCli2(main, { name: "map-validate" });
+
+// design-to-code/screen-inputs.ts
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
+
+// design-to-code/design-diff.ts
+import fs7 from "node:fs";
+import path5 from "node:path";
+
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/design-diff.ts
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/asset-compare.ts
 import crypto from "node:crypto";
-import fs4 from "node:fs";
+import fs6 from "node:fs";
 
 // bridge/src/svg-normalize.ts
 var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
@@ -860,7 +1251,7 @@ function svgFingerprint(svg) {
 }
 
 // bridge/src/file-memo.ts
-import fs3 from "node:fs";
+import fs5 from "node:fs";
 var FileMemo = class {
   entries = /* @__PURE__ */ new Map();
   recentMs;
@@ -884,7 +1275,7 @@ var FileMemo = class {
     const now = this.now();
     let st;
     try {
-      st = fs3.statSync(file, { bigint: true });
+      st = fs5.statSync(file, { bigint: true });
     } catch {
       return void 0;
     }
@@ -932,7 +1323,7 @@ var FileKeyCache = class extends FileMemo {
     return this.get(file, () => {
       let bytes;
       try {
-        bytes = fs4.readFileSync(file);
+        bytes = fs6.readFileSync(file);
       } catch {
         return void 0;
       }
@@ -941,61 +1332,6 @@ var FileKeyCache = class extends FileMemo {
   }
 };
 var fileKeyCache = new FileKeyCache();
-
-// bridge/src/design-system-layout.ts
-var DIR = "design-system";
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_DIR = DIR;
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
-
-// bridge/src/project-layout.ts
-import fs5 from "node:fs";
-import path3 from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
-var MERGED_VARIABLES_FILE = "variables.json";
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path3.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
-function looksLikeExportDir(dir) {
-  try {
-    if (!fs5.statSync(dir).isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return EXPORT_MARKERS.some((m) => fs5.existsSync(path3.join(dir, m)));
-}
-
-// bridge/src/library-layout.ts
-var ROOT = "libraries";
-var INDEX = "index.json";
-var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
-var COMPONENTS = "components.json";
-var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX];
 
 // design-to-code/design-diff.ts
 var CATEGORY = {
@@ -1344,35 +1680,35 @@ function markdown(d, label) {
 }
 function realOf(p) {
   try {
-    return fs6.realpathSync(p);
+    return fs7.realpathSync(p);
   } catch {
-    const d = path4.dirname(p);
-    return d === p ? p : path4.join(realOf(d), path4.basename(p));
+    const d = path5.dirname(p);
+    return d === p ? p : path5.join(realOf(d), path5.basename(p));
   }
 }
-var escapes = (rel) => rel === "" || rel === ".." || rel.startsWith(".." + path4.sep) || path4.isAbsolute(rel);
+var escapes = (rel) => rel === "" || rel === ".." || rel.startsWith(".." + path5.sep) || path5.isAbsolute(rel);
 function relUnder(base, abs) {
-  const logical = path4.relative(base, abs);
+  const logical = path5.relative(base, abs);
   if (!escapes(logical)) return logical;
-  const real = path4.relative(realOf(base), realOf(abs));
+  const real = path5.relative(realOf(base), realOf(abs));
   return escapes(real) ? null : real;
 }
 var ancestorsOf = (from) => {
   const out = [];
-  for (let d = from; ; d = path4.dirname(d)) {
+  for (let d = from; ; d = path5.dirname(d)) {
     out.push(d);
-    if (path4.dirname(d) === d) return out;
+    if (path5.dirname(d) === d) return out;
   }
 };
-var hasProjectDesign = (d) => looksLikeExportDir(path4.join(d, DESIGN_DIR)) || looksLikeExportDir(path4.join(d, EXPORT_DIR)) || fs6.existsSync(path4.join(d, SNAPSHOT_DIR));
+var hasProjectDesign = (d) => looksLikeExportDir(path5.join(d, DESIGN_DIR)) || looksLikeExportDir(path5.join(d, EXPORT_DIR)) || fs7.existsSync(path5.join(d, SNAPSHOT_DIR));
 function snapshotPath(file, cwd = process.cwd()) {
-  const abs = path4.resolve(cwd, file);
+  const abs = path5.resolve(cwd, file);
   const placeUnder = (d) => {
-    const rel = relUnder(path4.join(d, DESIGN_DIR), abs);
-    return rel === null ? null : path4.join(d, SNAPSHOT_DIR, rel.split(path4.sep).join("__"));
+    const rel = relUnder(path5.join(d, DESIGN_DIR), abs);
+    return rel === null ? null : path5.join(d, SNAPSHOT_DIR, rel.split(path5.sep).join("__"));
   };
   const fromCwd = ancestorsOf(cwd);
-  for (const d of [...fromCwd.filter(hasProjectDesign), ...ancestorsOf(path4.dirname(abs)).filter(hasProjectDesign), ...fromCwd]) {
+  for (const d of [...fromCwd.filter(hasProjectDesign), ...ancestorsOf(path5.dirname(abs)).filter(hasProjectDesign), ...fromCwd]) {
     const p = placeUnder(d);
     if (p !== null) return p;
   }
@@ -1389,15 +1725,15 @@ function assetPaths(doc) {
   return [...out];
 }
 function assetRoot(file, assets) {
-  let dir = path4.dirname(path4.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path4.dirname(dir)) if (assets.some((a) => fs6.existsSync(path4.join(dir, a)))) return dir;
+  let dir = path5.dirname(path5.resolve(file));
+  for (let i = 0; i < 6; i++, dir = path5.dirname(dir)) if (assets.some((a) => fs7.existsSync(path5.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs6.readFileSync(path4.join(root, a)));
+      out[a] = hashAssetBytes(a, fs7.readFileSync(path5.join(root, a)));
     } catch {
     }
   }
@@ -1407,7 +1743,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   const now = assetHashes(file, newDoc), out = /* @__PURE__ */ new Set();
   if (!now.root) return out;
   const root = now.root, entries = Object.entries(now.hashes);
-  const headHashes = prev.kind === "git" ? gitHeadAssetHashes(cwd, entries.map(([a]) => a), (a) => (relUnder(cwd, path4.join(root, a)) ?? path4.relative(cwd, path4.join(root, a))).split(path4.sep).join("/")) : null;
+  const headHashes = prev.kind === "git" ? gitHeadAssetHashes(cwd, entries.map(([a]) => a), (a) => (relUnder(cwd, path5.join(root, a)) ?? path5.relative(cwd, path5.join(root, a))).split(path5.sep).join("/")) : null;
   for (const [a, h] of entries) {
     const before = prev.kind === "snapshot" ? (prev.assets || {})[a] : headHashes?.get(a);
     if (before && before !== h) out.add(a);
@@ -1470,19 +1806,19 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   }
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (snap !== null && fs6.existsSync(snap)) {
+  if (snap !== null && fs7.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
-    if (!("doc" in r)) throw new Error(`the snapshot ${path4.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force if the export has not been re-pulled yet; after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against <an older copy>`);
-    found.push({ doc: r.doc, source: path4.relative(cwd, snap), kind: "snapshot", assets });
+    if (!("doc" in r)) throw new Error(`the snapshot ${path5.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force if the export has not been re-pulled yet; after the re-pull the snapshot would be the new export, so the diff then uses git HEAD or --against <an older copy>`);
+    found.push({ doc: r.doc, source: path5.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (snap !== null && fs6.existsSync(snap + ".prev") && !fs6.existsSync(snap + ".prev" + DIFFED)) {
+  if (snap !== null && fs7.existsSync(snap + ".prev") && !fs7.existsSync(snap + ".prev" + DIFFED)) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
-    if ("doc" in r) found.push({ doc: r.doc, source: path4.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+    if ("doc" in r) found.push({ doc: r.doc, source: path5.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = (relUnder(cwd, path4.resolve(cwd, file)) ?? path4.relative(cwd, path4.resolve(cwd, file))).split(path4.sep).join("/");
+    const rel = (relUnder(cwd, path5.resolve(cwd, file)) ?? path5.relative(cwd, path5.resolve(cwd, file))).split(path5.sep).join("/");
     const bytes = gitShowHead(cwd, rel);
     if (bytes) found.push({ doc: JSON.parse(bytes.toString("utf8")), source: "git HEAD", kind: "git" });
   } catch {
@@ -1505,28 +1841,28 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   const [newest, older] = useful;
   if (newest === void 0) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   if (older !== void 0 && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} \u2014 used the newer one, so changes already applied are not listed again.`);
-  if (snap !== null && newest.source === path4.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since \u2014 this lists everything since that diff, including changes the earlier sync already applied.`);
+  if (snap !== null && newest.source === path5.relative(cwd, snap) && diffedSince(file, snap)) notes.push(`${newest.source} was already diffed against an earlier export of ${file}, and the file was re-pulled since \u2014 this lists everything since that diff, including changes the earlier sync already applied.`);
   return { ...newest, notes };
 }
 var DS_FILE_NAMES = DESIGN_SYSTEM_FILE_NAMES;
-var dsFilePath = (exportRoot, name) => name === DESIGN_SYSTEM_FILES.MANIFEST ? path4.join(exportRoot, name) : path4.join(exportRoot, DESIGN_SYSTEM_DIR, name);
+var dsFilePath = (exportRoot, name) => name === DESIGN_SYSTEM_FILES.MANIFEST ? path5.join(exportRoot, name) : path5.join(exportRoot, DESIGN_SYSTEM_DIR, name);
 function exportSetCandidates(exportRoot) {
-  const libRoot = path4.join(exportRoot, ROOT);
-  const onDisk = fs6.existsSync(libRoot) ? fs6.readdirSync(libRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
+  const libRoot = path5.join(exportRoot, ROOT);
+  const onDisk = fs7.existsSync(libRoot) ? fs7.readdirSync(libRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
   const libDirs = [.../* @__PURE__ */ new Set([...onDisk, ...snapshotLibraryDirs(libRoot)])].sort();
   return [
-    path4.join(exportRoot, MERGED_VARIABLES_FILE),
+    path5.join(exportRoot, MERGED_VARIABLES_FILE),
     ...DS_FILE_NAMES.map((n) => dsFilePath(exportRoot, n)),
-    ...libDirs.flatMap((d) => LIBRARY_FILE_NAMES.map((n) => path4.join(libRoot, d, n)))
+    ...libDirs.flatMap((d) => LIBRARY_FILE_NAMES.map((n) => path5.join(libRoot, d, n)))
   ];
 }
 function snapshotLibraryDirs(libRoot) {
-  const probe = snapshotPath(path4.join(libRoot, "d", "f.json"));
+  const probe = snapshotPath(path5.join(libRoot, "d", "f.json"));
   if (probe === null) return [];
-  const prefix = path4.basename(probe).slice(0, -"d__f.json".length);
+  const prefix = path5.basename(probe).slice(0, -"d__f.json".length);
   let names;
   try {
-    names = fs6.readdirSync(path4.dirname(probe));
+    names = fs7.readdirSync(path5.dirname(probe));
   } catch {
     return [];
   }
@@ -1538,56 +1874,51 @@ function snapshotLibraryDirs(libRoot) {
   return [...dirs];
 }
 function exportSetFiles(exportRoot) {
-  return exportSetCandidates(exportRoot).filter((f) => fs6.existsSync(f));
+  return exportSetCandidates(exportRoot).filter((f) => fs7.existsSync(f));
 }
 function siblingFilesOf(f) {
-  const abs = path4.resolve(f);
-  const dir = path4.dirname(abs);
-  const base = path4.basename(abs);
+  const abs = path5.resolve(f);
+  const dir = path5.dirname(abs);
+  const base = path5.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    const exportRoot = path4.relative(process.cwd(), base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path4.dirname(dir));
+    const exportRoot = path5.relative(process.cwd(), base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path5.dirname(dir));
     for (const name of DS_FILE_NAMES) {
       const p = dsFilePath(exportRoot, name);
-      if (name !== base && fs6.existsSync(p)) out.push(p);
+      if (name !== base && fs7.existsSync(p)) out.push(p);
     }
     return out;
   }
-  const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
-  if (m) {
-    for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path4.join(dir, m + suf);
-      if (fs6.existsSync(p)) out.push(path4.relative(process.cwd(), p));
+  if (/\.json$/i.test(base)) {
+    for (const kind of ["vars", "assets"]) {
+      const p = screenSiblingFile(abs, kind);
+      if (fs7.existsSync(p)) out.push(path5.relative(process.cwd(), p));
     }
   }
-  const pageDir = dir;
-  const pagesDir = path4.dirname(pageDir);
-  if (path4.basename(pagesDir) === "pages") {
-    const idx = path4.join(pagesDir, "index.json");
-    if (fs6.existsSync(idx)) out.push(path4.relative(process.cwd(), idx));
-  }
+  const pagesRoot = pagesRootOfScreen(abs);
+  if (pagesRoot !== null && hasExportIndex(pagesRoot)) out.push(path5.relative(process.cwd(), rootIndexFile(pagesRoot)));
   return out;
 }
 var DIFFED = ".diffed";
 var fileHash = (f) => {
   try {
-    return sha1Hex(fs6.readFileSync(f));
+    return sha1Hex(fs7.readFileSync(f));
   } catch {
     return null;
   }
 };
 function markDiffed(file, cwd) {
   const snap = snapshotPath(file, cwd), h = fileHash(file);
-  if (h && snap !== null && fs6.existsSync(snap)) {
+  if (h && snap !== null && fs7.existsSync(snap)) {
     try {
-      fs6.writeFileSync(snap + DIFFED, h + "\n");
+      fs7.writeFileSync(snap + DIFFED, h + "\n");
     } catch {
     }
   }
 }
 var diffedHash = (snap) => {
   try {
-    return fs6.readFileSync(snap + DIFFED, "utf8").trim() || null;
+    return fs7.readFileSync(snap + DIFFED, "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -1624,8 +1955,8 @@ function writeReport(out, text, summary) {
     return true;
   }
   try {
-    fs6.mkdirSync(path4.dirname(path4.resolve(out)), { recursive: true });
-    fs6.writeFileSync(out, text);
+    fs7.mkdirSync(path5.dirname(path5.resolve(out)), { recursive: true });
+    fs7.writeFileSync(out, text);
   } catch (e) {
     console.error(`design-diff: cannot write ${out}: ${errorText(e)}`);
     return false;
@@ -1634,7 +1965,7 @@ function writeReport(out, text, summary) {
   return true;
 }
 var changeCount = (r) => r.summary.added + r.summary.removed + r.summary.changed + (r.summary.reordered || 0);
-var noBaselineHint = (what) => `no snapshot in ${SNAPSHOT_DIR.split(path4.sep).join("/")}/, and it is not committed in git.
+var noBaselineHint = (what) => `no snapshot in ${SNAPSHOT_DIR.split(path5.sep).join("/")}/, and it is not committed in git.
 Next time run \`${scriptCmd("design-diff")} --snapshot ${what}\` BEFORE re-pulling`;
 var SAME_EXPORT_NOTE = / is the SAME export as /;
 function directoryMarkdown(d) {
@@ -1660,7 +1991,7 @@ function diffDirectory(dir, json, out) {
   const files = exportSetFiles(dir);
   const gone = exportSetCandidates(dir).filter((f) => {
     const snap = snapshotPath(f);
-    return !fs6.existsSync(f) && snap !== null && fs6.existsSync(snap);
+    return !fs7.existsSync(f) && snap !== null && fs7.existsSync(snap);
   });
   if (!files.length && !gone.length) {
     console.error(`design-diff: ${dir} holds no ${MERGED_VARIABLES_FILE}, design-system or library files \u2014 pass the export directory (the one with ${MERGED_VARIABLES_FILE}, ${DESIGN_SYSTEM_FILES.MANIFEST} and ${DESIGN_SYSTEM_DIR}/), or one file.`);
@@ -1700,7 +2031,7 @@ function diffDirectory(dir, json, out) {
   for (const line of failed) console.error(line);
   return failed.length ? 2 : 0;
 }
-var isDirectory = (p) => fs6.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
+var isDirectory = (p) => fs7.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
 function main(argv) {
   const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json | export dir>... [--force]
        ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]
@@ -1720,7 +2051,7 @@ function main(argv) {
     }
     const entries = /* @__PURE__ */ new Map();
     const add = (file2, follows) => {
-      const key = path4.resolve(file2), had = entries.get(key);
+      const key = path5.resolve(file2), had = entries.get(key);
       if (!had) entries.set(key, { file: file2, ...ifDefined("follows", follows) });
       else if (had.follows !== void 0 && follows === void 0) entries.set(key, { file: had.file });
     };
@@ -1730,12 +2061,12 @@ function main(argv) {
         continue;
       }
       add(r);
-      const screenSiblings = !DS_FILE_NAMES.includes(path4.basename(r));
-      for (const f of siblingFilesOf(r)) add(f, screenSiblings ? path4.resolve(r) : void 0);
+      const screenSiblings = !DS_FILE_NAMES.includes(path5.basename(r));
+      for (const f of siblingFilesOf(r)) add(f, screenSiblings ? path5.resolve(r) : void 0);
     }
     for (const r of requested) if (isDirectory(r) && !exportSetFiles(r).length) console.error(`design-diff: ${r} holds no ${MERGED_VARIABLES_FILE}, design-system or library files \u2014 nothing to snapshot there (first pull?)`);
     for (const { file: f } of entries.values()) {
-      if (fs6.existsSync(f) && snapshotPath(f) === null) {
+      if (fs7.existsSync(f) && snapshotPath(f) === null) {
         console.error(`design-diff: ${f} is not under a design/ directory that holds an export (looked above the file and above ${process.cwd()}) \u2014 run this from the project root, or name the file by its path inside design/export/`);
         return 2;
       }
@@ -1743,41 +2074,41 @@ function main(argv) {
     let refused = 0, missing = 0;
     const refusedKeys = /* @__PURE__ */ new Set();
     for (const [key, { file: f, follows }] of entries) {
-      if (!fs6.existsSync(f)) {
+      if (!fs7.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         missing++;
         continue;
       }
       const dest = snapshotPath(f);
       if (dest === null) continue;
-      fs6.mkdirSync(path4.dirname(dest), { recursive: true });
+      fs7.mkdirSync(path5.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs6.existsSync(dest)) {
+      if (fs7.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs6.readFileSync(dest), fs6.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs7.readFileSync(dest), fs7.readFileSync(f)) === 0;
         } catch {
         }
       }
-      const replacing = fs6.existsSync(dest) && !identical;
-      const rel = path4.relative(process.cwd(), dest), prevOf = (p) => p + ".prev";
+      const replacing = fs7.existsSync(dest) && !identical;
+      const rel = path5.relative(process.cwd(), dest), prevOf = (p) => p + ".prev";
       let spent = false, demoted = false;
       if (identical && follows === void 0) {
         const mark = diffedHash(dest);
-        if (mark !== null && fs6.existsSync(prevOf(dest)) && !fs6.existsSync(prevOf(dest) + DIFFED)) {
+        if (mark !== null && fs7.existsSync(prevOf(dest)) && !fs7.existsSync(prevOf(dest) + DIFFED)) {
           try {
-            fs6.writeFileSync(prevOf(dest) + DIFFED, mark + "\n");
+            fs7.writeFileSync(prevOf(dest) + DIFFED, mark + "\n");
             demoted = true;
           } catch {
           }
         }
-        fs6.rmSync(dest + DIFFED, { force: true });
+        fs7.rmSync(dest + DIFFED, { force: true });
       }
       if (replacing) {
         spent = follows === void 0 && isSpent(f, dest);
         if (follows !== void 0 ? refusedKeys.has(follows) : !force && !spent) {
           if (follows === void 0) {
             const unreadable = readJson(dest, anyJson);
-            const shared = path4.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
+            const shared = path5.basename(f) === MERGED_VARIABLES_FILE ? ` (every screen and design-system pull merges into ${MERGED_VARIABLES_FILE}, so a pull for another screen changes it too)` : "";
             console.error(!("doc" in unreadable) ? `design-diff: ${rel} ${unreadable.error} \u2014 there is nothing in it to protect, and no diff can use it: re-take it with --snapshot --force.` : diffedSince(f, dest) ? `design-diff: ${rel} was already diffed against an earlier export, and ${f} was re-pulled since${shared} \u2014 refusing to overwrite it. Run the diff now (its report lists the earlier sync's changes again), then snapshot again.` : `design-diff: ${rel} already exists, would change, and no diff has used it yet${shared} \u2014 refusing to overwrite it. Run the diff now, then snapshot again (--force replaces it without a diff, the old one is kept as .prev).`);
             refused++;
             refusedKeys.add(key);
@@ -1787,20 +2118,20 @@ function main(argv) {
         const keepPrev = follows === void 0;
         for (const [from, to] of [[dest, prevOf(dest)], [dest + ".assets.json", prevOf(dest + ".assets.json")]]) {
           try {
-            if (keepPrev && fs6.existsSync(from)) fs6.copyFileSync(from, to);
-            else if (!keepPrev) fs6.rmSync(to, { force: true });
+            if (keepPrev && fs7.existsSync(from)) fs7.copyFileSync(from, to);
+            else if (!keepPrev) fs7.rmSync(to, { force: true });
           } catch {
           }
         }
         try {
-          if (spent) fs6.copyFileSync(dest + DIFFED, prevOf(dest) + DIFFED);
-          else fs6.rmSync(prevOf(dest) + DIFFED, { force: true });
+          if (spent) fs7.copyFileSync(dest + DIFFED, prevOf(dest) + DIFFED);
+          else fs7.rmSync(prevOf(dest) + DIFFED, { force: true });
         } catch {
         }
       }
       if (!identical) {
-        fs6.copyFileSync(f, dest);
-        fs6.rmSync(dest + DIFFED, { force: true });
+        fs7.copyFileSync(f, dest);
+        fs7.rmSync(dest + DIFFED, { force: true });
       }
       let n = 0;
       try {
@@ -1808,11 +2139,11 @@ function main(argv) {
         if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs6.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs7.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path4.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path5.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : replacing ? " (replaced)" : ""}`);
       if (spent || demoted) console.log(`  the old snapshot (spent by the last diff) is kept as ${rel}.prev, never used as a baseline \u2014 if the last sync was stopped before its report was applied, diff against it: --against ${rel}.prev`);
     }
     return refused || missing ? 1 : 0;
