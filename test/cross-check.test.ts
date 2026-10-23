@@ -582,8 +582,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
 
-// ---------- cross-check never cites a hidden layer (hidden.js predicate in both walks) ----------
-// Real Jet Roles export (test/fixtures/livetest3/verify/). Both walks use the hidden.js predicate, not `walkWithBg`'s
+// ---------- cross-check never cites a hidden layer (visible-tree.ts walkVisible in both walks) ----------
+// Real Jet Roles export (test/fixtures/livetest3/verify/). Both walks are visible-tree.ts walkVisible, not the old walker's
 // `visible === false` (a flag the export never sets) or no skip at all, so
 // `token-name-collision` never cites the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
 // derived-mode contrast check never grades hidden text.
@@ -939,8 +939,10 @@ console.log("cross-check — failing token pairs in the RENDERED mode, one table
   });
   // the accent button: stroke token == its own fill token, and that fill stands out on the page (≥ 3:1)
   const button: NodeInput = { type: "INSTANCE", id: "9:1", name: "Button", tokens: { fills: "Accent", strokes: "Accent" }, strokes: { colors: ["#c6bfff"], weight: 1 }, fills: [{ type: "solid", color: "#c6bfff", tokens: { color: "Accent" } }] };
+  // a form in auto layout: its children sit beside each other, none on an earlier one (in a frame with no
+  // auto layout and no positions, visible-tree.ts stacks every later child on the earlier ones)
   const page = (label: string, id: string, children: NodeInput[]): CrossCheckScreen => ({
-    doc: screenExport([{ type: "FRAME", id, name: label, resolvedModes: { Sem: "Dark", Prim: "Mode 1" }, tokens: { fills: "Bg/Page" }, children }], { screen: label }),
+    doc: screenExport([{ type: "FRAME", id, name: label, resolvedModes: { Sem: "Dark", Prim: "Mode 1" }, tokens: { fills: "Bg/Page" }, layout: { display: "flex", flexDirection: "column" }, children }], { screen: label }),
     label,
   });
   // a soft field on a white card: its border passes against the CARD (3.4:1) but not against its own fill
@@ -1028,7 +1030,7 @@ console.log("cross-check — token pairs (unknown backdrops, the colour outside 
   ok("control: on an opaque token-bound card the pair is judged against the CARD", card.length === 1 && card[0]?.fg === "Static/Black" && card[0].bg === "Bg/Card");
   ok("a fully transparent raw fill paints nothing: the page token stays the backdrop",
     pairs(scr("Side menu", [frame("2:1", [solid("#f4f4f400")], [label("2:2", "Static/Black")])]))[0]?.bg === "Bg/Page");
-  // …and the derived-mode check walks the same backdrop (walkWithBg): Text/Muted fails on the page only in Light.
+  // …and the derived-mode check walks the same backdrop (visible-tree.ts): Text/Muted fails on the page only in Light.
   const derived = (kids: NodeInput[]) => crossCheck({ screens: [scr("Side menu", kids)], variables: vars }).findings.some((x) => x.code === "derived-mode-contrast");
   ok("derived-mode-contrast: a text on the page is judged in the undrawn Light mode", derived([label("2:2", "Text/Muted")]));
   ok("derived-mode-contrast: the same text on a gradient highlight is not (its backdrop is unknown)", !derived([frame("2:1", [grad], [label("2:2", "Text/Muted")])]));

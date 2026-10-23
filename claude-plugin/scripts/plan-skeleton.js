@@ -35,6 +35,153 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+
+// design-to-code/visible-tree.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+var WHITE = { r: 255, g: 255, b: 255, a: 1 };
+var NOTHING = { color: null, complex: false, token: null };
+var paintToken = (p) => {
+  const t = p.tokens && p.tokens.color;
+  const s = Array.isArray(t) ? t[0] : t;
+  return typeof s === "string" && s ? s : null;
+};
+function paintOver(base, n) {
+  if (n.type === "TEXT") return base;
+  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
+  let { color, complex, token } = base;
+  for (const f of fills) {
+    if (f.opacity === 0 || f.visible === false) continue;
+    if (f.type !== "solid") {
+      complex = true;
+      token = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
+    if (!c) {
+      token = tok;
+      continue;
+    }
+    if (c.a <= 0) continue;
+    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
+    if (c.a >= 1) {
+      complex = false;
+      token = tok;
+    } else token = null;
+  }
+  return { color, complex, token };
+}
+var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+function isIconInk(n) {
+  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
+  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
+}
+function overlaps(a, b) {
+  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
+function beneathOf(parent, kids, i) {
+  const child = kids[i];
+  if (!child) return [];
+  const stacks = !parent.layout || parent.layout.mode === "absolute";
+  if (!stacks && !child.absolute) return [];
+  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
+}
+function memo(fn) {
+  let cell = null;
+  return () => (cell ??= { v: fn() }).v;
+}
+function walk(root, fn, prune, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path11, ancestors, under, beneath) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    if (hidden && prune) return;
+    const backdrop = memo(() => beneath().reduce(paintOver, under()));
+    const parentFrame = ancestors[ancestors.length - 1];
+    const frame = { node, hidden, get backdrop() {
+      return backdrop();
+    }, get beneath() {
+      return beneath();
+    } };
+    fn(node, {
+      hidden,
+      parentHidden: !!parentHidden,
+      path: path11,
+      parent: parentFrame ? parentFrame.node : null,
+      depth: ancestors.length,
+      ancestors,
+      get backdrop() {
+        return backdrop();
+      },
+      get beneath() {
+        return beneath();
+      }
+    });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    if (!kids.length) return;
+    const inside = memo(() => paintOver(backdrop(), node));
+    const chain = [...ancestors, frame];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path11 ? path11 + " > " : "") + pathOf(kid, i), chain, inside, memo(() => beneathOf(node, kids, i)));
+  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
+}
+function walkWithHidden(root, fn, opts) {
+  walk(root, fn, false, opts);
+}
+
 // bridge/src/json-util.ts
 function nullProto() {
   return /* @__PURE__ */ Object.create(null);
@@ -235,64 +382,8 @@ function nameVerdict(row) {
   return { status: "unmatched", reason: why || `no catalog entry named ${JSON.stringify(row.name)} agrees with the instance` };
 }
 
-// design-to-code/hidden.ts
-var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
-var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-function walkWithHidden(root, fn, opts) {
-  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path11, parent, depth) {
-    if (!node || typeof node !== "object") return;
-    const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path11, parent, depth });
-    const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path11 ? path11 + " > " : "") + pathOf(kid, i), node, depth + 1);
-  })(root, false, root ? pathOf(root, 0) : "", null, 0);
-}
-
 // design-to-code/audit-gate.ts
 import path8 from "node:path";
-
-// bridge/src/hex-color.ts
-function formatHex(c) {
-  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-function clampOpacityPct(n) {
-  return Math.min(100, Math.max(0, n));
-}
-function composeAlpha(alpha, opacityPct) {
-  return alpha * (clampOpacityPct(opacityPct) / 100);
-}
 
 // design-to-code/finding-id.ts
 function findingIds(findings) {
@@ -1825,12 +1916,10 @@ var USAGE = [
   "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` \u2014 review them."
 ].join("\n");
 function walkNodes(doc, visit) {
-  const instAbove = /* @__PURE__ */ new Map();
   for (const r of screenRoots(doc)) {
     walkWithHidden(r, (n, c) => {
-      const above = c.parent ? c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null : null;
-      instAbove.set(n, above);
-      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
+      const above = c.ancestors.findLast((a) => a.node.type === "INSTANCE");
+      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above ? above.node.id || null : null });
     });
   }
 }

@@ -480,7 +480,7 @@ export interface IrNode extends Partial<TextFields> {
   type: IrNodeType;
   name: string;
   id: string;
-  /** The ONE visibility flag (hidden.ts): the designer switched this layer off. Descendants inherit it. */
+  /** The ONE visibility flag (visible-tree.ts): the designer switched this layer off. Descendants inherit it. */
   hidden?: true;
   children?: IrNode[];
 

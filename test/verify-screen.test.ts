@@ -616,7 +616,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // An assertion that THROWS on an older report shape is a failure of that assertion, not of the suite.
   const ok = (name: string, cond: boolean | undefined | (() => unknown)) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, !!v); };
 
-  // An INDEPENDENT hidden walk — the snippet from the prompt, not hidden.js — so the test does not
+  // An INDEPENDENT hidden walk — the snippet from the prompt, not visible-tree.ts — so the test does not
   // grade the code with its own predicate.
   const hiddenOf = (doc: ScreenExport) => { const h = new Set<string | undefined>(); (function w(n: { id?: string; hidden?: boolean; children?: ScreenExport["nodes"] }, p: boolean) { const x = p || !!n.hidden; if (x && n.id) h.add(n.id); for (const c of n.children || []) w(c, x); })({ children: doc.nodes }, false); return h; };
   const jrHidden = hiddenOf(jrDoc), gpHidden = hiddenOf(gpDoc);

@@ -40,7 +40,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { isHidden, hiddenSelf } from "./hidden.ts";
+import { hiddenSelf, paintedOver, walkVisible, walkWithHidden } from "./visible-tree.ts";
+import type { Backdrop, WalkContext, WalkFrame } from "./visible-tree.ts";
 import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
@@ -61,7 +62,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ComponentPropValues, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
+  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, ScreenAssetsDoc, ScreenDoc,
   ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable, JsonValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -125,67 +126,22 @@ function textOf(node: IrNode): string | null {
   if (!t || t === (node.name || "").trim()) return null;
   return t.length > 40 ? t.slice(0, 39) + "…" : t;
 }
-// An icon's paint, not a surface: an asset leaf (figma-plugin/src/assets.ts) that is a path (VECTOR,
-// BOOLEAN_OPERATION, LINE) or a flattened icon container (FRAME/INSTANCE/GROUP/COMPONENT), with no
-// image/gradient fill. RECTANGLE/ELLIPSE/STAR/POLYGON leaves are shapes and can sit under text.
-const INK_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
-function isIconInk(n: IrNode): boolean {
-  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
-  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
-}
-// Whether two page-space boxes intersect. Unknown when either lacks x/y (a flow child's box is only w/h —
-// serialize.ts writes x/y only where the parent does not lay the child out): then assume they do, which
-// is what the walk did before it read positions.
-function overlaps(a: Box | undefined, b: Box | undefined): boolean {
-  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-// What a layer sits on: its ancestors' solid fills composited top-down, each followed by the earlier siblings
-// stacked under the next level (`__beneath`). A gradient/image/video layer makes it `complex` until an opaque
-// solid covers it again; `bg` null = nothing painted (the callers assume a white page). `token`: the variable
-// bound to the topmost opaque solid, when nothing translucent or complex lies over it.
-const WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
-interface Backdrop { bg: Rgba | null; complex: boolean; token?: string }
-const paintToken = (p: Paint): string | undefined => { const t = p.tokens && p.tokens.color; return Array.isArray(t) ? t[0] : t; };
-function backdropOf(ancestors: readonly Ancestor[]): Backdrop {
-  let bg: Rgba | null = null, complex = false, token: string | undefined;
-  for (const a of ancestors) {
-    // The ancestor's own fills, then any earlier siblings stacked under the next level down.
-    const layers = [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])];
-    for (const f of layers) {
-      if (f.type === "solid") {
-        const c = parseHex(f.color);
-        if (!c) continue;
-        bg = bg ? over(c, bg) : (c.a >= 1 ? c : over(c, WHITE));
-        if (c.a >= 1) complex = false;
-        token = c.a >= 1 ? paintToken(f) : undefined;
-      } else if (f.type === "gradient" || f.type === "image" || f.type === "video") {
-        complex = true;
-        token = undefined;
-      }
-    }
-  }
-  return { bg, complex, ...ifDefined("token", token) };
-}
 // What makes an input instance read like a select/picker — a visible "Select …"/"Choose …"/"Pick …" prompt
 // (preferred: it is what a reader sees) or a visible chevron/caret/calendar layer. Null when neither.
 const PICKER_PROMPT = /^(select|choose|pick)\b/i;
 const PICKER_ICON = /chevron|arrow-?down|caret|angle-?down|calendar/i;
 function pickerCue(inst: IrNode): string | null {
-  let icon: string | null = null;
-  const visit = (n: IrNode): string | null => {
-    for (const c of Array.isArray(n.children) ? n.children : []) {
-      if (hiddenSelf(c)) continue;
-      const t = c.type === "TEXT" ? (c.text || "").replace(/\s+/g, " ").trim() : "";
-      if (t && PICKER_PROMPT.test(t)) return `"${t.length > 40 ? t.slice(0, 39) + "…" : t}"`;
-      if (icon === null && PICKER_ICON.test(c.name || "")) icon = `a '${c.name}' layer`;
-      const deeper = visit(c);
-      if (deeper) return deeper;
-    }
-    return null;
-  };
-  return visit(inst) ?? icon;
+  let prompt: string | null = null, icon: string | null = null;
+  walkVisible(inst, (c, ctx) => {
+    if (ctx.depth === 0 || prompt !== null) return;
+    const t = c.type === "TEXT" ? (c.text || "").replace(/\s+/g, " ").trim() : "";
+    if (t && PICKER_PROMPT.test(t)) prompt = `"${t.length > 40 ? t.slice(0, 39) + "…" : t}"`;
+    else if (icon === null && PICKER_ICON.test(c.name || "")) icon = `a '${c.name}' layer`;
+  });
+  return prompt ?? icon;
 }
+// The page a backdrop of nothing (`color` null) is assumed to be.
+const WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
 const CONTROL_WORD = /\b(button|btn|checkbox|check box|radio|switch|toggle|input|text ?field|textfield|textarea)\b/i;
 const cite = (node: IrNode): string => { const t = textOf(node); return `'${node.name}'${t ? ` ("${t}")` : ""}`; };
 const textExtra = (node: IrNode): { text?: string } => ifDefined("text", textOf(node) ?? undefined);
@@ -280,11 +236,6 @@ export interface AuditOptions {
   siblings?: (() => CrossCheckScreen[]) | null;
 }
 
-// What the walk carries about an ancestor: only what descendants read off it (`id`/`type`/`mainComponent`/`component`:
-// which instance a text or a stroked layer sits in).
-interface Ancestor { name: string; id?: string; type?: string; mainComponent?: MainComponentRef; component?: string; props?: ComponentPropValues; hidden?: boolean; fills?: Paint[]; __tappable: boolean; __beneath: Paint[] }
-// An earlier sibling that may paint under a later one: its fills, and its page-space box when known.
-interface Layer { fills: Paint[]; box?: Box }
 interface WalkCtx { label: string; rootBox?: Box }
 interface Here { label: string; path?: string }
 // `icon`: the instance exported as an asset (an SVG icon) — "search-normal" names an icon, not a search field.
@@ -327,7 +278,7 @@ interface AddFinding {
 interface RawColor { count: number; nodeId: string; nodeName: string; rgb: Rgba }
 interface Boundary { nodes: IrNode[]; here: Here; stroke: string; backdrop: string; ratio: number; assumed: boolean; strokeToken?: string; backdropToken?: string; hasFill: boolean }
 interface Picker { node: IrNode; here: Here; useKey: string; cue: string }
-interface InstanceText { node: IrNode; here: Here; inst: Ancestor }
+interface InstanceText { node: IrNode; here: Here; inst: IrNode }
 interface OpenState { node: IrNode; here: Here; cue: string; nodes: string[] }
 /** What every pass reads: the inputs and options, the findings, and what the walk collects. */
 interface AuditCtx {
@@ -477,17 +428,19 @@ function walkRoots(ac: AuditCtx): void {
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' — confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk(ac, root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
+    const ctx: WalkCtx = { label: root.label, ...ifDefined("rootBox", root.tree.box) };
+    walkWithHidden(root.tree, (node, w) => visit(ac, node, w, ctx));
   }
 }
 
-function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor[], ctx: WalkCtx): void {
+// One node of the walk (visible-tree.ts: hidden layers included, flagged; `w` carries the ancestor chain and the backdrop).
+function visit(ac: AuditCtx, node: IrNode, w: WalkContext, ctx: WalkCtx): void {
   const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
-  if (!node || typeof node !== "object") return;
+  const ancestors = w.ancestors.map((a) => a.node);
   const path = [...ancestors.map((a) => a.name), node.name].join(" > ");
   const here: Here = { label: ctx.label, path };
-  // hidden.ts's one predicate: the node or any ancestor carries `hidden: true`.
-  const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
+  // visible-tree.ts's one predicate: the node or any ancestor carries `hidden: true`.
+  const hiddenBranch = w.hidden;
 
   // Designer intent the agent must read, collected verbatim.
   if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
@@ -525,8 +478,6 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
   // emitter below see visible layers only.
   if (hiddenBranch) {
     if (node.id) hiddenIds.add(node.id);
-    const self: Ancestor = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
-    for (const child of Array.isArray(node.children) ? node.children : []) walk(ac, child, [...ancestors, self], ctx);
     return;
   }
 
@@ -638,7 +589,7 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
       if (!bound) noteRaw(ac, c, node);
     }
     // a LINE is a divider, not a control's boundary (cross-check's token-pair table skips it too)
-    if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(ac, node, ancestors, here);
+    if (node.type !== "TEXT" && node.type !== "LINE") boundaryCheck(ac, node, w, here);
   }
   if (node.type === "TEXT") {
     const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
@@ -651,7 +602,7 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
         if (!cBound) noteRaw(ac, r.font.color, node);
       }
     }
-    if (!hiddenBranch) textChecks(ac, node, ancestors, here);
+    if (!hiddenBranch) textChecks(ac, node, w.backdrop, here);
     // A text a TEXT property drives (`propRefs.characters`) is never reported as a `characters` override,
     // so only the others can be judged; an instance whose override list was capped says nothing either way.
     const inst = [...ancestors].reverse().find((a) => a.type === "INSTANCE");
@@ -713,31 +664,11 @@ function walk(ac: AuditCtx, node: IrNode | null | undefined, ancestors: Ancestor
 
   // ---- touch targets
   const tappable = !hiddenBranch && isTappable(node);
-  if (tappable && node.box && !ancestors.some((a) => a.__tappable)) {
+  // (every ancestor of a visible node is visible, so a tappable ancestor is one isTappable says so of)
+  if (tappable && node.box && !ancestors.some(isTappable)) {
     const min = TOUCH_MIN[platform];
     if (node.box.w < min || node.box.h < min) {
       add("warning", "small-touch-target", `'${node.name}' is ${node.box.w}×${node.box.h} — below the ${min}×${min} ${platform} minimum; expand the hit area (padding/hitSlop/contentShape) even if the visual stays small`, node, here, { size: { w: node.box.w, h: node.box.h }, min });
-    }
-  }
-
-  if (Array.isArray(node.children)) {
-    // In a parent that doesn't flow its children (no auto layout), earlier siblings paint BENEATH
-    // later ones — a caption laid over a photo gets its backdrop from a sibling, not an ancestor.
-    const stacks = !node.layout || node.layout.mode === "absolute";
-    const earlier: Layer[] = [];
-    // Only what descendants read off an ancestor. The walk is synchronous and nothing keeps
-    // `ancestors`, so `self` is reused — `__beneath` is set per child before that child is walked.
-    const self: Ancestor = { name: node.name, id: node.id, type: node.type, ...ifDefined("mainComponent", node.mainComponent), ...ifDefined("component", node.component), ...ifDefined("props", node.props), ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
-    const chain = [...ancestors, self];
-    for (const child of node.children) {
-      self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
-      walk(ac, child, chain, ctx);
-      // A TEXT sibling's `fills` are its GLYPH colour and an icon's are its ink — neither paints a
-      // backdrop. Counting them would make the 2nd and 3rd of three stacked white header labels "white on white, 1:1". A
-      // SHAPE the plugin also exports as an asset (an ELLIPSE avatar disc, a photo RECTANGLE) still does.
-      if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
-        earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
-      }
     }
   }
 }
@@ -759,7 +690,7 @@ function noteRaw(ac: AuditCtx, hex: unknown, node: IrNode): void {
   rawColors.set(h, e);
 }
 
-function textChecks(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Here): void {
+function textChecks(ac: AuditCtx, node: IrNode, backdrop: Backdrop, here: Here): void {
   const { add } = ac;
   const font: FontSpec = node.font || {};
   // Fixed text box: no autoResize means Figma's "fixed size" — it will clip once text grows
@@ -767,10 +698,10 @@ function textChecks(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Her
   if (!node.autoResize && !node.truncate && !node.maxLines) {
     add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule — it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
   }
-  // Contrast against the composited ancestor background.
+  // Contrast against what it sits on (visible-tree.ts: the ancestors and the siblings beneath, composited).
   const fg = parseHex(font.color);
   if (!fg) return;
-  const { bg, complex } = backdropOf(ancestors);
+  const { color: bg, complex } = backdrop;
   const size = typeof font.size === "number" ? font.size : null;
   const bold = (font.weightValue || 0) >= 700 || /bold|black|heavy/i.test(font.weight || "");
   const large = size != null && (size >= 24 || (size >= 18.66 && bold));
@@ -791,38 +722,42 @@ function textChecks(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Her
 // outermost layer in that window — kits put the fill on the instance and the border on an inner frame, and the
 // control's own fill is never the adjacent colour. The fills from that layer down to the stroked one reaching 3:1
 // against the backdrop already mark the boundary (no finding); visible text inside does not. A disabled variant
-// is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only);
+// is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only),
+// nor one the control paints inside and leaves uncovered (visible-tree.ts paintedOver, shared with cross-check);
 // a fully transparent stroke paints nothing (no border to measure).
-function boundaryCheck(ac: AuditCtx, node: IrNode, ancestors: Ancestor[], here: Here): void {
+function boundaryCheck(ac: AuditCtx, node: IrNode, w: WalkContext, here: Here): void {
   const { boundaries } = ac;
   const strokes = node.strokes;
   const hex = strokes && Array.isArray(strokes.colors) ? strokes.colors.find((c) => { const x = parseHex(c); return !!x && x.a > 0; }) : undefined;
   const sc = parseHex(hex);
-  const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((w) => w || 0)) : 0;
+  const weight = strokes ? Math.max(strokes.weight || 0, ...Object.values(strokes.weights || {}).map((x) => x || 0)) : 0;
   if (!sc || !(weight > 0) || hex === undefined) return;
-  const near: Array<IrNode | Ancestor> = [node, ...ancestors.slice(-3).reverse()];
-  const outer = outermostControl(near);
-  if (outer < 0 || near.some((a) => isDisabledLayer(a))) return;
-  // near[outer] is ancestors[ancestors.length - outer] (outer 0 = the stroked layer itself)
-  const outside = ancestors.slice(0, ancestors.length - outer), inside = ancestors.slice(ancestors.length - outer);
-  const back = backdropOf(outside);
+  // the stroked layer and its ancestors, nearest first, each with what the walk knows of it
+  const self: WalkFrame = { node, hidden: w.hidden, backdrop: w.backdrop, beneath: w.beneath };
+  const frames = [...w.ancestors, self];
+  const near = frames.slice(-4).reverse();
+  const outer = outermostControl(near.map((f) => f.node));
+  if (outer < 0 || near.some((f) => isDisabledLayer(f.node))) return;
+  // The backdrop is what the outermost layer sits on; from it down to the stroked layer, each layer's own
+  // fills and the siblings stacked under the next one (the first layer's own beneath is outside it).
+  const inside = frames.slice(frames.length - 1 - outer);
+  const back = inside[0]?.backdrop ?? w.backdrop;
   if (back.complex) return;
-  const base = back.bg || WHITE;
+  const base = back.color || WHITE;
   const ratio = contrastRatio(over(sc, base), base);
   if (ratio >= 3) return;
-  let inner: Rgba | null = null;
-  for (const f of [...inside.flatMap((a) => [...(Array.isArray(a.fills) ? a.fills : []), ...(a.__beneath || [])]), ...(Array.isArray(node.fills) ? node.fills : [])]) {
-    const c = f.type === "solid" ? parseHex(f.color) : null;
-    if (c) inner = over(c, inner || base);
-  }
+  // a gradient / image left uncovered in there makes the rescue unknown: not judged (cross-check's rule too)
+  const painted = paintedOver(base, inside.flatMap((f, i) => [...(i > 0 ? f.beneath : []), f.node]));
+  if (painted && painted.complex) return;
+  const inner = painted && painted.color;
   if (inner && contrastRatio(inner, base) >= 3) return;
-  const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.bg;
+  const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.color;
   const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
   const row = boundaries.get(k);
   if (row) { row.nodes.push(node); return; }
   const st = node.tokens && node.tokens.strokes;
   const strokeToken = Array.isArray(st) ? st[0] : st;
-  boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? undefined : back.token) });
+  boundaries.set(k, { nodes: [node], here, stroke, backdrop, ratio, assumed, hasFill: !!inner, ...ifDefined("strokeToken", strokeToken), ...ifDefined("backdropToken", assumed ? undefined : back.token ?? undefined) });
 }
 
 // ---- near-duplicate raw colors (likely one token typed twice)
@@ -891,7 +826,7 @@ function nonTextContrast(ac: AuditCtx): void {
 // every overridden copy (a default that equals one is a real value). Same-screen groups only.
 function defaultCopyInInstances(ac: AuditCtx): string[] {
   const { instanceTexts, charOverridden, add } = ac;
-  const copyGroups = new Map<string, { inst: Ancestor; overridden: Array<{ node: IrNode; here: Here }>; plain: Array<{ node: IrNode; here: Here }> }>();
+  const copyGroups = new Map<string, { inst: IrNode; overridden: Array<{ node: IrNode; here: Here }>; plain: Array<{ node: IrNode; here: Here }> }>();
   for (const t of instanceTexts) {
     const mc: Partial<MainComponentRef> = t.inst.mainComponent || {};
     const k = `${t.here.label}|${mc.key ?? mc.setKey ?? t.inst.name}|${t.node.id.split(";").pop()}`;

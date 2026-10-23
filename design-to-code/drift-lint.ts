@@ -15,7 +15,7 @@
 import { TYPE_TO_KIND } from "./kinds.ts"; // shared vocab — kept in sync with map-bootstrap
 import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition of the freshness stamp
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
-import { walkWithHidden } from "./hidden.ts";
+import { walkWithHidden } from "./visible-tree.ts";
 import { readDocFile, readJsonFile, readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { isComponentsCatalog } from "./doc-guards.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
@@ -281,7 +281,7 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
   const catKeys = new Set(((catalog && catalog.components) || []).map((c) => c.key).filter((k): k is string => !!k));
 
   // Counted over EVERY instance in the export — and each set also records how many of its
-  // instances sit on layers the designer switched off (hidden.ts's predicate), so the headline can say
+  // instances sit on layers the designer switched off (visible-tree.ts's predicate), so the headline can say
   // how many of "the components on this screen" will never be built at all (a real pull: 45 of 87
   // instances were hidden).
   const used = new Map<string, UsedSet>(); // set key -> { setName, instances, hiddenInstances }

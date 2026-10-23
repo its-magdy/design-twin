@@ -26,7 +26,7 @@
 //                 suggested). Every visible anchor is a suggestion or under one. Not part of counts; refreshed
 //                 on every merge.
 //
-// Hidden predicate — the ONE rule (design-to-code/hidden.ts, shared with verify-screen/audit/drift-lint
+// Hidden predicate — the ONE rule (design-to-code/visible-tree.ts, shared with verify-screen/audit/drift-lint
 // and, through visibility() below, verify-build.ts): a node is hidden when it or any ancestor carries
 // `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
 // name in this export (`"visible": "Show Breadcrumb"`).
@@ -40,7 +40,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { matchByNameAndSignature, nameVerdict, parseVariant } from "./component-match.ts";
-import { walkWithHidden } from "./hidden.ts";
+import { walkWithHidden } from "./visible-tree.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
@@ -99,16 +99,14 @@ const USAGE = [
 /** What walkNodes hands its visitor beside the node. */
 export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoot: boolean; insideInstance: string | null }
 
-// Walk every node with its ancestry and hidden state, through the ONE shared predicate (hidden.ts:
+// Walk every node with its ancestry and hidden state, through the ONE shared predicate (visible-tree.ts:
 // the node or an ancestor carries `hidden`; never `visible`). `insideInstance` is the nearest INSTANCE
 // above the node — its internals belong to that component.
 function walkNodes(doc: ScreenDoc | null | undefined, visit: (n: IrNode, ctx: NodeContext) => void): void {
-  const instAbove = new Map<IrNode, string | null>();
   for (const r of screenRoots(doc)) {
     walkWithHidden(r, (n, c) => {
-      const above = c.parent ? (c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null) : null;
-      instAbove.set(n, above);
-      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
+      const above = c.ancestors.findLast((a) => a.node.type === "INSTANCE");
+      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above ? above.node.id || null : null });
     });
   }
 }

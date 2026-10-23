@@ -250,7 +250,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
   for (const [file, label] of [["positions___7314_87192.json", "Jet Roles"], ["Studio_Configurations__1359_21337.json", "Guided Policies"]] satisfies [string, string][]) {
     const doc = readFixture(path.join(FX, file), isScreenExport);
-    // independent walk — the prompt's own snippet, not hidden.js
+    // independent walk — the prompt's own snippet, not visible-tree.ts
     const hidden = new Set<string | undefined>();
     (function w(n: { id?: string; hidden?: boolean; children?: IrNode[] }, h: boolean) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: doc.nodes }, false);
     const res = audit([{ doc, label: file.replace(/\.json$/, "") }], { platform: "web" });
