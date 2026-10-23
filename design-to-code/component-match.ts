@@ -24,6 +24,7 @@ import type {
   CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, NameVerdict, ProposedMatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { screenRoots } from "./export-shape.ts";
+import { walkVisible } from "./visible-tree.ts";
 import { isJsonObject } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -32,10 +33,7 @@ import { getOrInit } from "./map-util.ts";
 // skipped with it).
 function visibleInstances(doc: ScreenDoc | null | undefined, label: string): VisibleInstance[] {
   const out: VisibleInstance[] = [];
-  const roots = screenRoots(doc); // the three shapes the export writes (export-shape.ts)
-  const walk = (n: IrNode): void => {
-    // `hidden` is the export's ONLY visibility flag (serialize.ts writes it; there is no `visible`).
-    if (!n || typeof n !== "object" || n.hidden === true) return;
+  const visit = (n: IrNode): void => {
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
       out.push({
@@ -50,9 +48,9 @@ function visibleInstances(doc: ScreenDoc | null | undefined, label: string): Vis
         props: n.props && typeof n.props === "object" ? n.props : {},
       });
     }
-    for (const c of n.children || []) walk(c);
   };
-  for (const r of roots) walk(r);
+  // visible-tree.ts: a layer with `hidden` (the export's ONLY visibility flag) and its subtree are never visited.
+  for (const r of screenRoots(doc)) walkVisible(r, visit); // the three shapes the export writes (export-shape.ts)
   return out;
 }
 

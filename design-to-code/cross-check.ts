@@ -35,9 +35,9 @@ import { findingIds } from "./finding-id.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
-// hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
-// hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
-import { hiddenSelf } from "./hidden.ts";
+// Every walk here is visible-tree.ts's walkVisible: a layer with `hidden: true` and its whole subtree are skipped,
+// and the contrast checks read the backdrop it works out (the same one the audit reads).
+import { walkVisible } from "./visible-tree.ts";
 import { outermostControl, isDisabledLayer } from "./control-kind.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
@@ -100,16 +100,6 @@ interface Push {
   (severity: "blocker", code: BlockerCode & CrossCheckFindingCode, message: string, extra?: PushExtra): void;
   (severity: "warning" | "info", code: CrossCheckFindingCode, message: string, extra?: PushExtra): void;
 }
-
-// Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
-// a token the build has to resolve (the same rule as audit.ts and verify-expect.ts).
-function walk(node: IrNode | null | undefined, fn: (n: IrNode) => void): void {
-  if (!node || typeof node !== "object") return;
-  if (hiddenSelf(node)) return;
-  fn(node);
-  for (const c of node.children || []) walk(c, fn);
-}
-
 
 // Names are compared case- and punctuation-insensitively ONLY to find near-misses worth reporting.
 // Nothing is ever auto-bound on a normalised name — `Medium/14 Medium` vs `Medium/14 medium`
@@ -252,7 +242,9 @@ function screenUsage(screens: CrossCheckScreen[]): ScreenUsage {
           getOrInit(resolvedModes, coll, () => new Set<string>()).add(mode);
         }
       }
-      walk(root, (n) => {
+      // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
+      // a token the build has to resolve (the same rule as audit.ts and verify-expect.ts).
+      walkVisible(root, (n) => {
         for (const [field, name] of Object.entries(n.tokens || {})) {
           if (typeof name !== "string") continue;
           getOrInit(usedTokenNames, name, () => []).push({ screen: label, nodeId: n.id, field });
@@ -1161,9 +1153,8 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
     for (const m of (c && c.modes) || []) modes.add(m);
   }
   // Skip the modes the export was actually RENDERED in. Those already have a contrast check that is
-  // strictly better — audit.ts walks the real composited backgrounds, where this one can only see the
-  // nearest token-bound ancestor and will call a header sitting on an absolutely-positioned child
-  // white-on-white. This check exists for the modes NOBODY HAS SEEN, and saying so is most of its value.
+  // strictly better — audit.ts measures the real composited colours, where this one can only judge a
+  // backdrop some token names. This check exists for the modes NOBODY HAS SEEN, and saying so is most of its value.
   const rendered = new Set<string>();
   for (const set of (resolvedModes || new Map<string, Set<string>>()).values()) for (const m of set) rendered.add(m);
   for (const m of rendered) modes.delete(m);
@@ -1173,7 +1164,8 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   const pairs = new Map<string, { fg: string; bg: string; nodes: string[]; sample: string }>(); // "fg|bg" -> { fg, bg, nodes:[], sample }
   for (const s of screens) {
     for (const root of screenRoots(s.doc)) {
-      walkWithBg(root, null, (n, bgToken) => {
+      walkVisible(root, (n, ctx) => {
+        const bgToken = ctx.backdrop.token;
         if (n.type !== "TEXT" || !bgToken) return;
         const fg = (n.tokens && (n.tokens.fills || n.tokens.textRangeFills)) ||
           ((n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
@@ -1224,39 +1216,6 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   }
 }
 
-// Walk carrying the nearest ancestor background TOKEN down the tree — a text node's contrast is
-// against whatever surface it sits on, which is virtually never its own parent's own fill.
-function walkWithBg(node: IrNode | null | undefined, bgToken: string | null, fn: (n: IrNode, bg: string | null) => void): void {
-  if (!node || typeof node !== "object") return;
-  // Was `node.visible === false`, which the export never uses — so every hidden layer's text was
-  // contrast-checked. `hidden` (and, by not descending, its ancestry) is the flag.
-  if (hiddenSelf(node)) return;
-  const bg = backdropTokenAfter(node, bgToken);
-  fn(node, bg);
-  for (const c of node.children || []) walkWithBg(c, bg, fn);
-}
-// The backdrop TOKEN a node leaves for its subtree. A token-bound opaque solid fill names it; anything
-// else the node paints — a gradient / image / video / pattern / shader, a raw solid, a translucent fill — leaves a
-// colour no token names, so the backdrop is UNKNOWN (null: no pair is judged under it; the audit's contrast-manual /
-// low-contrast measure what renders). No fill, or a fully transparent one, leaves it as it was; a TEXT's fill is its
-// glyph colour. A node-level `tokens.fills` with no `fills[]` (older exports, hand-written inputs) still names it.
-function backdropTokenAfter(n: IrNode, above: string | null): string | null {
-  if (n.type === "TEXT") return above;
-  const fills = (n.fills || []).filter(Boolean);
-  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
-  if (!fills.length) return nodeTok ?? above;
-  let cur = above;
-  for (const f of fills) {
-    if (f.opacity === 0) continue;
-    if (f.type !== "solid") { cur = null; continue; }
-    const c = parseHex(f.color);
-    if (c && c.a <= 0) continue;
-    const t = f.tokens && f.tokens.color;
-    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
-    cur = tok && (!c || c.a >= 1) ? tok : null;
-  }
-  return cur;
-}
 // The colour token a node's fill is bound to (the node-level binding, else the first bound fill paint).
 function fillToken(n: IrNode): string | null {
   const own = (n.tokens && n.tokens.fills) || ((n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
@@ -1309,7 +1268,7 @@ function mixedModeBindings(screens: CrossCheckScreen[], variables: TokensDoc | n
       const rm = root.resolvedModes;
       if (!rm) continue;
       const use = new Map<string, ModeUse>();
-      walk(root, (n) => {
+      walkVisible(root, (n) => {
         for (const name of colourBindings(n)) {
           const v = defs.get(name);
           if (!v || v.type !== "COLOR") continue;
@@ -1375,7 +1334,8 @@ function mixedModeBindings(screens: CrossCheckScreen[], variables: TokensDoc | n
 //     against the background ABOVE the control's outermost layer — the colour outside the control, never its
 //     own fill, even when the fill is on the instance and the border on an inner frame — at 3:1; skipped when
 //     what the control paints inside already contrasts 3:1 with that background (the fill draws the boundary).
-// The background is known only while every fill between it and the node is a token-bound opaque solid: a
+// The background is visible-tree.ts's backdrop — the audit's: the ancestors and the earlier siblings stacked under
+// the node. It is known only while every fill between it and the node is a token-bound opaque solid: a
 // gradient / image / raw or translucent fill in between makes it unknown and the pair is not judged (the
 // audit's contrast-manual / low-contrast cover it). Disabled variants (control-kind.ts isDisabledLayer, and
 // everything inside them) are exempt under both SCs. LINE nodes (dividers) and transparent strokes are not checked.
@@ -1439,29 +1399,31 @@ function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | nu
         if (!row.screens.includes(label)) row.screens.push(label);
         if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
       };
-      // `above`: the backdrop token around n (null = unknown); `aboves[i]`: the one around ancestors[i].
-      const visit = (n: IrNode, above: string | null, disabled: boolean, ancestors: IrNode[], aboves: Array<string | null>): void => {
-        if (hiddenSelf(n)) return;
-        const off = disabled || isDisabledVariant(n);
-        const next = backdropTokenAfter(n, above);
-        if (!off && n.type === "TEXT") {
+      // visible-tree.ts: `ctx.backdrop.token` is the backdrop token around n (null = unknown), the ancestors' frames carry theirs.
+      walkVisible(root, (n, ctx) => {
+        if (isDisabledVariant(n) || ctx.ancestors.some((a) => isDisabledVariant(a.node))) return;
+        const above = ctx.backdrop.token;
+        if (n.type === "TEXT") {
           const fg = textToken(n);
           if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
-        } else if (!off && n.type !== "LINE") {
+        } else if (n.type !== "LINE") {
           const st = n.tokens && n.tokens.strokes;
           const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
           const colours = (n.strokes && n.strokes.colors) || [];
           const painted = !colours.length || colours.some((c) => { const x = parseHex(c); return !x || x.a > 0; });
-          // The colour outside the control is the backdrop above its OUTERMOST layer (the fill may sit on the
+          // The colour outside the control is the backdrop under its OUTERMOST layer (the fill may sit on the
           // instance and the border on an inner frame); the fills from that layer down to n may draw the boundary.
-          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
-          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const frames = [...ctx.ancestors, { node: n, hidden: false, backdrop: ctx.backdrop, beneath: ctx.beneath }];
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl(frames.slice(-4).reverse().map((f) => f.node)) : -1;
+          const inside = outer < 0 ? [] : frames.slice(frames.length - 1 - outer);
+          const outside = inside[0]?.backdrop.token ?? null;
           const bg = outside ? resolve(outside) : null;
           if (typeof st === "string" && outside && bg) {
-            // what the control paints inside, from its outermost layer down to n, over the backdrop — the rendered
-            // hex (the exported mode's value); a gradient / image in there leaves the rescue unknown: no row
+            // what the control paints inside, from its outermost layer down to n (and the siblings stacked under each
+            // inner layer), over the backdrop — the rendered hex (the exported mode's value); a gradient / image in
+            // there leaves the rescue unknown: no row
             let inner: Rgba | null = null, unknown = false;
-            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+            for (const l of inside.flatMap((f, i) => [...(i > 0 ? f.beneath : []), f.node])) {
               const fills = (l.fills || []).filter(Boolean);
               const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
               if (lt) inner = compositeOver(lt, inner || bg);
@@ -1476,10 +1438,7 @@ function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | nu
             if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
           }
         }
-        const chain = [...ancestors, n], chainAbove = [...aboves, above];
-        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
-      };
-      visit(root, null, false, [], []);
+      });
     }
   }
   if (!rows.size) return;

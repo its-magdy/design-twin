@@ -35,6 +35,158 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+function luminance(c) {
+  const ch = (v) => {
+    v /= 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
+}
+function contrastRatio(a, b) {
+  const la = luminance(a), lb = luminance(b);
+  const hi = Math.max(la, lb), lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// design-to-code/visible-tree.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+var WHITE = { r: 255, g: 255, b: 255, a: 1 };
+var NOTHING = { color: null, complex: false, token: null };
+var paintToken = (p) => {
+  const t = p.tokens && p.tokens.color;
+  const s = Array.isArray(t) ? t[0] : t;
+  return typeof s === "string" && s ? s : null;
+};
+function paintOver(base, n) {
+  if (n.type === "TEXT") return base;
+  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
+  let { color, complex, token } = base;
+  for (const f of fills) {
+    if (f.opacity === 0 || f.visible === false) continue;
+    if (f.type !== "solid") {
+      complex = true;
+      token = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
+    if (!c) {
+      token = tok;
+      continue;
+    }
+    if (c.a <= 0) continue;
+    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
+    if (c.a >= 1) {
+      complex = false;
+      token = tok;
+    } else token = null;
+  }
+  return { color, complex, token };
+}
+var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+function isIconInk(n) {
+  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
+  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
+}
+function overlaps(a, b) {
+  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
+function beneathOf(parent, kids, i) {
+  const child = kids[i];
+  if (!child) return [];
+  const stacks = !parent.layout || parent.layout.mode === "absolute";
+  if (!stacks && !child.absolute) return [];
+  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
+}
+function memo(fn) {
+  let cell = null;
+  return () => (cell ??= { v: fn() }).v;
+}
+function walk(root, fn, prune, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path6, ancestors, under, beneath) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    if (hidden && prune) return;
+    const backdrop = memo(() => beneath().reduce(paintOver, under()));
+    const parentFrame = ancestors[ancestors.length - 1];
+    const frame = { node, hidden, get backdrop() {
+      return backdrop();
+    }, get beneath() {
+      return beneath();
+    } };
+    fn(node, {
+      hidden,
+      parentHidden: !!parentHidden,
+      path: path6,
+      parent: parentFrame ? parentFrame.node : null,
+      depth: ancestors.length,
+      ancestors,
+      get backdrop() {
+        return backdrop();
+      },
+      get beneath() {
+        return beneath();
+      }
+    });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    if (!kids.length) return;
+    const inside = memo(() => paintOver(backdrop(), node));
+    const chain = [...ancestors, frame];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path6 ? path6 + " > " : "") + pathOf(kid, i), chain, inside, memo(() => beneathOf(node, kids, i)));
+  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
+}
+function walkVisible(root, fn, opts) {
+  walk(root, fn, true, opts);
+}
+
 // bridge/src/json-util.ts
 function nullProto() {
   return /* @__PURE__ */ Object.create(null);
@@ -64,9 +216,7 @@ function getOrInit(m, k, init) {
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
-  const roots = screenRoots(doc);
-  const walk2 = (n) => {
-    if (!n || typeof n !== "object" || n.hidden === true) return;
+  const visit = (n) => {
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
       out.push({
@@ -81,9 +231,8 @@ function visibleInstances(doc, label) {
         props: n.props && typeof n.props === "object" ? n.props : {}
       });
     }
-    for (const c of n.children || []) walk2(c);
   };
-  for (const r of roots) walk2(r);
+  for (const r of screenRoots(doc)) walkVisible(r, visit);
   return out;
 }
 function parseVariant(s) {
@@ -930,9 +1079,6 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/hidden.ts
-var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
-
 // design-to-code/control-kind.ts
 var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
 function controlKind(name) {
@@ -973,61 +1119,6 @@ function isDisabledLayer(layer) {
     if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
   }
   return false;
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-function clampOpacityPct(n) {
-  return Math.min(100, Math.max(0, n));
-}
-function composeAlpha(alpha, opacityPct) {
-  return alpha * (clampOpacityPct(opacityPct) / 100);
-}
-function compositeOver(fg, bg) {
-  return {
-    r: fg.r * fg.a + bg.r * (1 - fg.a),
-    g: fg.g * fg.a + bg.g * (1 - fg.a),
-    b: fg.b * fg.a + bg.b * (1 - fg.a),
-    a: 1
-  };
-}
-function luminance(c) {
-  const ch = (v) => {
-    v /= 255;
-    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-}
-function contrastRatio(a, b) {
-  const la = luminance(a), lb = luminance(b);
-  const hi = Math.max(la, lb), lo = Math.min(la, lb);
-  return (hi + 0.05) / (lo + 0.05);
 }
 
 // design-to-code/design-system-dir.ts
@@ -1192,12 +1283,6 @@ function variablesContext(screenFiles, varsFile, opts) {
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 var ABSURD_NUMBER = 1e4;
 var WRONG_CATALOG_PCT = 5;
-function walk(node, fn) {
-  if (!node || typeof node !== "object") return;
-  if (hiddenSelf(node)) return;
-  fn(node);
-  for (const c of node.children || []) walk(c, fn);
-}
 function crossCheck(input) {
   const screens = input.screens || [];
   const variables = input.variables || null;
@@ -1268,7 +1353,7 @@ function screenUsage(screens) {
           getOrInit(resolvedModes, coll, () => /* @__PURE__ */ new Set()).add(mode);
         }
       }
-      walk(root, (n) => {
+      walkVisible(root, (n) => {
         for (const [field, name] of Object.entries(n.tokens || {})) {
           if (typeof name !== "string") continue;
           getOrInit(usedTokenNames, name, () => []).push({ screen: label, nodeId: n.id, field });
@@ -1940,7 +2025,8 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const pairs = /* @__PURE__ */ new Map();
   for (const s of screens) {
     for (const root of screenRoots(s.doc)) {
-      walkWithBg(root, null, (n, bgToken) => {
+      walkVisible(root, (n, ctx) => {
+        const bgToken = ctx.backdrop.token;
         if (n.type !== "TEXT" || !bgToken) return;
         const fg = n.tokens && (n.tokens.fills || n.tokens.textRangeFills) || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
         if (!fg || typeof fg !== "string") return;
@@ -1975,33 +2061,6 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
       { mode, pairs: list, confirm: `Mode '${mode}' was never drawn and ${list.length} derived text/background pair(s) in it fail contrast \u2014 ship '${mode}' as derived, or will the designer supply it?` }
     );
   }
-}
-function walkWithBg(node, bgToken, fn) {
-  if (!node || typeof node !== "object") return;
-  if (hiddenSelf(node)) return;
-  const bg = backdropTokenAfter(node, bgToken);
-  fn(node, bg);
-  for (const c of node.children || []) walkWithBg(c, bg, fn);
-}
-function backdropTokenAfter(n, above) {
-  if (n.type === "TEXT") return above;
-  const fills = (n.fills || []).filter(Boolean);
-  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
-  if (!fills.length) return nodeTok ?? above;
-  let cur = above;
-  for (const f of fills) {
-    if (f.opacity === 0) continue;
-    if (f.type !== "solid") {
-      cur = null;
-      continue;
-    }
-    const c = parseHex(f.color);
-    if (c && c.a <= 0) continue;
-    const t = f.tokens && f.tokens.color;
-    const tok = typeof t === "string" && t ? t : fills.length === 1 ? nodeTok : null;
-    cur = tok && (!c || c.a >= 1) ? tok : null;
-  }
-  return cur;
 }
 function fillToken(n) {
   const own = n.tokens && n.tokens.fills || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
@@ -2039,7 +2098,7 @@ function mixedModeBindings(screens, variables, tokens, push) {
       const rm = root.resolvedModes;
       if (!rm) continue;
       const use = /* @__PURE__ */ new Map();
-      walk(root, (n) => {
+      walkVisible(root, (n) => {
         for (const name of colourBindings(n)) {
           const v = defs.get(name);
           if (!v || v.type !== "COLOR") continue;
@@ -2144,14 +2203,13 @@ function contrastRendered(screens, variables, tokens, push) {
         if (!row.screens.includes(label)) row.screens.push(label);
         if (row.nodes.length < 4 && !row.nodes.includes(nodeId)) row.nodes.push(nodeId);
       };
-      const visit = (n, above, disabled, ancestors, aboves) => {
-        if (hiddenSelf(n)) return;
-        const off = disabled || isDisabledVariant(n);
-        const next = backdropTokenAfter(n, above);
-        if (!off && n.type === "TEXT") {
+      walkVisible(root, (n, ctx) => {
+        if (isDisabledVariant(n) || ctx.ancestors.some((a) => isDisabledVariant(a.node))) return;
+        const above = ctx.backdrop.token;
+        if (n.type === "TEXT") {
           const fg = textToken(n);
           if (fg && above) check("text", fg, above, isLargeText(n) ? NON_TEXT_CONTRAST : MIN_CONTRAST, n.id);
-        } else if (!off && n.type !== "LINE") {
+        } else if (n.type !== "LINE") {
           const st = n.tokens && n.tokens.strokes;
           const w = n.strokes ? Math.max(n.strokes.weight || 0, ...Object.values(n.strokes.weights || {}).map((x) => x || 0)) : 0;
           const colours = n.strokes && n.strokes.colors || [];
@@ -2159,12 +2217,14 @@ function contrastRendered(screens, variables, tokens, push) {
             const x = parseHex(c);
             return !x || x.a > 0;
           });
-          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl([n, ...ancestors.slice(-3).reverse()]) : -1;
-          const outside = outer < 0 ? null : outer === 0 ? above : aboves[ancestors.length - outer] ?? null;
+          const frames = [...ctx.ancestors, { node: n, hidden: false, backdrop: ctx.backdrop, beneath: ctx.beneath }];
+          const outer = typeof st === "string" && st && w > 0 && painted ? outermostControl(frames.slice(-4).reverse().map((f) => f.node)) : -1;
+          const inside = outer < 0 ? [] : frames.slice(frames.length - 1 - outer);
+          const outside = inside[0]?.backdrop.token ?? null;
           const bg = outside ? resolve(outside) : null;
           if (typeof st === "string" && outside && bg) {
             let inner = null, unknown = false;
-            for (const l of [...ancestors.slice(ancestors.length - outer), n]) {
+            for (const l of inside.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node])) {
               const fills = (l.fills || []).filter(Boolean);
               const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
               if (lt) inner = compositeOver(lt, inner || bg);
@@ -2182,10 +2242,7 @@ function contrastRendered(screens, variables, tokens, push) {
             if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
           }
         }
-        const chain = [...ancestors, n], chainAbove = [...aboves, above];
-        for (const c of n.children || []) visit(c, next, off, chain, chainAbove);
-      };
-      visit(root, null, false, [], []);
+      });
     }
   }
   if (!rows.size) return;

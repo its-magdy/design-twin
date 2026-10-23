@@ -5,8 +5,8 @@
 // first frame. A library: the CLI (file reading, --out, the notes) is verify-screen.ts.
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { walkWithHidden } from "./hidden.ts";
-import type { WalkContext } from "./hidden.ts";
+import { walkWithHidden } from "./visible-tree.ts";
+import type { WalkContext } from "./visible-tree.ts";
 import { exportContentSha256 } from "./content-hash.ts";
 import { planInteractionsSha256 } from "./plan-waivers.ts";
 import { pngInfo } from "../bridge/src/png.ts";
@@ -32,7 +32,7 @@ import type { PadSide } from "./verify-shared.ts";
 // export does not define is OMITTED, never defaulted — a spec that invents `fontWeight: 400` because
 // the node didn't say produces exactly the confident-and-wrong comparison this file exists to stop.
 //
-// Only layers that RENDER get a row. The rule is hidden.ts's one predicate (`hidden: true` on the
+// Only layers that RENDER get a row. The rule is visible-tree.ts's one predicate (`hidden: true` on the
 // node or any ancestor — never `visible === false`, which the export does not use). Without it, a real
 // pull had 83 of 272 specs, 61 of 112 instances and 22 of 28 designed interactions for layers the
 // designer switched off, and a build that correctly omitted them was graded on them.
@@ -518,7 +518,7 @@ export interface ExpectOptions { index?: { layers: IndexRow[] } | null;
 
 // the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
 // by the visible NAME PATH from the instance root ("" = the root itself) → node id. A path that repeats inside the
-// instance maps to null (ambiguous). Hidden layers are skipped (hidden.ts: the flag is inherited).
+// instance maps to null (ambiguous). Hidden layers are skipped (visible-tree.ts: the flag is inherited).
 // Each path also carries a CONTENT signature, and an alias needs both to agree (seen in a live run): a selected
 // item moved between wrapper frames per screen, so one name path was unique in each export yet named "Orders" in
 // one and "Invoices" in the other. The signature is the subtree's visible TEXT (concatenated in tree order,

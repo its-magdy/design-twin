@@ -4,8 +4,9 @@
 // that module do not also pull in these guards.
 import fs from "node:fs";
 import path from "node:path";
-import type { ComponentsCatalog, IndexRow, IrNode, TextStylesDoc, TokensDoc } from "./types.ts";
+import type { ComponentsCatalog, IndexRow, TextStylesDoc, TokensDoc } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
+import { walkWithHidden } from "./visible-tree.ts";
 import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isPageIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
@@ -182,11 +183,10 @@ function readFrameTexts(file: string): FrameTexts | null {
   const doc = readJsonOrNull(file, isScreenDoc);
   if (!doc) return null;
   const all: string[] = [], shallow: string[] = [];
-  const walk = (n: IrNode, depth: number): void => {
-    if (n.type === "TEXT" && typeof n.text === "string" && n.text.trim()) { all.push(n.text); if (depth <= 6) shallow.push(n.text); }
-    for (const c of Array.isArray(n.children) ? n.children : []) walk(c, depth + 1);
-  };
-  for (const r of screenRoots(doc)) walk(r, 0);
+  // hidden layers too: a hidden empty-state sentence is still evidence the state was drawn (audit.ts reads them the same way)
+  for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
+    if (n.type === "TEXT" && typeof n.text === "string" && n.text.trim()) { all.push(n.text); if (c.depth <= 6) shallow.push(n.text); }
+  });
   return { all, shallow };
 }
 function findExportNeighbours(screenFile: string): ExportNeighbours | null {

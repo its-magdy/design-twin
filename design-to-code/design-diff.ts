@@ -48,6 +48,7 @@ import type {
 import { bag, isJsonObject } from "./types.ts";
 import { isLayerFile, isScreenExport, manifestOf, screenRoots } from "./export-shape.ts";
 import { readJsonFile } from "./catalog-input.ts";
+import { walkWithHidden } from "./visible-tree.ts";
 import { isComponentsCatalog, isStringRecord, isTokensDoc } from "./doc-guards.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
@@ -491,8 +492,8 @@ function hashAssetBytes(fileName: string, buf: Buffer | string): string {
 }
 function assetPaths(doc: ScreenDoc): string[] {
   const out = new Set<string>();
-  const walk = (n: IrNode): void => { if (!n || typeof n !== "object") return; if (typeof n.asset === "string") out.add(n.asset); for (const k of Array.isArray(n.children) ? n.children : []) walk(k); };
-  for (const r of screenRoots(doc)) walk(r);
+  // every layer's file, a hidden one's too: the diff compares what the export wrote, not what renders
+  for (const r of screenRoots(doc)) walkWithHidden(r, (n) => { if (typeof n.asset === "string") out.add(n.asset); });
   return [...out];
 }
 // Asset paths are relative to the export root (design/), which may be several directories above a page file.
