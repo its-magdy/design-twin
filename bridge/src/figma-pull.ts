@@ -66,6 +66,7 @@ import type { PlanOf, ReadCmd, ReadPlan, ReadRefusal, ReadScope } from "./read-p
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
 import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import { ALLOWED_PORTS } from "./ports.ts";
 import type { Route, Sent, Upstream } from "./route.ts";
 import { translate, VerbError, verbHelp, distance, dtwinPortWarning } from "./verbs.ts";
 // THE command registry (cli-commands.ts): every command's flag, family, read and verb spellings, the
@@ -215,8 +216,6 @@ Keep the connection open (daemon):
   dtwin --daemon-status  # is one running, and is the plugin connected?
   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
-  Not on Windows yet: there --serve / --stop refuse, nothing shares the bridge, and one MCP session or
-  dtwin command holds it at a time.
 
 The bridge token (auth for the plugin -> bridge handshake). Generated once on the first bridge
 start, saved to a per-user config file (0600), and reused forever after — so you paste it into the
@@ -682,10 +681,9 @@ const topLevelLayers = (r: ListPagesReply | ListChildrenReply): NodeSummary[] =>
 // out the plugin's reconnect (a retry timer walking three ports, slower still in a background window),
 // which measured 27 s against an export of under 3 s; naming the wait is what makes that visible, and `dtwin serve` is the fix.
 // `connectMs` is the own-bridge wait for the plugin (0 / ignored behind a daemon, which waits inside the request).
-// `platform`: where no daemon can run (daemon.ts daemonSupported) the hint names the wait, not `dtwin serve`.
 const CONNECT_HINT_MS = 5000;
 const secs = (ms: number) => (ms / 1000).toFixed(1) + "s";
-function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; writeMs: number; viaDaemon: boolean }, platform: NodeJS.Platform = process.platform): string[] {
+function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; writeMs: number; viaDaemon: boolean }): string[] {
   // Behind a daemon whose plugin is not connected yet, the daemon waits INSIDE the request, so that wait is
   // part of the export figure: the line says so instead of claiming there was no reconnect.
   const wait = t.viaDaemon ? "via the running daemon" : `waited ${secs(t.connectMs)} for the plugin to connect`;
@@ -693,7 +691,7 @@ function formatDone(t: { totalMs: number; connectMs: number; exportMs: number; w
   const lines = [`done in ${secs(t.totalMs)} — ${wait} · ${exp} ${secs(t.exportMs)} · write ${secs(t.writeMs)}`];
   if (!t.viaDaemon && t.connectMs >= CONNECT_HINT_MS) {
     lines.push("the wait was the plugin reconnecting to this fresh bridge (it retries every second, one port at a time, and slower in a background window)" +
-      (daemon.daemonSupported(platform) ? " — `dtwin serve` in another terminal keeps one bridge open, so the next command skips it." : "."));
+      " — `dtwin serve` in another terminal keeps one bridge open, so the next command skips it.");
   }
   return lines;
 }
@@ -727,7 +725,26 @@ function showToken(tokenFile: string | null): void {
   }
 }
 
-function rotateToken(): void {
+// A running daemon keeps the token it started with: its plugin connection, and on Windows the pipe it is
+// named and found by (daemon.ts winPipe). Replaced or deleted from under it, it would hold the port while no
+// later command could find it any more — each would then fail on the held port. So it is stopped FIRST,
+// while the old token still finds it. Not when an env token or token file is what the bridge actually uses:
+// the stored file changing then changes nothing for it (the env token as token-store reads it: trimmed).
+// Every allowed port, not just FIGMA_BRIDGE_PORT's: the saved token is shared by all three, so a daemon
+// another shell started on 8788 would be stranded the same way.
+async function stopDaemonForTokenChange(): Promise<void> {
+  if ((process.env.FIGMA_BRIDGE_TOKEN || "").trim() || process.env.FIGMA_BRIDGE_TOKEN_FILE) return;
+  for (const port of ALLOWED_PORTS) {
+    // Looked up first (status: creates nothing), so a token command never makes a socket directory.
+    if (!(await daemon.status(port).catch(() => null))) continue;
+    let stopped = false;
+    try { stopped = await daemon.stop(port); } catch { /* a refused socket location: no daemon of ours is there */ }
+    if (stopped) console.error(`[dtwin] stopped the running daemon on port ${port} first — it was using the old token. Start it again with \`dtwin serve\`.`);
+  }
+}
+
+async function rotateToken(): Promise<void> {
+  await stopDaemonForTokenChange();
   const had = tokenStore.readFrom(tokenStore.tokenPath());
   const token = tokenStore.generate();
   const file = tokenStore.write(token);
@@ -741,7 +758,8 @@ function rotateToken(): void {
   }
 }
 
-function forgetToken(): void {
+async function forgetToken(): Promise<void> {
+  await stopDaemonForTokenChange();
   const file = tokenStore.tokenPath();
   const removed = tokenStore.remove(file);
   console.error("[dtwin] " + (removed ? `deleted ${file}. The next bridge start mints and saves a new token.` : `nothing to delete — no token saved at ${file}.`));
@@ -764,14 +782,16 @@ async function daemonStatus(): Promise<void> {
   console.error("[dtwin] " + (st
     ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
       (st.idleMs ? `, idle ${daemon.humanMs(st.idleForMs ?? 0)}/${daemon.humanMs(st.idleMs)} before auto-shutdown.` : ", no idle shutdown.")
-    : daemon.daemonSupported() ? "no daemon is running — start one with --serve." : "no daemon is running: " + daemon.DAEMON_UNSUPPORTED));
+    : "no daemon is running — start one with --serve."));
 }
 
 async function serveDaemon(createBridge: typeof ServerCore.createBridge): Promise<void> {
   // The already-running probe FIRST: createBridge() binds the port, and with a daemon already up
   // that is an EADDRINUSE exit naming "another dtwin bridge" — the right answer is the daemon's own
   // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
-  await daemon.assertNoDaemon();
+  // No saved token yet (Windows, first run): nothing can be serving a pipe named from a token nobody saved,
+  // and createBridge() below saves the one it mints — serve() then names the pipe from it.
+  try { await daemon.assertNoDaemon(); } catch (e) { if (errMsg(e) !== daemon.NO_DAEMON_TOKEN) throw e; }
   const bridge = createBridge();
   const { sock } = await daemon.serve(servedBridge(bridge), { log: (m) => console.error("[dtwin] " + m) });
   console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
@@ -829,11 +849,8 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // Without `dtwin serve`, every pull opens a throwaway bridge and the plugin's
   // reconnect is what actually costs the time (measured 300s/908s vs 7.5-8.8s with a daemon warm).
   // Said up front, before anything is sent, not just diagnosed after the fact by `dtwin doctor`.
-  // Where no daemon can run (daemon.ts daemonSupported) the cost is still said, but not the fix it has none of.
   if (!d && isExportCmd) {
-    console.error(daemon.daemonSupported()
-      ? "[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection."
-      : "[dtwin] this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection.");
+    console.error("[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection.");
   }
   // The plugin sends a `queued` progress frame when this command waits behind another run in the
   // same file (a `start` frame when it begins — never worth a line). Say so once, so a silent wait is
@@ -863,7 +880,7 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
     bridge = b;
     console.error("[dtwin] listening on ws://localhost:" + b.port);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
-    if (daemon.daemonSupported()) console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
+    console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
     up = ownUpstream(b);
   }
   const route = createRoute(async () => up, { connectWaitMs, oneShot: true });

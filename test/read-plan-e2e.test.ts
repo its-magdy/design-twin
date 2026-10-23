@@ -26,12 +26,6 @@ const TOKEN = "read-plan-e2e-token";
 const ROOT = path.join(import.meta.dirname, "..");
 const MCP = path.join(ROOT, "bridge", "src", "figma-mcp.ts");
 
-if (!daemon.daemonSupported()) {
-  console.log("read-plan-e2e: no daemon socket on this platform — " + daemon.DAEMON_UNSUPPORTED);
-  check("skipped: the daemon socket this suite records through does not exist here", true);
-  report();
-}
-
 // ---------------------------------------------------------------- the recording daemon
 interface Rec { cmd: string; args: unknown; timeoutMs: number | undefined }
 let log: Rec[] = [];
@@ -67,7 +61,8 @@ const fake: DaemonBridge = {
   listClients: () => [client],
 };
 process.env.FIGMA_BRIDGE_PORT = String(PORT);
-const served = await daemon.serve(fake, { port: PORT, idleMin: 0, signals: false });
+// The token named, so on Windows the pipe is named from this suite's token and never the user's saved one.
+const served = await daemon.serve(fake, { port: PORT, idleMin: 0, signals: false, token: TOKEN });
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "read-plan-e2e-"));
 const env: Record<string, string> = {};

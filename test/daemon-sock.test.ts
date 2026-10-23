@@ -1,15 +1,19 @@
-// Where the daemon's socket lives (bridge/src/daemon.ts sockDir / sockPath). The socket answers
+// Where the daemon's socket lives (bridge/src/daemon.ts sockDir / sockPath). On POSIX the socket answers
 // without a token, so the directory holding it must be private to this user: created 0700, and an
-// existing one refused when it is a symlink, someone else's, or open to group/other.
+// existing one refused when it is a symlink, someone else's, or open to group/other. On Windows it is a pipe
+// named from the token, and the handshake (daemon-auth.ts) is the check — driven here end to end.
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import * as daemon from "../bridge/src/daemon.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
-import { checkDaemon } from "../bridge/src/doctor.ts";
+import type { Cmd, Commands } from "../bridge/src/commands.ts";
+import { checkDaemon, sharedTokenNote } from "../bridge/src/doctor.ts";
+import { ipcKey, pipeName, serverHandshake } from "../bridge/src/daemon-auth.ts";
 import { check, report } from "./assert.ts";
 import { dtwin, dtwinSync } from "./children.ts";
+import { malformed } from "./fixtures.ts";
 
 const uid = process.getuid?.();
 
@@ -17,72 +21,157 @@ const uid = process.getuid?.();
 // (<base>/b<n>/designtwin-<uid>/designtwin-<port>.sock), and macOS holds a socket path to 103 bytes
 // (daemon.ts MAX_SOCK_PATH_BYTES) — under its ~48-byte os.tmpdir() (/var/folders/…/T) that nesting is
 // ~105 bytes, which sockPath rightly refuses. So on POSIX the base is under /tmp (mkdtemp makes it 0700),
-// as in mcp-lifecycle; Windows has no /tmp (and no socket paths: daemonSupported).
+// as in mcp-lifecycle; Windows has no /tmp (and no socket paths: its daemon is a named pipe).
 const TMP_ROOT = process.platform === "win32" ? os.tmpdir() : fs.realpathSync.native("/tmp");
 
-// Where a daemon can run at all (daemonSupported, DAEMON_UNSUPPORTED). The platform is a parameter, so
-// these run on every OS: an injected "win32" refuses serve/stop with the reason before anything is made,
-// and reads every lookup as "no daemon" without looking — even with a live daemon at that location.
+// Windows: the daemon is a named pipe, named from the bridge token (daemon.ts winPipe, daemon-auth.ts pipeName).
+// The location is computed, so with an injected "win32" it is checked on every OS — and nothing is created
+// or looked at in the filesystem for it.
 {
-  const why = daemon.DAEMON_UNSUPPORTED;
-  check("daemonSupported: false on win32, true on darwin and linux",
-    !daemon.daemonSupported("win32") && daemon.daemonSupported("darwin") && daemon.daemonSupported("linux"));
-  check("…and it defaults to this process's platform", daemon.daemonSupported() === (process.platform !== "win32"));
-  check("the reason says what is unsupported (dtwin serve, sharing the bridge), where, and what to do instead",
-    /`dtwin serve`/.test(why) && /sharing one bridge between sessions/.test(why) && /not supported on Windows/.test(why)
-    && /one MCP session or dtwin command holds the bridge at a time/.test(why) && /close the other one/.test(why));
-
+  const T = "w".repeat(48);
   const base = fs.mkdtempSync(path.join(TMP_ROOT, "dtwin-u-"));
-  const rejectsWithWhy = async (p: Promise<unknown>): Promise<boolean> => { try { await p; return false; } catch (e) { return e instanceof Error && e.message === why; } };
-  // stop / assertNoDaemon on a fresh tmpdir: POSIX would create <tmpdir>/designtwin-<uid> first.
   const fresh = fs.mkdtempSync(path.join(base, "f-"));
-  const win = (tmpdir: string): daemon.SockPlace => ({ env: {}, tmpdir, platform: "win32" });
-  check("win32: stop() rejects with the reason", await rejectsWithWhy(daemon.stop(8790, win(fresh))));
-  check("win32: assertNoDaemon() (what `dtwin serve` asks first) rejects with the reason", await rejectsWithWhy(daemon.assertNoDaemon(8790, win(fresh))));
-  check("…and neither created anything", fs.readdirSync(fresh).length === 0);
-  let closes = 0;
-  const bridge: DaemonBridge = { port: 8790, isConnected: () => false, request: async () => { throw new Error("never asked: serve() refuses first"); }, close: () => { closes++; } };
-  check("win32: serve() rejects with the reason", await rejectsWithWhy(daemon.serve(bridge, { port: 8790, signals: false, crashHandlers: false, platform: "win32" })));
-  check("…without listening (no daemon answers for that port) and without touching the bridge",
-    (await daemon.connect(8790)) === null && closes === 0);
-  check("win32: sockProblem() and legacySock() are null", daemon.sockProblem(8790, win(fresh)) === null && daemon.legacySock(8790, win(fresh)) === null);
-  check("win32: doctor's daemon check is a note quoting the reason, not a failure and not a \"not checked\"",
-    (() => { const c = checkDaemon(null, 8790, null, why); return c.status === "warn" && c.detail === why && !/not checked/i.test(c.detail); })());
-
-  // A live daemon of ours at that location (POSIX only: a path socket): found with the real platform, not
-  // looked at under "win32". The location is a private XDG_RUNTIME_DIR (mkdtemp makes it 0700), which
-  // keeps the socket path inside sun_path.
-  if (uid !== undefined) {
-    const live = fs.mkdtempSync(path.join(base, "l"));
-    const place: daemon.SockPlace = { env: { XDG_RUNTIME_DIR: live }, tmpdir: live };
-    const sock = daemon.sockPath(8790, place);
-    const fake = net.createServer((c) => {
-      c.setEncoding("utf8");
-      c.on("data", daemon.framer(() => { c.write(JSON.stringify({ ok: true, result: { daemon: true, pid: 1, port: 8790 } }) + "\n"); }));
-    });
-    await new Promise<void>((r) => fake.listen(sock, () => r()));
-    check("fixture: a live daemon at the location is found on this platform", (await daemon.connect(8790, place)) !== null);
-    const errs: string[] = [];
-    const realError = console.error;
-    console.error = (...a: unknown[]) => { errs.push(a.map(String).join(" ")); };
-    let conn: unknown = "unset", st: unknown = "unset";
-    try {
-      conn = await daemon.connect(8790, { ...place, platform: "win32" });
-      st = await daemon.status(8790, { ...place, platform: "win32" });
-    } finally { console.error = realError; }
-    check("win32: connect() and status() are null with that daemon live — no probe, and nothing on stderr", conn === null && st === null && errs.length === 0);
-    await new Promise<void>((r) => fake.close(() => r()));
-  }
-
-  // End to end on Windows: `dtwin doctor` reports the daemon line as unsupported, with the reason.
-  if (process.platform === "win32") {
-    const doc = dtwinSync(["doctor", "--json", "--wait", "0"],
-      { env: { ...process.env, FIGMA_BRIDGE_TOKEN: "s".repeat(40), FIGMA_BRIDGE_PORT: "8789" }, cwd: fresh });
-    let daemonCheck: { status?: string; detail?: string } | undefined;
-    try { daemonCheck = (JSON.parse(doc.stdout) as { checks: { id: string; status: string; detail: string }[] }).checks.find((x) => x.id === "daemon"); } catch { /* checked below */ }
-    check("doctor --json on Windows: the daemon check is a note quoting the reason", daemonCheck?.status === "warn" && daemonCheck.detail === why);
-  }
+  const win = (token: string | null = T, env: NodeJS.ProcessEnv = {}): daemon.SockPlace => ({ env, tmpdir: fresh, platform: "win32", token });
+  check("win32: sockPath is the pipe named from the token and the port", daemon.sockPath(8790, win()) === pipeName(T, 8790) && /^\\\\\.\\pipe\\designtwin-8790-[0-9a-f]{32}$/.test(daemon.sockPath(8790, win())));
+  check("…FIGMA_BRIDGE_PORT names the port when none is passed", daemon.sockPath(undefined, win(T, { FIGMA_BRIDGE_PORT: "8788" })) === pipeName(T, 8788));
+  check("…another token is another pipe", daemon.sockPath(8790, win("v".repeat(48))) !== daemon.sockPath(8790, win()));
+  check("…and nothing was created for it", fs.readdirSync(fresh).length === 0);
+  const throws = (fn: () => unknown, re: RegExp): boolean => { try { fn(); return false; } catch (e) { return e instanceof Error && re.test(e.message); } };
+  check("win32 with no saved token: sockPath refuses, saying a bridge has to save one first",
+    throws(() => daemon.sockPath(8790, win(null)), /no bridge token is saved yet.*start a bridge once/));
+  check("…assertNoDaemon() (what `dtwin serve` asks first) refuses the same way",
+    await (async () => { try { await daemon.assertNoDaemon(8790, win(null)); return false; } catch (e) { return e instanceof Error && e.message === daemon.NO_DAEMON_TOKEN; } })());
+  check("…stop() is false — no daemon of ours could be named — not a throw", (await daemon.stop(8790, win(null))) === false);
+  check("…connect() and status() are null", (await daemon.connect(8790, win(null))) === null && (await daemon.status(8790, win(null))) === null);
+  check("win32: sockProblem() and legacySock() are null (a pipe has no location to refuse, and no earlier build served one)",
+    daemon.sockProblem(8790, win()) === null && daemon.legacySock(8790, win()) === null);
+  check("daemonToken: a place's own token wins, and an explicit null stays null",
+    daemon.daemonToken({ token: T }) === T && daemon.daemonToken({ token: null }) === null);
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+// The handshake, end to end through a served daemon (in-process). `handshake: true` makes POSIX take the exact
+// path win32 takes by default, over this platform's own socket — on Windows CI this IS the pipe. A fixed token
+// per place, so the suite never reads (or mints) the real user's.
+{
+  const T = "h".repeat(48), OTHER = "o".repeat(48);
+  const PORT = 8796, SQUAT_PORT = 8797;
+  const P: daemon.SockPlace = { handshake: true, token: T };
+  const calls: string[] = [];
+  let closed = 0;
+  const bridge: DaemonBridge = {
+    port: PORT, isConnected: () => true, close: () => { closed++; },
+    // Every command is answered as ping is: the only one this block sends.
+    request: async <C extends Cmd>(cmd: C) => { calls.push(cmd); return { reply: malformed<Commands[C]["reply"]>({ pong: true, page: "P", file: "f" }), client: null }; },
+  };
+  const h = await daemon.serve(bridge, { port: PORT, signals: false, crashHandlers: false, handshake: true, token: T });
+  check("handshake: the daemon serves on this platform's address for the port", h.sock === daemon.sockPath(PORT, P));
+  const conn = await daemon.connect(PORT, P);
+  check("…a client holding the token finds it", conn !== null);
+  check("…and a request round-trips through it", conn !== null && (await conn.request({ cmd: "ping", timeoutMs: 5000 }, 5000)).pong === true && calls.join() === "ping");
+  check("…so does __status", (await daemon.status(PORT, P))?.daemon === true);
+  const framesBefore = h.activity().frames;
+  check("a client with a DIFFERENT token finds no daemon there", (await daemon.connect(PORT, { handshake: true, token: OTHER })) === null);
+  check("a client that does not handshake (it sends __ping first) finds none either", (await daemon.connect(PORT, { handshake: false, token: T })) === null);
+  check("…neither reached the bridge, and no frame of theirs was read (nor counted as activity)",
+    calls.join() === "ping" && h.activity().frames === framesBefore);
+
+  // The raw view of an unauthenticated peer: the public hello, then a closed socket — no reply, no error text.
+  const raw = (first: string): Promise<{ got: string; closed: boolean }> => new Promise((resolve) => {
+    const c = net.createConnection(h.sock);
+    c.setEncoding("utf8");
+    let got = "";
+    const t = setTimeout(() => { c.destroy(); resolve({ got, closed: false }); }, 2500);
+    c.on("data", (d: string) => { got += d; });
+    c.on("error", () => { /* the close settles it */ });
+    c.on("close", () => { clearTimeout(t); resolve({ got, closed: true }); });
+    c.on("connect", () => c.write(first));
+  });
+  const ping = await raw('{"cmd":"__ping"}\n');
+  check("raw: a __ping before the handshake is answered by the hello alone, then the connection closes",
+    ping.closed && ping.got.split("\n").filter(Boolean).length === 1 && /"dtwin":"auth\/1"/.test(ping.got) && !/"ok"/.test(ping.got));
+  const flood = await raw("x".repeat(4096));
+  check("raw: a flood before the handshake is cut off (closed), not buffered", flood.closed && !/"ok"/.test(flood.got));
+  check("…and neither reached the bridge", calls.join() === "ping");
+
+  // A squatter: something holding the name that does not know the token. It speaks the handshake — under
+  // another token — and records every byte a client sends it after that.
+  const squatSock = daemon.sockPath(SQUAT_PORT, P);
+  if (!squatSock.startsWith("\\\\")) { try { fs.unlinkSync(squatSock); } catch { /* none left over */ } }
+  const leaked: string[] = [];
+  const squatter = net.createServer((c) => {
+    c.setEncoding("utf8");
+    const hs = serverHandshake({ key: ipcKey(OTHER), name: squatSock }, { write: (l) => { try { c.write(l + "\n"); } catch { /* gone */ } }, sink: (x) => leaked.push(x), fail: () => { leaked.push("<proof refused>"); c.destroy(); } });
+    c.on("data", hs.data);
+    c.on("error", () => { /* the client left */ });
+    c.on("close", hs.stop);
+  });
+  await new Promise<void>((r) => squatter.listen(squatSock, () => r()));
+  check("squatter: a client holding the token finds no daemon there", (await daemon.connect(SQUAT_PORT, P)) === null);
+  check("…and sent it nothing past its proof — no __ping, no request", leaked.every((x) => x === "<proof refused>"));
+  let serveErr = "";
+  try { await daemon.serve(bridge, { port: SQUAT_PORT, signals: false, crashHandlers: false, handshake: true, token: T }); } catch (e) { serveErr = String(e); }
+  check("…`dtwin serve` on the squatted name refuses, saying the holder could not prove the token",
+    /could not prove it knows your bridge token/.test(serveErr) && /--rotate-token/.test(serveErr));
+  check("…and stop() there reports nothing of ours to stop (and sends the squatter no request)",
+    (await daemon.stop(SQUAT_PORT, P)) === false && leaked.every((x) => x === "<proof refused>"));
+  await new Promise<void>((r) => squatter.close(() => r()));
+
+  check("stop() with the token stops the daemon", (await daemon.stop(PORT, P)) === true && closed === 1);
+  check("…after which no daemon is found", (await daemon.connect(PORT, P)) === null);
+}
+
+// --rotate-token / --forget-token with a daemon running: it is stopped FIRST, under the old token — afterwards
+// nothing could find it (on Windows its pipe is named from the token) while it still held the port.
+for (const verb of ["--rotate-token", "--forget-token"] as const) {
+  const base = fs.mkdtempSync(path.join(TMP_ROOT, "dtwin-rot-"));
+  const cfg = path.join(base, "cfg");
+  fs.mkdirSync(cfg, { recursive: true, mode: 0o700 });
+  const T = "r".repeat(48);
+  fs.writeFileSync(path.join(cfg, "bridge-token"), T + "\n", { mode: 0o600 });
+  const env: NodeJS.ProcessEnv = { ...process.env, DESIGNTWIN_CONFIG_DIR: cfg, FIGMA_BRIDGE_PORT: "8789", TMPDIR: base, TEMP: base, TMP: base };
+  delete env.XDG_RUNTIME_DIR;
+  delete env.FIGMA_BRIDGE_TOKEN;
+  delete env.FIGMA_BRIDGE_TOKEN_FILE;
+  // The address the child will look at: its own default place, under the env above.
+  const place: daemon.SockPlace = { env: {}, tmpdir: base, token: T };
+  const sock = daemon.sockPath(8789, place);
+  const seen: string[] = [];
+  const auth = process.platform === "win32" ? { key: ipcKey(T), name: sock } : null;
+  const fake = net.createServer((c) => {
+    c.setEncoding("utf8");
+    const onFrames = daemon.framer((line) => {
+      const m = JSON.parse(line) as { cmd: string };
+      seen.push(m.cmd);
+      c.write(JSON.stringify({ ok: true, result: m.cmd === "__shutdown" ? { stopped: true } : { daemon: true, pid: 1, port: 8789 } }) + "\n");
+    });
+    if (!auth) c.on("data", onFrames);
+    else { const hs = serverHandshake(auth, { write: (l) => c.write(l + "\n"), sink: onFrames, fail: () => c.destroy() }); c.on("data", hs.data); c.on("close", hs.stop); }
+    c.on("error", () => { /* the client left */ });
+  });
+  await new Promise<void>((r) => fake.listen(sock, () => r()));
+  // dtwin, not dtwinSync: this process serves the fake daemon meanwhile.
+  const r = await dtwin([verb], { env });
+  check(`${verb} with a daemon running stops it first, under the old token, and says so`,
+    r.status === 0 && seen.includes("__shutdown") && /stopped the running daemon on port 8789 first — it was using the old token/.test(r.stderr));
+  const now = (() => { try { return fs.readFileSync(path.join(cfg, "bridge-token"), "utf8").trim(); } catch { return null; } })();
+  check(`…and then ${verb === "--rotate-token" ? "replaces" : "deletes"} the token`, verb === "--rotate-token" ? now !== null && now !== T : now === null);
+  await new Promise<void>((r2) => fake.close(() => r2()));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// doctor, Windows: the pipe is only as private as the token file, so a file outside the user's profile is
+// said on the daemon line (judged by path — Bun cannot read an ACL).
+{
+  const prof = "C:\\Users\\me";
+  check("doctor: a token file outside the profile is named on Windows",
+    /outside your user profile/.test(sharedTokenNote("D:\\shared\\tok", prof, "win32") ?? "") && sharedTokenNote("C:\\Users\\meX\\tok", prof, "win32") !== null);
+  check("…not one inside it (case-insensitive), not an env token (no file), and never off Windows",
+    sharedTokenNote("c:\\users\\ME\\AppData\\Roaming\\design-twin\\bridge-token", prof, "win32") === null
+    && sharedTokenNote(null, prof, "win32") === null && sharedTokenNote("/srv/shared/tok", "/home/me", "linux") === null);
+  const c = checkDaemon(null, 8787, null, sharedTokenNote("D:\\shared\\tok", prof, "win32"));
+  check("…as a warning on the daemon check that says how to fix it", c.status === "warn" && /outside your user profile/.test(c.detail) && /--rotate-token/.test(c.next ?? ""));
+  check("…and a refused location stays the failure it is", checkDaemon(null, 8787, "refused here", "a note").status === "fail");
 }
 if (uid === undefined) {
   console.log("  (no POSIX uids on this platform: the socket stays in os.tmpdir())");

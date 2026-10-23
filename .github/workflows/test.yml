@@ -41,7 +41,8 @@ jobs:
           - leg: fast-macos
             os: macos-15
             suites: --fast
-          # the same quick suites on Windows (the dtwin daemon is not supported there, and its checks skip with that reason)
+          # the same quick suites on Windows — where the dtwin daemon is a named pipe behind a token handshake
+          # (daemon-sock drives it end to end; the raw-socket daemon checks in bridge / mcp-lifecycle are POSIX's)
           - leg: fast-windows
             os: windows-latest
             suites: --fast

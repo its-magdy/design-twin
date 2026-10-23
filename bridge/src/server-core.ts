@@ -22,7 +22,7 @@ import { abortReason } from "./abort-reason.ts";
 import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS, bridgePortOrExit } from "./ports.ts";
-import { daemonSupported, legacySock } from "./daemon.ts";
+import { legacySock } from "./daemon.ts";
 import { isConnId, connectionFor } from "./route.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
@@ -374,17 +374,17 @@ function refuseUpgrade(code: number, message?: string): Response {
   return new Response(message || STATUS_TEXT[code] || "", { status: code, headers: { Connection: "close", "Content-Type": "text/html" } });
 }
 
-/** The bind refusal when `port` is already held (EADDRINUSE). Where no daemon can run (daemon.ts
- *  daemonSupported) the holder cannot share the bridge, so the text says so and to close the other
- *  session or command. Elsewhere, a daemon from an earlier dtwin build listens on a socket this build
- *  does not look at, so neither routing through it nor `dtwin --stop`'s first look finds it — the
- *  text names it instead. */
+/** The bind refusal when `port` is already held (EADDRINUSE). A daemon from an earlier dtwin build listens on
+ *  a socket this build does not look at, so neither routing through it nor `dtwin --stop`'s first look finds
+ *  it — the text names it instead. On Windows the daemon's pipe is named from the bridge token (daemon.ts
+ *  winPipe), so one started under an EARLIER token is unreachable by name in the same way — the text says so. */
 function portInUseMessage(port: number, platform: NodeJS.Platform = process.platform): string {
   const others = `set FIGMA_BRIDGE_PORT to one of the other allowed ports (${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`;
-  if (!daemonSupported(platform)) {
-    return `[bridge] port ${port} is already in use — another MCP session or dtwin command holds the bridge, and sharing it between sessions is not supported on Windows (yet). Close the other one first, or ${others}`;
+  if (platform === "win32") {
+    return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others} ` +
+      "A dtwin daemon started under a different bridge token cannot be found by this one (its pipe is named from the token), so `dtwin --stop` does not reach it — end that process instead.";
   }
-  const sock = legacySock(port);
+  const sock = legacySock(port, { platform });
   const legacy = sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
   return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others}${legacy}`;
 }

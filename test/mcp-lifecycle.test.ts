@@ -10,10 +10,12 @@
 // (`[bridge] DT_TEST_EPHEMERAL_PORT: 8789 -> <port>`); FIGMA_BRIDGE_PORT=8789 then only names the daemon
 // socket, which lives under a short per-run TMPDIR
 // (/tmp/dtl-…: a unix socket path is capped at 104 bytes on macOS, and /var/folders/… is too long; Windows
-// has no /tmp, and no daemon socket either, so there it is under os.tmpdir()).
+// has no /tmp, and its daemon is a named pipe, so there BASE is under os.tmpdir()).
 // HOME (USERPROFILE, APPDATA on Windows) is isolated and the token fixed, so nothing is minted into a real
-// config dir. Windows has no daemon (daemon.ts daemonSupported): the checks that need its socket print why
-// they are skipped, and every other one runs.
+// config dir. On Windows each server gets a token of its own instead: the pipe is named from the token, not
+// TMPDIR, so that is what keeps the servers apart there. The blocks that drive the socket with raw
+// (unauthenticated) frames and check its FILE are POSIX's (daemonSection); the pipe and its handshake are
+// daemon-sock.test.ts's.
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -85,6 +87,8 @@ interface Server {
   dir: string;
   cwd: string;
   sock: string;
+  /** The bridge token it runs with (its own on Windows, see startServer). */
+  token: string;
   err(): string;
   exit(): Exit | null;
   wsPort(): number | null;
@@ -103,13 +107,15 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   const cwd = opts.cwd ?? path.join(dir, "cwd");
   for (const d of [home, tmp, cwd]) fs.mkdirSync(d, { recursive: true });
   const env: Record<string, string> = {};
+  // Windows: a token per server, so each one's pipe (named from the token) is its own — as TMPDIR does on POSIX.
+  const token = process.platform === "win32" ? `${TOKEN}-${seq}` : TOKEN;
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   for (const k of ["FIGMA_DAEMON_IDLE_MIN", "FIGMA_EXPORT_DIR", "FIGMA_BRIDGE_TOKEN_FILE", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"]) delete env[k];
   // The home and temp directory under each name a platform reads them by: HOME / TMPDIR (POSIX), and
   // USERPROFILE (os.homedir), TEMP / TMP (os.tmpdir), APPDATA (token-store's config dir) on Windows.
   Object.assign(env, {
     HOME: home, USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), TMPDIR: tmp, TEMP: tmp, TMP: tmp,
-    FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN, MAX_MCP_OUTPUT_TOKENS: "", DT_TEST_EPHEMERAL_PORT: "1",
+    FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: token, MAX_MCP_OUTPUT_TOKENS: "", DT_TEST_EPHEMERAL_PORT: "1",
   }, opts.env ?? {});
   // test/children.ts startMcp: its stdout/stderr accumulated, its exit recorded, a JSON-RPC client on top
   const m = startMcp({ env, cwd });
@@ -117,7 +123,8 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   p.stdout?.on("error", () => { /* destroyed on purpose */ });
   const s: Server = {
     p, dir, cwd,
-    sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp }),
+    sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp, token }),
+    token,
     err: m.stderr,
     exit: m.exit,
     wsPort: () => { const w = /\[bridge\] DT_TEST_EPHEMERAL_PORT: 8789 -> (\d+)/.exec(m.stderr()); return w ? Number(w[1]) : null; },
@@ -128,9 +135,8 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   servers.push(s);
   return s;
 }
-/** Up = the stdio transport is connected and (owner) the bridge is bound and the daemon socket is being
- *  served — or, where no daemon can run, the server has said it does not share the bridge. */
-const SERVED = daemon.daemonSupported() ? /daemon listening on/ : /not sharing the bridge with other sessions/;
+/** Up = the stdio transport is connected and (owner) the bridge is bound and the daemon socket is being served. */
+const SERVED = /daemon listening on/;
 async function up(s: Server, owner = true): Promise<boolean> {
   const done = await until(() => /MCP server up/.test(s.err()) && (!owner || (SERVED.test(s.err()) && s.wsPort() !== null)), 20000);
   if (!done) console.log("   (server did not come up; stderr:)\n" + s.err().split("\n").map((l) => "   | " + l).join("\n"));
@@ -152,10 +158,10 @@ const screenReply = (): ScreenReply => malformed<ScreenReply>({
   variables: { collections: [], variables: [], hygiene: [] },
   assets: [],
 });
-async function fakePlugin(port: number): Promise<Plugin> {
+async function fakePlugin(port: number, token = TOKEN): Promise<Plugin> {
   const pl: Plugin = {
     fake: dialPlugin(port, {
-      token: TOKEN, hello: { instanceId: "fig-1", file: "Sample File", page: "Page A" }, unhandled: HANG,
+      token, hello: { instanceId: "fig-1", file: "Sample File", page: "Page A" }, unhandled: HANG,
       on: {
         ping: () => ({ pong: true, page: "Page A", file: "Sample File" }),
         exportNode: () => (pl.hang ? HANG : screenReply()),
@@ -223,10 +229,11 @@ function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; r
 async function section(name: string, fn: () => Promise<void>): Promise<void> {
   try { await fn(); } catch (e) { ok(`[${name}] ran without throwing — ${e instanceof Error ? e.message : String(e)}`, false); }
 }
-/** A block that needs the daemon socket (served, used by another process, or idled out): where no daemon
- *  can run (daemon.ts daemonSupported) it says so and is skipped. */
+/** A block that drives the daemon socket with raw frames and checks its file (served, used by another
+ *  process, or idled out): POSIX's. On Windows the pipe requires the handshake before any frame and has no
+ *  file — driven end to end in daemon-sock.test.ts instead. */
 async function daemonSection(name: string, fn: () => Promise<void>): Promise<void> {
-  if (!daemon.daemonSupported()) { console.log(`  (skipped: ${name} — the daemon is not supported on Windows, so no socket is served for another process to use)`); return; }
+  if (process.platform === "win32") { console.log(`  (skipped on Windows: ${name} — raw unauthenticated frames and a socket file are POSIX's; the pipe is daemon-sock.test.ts's)`); return; }
   return section(name, fn);
 }
 
@@ -320,9 +327,9 @@ void (async () => {
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         ok(`owner, shared socket never used → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
-        if (daemon.daemonSupported()) ok("…the socket file is gone, and the log says why", !fs.existsSync(s.sock) && /no other dtwin command or session used the shared bridge/.test(s.err()));
-        // No daemon (Windows): nothing was shared, so the log says only that the client went away.
-        else ok("…and the log says why (the client went away; the bridge was never shared)", /the MCP client went away \(stdin closed\) — exiting/.test(s.err()));
+        // A pipe (Windows) has no file to be gone: there the log alone says it.
+        ok("…the socket file is gone, and the log says why",
+          (process.platform === "win32" || !fs.existsSync(s.sock)) && /no other dtwin command or session used the shared bridge/.test(s.err()));
       } else ok("server came up", false);
     });
     await daemonSection("stdin EOF, socket used by another process", async () => {
@@ -361,7 +368,7 @@ void (async () => {
       // an MCP export in flight when stdin ends → the plugin gets its cancel frame before the exit.
       const s = startServer();
       if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
@@ -382,7 +389,7 @@ void (async () => {
       // daemon's shutdown sends this one: the request is not this server's own call).
       const s = startServer();
       if (await up(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         pl.hang = true;
         const other = await openRaw(s.sock, { cmd: "exportNode", args: { nodeId: "9:1" }, timeoutMs: 20000 });
         other.on("error", () => { /* the server went away */ });
@@ -407,7 +414,7 @@ void (async () => {
       // Claude Code's stop sequence: SIGINT, SIGTERM 100 ms later — with a read in flight.
       const s = startServer();
       if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         pl.hang = true;
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
@@ -453,7 +460,7 @@ void (async () => {
       // others must survive it.
       const s = startServer();
       if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         pl.hang = true;
         await sockReq(s.sock, { cmd: "__status" }); // another process uses the shared bridge
         // With a progressToken, so every plugin tick becomes a notifications/progress write to stdout.
@@ -527,7 +534,7 @@ void (async () => {
       const outside = path.join(BASE, "outside-export");
       const s = startServer({ env: { FIGMA_EXPORT_DIR: outside } });
       if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         const r = await s.call("figma_export_url", { url: "9:1", outDir: "" });
         ok(`outDir "" + FIGMA_EXPORT_DIR outside the cwd → the inline result, plugin asked once (got ${r ? (r.isError ? "an error: " + r.text.slice(0, 160) : "an inline result") : "no answer"})`,
           !!r && !r.isError && rec(r.json.screen).screen === "Sample" && cmdFrames(pl, "exportNode").length === 1 && !fs.existsSync(outside));
@@ -541,7 +548,7 @@ void (async () => {
     await section("outDir pre-check and .prev on a full spill", async () => {
       const s = startServer();
       if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0);
+        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         const asks = () => cmdFrames(pl, "exportNode").length;
         const n0 = asks();
         const esc = await s.call("figma_export_url", { url: "9:1", writeToDisk: true, outDir: "../escape" });

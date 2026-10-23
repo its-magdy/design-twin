@@ -373,6 +373,16 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   Connections without it are rejected at the handshake (401, compared as SHA-256 digests through
   `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
+- Daemon socket (`dtwin serve`, and the bridge an MCP server shares): on POSIX a Unix socket in a directory
+  only this user can enter (`0700`, refused if anyone else owns or can open it) — the directory is the access
+  control. On Windows it is a named pipe, which gets a default security descriptor (Everyone may open it
+  for reading) and cannot be narrowed, nor its creator checked. There the pipe is named from the token and
+  both ends prove they hold the token before anything else crosses it (`bridge/src/daemon-auth.ts`): a key
+  derived from the token, HMAC over fresh nonces from both sides, role labels and the pipe's name bound in,
+  constant-time compare, and a byte cap and timeout before the proof. An unauthenticated peer is dropped
+  silently, and a squatter on the name gets no request. A squatter can still deny the daemon (commands fall
+  back to their own bridge), and the pipe is only as private as the token file (`%APPDATA%` is per-user;
+  `dtwin doctor` warns about a token file outside the profile).
   The WebSocket server is Bun's own (`Bun.serve`): the handshake checks run before the upgrade, and its
   `maxPayloadLength` is the real per-message cap (`FIGMA_BRIDGE_MAX_PAYLOAD_MB`, default 128; a value that is not a
   number above 0 falls back to 128 with a warning — `ws` read ≤ 0 as unlimited, Bun.serve has no unlimited) — there is

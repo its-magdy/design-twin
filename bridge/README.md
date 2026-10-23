@@ -721,13 +721,18 @@ started with different values (a terminal, and an MCP server launched by an app)
 A daemon started by an earlier dtwin version listens at `$TMPDIR/designtwin-<port>.sock`: `--stop`
 stops it too, and a port-in-use error names that socket.
 
-> **Not on Windows (yet).** There the socket would be a named pipe, and Bun cannot make one private to
-> your account (nor let a client check who created it), so another user on the machine could pose as the
-> daemon. So on Windows `--serve` and `--stop` refuse with that reason (exit 1), `--daemon-status`
-> reports no daemon, and nothing shares the bridge: one MCP session or `dtwin` command holds port 8787
-> at a time. A second one gets a port-in-use error saying so — close the other session (or let the
-> other command finish) and retry. `dtwin doctor` notes the daemon as unsupported. One-shot pulls and a
-> single MCP session work as everywhere else.
+> **On Windows** the daemon listens on a named pipe, `\\.\pipe\designtwin-<port>-<hash>`, named from the
+> bridge token. A pipe cannot be made private to your account the way the socket's directory is (its
+> default access lets any local user open it, and a client cannot check who created it), so before any
+> request both ends prove they hold the bridge token — a mutual HMAC challenge over fresh nonces from each
+> side (`bridge/src/daemon-auth.ts`). A process that cannot prove it is dropped without a word, and a
+> squatter holding the pipe name is refused by every command (nothing is sent to it): `--serve` says so,
+> and commands fall back to opening their own bridge. What it cannot stop: a squatter can still deny you
+> the daemon (move it with `dtwin --rotate-token`), and the pipe is only as private as the token file —
+> `%APPDATA%\design-twin\bridge-token` is per-user; `dtwin doctor` warns when the token comes from a file
+> outside your profile. With no token saved yet there is nothing to name the pipe with: start a bridge once
+> first. `--rotate-token` / `--forget-token` stop a running daemon first (on every OS), since nothing
+> could find it under the new token while it still held the port.
 
 Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
@@ -839,9 +844,8 @@ lexically or by real path), so a refused path never costs a read; a server start
 > The one holder that does NOT share is a plain one-shot `dtwin pull` with no daemon: while it runs,
 > another `dtwin` command that needs the port exits with `EADDRINUSE`, while an MCP server stays up and
 > only that tool call errors — retry it once the pull is done. `writeToDisk` is still the simplest way
-> to get files from inside an MCP session. On Windows nothing shares the bridge (no daemon there — see
-> the `--serve` section): whichever session or command holds the port is the only one that can use it,
-> and the others' calls error until it is closed.
+> to get files from inside an MCP session. On Windows the shared socket is a named pipe guarded by a
+> token handshake (see the `--serve` section); sharing otherwise works the same.
 
 **Look before you pull.** `figma_list_pages` (and `figma_list_children` to drill into one frame) return
 a cheap structural index — ids, names, types, sizes; no recursion, no assets, no node properties. Every
@@ -896,8 +900,10 @@ Pre-approve tools in `.claude/settings.json`:
   (later `dtwin` commands and MCP servers route through it); only a one-shot pull does not. A `dtwin`
   command that then finds the port taken exits immediately with a clear `EADDRINUSE` message; an MCP
   server stays up and that one tool call errors — retry it after the pull.
-- Windows: no daemon (`dtwin serve` / `stop` refuse) and no sharing — one MCP session or `dtwin` command
-  holds the bridge at a time; close the other one first.
+- Windows: the daemon is a named pipe named from the bridge token, and every connection proves the token
+  first (`daemon-auth.ts`). A daemon started under an EARLIER token cannot be found or stopped by name —
+  `--rotate-token` stops it before rotating, so that only happens to one started with a different
+  `FIGMA_BRIDGE_TOKEN`.
 - One WebSocket frame may be at most `FIGMA_BRIDGE_MAX_PAYLOAD_MB` (default 128; clamped just under
   4096). A value that is not a number above 0 falls back to 128 with a warning — there is no "unlimited".
   An export over it fails with a message quoting the cap in force.
