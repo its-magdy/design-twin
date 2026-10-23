@@ -609,6 +609,12 @@ console.log("\nthe content index is built only when a consumer needs it, and dup
   let keyed = 0;
   keyOf.keyOf = function (file: string, name: string) { keyed++; return orig.call(this, file, name); };
   let refOnly: Pull, icons: Pull;
+  // `duplicates` lists groups in the index's bucket order, which is the directory listing's order of the files
+  // already on disk (APFS and NTFS list differently), then new buckets in write order — read it, never assume it
+  const listing = fs.readdirSync(a);
+  const firstAt = (names: string[]): number => Math.min(...names.map((n) => listing.indexOf(n)));
+  const discGroup = '["assets/x.svg","assets/x-abc123.svg"]', pngGroup = '["assets/p.png","assets/1_1_ref.png"]';
+  const wantGroups = "[" + (firstAt(["x.svg", "x-abc123.svg"]) < firstAt(["p.png"]) ? discGroup + "," + pngGroup : pngGroup + "," + discGroup) + "]";
   try {
     refOnly = pull(d, { name: "RefOnly", id: "2:1", nodes: [{ id: "2:1", type: "FRAME", reference: "assets/2_1_ref.png", children: [] }], assets: [refAsset("2:1", [7, 7, 7])] });
     const keyedRefOnly = keyed;
@@ -624,8 +630,8 @@ console.log("\nthe content index is built only when a consumer needs it, and dup
       () => keyedRefOnly === 0 && refOnly.assets?.duplicates.length === 0 && refOnly.assets.files.length === 0 && assetFiles(d).includes("2_1_ref.png"));
     t(`a pull with shippable assets does build it (got ${keyed} keys)`, () => keyed > 0);
   } finally { keyOf.keyOf = orig; }
-  t("…and reports the tolerance group and the PNG group (its reference included, after p.png), representative first",
-    () => JSON.stringify(icons.assets?.duplicates.map((g) => g.files)) === '[["assets/x.svg","assets/x-abc123.svg"],["assets/p.png","assets/1_1_ref.png"]]');
+  t(`…and reports the tolerance group and the PNG group (its reference included, after p.png), representative first, in the directory's bucket order (want ${wantGroups})`,
+    () => JSON.stringify(icons.assets?.duplicates.map((g) => g.files)) === wantGroups);
   t("…with the icon and the picture reusing the files already on disk", () => icons.assets?.files.map((f) => f.file).join(",") === "assets/x.svg,assets/p.png");
 }
 
