@@ -11,9 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import * as probeVisual from "../design-to-code/probe-visual.ts";
-import { VISUAL_CAP_MS, designedRects, finishVisual, visualBudget, visualLine } from "../design-to-code/probe-visual.ts";
+import { designedRects, finishVisual, visualLine } from "../design-to-code/probe-visual.ts";
 import type { MeasuredVisual } from "../design-to-code/types.ts";
-import { BEHAVIOUR_RESERVE_MS } from "../design-to-code/probe-behaviour.ts";
 import type { VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
@@ -242,15 +241,6 @@ const throwsMsg = (f: () => unknown): string => { try { f(); return ""; } catch 
   const tr = img(2, 1); put(tr, 0, 0, [0, 0, 0, 0]); put(tr, 1, 0, [200, 100, 50, 255]);
   const t1 = resampleBox(tr, 1, 1);
   check("[resample] a transparent pixel adds no colour (alpha-weighted)", t1.data[0] === 200 && t1.data[1] === 100 && t1.data[2] === 50 && Math.abs((t1.data[3] ?? 0) - 128) <= 1);
-}
-
-// ---------------------------------------------------------------- budget: the capture's budget
-{
-  check("[budget] the cap is 30 s and the reserve is behaviour's (imported)", VISUAL_CAP_MS === 30_000 && BEHAVIOUR_RESERVE_MS === 20_000);
-  check("[budget] plenty of time → the cap", visualBudget(0, 180_000) === 30_000);
-  check("[budget] little time → what is left less the reserve", visualBudget(1_000, 1_000 + BEHAVIOUR_RESERVE_MS + 7_000) === 7_000);
-  check("[budget] no time → 0, never negative", visualBudget(0, BEHAVIOUR_RESERVE_MS - 1) === 0 && visualBudget(0, 5_000) === 0);
-  check("[budget] explicit cap / reserve", visualBudget(0, 100_000, 10_000, 5_000) === 10_000 && visualBudget(0, 12_000, 10_000, 5_000) === 7_000);
 }
 
 // ---- elapsedMs is the capture's own time + the diff step's, never the behaviour battery in between

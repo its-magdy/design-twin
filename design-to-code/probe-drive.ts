@@ -27,7 +27,8 @@
 //   - React commits a dialog opened from a click within a frame or two: the detector polls every 100 ms for 2 s.
 //   - :modal and :popover-open parse in Chromium; an unknown selector throws, so each contract selector is tried alone.
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Page } from "playwright";
+import type { ProbeSession, Reached } from "./probe-session.ts";
 import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActivation, VerifyExpectation, VerifyInteraction } from "./types.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
@@ -1116,12 +1117,6 @@ export function drivable(exp: Pick<VerifyExpectation, "interactions" | "hidden">
   return [...rows.filter((r) => r.destinationExported !== false), ...rows.filter((r) => r.destinationExported === false)];
 }
 
-export const DRIVE_CAP_MS = 60_000, DRIVE_RESERVE_MS = 15_000;
-/** The driving sub-budget: min(60 s, what is left of --max-time less 15 s for writing up and closing) — never < 0. */
-export function driveBudget(now: number, deadline: number, capMs = DRIVE_CAP_MS, reserveMs = DRIVE_RESERVE_MS): number {
-  return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
-}
-
 /** What the probe saw, as an outcome for the row's action. */
 export function classifyOutcome(action: string, read: Pick<DetectorRead, "detectedBy" | "dest" | "opened">): { outcome: InteractionOutcome; detectedBy?: string } {
   const destNew = !!(read.dest && read.dest.newly);
@@ -1150,19 +1145,9 @@ export function judge(action: string, e: Pick<InteractionEvidence, "selectorCoun
 }
 
 // ---------------------------------------------------------------- driving
-/** A step replay failed in a driving page (thrown by the reach function). */
-export class StepError extends Error {}
-
 export interface DriveOptions {
   rows: VerifyInteraction[];
-  viewport: { w: number; h: number };
-  /** per-action timeout (the probe's --timeout) */
-  timeout: number;
-  /** the probe's init script (no transitions/animations; the per-document token window.__dtProbeDoc) */
-  initScript: string;
-  /** goto → settle → steps → settle(--ready) on a fresh page; throws StepError when a step fails */
-  reach(page: Page): Promise<void>;
-  /** the sub-budget (driveBudget), in ms from now */
+  /** the drive's share (session.budget("drive")), in ms from now */
   budgetMs: number;
 }
 export interface DriveHooks {
@@ -1173,49 +1158,6 @@ export interface DriveHooks {
 /** Two animation frames: whatever the last action changed has been laid out and painted. The expression is a string, so
  *  nothing from this module's scope is serialised into the page. */
 export const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
-/** What a cut unit may still take to settle after its context is closed. */
-export const CUT_SETTLE_MS = 5_000;
-/** What raceBudget saw: work's value, or a cut — `settled` false when the settle window ran out before the context
- *  closed and work wound down, i.e. the browser stopped answering. */
-export type Raced<T> = { cut: false; value: T } | { cut: true; settled: boolean };
-const CUT = Symbol("cut");
-const UNSETTLED = Symbol("unsettled");
-/** What a raced unit hands raceBudget: the context it opened (once it exists), and whether the cut has come. */
-export interface Held { ctx?: { close(): Promise<unknown> }; cut?: boolean }
-/** The onContext for a raced unit: store the context so a cut can close it — and when the cut came while the context
- *  was still being created, close it at once, so whatever the unit goes on to wait on in it ends instead of running
- *  past the settle window. */
-export function holdContext(held: Held): (c: { close(): Promise<unknown> }) => void {
-  return (c) => {
-    held.ctx = c;
-    if (held.cut) void c.close().catch(() => undefined);
-  };
-}
-/**
- * Race `work` against a `ms` deadline. Returns its value, or a cut when the deadline came first — after
- * `onCut` (called at once, before anything is awaited), then closing the context `held` captured (that ends
- * whatever `work` is waiting on; one still being created is closed as it arrives, see holdContext) and giving the
- * close and `work` at most CUT_SETTLE_MS between them. A close that is slow but returns inside that window settles;
- * one that never returns (a wedged browser) does not.
- * `work` must not reject; if it does, the rejection propagates and the deadline timer is still cleared.
- */
-export async function raceBudget<T>(work: Promise<T>, ms: number, held: Held, onCut?: () => void): Promise<Raced<T>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let r: T | typeof CUT;
-  try {
-    r = await Promise.race([work, new Promise<typeof CUT>((resolve) => { timer = setTimeout(() => resolve(CUT), ms); })]);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (r !== CUT) return { cut: false, value: r };
-  onCut?.();
-  // marked first: a context that arrives after this is closed by holdContext as it arrives
-  held.cut = true;
-  const ctx = held.ctx;
-  const wound = (async (): Promise<void> => { if (ctx) await ctx.close().catch(() => undefined); await work; })();
-  const s = await Promise.race([wound, sleep(CUT_SETTLE_MS, UNSETTLED, { ref: false })]);
-  return { cut: true, settled: s !== UNSETTLED };
-}
 const notRun = (row: VerifyInteraction, detail: string, extra?: Partial<InteractionEvidence>): InteractionEvidence => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
 
 /** The signed distance (CSS px; < 0 inside) from (px, py) to a rounded rect — its rect, or by the corner's
@@ -1339,154 +1281,123 @@ async function restoreSettled(page: Page): Promise<void> {
   }
 }
 
-/** Seam for the behaviour checks: a fresh context + page (no hasTouch/isMobile) reached like the measurement pass. The caller
- *  closes the context. `loads` counts main-frame document loads from the moment the page exists. `onContext` gets the
- *  context BEFORE the screen is reached: a budget cut can then close it while reach is still waiting. */
-export async function openReached(browser: Pick<Browser, "newContext">, o: Pick<DriveOptions, "viewport" | "timeout" | "initScript" | "reach">, extra?: { dsf?: number; onContext?: (c: BrowserContext) => void }): Promise<{ context: BrowserContext; page: Page; loads: () => number }> {
-  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: extra?.dsf ?? 1, reducedMotion: "reduce" });
-  if (extra && extra.onContext) extra.onContext(context);
-  let loads = 0;
-  try {
-    const page = await context.newPage();
-    page.setDefaultTimeout(o.timeout);
-    await page.addInitScript({ content: o.initScript });
-    page.on("load", () => { loads++; });
-    await o.reach(page);
-    return { context, page, loads: () => loads };
-  } catch (e) {
-    await context.close().catch(() => undefined);
-    throw e;
-  }
-}
-
-async function driveRow(browser: Pick<Browser, "newContext">, o: DriveOptions, row: VerifyInteraction, hooks: DriveHooks | undefined, onContext: (c: BrowserContext) => void): Promise<InteractionEvidence> {
+/** One row on the screen its unit reached (the session closes the context after it). */
+async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks: DriveHooks | undefined): Promise<InteractionEvidence> {
   const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
   const destId = row.destinationId ?? null;
-  let opened: Awaited<ReturnType<typeof openReached>>;
-  try {
-    opened = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { onContext });
-  } catch (e) {
-    if (e instanceof StepError) return notRun(row, `the steps failed — ${e.message}`, { stepsFailed: e.message });
-    return notRun(row, `could not reach the screen — ${firstLine(e)}`);
-  }
-  const { context, page, loads } = opened;
   const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
-  try {
-    let st = await page.evaluate(openerState, { id: row.nodeId });
-    const base: InteractionEvidence = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
-    if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog — not driven` };
-    // a disabled opener is not clicked (an aria-disabled one would still run the app's handler — a real write)
-    if (st.disabled) return { ...base, ok: null, detail: "opener is disabled — not driven" };
-    // nor one whose click submits a form (the probe navigates and opens, never submits)
-    // judged where the click will land — scrolled into view the way Playwright's click does it first
-    if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
-    const submits = await page.locator(st.path).first().evaluate(submitGuard);
-    if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) — not driven` };
-    // what is on screen before the probe's first hover — a tooltip shown before it is not the control's
-    await page.evaluate(tipPreMark, null).catch(() => false);
-    let revealedBy: string | undefined;
-    if (!st.visible) {
-      // hover-reveal path: park the pointer, hover the nearest visible (tagged) ancestor, two frames, look again
-      if (st.hoverPath !== null) {
-        revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
-        await page.mouse.move(0, 0);
-        await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
-        await raf2(page);
-        st = await page.evaluate(openerState, { id: row.nodeId });
-      }
-      if (!st.visible || st.path === null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener not visible even on hover${revealedBy !== undefined ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} — not driven` };
+  let st = await page.evaluate(openerState, { id: row.nodeId });
+  const base: InteractionEvidence = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
+  if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog — not driven` };
+  // a disabled opener is not clicked (an aria-disabled one would still run the app's handler — a real write)
+  if (st.disabled) return { ...base, ok: null, detail: "opener is disabled — not driven" };
+  // nor one whose click submits a form (the probe navigates and opens, never submits)
+  // judged where the click will land — scrolled into view the way Playwright's click does it first
+  if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+  const submits = await page.locator(st.path).first().evaluate(submitGuard);
+  if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) — not driven` };
+  // what is on screen before the probe's first hover — a tooltip shown before it is not the control's
+  await page.evaluate(tipPreMark, null).catch(() => false);
+  let revealedBy: string | undefined;
+  if (!st.visible) {
+    // hover-reveal path: park the pointer, hover the nearest visible (tagged) ancestor, two frames, look again
+    if (st.hoverPath !== null) {
+      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
+      await page.mouse.move(0, 0);
+      await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
+      await raf2(page);
+      st = await page.evaluate(openerState, { id: row.nodeId });
     }
-    const openerPath = st.path;
-    // the pointer goes where the click will put it FIRST — a row action revealed on :hover (by visibility,
-    // display or pointer-events) is under the click point only then, and Playwright's click would land on it. force: no 2 s
-    // actionability wait (a covered opener); two frames for the hover styles; the submit guard looks again
-    await page.locator(openerPath).first().hover({ timeout: 2000, force: true }).catch(() => undefined);
-    await raf2(page);
-    const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
-    if (submitsHovered !== null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener would submit a form (${submitsHovered}) — not driven` };
-    // nor one whose click point is another control inside it (a card's centred Delete) — the drive has no
-    // write block
-    const notOwn = (ctl: string, why?: string): InteractionEvidence => ({ ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}),
-      detail: `the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element — not driven${why !== undefined ? ` (${why})` : ""}` });
-    const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
-    if (inner !== null) return notOwn(inner, (await page.evaluate(ownWhy, null).catch(() => null)) ?? undefined);
-    // a container's sole control the DOM check let through — the pixels decide (the pointer parked away, unless the opener
-    // only shows while its ancestor is hovered: the hover-reveal path keeps that hover)
-    const px = await ownPixels(page, { park: revealedBy === undefined });
-    if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
-    const contract = [...DIALOG_CONTRACT];
-    await page.evaluate(armDetector, { destId, contract });
-    const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
-    const loadsBefore = loads();
-    let activation: ProbeActivation = "mouse", clickWhy = "";
-    await page.locator(openerPath).first().evaluate(saveScroll);
-    try {
-      await page.locator(openerPath).first().click({ timeout: 2000 });
-    } catch (e) {
-      const m = errMsg(e);
-      const kind = pwErrorKind(e, page);
-      if (kind === "gone") throw e;
-      if (kind !== "navigated") {
-        // hidden or covered (TimeoutError after the full 2 s): click in the page — never a user activation
-        clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
-        activation = "synthetic";
-        // from the scroll the drive had, never from where the retries left the page — and still
-        // there two frames later, twice in a row: a smooth scroll Playwright's last retry started can outlive one restore
-        await restoreSettled(page);
-        await page.evaluate(syntheticClick, openerPath);
-      }
-    }
-    // poll ≤ 2 s; once a contract element opened, wait ≤ 0.5 s more for the destination tag to land inside it
-    const t0 = Date.now();
-    let read: DetectorRead = { lost: false, detectedBy: null, opened: null, dest: null };
-    let detectedAt: number | null = null;
-    for (;;) {
-      try { read = await page.evaluate(pollDetector, { destId, contract }); } catch (e) {
-        // a closed or crashed page, or any other failure, ends the row; only a replaced document is read as "lost"
-        if (pwErrorKind(e, page) !== "navigated") throw e;
-        read = { lost: true, detectedBy: null, opened: null, dest: null };
-      }
-      if (read.lost) break;
-      if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-      const destDone = destId === null || (read.dest !== null && read.dest.inside);
-      if (read.opened && destDone) break;
-      if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
-      if (Date.now() - t0 >= 2000) break;
-      await sleep(100);
-    }
-    if (read.lost) await page.waitForLoadState("load", { timeout: 2000 }).catch(() => undefined);
-    let tokenAfter = "";
-    try { tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''")); } catch { tokenAfter = ""; }
-    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read.lost ? 1 : 0);
-    const { outcome, detectedBy } = read.lost ? { outcome: "none" as const, detectedBy: undefined } : classifyOutcome(action, read);
-    const ev: InteractionEvidence = {
-      ...base, outcome, navEvents, activation,
-      ...(detectedBy !== undefined ? { detectedBy } : {}),
-      ...(revealedBy !== undefined ? { revealedBy } : {}),
-      ...(destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {}),
-      ...(read.opened && !read.lost ? { opened: read.opened } : {}),
-    };
-    const j = judge(action, ev);
-    const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== undefined ? ` after hovering ${revealedBy}` : ""}`;
-    const saw = read.lost ? "the page loaded a new document" : detectedBy !== undefined ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
-    ev.ok = j.ok;
-    ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} — ${j.missing.join("; ")}`;
-    if (hooks && hooks.afterOpen && read.opened && !read.lost) await hooks.afterOpen(page, row, read.opened);
-    return ev;
-  } finally {
-    await context.close().catch(() => undefined);
+    if (!st.visible || st.path === null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener not visible even on hover${revealedBy !== undefined ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} — not driven` };
   }
+  const openerPath = st.path;
+  // the pointer goes where the click will put it FIRST — a row action revealed on :hover (by visibility,
+  // display or pointer-events) is under the click point only then, and Playwright's click would land on it. force: no 2 s
+  // actionability wait (a covered opener); two frames for the hover styles; the submit guard looks again
+  await page.locator(openerPath).first().hover({ timeout: 2000, force: true }).catch(() => undefined);
+  await raf2(page);
+  const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
+  if (submitsHovered !== null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener would submit a form (${submitsHovered}) — not driven` };
+  // nor one whose click point is another control inside it (a card's centred Delete) — the drive has no
+  // write block
+  const notOwn = (ctl: string, why?: string): InteractionEvidence => ({ ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}),
+    detail: `the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element — not driven${why !== undefined ? ` (${why})` : ""}` });
+  const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
+  if (inner !== null) return notOwn(inner, (await page.evaluate(ownWhy, null).catch(() => null)) ?? undefined);
+  // a container's sole control the DOM check let through — the pixels decide (the pointer parked away, unless the opener
+  // only shows while its ancestor is hovered: the hover-reveal path keeps that hover)
+  const px = await ownPixels(page, { park: revealedBy === undefined });
+  if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
+  const contract = [...DIALOG_CONTRACT];
+  await page.evaluate(armDetector, { destId, contract });
+  const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
+  const loadsBefore = loads();
+  let activation: ProbeActivation = "mouse", clickWhy = "";
+  await page.locator(openerPath).first().evaluate(saveScroll);
+  try {
+    await page.locator(openerPath).first().click({ timeout: 2000 });
+  } catch (e) {
+    const m = errMsg(e);
+    const kind = pwErrorKind(e, page);
+    if (kind === "gone") throw e;
+    if (kind !== "navigated") {
+      // hidden or covered (TimeoutError after the full 2 s): click in the page — never a user activation
+      clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
+      activation = "synthetic";
+      // from the scroll the drive had, never from where the retries left the page — and still
+      // there two frames later, twice in a row: a smooth scroll Playwright's last retry started can outlive one restore
+      await restoreSettled(page);
+      await page.evaluate(syntheticClick, openerPath);
+    }
+  }
+  // poll ≤ 2 s; once a contract element opened, wait ≤ 0.5 s more for the destination tag to land inside it
+  const t0 = Date.now();
+  let read: DetectorRead = { lost: false, detectedBy: null, opened: null, dest: null };
+  let detectedAt: number | null = null;
+  for (;;) {
+    try { read = await page.evaluate(pollDetector, { destId, contract }); } catch (e) {
+      // a closed or crashed page, or any other failure, ends the row; only a replaced document is read as "lost"
+      if (pwErrorKind(e, page) !== "navigated") throw e;
+      read = { lost: true, detectedBy: null, opened: null, dest: null };
+    }
+    if (read.lost) break;
+    if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
+    const destDone = destId === null || (read.dest !== null && read.dest.inside);
+    if (read.opened && destDone) break;
+    if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
+    if (Date.now() - t0 >= 2000) break;
+    await sleep(100);
+  }
+  if (read.lost) await page.waitForLoadState("load", { timeout: 2000 }).catch(() => undefined);
+  let tokenAfter = "";
+  try { tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''")); } catch { tokenAfter = ""; }
+  const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read.lost ? 1 : 0);
+  const { outcome, detectedBy } = read.lost ? { outcome: "none" as const, detectedBy: undefined } : classifyOutcome(action, read);
+  const ev: InteractionEvidence = {
+    ...base, outcome, navEvents, activation,
+    ...(detectedBy !== undefined ? { detectedBy } : {}),
+    ...(revealedBy !== undefined ? { revealedBy } : {}),
+    ...(destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {}),
+    ...(read.opened && !read.lost ? { opened: read.opened } : {}),
+  };
+  const j = judge(action, ev);
+  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== undefined ? ` after hovering ${revealedBy}` : ""}`;
+  const saw = read.lost ? "the page loaded a new document" : detectedBy !== undefined ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
+  ev.ok = j.ok;
+  ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} — ${j.missing.join("; ")}`;
+  if (hooks && hooks.afterOpen && read.opened && !read.lost) await hooks.afterOpen(page, row, read.opened);
+  return ev;
 }
 
 /** What driveInteractions returns: a row each, and whether the browser stopped answering (a cut row's context
  *  close and the row did not wind down within CUT_SETTLE_MS) — then the rows after it are not driven. */
 export interface DriveResult { evidence: InteractionEvidence[]; wedged: boolean }
 /**
- * Drive every row (drivable()), each on a fresh page in a fresh context, within the sub-budget. A row the budget
- * does not reach is {ok:null, cut:"budget"}; a row that throws is ok:null with why. Never throws for a row.
+ * Drive every row (drivable()), each as a session unit (a fresh page in a fresh context), within the drive's share. A row
+ * the budget does not reach is {ok:null, cut:"budget"}; a row that throws is ok:null with why. Never throws for a row.
  * Returns by about budgetMs + CUT_SETTLE_MS even when the browser stops answering.
  */
-export async function driveInteractions(browser: Pick<Browser, "newContext">, o: DriveOptions, hooks?: DriveHooks): Promise<DriveResult> {
+export async function driveInteractions(session: ProbeSession<unknown>, o: DriveOptions, hooks?: DriveHooks): Promise<DriveResult> {
   const out: InteractionEvidence[] = [];
   const end = Date.now() + o.budgetMs;
   let wedged = false;
@@ -1494,13 +1405,15 @@ export async function driveInteractions(browser: Pick<Browser, "newContext">, o:
     if (wedged) { out.push(notRun(row, "the browser stopped answering")); continue; }
     const left = end - Date.now();
     if (left <= 0) { out.push(notRun(row, "time budget", { cut: "budget" })); continue; }
-    const held: Held = {};
-    const work = driveRow(browser, o, row, hooks, holdContext(held)).catch((e: unknown): InteractionEvidence => {
-      if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving — ${pwFirstLine(e)}`);
-      return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
+    const r = await session.unit<InteractionEvidence>({
+      ms: left,
+      act: (reached) => driveRow(reached, row, hooks),
+      unreached: (f) => notRun(row, f.why, f.steps !== undefined ? { stepsFailed: f.steps } : undefined),
+      failed: (e) => {
+        if (pwErrorKind(e) === "gone") return notRun(row, `the page or browser closed or crashed while driving — ${pwFirstLine(e)}`);
+        return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
+      },
     });
-    // the context exists from before the screen was reached: closing it ends whatever the row was waiting on
-    const r = await raceBudget(work, left, held);
     if (r.cut) {
       out.push(notRun(row, "time budget", { cut: "budget" }));
       if (!r.settled) wedged = true;

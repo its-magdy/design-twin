@@ -1,5 +1,5 @@
 // probe-behaviour.ts — the shipped probe's behaviour/accessibility checks. They run AFTER the measurement pass and the drive,
-// each unit on a fresh page in a fresh browser context (as openReached, plus the write block below), on their own time budget
+// each unit a session unit (probe-session.ts: a fresh page in a fresh browser context, plus the write block below), on their own time budget
 // (a battery unit: its own share of it) — and they never change the fidelity verdict:
 // what they find goes to measured.behaviour, which verify-screen --compare copies into a second headline.
 //
@@ -38,8 +38,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { BehaviourAxe, BehaviourCheck, BehaviourCheckId, BehaviourLandmark, BehaviourStatus, BehaviourWidth, InteractionEvidence, JsonObject, MeasuredBehaviour, PageOverflow, VerifyExpectation, VerifyInteraction } from "./types.ts";
-import { CUT_SETTLE_MS, DIALOG_CONTRACT, StepError, armDetector, drivable, holdContext, openerState, ownPixels, pollDetector, raceBudget, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
-import type { DetectorRead, Held } from "./probe-drive.ts";
+import { DIALOG_CONTRACT, armDetector, drivable, openerState, ownPixels, pollDetector, raf2, readPageOverflow, submitGuard, tipPreMark } from "./probe-drive.ts";
+import type { DetectorRead } from "./probe-drive.ts";
+import { unitCap } from "./probe-session.ts";
+import type { ProbeSession } from "./probe-session.ts";
 import { firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { parseCssColor } from "./color.ts";
@@ -56,23 +58,6 @@ declare function getComputedStyle(el: PageElement, pseudo?: string | null): Page
 declare function requestAnimationFrame(cb: () => void): number;
 
 // ---------------------------------------------------------------- pure helpers (unit-tested in test/verify-probe.test.ts)
-/** what the probe may still need after the behaviour budget ends — a cut unit's settle (CUT_SETTLE_MS), the capped close
- *  of a wedged browser (two CLOSE_STEP_CAP_MS steps, then its kill within KILL_STEP_CAP_MS: a short wait for the browser to
- *  go on its own, then at most one capped command — pgrep, ps or taskkill — or none) and writing the files (WRITE_MARGIN_MS)
- *  — all inside --max-time, so a measurement that finished is never lost to the watchdog. */
-export { CUT_SETTLE_MS };
-export const CLOSE_STEP_CAP_MS = 5_000, KILL_STEP_CAP_MS = 3_000, WRITE_MARGIN_MS = 2_000;
-export const BEHAVIOUR_CAP_MS = 90_000, BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS + 2 * CLOSE_STEP_CAP_MS + KILL_STEP_CAP_MS + WRITE_MARGIN_MS;
-/** The behaviour sub-budget: min(90 s, what is left of --max-time less the reserve for settling, closing and writing) — never < 0. */
-export function behaviourBudget(now: number, deadline: number, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS): number {
-  return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
-}
-/** a battery unit's own time: an even share of what is left (`unitsLeft` battery units, this one included), never less than
- *  15 s and never more than what is left — one page that freezes (a hang on Enter) cannot eat the rows after it. */
-export const UNIT_FLOOR_MS = 15_000;
-export function unitCap(leftMs: number, unitsLeft: number, floorMs = UNIT_FLOOR_MS): number {
-  return Math.max(0, Math.min(leftMs, Math.max(floorMs, leftMs / Math.max(1, unitsLeft))));
-}
 
 /** The write block's scope, one line: measured.behaviour.writeBlock → report.behaviour.writeBlock and its md. */
 export const WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scroll, hover or resize on, no request but GET/HEAD/OPTIONS leaves the browser " +
@@ -1440,11 +1425,7 @@ export interface BehaviourOptions {
   expectation: Pick<VerifyExpectation, "interactions" | "hidden">;
   /** the drive's evidence (measured.interactions) — which rows opened a modal by a real click */
   driven: readonly InteractionEvidence[] | null;
-  viewport: { w: number; h: number };
-  timeout: number;
-  initScript: string;
-  /** goto → settle → steps → settle(--ready) on a fresh page (the measurement pass's reach) */
-  reach(page: Page): Promise<void>;
+  /** behaviour's share (session.budget("behaviour")), in ms from now */
   budgetMs: number;
   /** the measurement pass's visible tags (its fingerprint) — a unit whose page differs materially is not-run; absent = no check */
   measuredTags?: readonly string[];
@@ -1596,50 +1577,40 @@ async function openWriteBlock(browser: Browser): Promise<{ unit(n: UnitNet | nul
   return { unit: (n) => { current = n; }, close: () => { cdp.detach().catch(() => undefined); } };
 }
 /**
- * A fresh page reached like the measurement pass (the same as probe-drive's openReached), in a context whose WebSockets go
- * through Playwright's routeWebSocket (https://playwright.dev/docs/api/class-browsercontext#browser-context-route-web-socket:
- * "only WebSockets created after this method was called will be routed" — it is set before the page exists): server → page
+ * What a unit's context needs beyond the session's (probe-session.ts: a fresh page reached like the measurement pass): its
+ * WebSockets go through Playwright's routeWebSocket (https://playwright.dev/docs/api/class-browsercontext#browser-context-route-web-socket:
+ * "only WebSockets created after this method was called will be routed" — it is set before the page exists, in prepare): server → page
  * messages always pass; page → server ones pass until the unit acts, then each is dropped and reported as a write (verified:
  * the server gets none, the page still receives); a socket opened once the unit has acted never reaches the server
- * (reported as a write, closed). Known miss: a WebSocket opened inside a worker is not routed. `failed`:
+ * (reported as a write, closed). Known miss: a WebSocket opened inside a worker is not routed. `failed` collects
  * the requests that failed while the screen was reached (named when the page differs from the measured one).
  */
-async function openUnitPage(browser: Browser, o: Pick<BehaviourOptions, "viewport" | "timeout" | "initScript" | "reach">, onContext: (c: BrowserContext) => void,
-  net: UnitNet): Promise<{ context: BrowserContext; page: Page; loads: () => number; failed: string[] }> {
-  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
-  onContext(context);
-  let loads = 0;
-  const failed: string[] = [];
-  try {
-    await context.routeWebSocket(/.*/, (ws) => {
-      const url = originPath(ws.url());
-      // a socket the page opens once the unit has acted is never connected — its handshake (a URL like
-      // ?op=delete) is itself the action's side effect. A route that does not call connectToServer is a mock with no server
-      // (https://playwright.dev/docs/api/class-websocketroute: "By default, routed WebSocket does not connect to the server");
-      // it is reported as a write and closed (its messages, if any, are recorded too)
-      // once the unit's log is full the socket is left open as an unconnected mock (not closed), so a page that
-      // reopens on close stops looping
-      if (net.armed) {
-        const kept = net.write("WebSocket", url);
-        ws.onMessage(() => { net.write("WebSocket", url); });
-        if (kept) ws.close().catch(() => undefined);
-        return;
-      }
-      const server = ws.connectToServer();
-      ws.onMessage((m) => { if (net.armed) net.write("WebSocket", url); else server.send(m); });
-      server.onMessage((m) => { ws.send(m); });
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(o.timeout);
-    await page.addInitScript({ content: o.initScript });
-    page.on("load", () => { loads++; });
-    page.on("requestfailed", (r) => { if (!net.armed && failed.length < 5) failed.push(`${r.method()} ${new URL(originPath(r.url()), "http://x").pathname} (${r.failure()?.errorText ?? "failed"})`); });
-    await o.reach(page);
-    return { context, page, loads: () => loads, failed };
-  } catch (e) {
-    await context.close().catch(() => undefined);
-    throw e;
-  }
+function unitPageHooks(net: UnitNet, failed: string[]): { prepare(context: BrowserContext): Promise<void>; onPage(page: Page): void } {
+  return {
+    prepare: async (context) => {
+      await context.routeWebSocket(/.*/, (ws) => {
+        const url = originPath(ws.url());
+        // a socket the page opens once the unit has acted is never connected — its handshake (a URL like
+        // ?op=delete) is itself the action's side effect. A route that does not call connectToServer is a mock with no server
+        // (https://playwright.dev/docs/api/class-websocketroute: "By default, routed WebSocket does not connect to the server");
+        // it is reported as a write and closed (its messages, if any, are recorded too)
+        // once the unit's log is full the socket is left open as an unconnected mock (not closed), so a page that
+        // reopens on close stops looping
+        if (net.armed) {
+          const kept = net.write("WebSocket", url);
+          ws.onMessage(() => { net.write("WebSocket", url); });
+          if (kept) ws.close().catch(() => undefined);
+          return;
+        }
+        const server = ws.connectToServer();
+        ws.onMessage((m) => { if (net.armed) net.write("WebSocket", url); else server.send(m); });
+        server.onMessage((m) => { ws.send(m); });
+      });
+    },
+    onPage: (page) => {
+      page.on("requestfailed", (r) => { if (!net.armed && failed.length < 5) failed.push(`${r.method()} ${new URL(originPath(r.url()), "http://x").pathname} (${r.failure()?.errorText ?? "failed"})`); });
+    },
+  };
 }
 
 type Declared = Pick<BehaviourCheck, "id" | "nodeId" | "trigger" | "variant">;
@@ -1674,11 +1645,11 @@ function fill(out: BehaviourCheck[], produced: BehaviourCheck[], declared: Decla
  * its checks not-run with the reason. The caller still wraps it (a throw here — the write block could not be set up — is
  * {ran:false, why}). The write block lives exactly as long as the units: opened first, detached when they end.
  */
-export async function runBehaviour(browser: Browser, o: BehaviourOptions): Promise<BehaviourResult> {
+export async function runBehaviour(session: ProbeSession<Browser>, o: BehaviourOptions): Promise<BehaviourResult> {
   const t0 = Date.now();
   // inside the budget, and bounded: a browser that stopped answering never holds the probe here (one that answers late gets
   // its session detached at once)
-  const opening = openWriteBlock(browser);
+  const opening = openWriteBlock(session.browser);
   const late = Symbol("no answer");
   const block = await Promise.race([opening, sleep(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
   if (block === late) {
@@ -1686,7 +1657,7 @@ export async function runBehaviour(browser: Browser, o: BehaviourOptions): Promi
     throw new Error(`the write block could not be set up (the browser did not answer within ${Math.round(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs) / 1000)} s)`);
   }
   try {
-    return await runUnits(browser, o, block, t0);
+    return await runUnits(session, o, block, t0);
   } finally {
     block.close();
   }
@@ -1697,7 +1668,7 @@ type WriteBlock = Awaited<ReturnType<typeof openWriteBlock>>;
  *  checks and the run's landmarks / axe / widths / forced-colours shot, plus `cut`), and what a battery row's R-key unit tells
  *  its R-scroll unit. A unit reads it when it runs, so a later unit sees what an earlier one wrote. */
 interface UnitCtx {
-  readonly browser: Browser;
+  readonly session: ProbeSession<Browser>;
   readonly o: BehaviourOptions;
   readonly block: WriteBlock;
   /** the behaviour budget's end (t0 + budgetMs) */
@@ -1715,9 +1686,9 @@ interface UnitCtx {
   /** battery units not yet run (each gets unitCap of what is left) */
   batteryLeft: number;
 }
-async function runUnits(browser: Browser, o: BehaviourOptions, block: WriteBlock, t0: number): Promise<BehaviourResult> {
+async function runUnits(session: ProbeSession<Browser>, o: BehaviourOptions, block: WriteBlock, t0: number): Promise<BehaviourResult> {
   const ctx: UnitCtx = {
-    browser, o, block, end: t0 + o.budgetMs, checks: [], cut: false, landmarks: null,
+    session, o, block, end: t0 + o.budgetMs, checks: [], cut: false, landmarks: null,
     axe: "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" },
     widths: [], forced: null, keyOpens: new Map(), nonModal: new Set(), batteryLeft: 0,
   };
@@ -1733,7 +1704,7 @@ async function runUnits(browser: Browser, o: BehaviourOptions, block: WriteBlock
 
   return {
     behaviour: {
-      version: 1, ran: true, browser: { name: o.browserName ?? "chromium", version: browser.version() }, namesComputedBy: NAMES_COMPUTED_BY,
+      version: 1, ran: true, browser: { name: o.browserName ?? "chromium", version: session.browser.version() }, namesComputedBy: NAMES_COMPUTED_BY,
       budgetMs: o.budgetMs, elapsedMs: Date.now() - t0, cut: ctx.cut, checks: ctx.checks, landmarks: ctx.landmarks, axe: ctx.axe, widths: ctx.widths, artifacts: ctx.forced ? [o.forcedPng] : [], writeBlock: WRITE_BLOCK_SCOPE,
     },
     forcedPng: ctx.forced,
@@ -1746,7 +1717,7 @@ async function runUnit(ctx: UnitCtx, unit: Unit): Promise<void> {
   try { await runUnitInner(ctx, unit); } finally { if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`); }
 }
 async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
-  const { browser, o, block, end, checks } = ctx;
+  const { session, o, block, end, checks } = ctx;
   const produced: BehaviourCheck[] = [];
   const budgetLeft = end - Date.now();
   const left = unit.battery ? unitCap(budgetLeft, ctx.batteryLeft) : budgetLeft;
@@ -1754,7 +1725,6 @@ async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
   if (left <= 0) { ctx.cut = true; fill(checks, [], unit.declared, "time budget"); return; }
   const unitEnd = Date.now() + left;
   let closed = false;
-  const held: Held = {};
   let loadsAt = 0;
   let loadsNow: () => number = () => 0;
   // what the unit did, and the writes the block stopped (charged to checks once the unit is over)
@@ -1774,35 +1744,33 @@ async function runUnitInner(ctx: UnitCtx, unit: Unit): Promise<void> {
   });
   const blocked = (): BlockedWrite[] => blockedOf(tried, taintedPhases(trace));
   block.unit(net);
-  const work = (async (): Promise<string | null> => {
-    let reached: Awaited<ReturnType<typeof openUnitPage>>;
-    try {
-      reached = await openUnitPage(browser, o, holdContext(held), net);
-    } catch (e) {
-      return e instanceof StepError ? `the steps failed — ${e.message}` : `could not reach the screen — ${firstLine(e)}`;
-    }
-    try {
-      loadsAt = reached.loads(); loadsNow = reached.loads;
+  const loadFailures: string[] = [];
+  const raced = await session.unit<string | null>({
+    ms: left,
+    ...unitPageHooks(net, loadFailures),
+    act: async ({ page, loads }) => {
+      loadsAt = loads(); loadsNow = loads;
       // the screen this unit reached must be the measured one — never judge an error / empty state instead
       if (o.measuredTags && o.measuredTags.length) {
-        const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
-        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
+        const diff = fingerprintDiff(o.measuredTags, await page.evaluate(visibleTags, null), unit.uses);
+        if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${loadFailures.length ? `; failed while loading: ${loadFailures.slice(0, 3).join(", ")}` : ""})`);
       }
       // what is on screen before the unit's first action — a tooltip shown before it is not the control's
-      await reached.page.evaluate(tipPreMark, null).catch(() => false);
-      await unit.run(api(reached.page));
+      await page.evaluate(tipPreMark, null).catch(() => false);
+      await unit.run(api(page));
       return null;
-    } finally {
-      // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
-      // the unit's own time
+    },
+    // a write deferred a little after the unit's last action (an undo window) is still seen and charged — bounded by
+    // the unit's own time
+    beforeClose: async () => {
       const last = trace.actions.at(-1);
       const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
       if (wait > 0) await sleep(wait, undefined, { ref: false });
-      await reached.context.close().catch(() => undefined);
-    }
-  })().catch(unitEndWhy);
-  // the context exists from before the screen was reached: closing it ends whatever the unit waits on — ≤ 5 s in all
-  const raced = await raceBudget(work, left, held, () => { closed = true; ctx.cut = true; });
+    },
+    unreached: (f) => f.why,
+    failed: unitEndWhy,
+    onCut: () => { closed = true; ctx.cut = true; },
+  });
   if (raced.cut) {
     block.unit(null);
     checks.push(...judgeWrites(produced, blocked()));
@@ -1831,7 +1799,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
       await park(page);
       u.phase("a11y.landmarks");
       let yaml: string | null = null;
-      try { yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 10_000) }); } catch (e) { if (endsUnit(e, page)) throw e; }
+      try { yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(ctx.session.timeout, 10_000) }); } catch (e) { if (endsUnit(e, page)) throw e; }
       const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
       ctx.landmarks = tree ? tree.landmarks : null;
       for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
@@ -1981,7 +1949,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
 /** P2 (render): forced colours, then the widths (live viewport changes). */
 function renderUnit(ctx: UnitCtx): Unit {
   const { o, widths } = ctx;
-  const designW = o.viewport.w, designH = o.viewport.h;
+  const designW = ctx.session.viewport.w, designH = ctx.session.viewport.h;
   const mid = designW >= 1280, narrow = designW > 320;
   return {
     name: "render",
