@@ -2658,13 +2658,13 @@ function memberRefs(codeToken) {
     const member = part.slice(dot + 1);
     if (dot <= 0 || !IDENT.test(member) || /(^|[^\w])\d+\.\w+$/.test(part)) continue;
     if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
-    const path17 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
-    const containers = [...path17.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
+    const path19 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
+    const containers = [...path19.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
     if (containers.length) out.push({ member, containers });
   }
   return out;
 }
-var escapeRe = (s) => s.replace(/[$]/g, "\\$");
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var BINDING = "(?:^|[^\\w$.])(?:const|val|var|let|final|static)\\s";
 function headNames(rawHead, container) {
   const head = rawHead.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');

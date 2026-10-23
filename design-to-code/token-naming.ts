@@ -157,7 +157,7 @@ function memberRefs(codeToken: string): MemberRef[] {
 // `extension<ColorsTokens>()!.copyWith`, `const o: Partial<ColorsTokens> = `) and a construction outside a binding is an
 // argument or a default (`Card(colors = ColorsTokens`, `fun Card(t: ColorsTokens = ColorsTokens`) — hand-picked values.
 // Compose's `LocalColorsTokens` provides `ColorsTokens` instances, so a `Local<C>` container also accepts C's blocks.
-const escapeRe = (s: string): string => s.replace(/[$]/g, "\\$");
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const BINDING = "(?:^|[^\\w$.])(?:const|val|var|let|final|static)\\s";
 function headNames(rawHead: string, container: string): boolean {
   const head = rawHead.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
