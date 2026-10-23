@@ -46,7 +46,7 @@ import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } 
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
 import { SEVERITY_ORDER, crossCheck } from "./cross-check.ts";
-import { crossCheckInputOf, readScreenInputs } from "./screen-inputs.ts";
+import { crossCheckInputOf, readScreenInputs, withCatalog } from "./screen-inputs.ts";
 import { controlKind, outermostControl, isDisabledLayer, DISABLED_WORD } from "./control-kind.ts";
 import type { CrossCheckScreen } from "./cross-check.ts";
 import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
@@ -1448,9 +1448,10 @@ export function main(argv: string[]): number {
     "  --overrides defaults to <out>.overrides.json when it exists: { overrides: [{ code, nodeId?, token?,\n" +
     "  component?, severity, reason, decidedBy?, decidedAt? }] } — the user's severity decisions, applied to\n" +
     "  BOTH the .json and the .md (never hand-edit severities in the .md).\n" +
-    "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
-    "  It takes design/export/design-system or a library export, design/export/libraries/<dir>.\n" +
-    "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
+    "  A design system turns on the cross-FILE pass (does this screen come from that design system?): --design-system\n" +
+    "  takes design/export/design-system or a library export, design/export/libraries/<dir>; without it, the\n" +
+    "  design-system/ of the export the screen sits in is used when there is one (stderr names it). With none, every\n" +
+    "  token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
     "  --out defaults to design/audit/<input file's own basename> — the same <LayerName>__<node-id>\n" +
     "  name the export gave the screen file, so re-auditing the same screen always lands on the same\n" +
     "  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same\n" +
@@ -1479,12 +1480,11 @@ export function main(argv: string[]): number {
   if ("errors" in read) { for (const e of read.errors) console.error(e); return 2; }
   const ctx = read.inputs;
   for (const n of ctx.notes) console.error(n);
-  const inputs: AuditInput[] = ctx.screens.map((s) => ({ doc: s.doc, label: s.label, ...ifDefined("vars", s.vars), assets: s.assets }));
+  const inputs: AuditInput[] = ctx.screens;
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : undefined;
   const ds = ctx.designSystem;
-  const designSystem: AuditDesignSystem | undefined = ds
-    ? { tokens: ds.tokens, ...ifDefined("components", ds.components || catalog), componentsLibrary: ds.componentsLibrary, stylesText: ds.stylesText, componentsFile: ds.componentsFile, isLibrary: ds.isLibrary }
-    : undefined;
+  // --catalog stands in for a named design system's catalog, and beats a found one's (screen-inputs.ts withCatalog)
+  const designSystem: AuditDesignSystem | undefined = withCatalog(ds, catalog) ?? undefined;
   const neighbours = findExportNeighbours(firstFile);
   // The user's severity decisions for this report pair, beside it (or --overrides). Present but
   // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.

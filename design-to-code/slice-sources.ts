@@ -15,6 +15,7 @@ import type { TokensDoc } from "./types.ts";
 import { isTokensDoc } from "./doc-guards.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { MERGED_VARIABLES_FILE } from "../bridge/src/project-layout.ts";
+import { screenSiblingFile } from "./export-index.ts";
 
 /** Map(variable key -> [screen label]) */
 export type SliceSources = Map<string, string[]>;
@@ -85,7 +86,7 @@ function variablesContext(screenFiles: readonly string[] | null | undefined, var
     return null;
   };
   const files = screenFiles || [];
-  const own = files.map((f) => readTokens(String(f).replace(/\.json$/, ".vars.json")));
+  const own = files.map((f) => readTokens(screenSiblingFile(String(f), "vars")));
   let variablesPath = varsFile || null;
   const firstFile = files[0]; // set exactly when files.length
   if (!variablesPath && firstFile !== undefined) {
@@ -94,7 +95,7 @@ function variablesContext(screenFiles: readonly string[] | null | undefined, var
     const sibling = path.join(path.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy: string | null = null;

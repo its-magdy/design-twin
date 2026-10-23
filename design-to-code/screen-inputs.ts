@@ -8,8 +8,9 @@
 //
 //   - variables: slice-sources.ts variablesContext — --variables, else the export root's union, else (a lone screen) its
 //     own slice; a stale design/variables.json above design/export/ is never read, and is warned about.
-//   - design system: --design-system, else the design-system/ of the export the first screen sits in, else that of the
-//     cwd's export (project-layout.ts findExportDir); read in either layout (design-system-dir.ts readDesignSystemDir).
+//   - design system: --design-system, else the design-system/ of the export the first screen sits in, else — for a screen
+//     in no export at all — that of the cwd's export (project-layout.ts findExportDir); never another export's beside a
+//     screen whose own has none. Read in either layout (design-system-dir.ts readDesignSystemDir).
 //   - map: --map (read fail-loud), else design/codeconnect.local.json or ./codeconnect.local.json; a found map that is
 //     broken only labels nothing (a warning), since it labels proposals and decides nothing.
 //   - siblings: every other screen the export indexes (export-index.ts), read only when a report has proposals.
@@ -26,19 +27,13 @@ import { findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts"
 import type { DesignSystemDir, LibraryExport } from "./design-system-dir.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenAssetsDoc } from "./doc-guards.ts";
-import { exportRootOfScreen, pagesRootOfScreen, readExportIndex } from "./export-index.ts";
+import { exportRootOfScreen, pagesRootOfScreen, readExportIndex, screenSiblingFile } from "./export-index.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import type { CrossCheckInput, CrossCheckScreen } from "./cross-check.ts";
 import type { CodeConnectMap, ComponentsCatalog, ScreenAssetsDoc, ScreenDoc, TokensDoc } from "./types.ts";
-
-/** A screen export's sibling file of `kind`: `<stem>.vars.json` (its variable slice) or `<stem>.assets.json` (its asset
- *  manifest) — bridge/src/pages-layout.ts screenPaths' names, beside the screen. */
-export function screenSiblingFile(screenFile: string, kind: "vars" | "assets"): string {
-  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
-}
 
 /** One screen as both CLIs read it: crossCheck's screen, plus its file and asset manifest (null when absent or unreadable —
  *  it is advice). */
@@ -101,15 +96,16 @@ export function exportSiblings(files: readonly string[]): (() => CrossCheckScree
   };
 }
 
-// The design-system dir to read: the one named, else design-system/ of the first screen's export, else of the cwd's
-// export — whichever exists. A path under the cwd is printed relative to it, as the user would type it.
+// The design-system dir to read: the one named, else design-system/ of the first screen's export, else (a screen in no
+// export) of the cwd's export — when it exists. A screen whose own export has no design system gets none: another
+// export's is another Figma file's, and its findings (collision blockers among them) would gate this screen. A path
+// under the cwd is printed relative to it, as the user would type it.
 function designSystemDirOf(firstFile: string | undefined, named: string | undefined): { dir: string; given: boolean } | null {
   if (named) return { dir: named, given: true };
   const shown = (abs: string): string => { const rel = path.relative(process.cwd(), abs); return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep).join("/") : abs; };
   const root = firstFile === undefined ? null : pagesRootOfScreen(firstFile);
-  const candidates = [...(root !== null ? [path.join(root, DESIGN_SYSTEM_DIR)] : []), path.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR)];
-  const found = candidates.find((d) => fs.existsSync(d) && fs.statSync(d).isDirectory());
-  return found === undefined ? null : { dir: shown(found), given: false };
+  const dir = root !== null ? path.join(root, DESIGN_SYSTEM_DIR) : path.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  return fs.existsSync(dir) && fs.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
 }
 
 /** The screen files and the flags, resolved (see the top of the file); `errors` when a variables file is there but
@@ -132,6 +128,7 @@ export function readScreenInputs(files: readonly string[], flags: ScreenInputsFl
   const at = designSystemDirOf(firstFile, flags.designSystem);
   const designSystem: ScreenDesignSystem | null = at === null ? null : { ...readDesignSystemDir(at.dir), ...at };
   if (at === null) notes.push(`note  no design system: none given, and no ${DESIGN_SYSTEM_DIR}/ beside the export (pass --design-system)`);
+  else if (at.given && !fs.existsSync(at.dir)) notes.push(`note  --design-system ${at.dir} does not exist — no design system was read`);
   else notes.push(`design system: ${at.dir}${at.given ? "" : " (found beside the export; pass --design-system to choose another)"}`);
   // The --as-library exports beside the export (libraries/index.json), found from the screen's own path or the
   // design-system dir's — never a directory the user did not already pull into.
@@ -150,6 +147,13 @@ export function readScreenInputs(files: readonly string[], flags: ScreenInputsFl
       designSystem, libraries, map, mapFile, siblings: exportSiblings(files), notes,
     },
   };
+}
+
+/** The design system with a catalog the user named (audit's --catalog): it stands in when a NAMED design system has no
+ *  catalog, and beats the catalog of one only found beside the export — the user named that catalog, not that dir. */
+export function withCatalog(ds: ScreenDesignSystem | null, catalog: ComponentsCatalog | undefined): ScreenDesignSystem | null {
+  if (ds === null || catalog === undefined) return ds;
+  return { ...ds, components: ds.given ? ds.components || catalog : catalog };
 }
 
 /** What crossCheck needs from a screen context (ScreenInputs, or audit's options with its screens). */

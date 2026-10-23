@@ -38,8 +38,7 @@
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.
-import { hasExportIndex, pagesRootOfScreen, rootIndexFile } from "./export-index.ts";
-import { screenSiblingFile } from "./screen-inputs.ts";
+import { hasExportIndex, pagesRootOfScreen, rootIndexFile, screenSiblingFile } from "./export-index.ts";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -723,7 +722,7 @@ function siblingFilesOf(f: string): string[] {
     return out;
   }
   // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
-  // exact same stem (screen-inputs.ts screenSiblingFile — bridge/src/pages-layout.ts's naming).
+  // exact same stem (export-index.ts screenSiblingFile — bridge/src/pages-layout.ts's naming).
   if (/\.json$/i.test(base)) {
     for (const kind of ["vars", "assets"] as const) {
       const p = screenSiblingFile(abs, kind);

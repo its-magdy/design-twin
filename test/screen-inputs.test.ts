@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import { catalog, collection, screenExport, tokens, variable } from "./fixtures.ts";
-import { crossCheckInputOf, readScreenInputs, screenSiblingFile } from "../design-to-code/screen-inputs.ts";
+import { crossCheckInputOf, readScreenInputs, withCatalog } from "../design-to-code/screen-inputs.ts";
+import { screenSiblingFile } from "../design-to-code/export-index.ts";
 import type { ScreenInputs } from "../design-to-code/screen-inputs.ts";
 import { cliRunner } from "./cli-runner.ts";
 import { main as auditMain } from "../design-to-code/audit.ts";
@@ -116,6 +117,36 @@ console.log("what is not there: no input, and a note saying so");
   check(`a screen outside any export: the cwd's export's design system (got ${loose.designSystem?.dir})`, loose.designSystem?.dir === "design/export/design-system");
 }
 
+{
+  // a screen in an export with no design-system/ while the cwd's project has one: none — another export's is another file's
+  const root = project();
+  const elsewhere = tmp("other-export");
+  put(path.join(elsewhere, "pages/Home/A__1_1.json"), screenExport([{ id: "1:1", type: "FRAME", name: "A" }]));
+  put(path.join(elsewhere, "pages/index.json"), { pageDirs: [], layers: [] });
+  const ix = ok(read(root, [path.join(elsewhere, "pages/Home/A__1_1.json")]));
+  check(`a screen whose own export has no design system: none, not the cwd's (got ${ix.designSystem?.dir ?? null})`, ix.designSystem === null && ix.notes.some((n) => /^note {2}no design system/.test(n)));
+  const named = ok(read(root, [SCREEN], { designSystem: "no/such/dir" }));
+  check("a named --design-system that is not there: said, not reported as read", named.notes.includes("note  --design-system no/such/dir does not exist — no design system was read"));
+}
+{
+  // either layout: a dir holding both catalogs is a design file's (components.local.json wins)
+  const root = project();
+  put(path.join(root, "design/export/design-system/components.json"), catalog([{ key: "zz", name: "Other", type: "COMPONENT" }]));
+  const ix = ok(read(root, [SCREEN]));
+  check("components.local.json beside a components.json: the design file's layout", ix.designSystem?.isLibrary === false && ix.designSystem.components?.components[0]?.name === "Button");
+}
+{
+  // audit's --catalog against the design system: it stands in for a named one's missing catalog, and beats a found one's
+  const root = project();
+  const named = catalog([{ key: "nk", name: "Named", type: "COMPONENT" }]);
+  const found = ok(read(root, [SCREEN])).designSystem;
+  check("withCatalog: a catalog the user named beats a found design system's", withCatalog(found, named)?.components === named);
+  const given = ok(read(root, [SCREEN], { designSystem: "design/export/design-system" })).designSystem;
+  check("…not a named one's", withCatalog(given, named)?.components?.components[0]?.name === "Button");
+  const empty = ok(read(root, [SCREEN], { designSystem: "design/export/libraries/none" })).designSystem;
+  check("…and stands in when a named one has no catalog", withCatalog(empty, named)?.components === named && withCatalog(null, named) === null && withCatalog(found, undefined) === found);
+}
+
 console.log("what is there but broken");
 {
   const root = project();
@@ -157,6 +188,30 @@ console.log("the two CLIs read one context");
   const codes = (r: unknown): string => JSON.stringify(r && typeof r === "object" && "findings" in r && Array.isArray(r.findings) ? r.findings.map((f: { code?: unknown }) => f.code) : null);
   check(`…and so are the cross-file findings (${codes(cr)})`, codes(crossFile) === codes(cr));
   check("both print where the design system came from", /design system: design\/export\/design-system \(found beside the export/.test(a.stderr) && /design system: design\/export\/design-system \(found/.test(c.stderr));
+}
+
+{
+  // a broken split file in a FOUND design system stops the audit like a named one (exit 2, the file named)
+  const root = project();
+  put(path.join(root, "design/export/design-system/tokens.json"), "{ not json");
+  const a = auditCli([SCREEN, "--platform", "web", "--json"], { cwd: root });
+  check(`audit, a broken tokens.json in the found design-system/: exit 2 naming it (got ${a.status})`, a.status === 2 && /design-system tokens: '.*tokens\.json' is not valid JSON/.test(a.stderr));
+}
+{
+  // a lone screen with only its own slice: cross-check reads the slice as the variables, and no other screen is blamed
+  const root = tmp("lone");
+  put(path.join(root, "s.json"), screenExport([{ id: "1:1", type: "FRAME", name: "A" }], { screen: "A" }));
+  put(path.join(root, "s.vars.json"), slice);
+  const c = crossCheckCli(["s.json", "--json"], { cwd: root });
+  check(`cross-check, a lone screen: its own slice is the variables read (${c.stderr.split("\n")[0]})`, c.status === 0 && /^variables: s\.vars\.json$/m.test(c.stderr) && !/-elsewhere/.test(c.stdout));
+}
+{
+  // the library passed as the design system is not also offered as a "re-run with --design-system" library
+  const root = project();
+  const a = auditCli([SCREEN, "--platform", "web", "--json", "--design-system", "design/export/libraries/brand-lib"], { cwd: root });
+  check(`audit --design-system <the library>: no re-run hint for that same library (exit ${a.status})`, a.status === 0 && a.stdout.includes("\"crossFile\"") && !/the library export design\/export\/libraries\/brand-lib/.test(a.stdout));
+  const b = auditCli([SCREEN, "--platform", "web", "--json"], { cwd: root });
+  check("…while the found design-system/ run names the library to re-run with", /the library export design\/export\/libraries\/brand-lib/.test(b.stdout));
 }
 
 console.log("screenSiblingFile");

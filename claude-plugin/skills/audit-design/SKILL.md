@@ -157,7 +157,9 @@ report the pair once, not once per screen.
    **A design system is what makes this a real audit rather than a self-consistent one.** Without `--design-system`
    the audit (like cross-check) reads the `design-system/` of the export the screen sits in, when there is one, and
    says on stderr which directory it used (`design system: … (found beside the export …)`); pass the flag to choose
-   another (a library export, below). With no design system at all, every check reasons inside the screen's own JSON, and the token-binding table means "this node
+   another (a library export, below). A found design system counts like a named one: a broken split file in it stops
+   the audit (exit 2, the file named), and its cross-file blockers gate the build. A screen whose own export has no
+   `design-system/` gets none — never another export's. With no design system at all, every check reasons inside the screen's own JSON, and the token-binding table means "this node
    binds SOME variable" — not "it binds a variable your design system defines". Those read identically
    and are wildly different facts: on the live run the audit reported 96% of colours bound on a screen
    whose every collection key belonged to a different library than the design system sitting beside

@@ -1201,6 +1201,9 @@ var MEASURED_KEYS_DOC = {
 // design-to-code/export-index.ts
 var PAGES = "pages";
 var INDEX = "index.json";
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
 var rootIndexFile = (exportRoot) => path3.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
 function pagesRootOfScreen(screenFile) {
@@ -1670,7 +1673,7 @@ function variablesContext(screenFiles, varsFile, opts) {
     return null;
   };
   const files = screenFiles || [];
-  const own = files.map((f) => readTokens(String(f).replace(/\.json$/, ".vars.json")));
+  const own = files.map((f) => readTokens(screenSiblingFile(String(f), "vars")));
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
@@ -1679,7 +1682,7 @@ function variablesContext(screenFiles, varsFile, opts) {
     const sibling = path6.join(path6.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs6.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs6.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
@@ -1691,9 +1694,6 @@ function variablesContext(screenFiles, varsFile, opts) {
 }
 
 // design-to-code/screen-inputs.ts
-function screenSiblingFile(screenFile, kind) {
-  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
-}
 function exportSiblings(files) {
   const checked = new Set(files.map((f) => path7.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
@@ -1725,9 +1725,8 @@ function designSystemDirOf(firstFile, named) {
     return rel && !rel.startsWith("..") && !path7.isAbsolute(rel) ? rel.split(path7.sep).join("/") : abs;
   };
   const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
-  const candidates = [...root !== null ? [path7.join(root, DESIGN_SYSTEM_DIR)] : [], path7.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR)];
-  const found = candidates.find((d) => fs7.existsSync(d) && fs7.statSync(d).isDirectory());
-  return found === void 0 ? null : { dir: shown(found), given: false };
+  const dir = root !== null ? path7.join(root, DESIGN_SYSTEM_DIR) : path7.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
 }
 function readScreenInputs(files, flags = {}) {
   const ctx = variablesContext(files, flags.variables, { sliceFallback: true });
@@ -1747,6 +1746,7 @@ function readScreenInputs(files, flags = {}) {
   const at = designSystemDirOf(firstFile, flags.designSystem);
   const designSystem = at === null ? null : { ...readDesignSystemDir(at.dir), ...at };
   if (at === null) notes.push(`note  no design system: none given, and no ${DESIGN_SYSTEM_DIR}/ beside the export (pass --design-system)`);
+  else if (at.given && !fs7.existsSync(at.dir)) notes.push(`note  --design-system ${at.dir} does not exist \u2014 no design system was read`);
   else notes.push(`design system: ${at.dir}${at.given ? "" : " (found beside the export; pass --design-system to choose another)"}`);
   const libraries = findLibraryExports(firstFile, at?.dir);
   let map = null, mapFile = null;
@@ -1776,6 +1776,10 @@ function readScreenInputs(files, flags = {}) {
       notes
     }
   };
+}
+function withCatalog(ds, catalog) {
+  if (ds === null || catalog === void 0) return ds;
+  return { ...ds, components: ds.given ? ds.components || catalog : catalog };
 }
 function crossCheckInputOf(c, fallback = {}) {
   const ds = c.designSystem;
@@ -4257,9 +4261,10 @@ function main(argv) {
   --overrides defaults to <out>.overrides.json when it exists: { overrides: [{ code, nodeId?, token?,
   component?, severity, reason, decidedBy?, decidedAt? }] } \u2014 the user's severity decisions, applied to
   BOTH the .json and the .md (never hand-edit severities in the .md).
-  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
-  It takes design/export/design-system or a library export, design/export/libraries/<dir>.
-  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
+  A design system turns on the cross-FILE pass (does this screen come from that design system?): --design-system
+  takes design/export/design-system or a library export, design/export/libraries/<dir>; without it, the
+  design-system/ of the export the screen sits in is used when there is one (stderr names it). With none, every
+  token-binding % below means "binds SOME variable", not "matches your design system".
   --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
   name the export gave the screen file, so re-auditing the same screen always lands on the same
   report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
@@ -4305,10 +4310,10 @@ function main(argv) {
   }
   const ctx = read.inputs;
   for (const n of ctx.notes) console.error(n);
-  const inputs = ctx.screens.map((s) => ({ doc: s.doc, label: s.label, ...ifDefined("vars", s.vars), assets: s.assets }));
+  const inputs = ctx.screens;
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
   const ds = ctx.designSystem;
-  const designSystem = ds ? { tokens: ds.tokens, ...ifDefined("components", ds.components || catalog), componentsLibrary: ds.componentsLibrary, stylesText: ds.stylesText, componentsFile: ds.componentsFile, isLibrary: ds.isLibrary } : void 0;
+  const designSystem = withCatalog(ds, catalog) ?? void 0;
   const neighbours = findExportNeighbours(firstFile);
   const outBase = out || path12.join(AUDIT_DIR, path12.basename(firstFile, ".json"));
   const ownOverrides = outBase + ".overrides.json";

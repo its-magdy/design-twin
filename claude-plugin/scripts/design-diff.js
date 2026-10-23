@@ -34,12 +34,6 @@ function looksLikeExportDir(dir) {
 }
 
 // bridge/src/json-util.ts
-function nullProto() {
-  return /* @__PURE__ */ Object.create(null);
-}
-function isRecord(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
@@ -522,6 +516,9 @@ var MEASURED_KEYS_DOC = {
 // design-to-code/export-index.ts
 var PAGES = "pages";
 var INDEX = "index.json";
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
 var rootIndexFile = (exportRoot) => path2.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs3.existsSync(rootIndexFile(exportRoot));
 function pagesRootOfScreen(screenFile) {
@@ -529,26 +526,33 @@ function pagesRootOfScreen(screenFile) {
   return path2.basename(pages) === PAGES ? path2.dirname(pages) : null;
 }
 
-// bridge/src/design-system-layout.ts
-var DIR = "design-system";
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_DIR = DIR;
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+// design-to-code/design-diff.ts
+import fs7 from "node:fs";
+import path5 from "node:path";
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function manifestOf(doc) {
+  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
+}
 
 // design-to-code/proc.ts
 import { spawn, spawnSync } from "node:child_process";
@@ -796,30 +800,6 @@ function readDocFile(file, what, guard, hint) {
   exitCli(2);
 }
 
-// design-to-code/export-shape.ts
-function isIrNode(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
-}
-function isScreenExport(x) {
-  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
-}
-function isLayerFile(x) {
-  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
-}
-function isScreenDoc(x) {
-  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
-}
-isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
-function screenRoots(doc) {
-  if (isScreenExport(doc)) return doc.nodes;
-  if (isLayerFile(doc)) return [doc.tree];
-  if (isIrNode(doc)) return [doc];
-  return [];
-}
-function manifestOf(doc) {
-  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
-}
-
 // design-to-code/visible-tree.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
@@ -917,16 +897,14 @@ function walkWithHidden(root, fn, opts) {
   walk(root, fn, false, opts);
 }
 
-// bridge/src/library-layout.ts
-var ROOT = "libraries";
-var INDEX2 = "index.json";
-var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
-var COMPONENTS = "components.json";
-var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
-
-// design-to-code/design-system-dir.ts
-var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
-var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
 
 // design-to-code/cli-args.ts
 import path4 from "node:path";
@@ -1018,161 +996,6 @@ ${usage}`;
   }
   console.error(failure);
   exitCli(exitCode);
-}
-
-// design-to-code/map-validate.ts
-var STATUSES = ["active", "deprecated", "needs-review"];
-var KEYS = {
-  root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
-  figma: ["key", "id", "name", "unstable"],
-  code: ["module", "export", "targets"],
-  target: ["module", "export"],
-  vo: ["when", "code"],
-  voCode: ["module", "export"],
-  children: ["layerNamePattern", "slot"],
-  prop: Object.assign(nullProto(), {
-    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
-    boolean: ["kind", "codeProp", "default", "omitDefault"],
-    string: ["kind", "codeProp"],
-    instance: ["kind", "codeProp", "slot"]
-  })
-};
-var PROP_KINDS = Object.keys(KEYS.prop);
-var isStr = (v) => typeof v === "string";
-var isBool = (v) => typeof v === "boolean";
-var noExtra = (obj, allowed, at, err) => {
-  if (!Array.isArray(allowed)) return;
-  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
-};
-var optStrings = (obj, keys, at, err) => {
-  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
-};
-function validateMap(map) {
-  const errors = [];
-  const err = (path6, message) => errors.push({ path: path6, message });
-  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
-  noExtra(map, KEYS.root, "", err);
-  if (map.version !== 1) err("version", "must be 1");
-  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isRecord(map.components)) {
-    err("components", "must be an object");
-    return { ok: false, errors };
-  }
-  for (const key of Object.keys(map.components)) {
-    const e = map.components[key];
-    const at = `components.${key}`;
-    if (!isRecord(e)) {
-      err(at, "entry must be an object");
-      continue;
-    }
-    noExtra(e, KEYS.entry, at, err);
-    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
-    else {
-      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
-      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
-      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
-      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
-    }
-    if (!isRecord(e.code)) err(`${at}.code`, "required object");
-    else {
-      noExtra(e.code, KEYS.code, `${at}.code`, err);
-      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
-      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
-      if (e.code.targets !== void 0) {
-        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
-        else for (const t of Object.keys(e.code.targets)) {
-          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isRecord(tv)) err(ta, "must be an object");
-          else {
-            noExtra(tv, KEYS.target, ta, err);
-            optStrings(tv, ["module", "export"], ta, err);
-          }
-        }
-      }
-    }
-    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
-    optStrings(e, ["note"], at, err);
-    if (e.props !== void 0) {
-      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
-      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
-    }
-    if (e.variantOverrides !== void 0) {
-      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
-      else e.variantOverrides.forEach((vo, i) => {
-        const va = `${at}.variantOverrides[${i}]`;
-        if (!isRecord(vo)) {
-          err(va, "must be an object");
-          return;
-        }
-        noExtra(vo, KEYS.vo, va, err);
-        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
-        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
-        else {
-          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
-          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
-          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
-        }
-      });
-    }
-    if (e.childrenByLayer !== void 0) {
-      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
-      else {
-        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
-        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
-      }
-    }
-  }
-  return { ok: errors.length === 0, errors };
-}
-function validateProp(p, at, err) {
-  if (!isRecord(p)) {
-    err(at, "prop must be an object");
-    return;
-  }
-  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
-  if (!Array.isArray(allowed)) {
-    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
-    return;
-  }
-  noExtra(p, allowed, at, err);
-  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
-  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
-  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
-  if (p.kind === "enum") {
-    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
-      const t = typeof p.values[k];
-      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
-    }
-    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
-  }
-  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
-  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
-}
-function isCodeConnectMap(x) {
-  return validateMap(x).ok;
-}
-isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
-
-// design-to-code/screen-inputs.ts
-function screenSiblingFile(screenFile, kind) {
-  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
-}
-
-// design-to-code/design-diff.ts
-import fs7 from "node:fs";
-import path5 from "node:path";
-
-// design-to-code/map-util.ts
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
 }
 
 // design-to-code/design-diff.ts
@@ -1332,6 +1155,34 @@ var FileKeyCache = class extends FileMemo {
   }
 };
 var fileKeyCache = new FileKeyCache();
+
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX2 = "index.json";
+var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
 
 // design-to-code/design-diff.ts
 var CATEGORY = {

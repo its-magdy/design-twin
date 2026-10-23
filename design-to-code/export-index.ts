@@ -32,6 +32,12 @@ import type { IndexRow } from "./types.ts";
 const PAGES = "pages";
 const INDEX = "index.json";
 
+/** A screen export's sibling file of `kind`: `<stem>.vars.json` (its variable slice) or `<stem>.assets.json` (its asset
+ *  manifest) — bridge/src/pages-layout.ts screenPaths' names, beside the screen. */
+export function screenSiblingFile(screenFile: string, kind: "vars" | "assets"): string {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
+
 /** The root index file of the export at `exportRoot`. */
 export const rootIndexFile = (exportRoot: string): string => path.join(exportRoot, PAGES, INDEX);
 /** Whether `exportRoot` holds an export index (pages/index.json). */
