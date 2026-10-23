@@ -69,7 +69,7 @@ function session(): Holder {
   if (holder) return holder;
   const r = readSettings();
   if (!r.ok) throw new Error(r.problem);
-  holder = bridgeHolder("session", { settings: r.settings, createBridge, daemon: daemonSide(r.settings), log: wlog });
+  holder = bridgeHolder("session", { settings: r.settings, createBridge, daemon: daemonSide, log: wlog });
   return holder;
 }
 // Every tool reaches the plugin through ONE route (route.ts), over whichever side holds the bridge — this

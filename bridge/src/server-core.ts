@@ -15,6 +15,7 @@ import type { Server, ServerWebSocket } from "bun";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import * as tokenStore from "./token-store.ts";
+import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
@@ -1232,6 +1233,9 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     /** the token a daemon serving this bridge is keyed on (settings.ts daemonTokenOf): this bridge's own once it is saved —
      *  the run that mints one saves it above, before anything serves — else null */
     savedToken: (): string | null => (tokenInfo.source === "ephemeral" ? null : token),
+    /** the token in use, as the next bridge of this process should be given it: a token minted and saved here is now
+     *  the saved file's (so a later bridge neither writes it over a rotated file nor prints it again) */
+    tokenInUse: (): ResolvedToken => ({ token, source: tokenInfo.source, path: tokenInfo.path, created: false }),
     /** test seam: one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
     heartbeatTick,
   };

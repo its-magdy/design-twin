@@ -157,10 +157,8 @@ const fileNames = (clients: ClientRowLike[] | null | undefined) => (clients || [
 // command. `pluginStale` is computed server-side (server-core.ts's `describe()`), so doctor doesn't
 // duplicate the version-compare logic; it just relays whichever client(s) are behind.
 function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: string): { detail: string; next?: string } {
-  // daemonRowStalenessNote comes from staleness.ts, NOT server-core: this file's header rule is that
-  // server-core is never loaded until the port is already known to be valid, because loading it can
-  // exit the process on a bad FIGMA_BRIDGE_PORT. staleness.ts has no such load-time effect, so it is a
-  // plain static import.
+  // daemonRowStalenessNote comes from staleness.ts, NOT server-core: server-core is only loaded for the
+  // plugin probe (this file's header), and staleness.ts is a plain static import.
   const detail = `${prefix}: ${fileNames(clients)}`;
   const stale = (clients || []).map((c) => c.pluginStale).filter((n): n is string => Boolean(n));
   // A row with no `pluginVersion` KEY at all (not merely a `null` value) means it came from a

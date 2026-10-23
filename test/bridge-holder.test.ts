@@ -33,7 +33,9 @@ interface FakeBridge extends OwnBridge { closes: number; listenError: boolean }
  *  one, as server-core does; without one, the real thing would exit the process, which no case here asks for). */
 function bridges({ held = false, bindMs = 0 }: { held?: boolean; bindMs?: number } = {}) {
   const made: FakeBridge[] = [];
+  const given: BridgeSettings[] = [];
   const factory: BridgeFactory = (_settings, opts) => {
+    given.push(_settings);
     let ready: () => void = () => {};
     const listening = new Promise<void>((r) => { ready = r; });
     const b: FakeBridge = {
@@ -48,6 +50,10 @@ function bridges({ held = false, bindMs = 0 }: { held?: boolean; bindMs?: number
       close() { b.closes++; },
       listening,
       savedToken: () => "t",
+      // as server-core: a token it was given to mint is saved by now
+      tokenInUse: () => (_settings.token.ok && _settings.token.resolved.source === "ephemeral"
+        ? { ..._settings.token.resolved, source: "file", path: "/tmp/fake-config/bridge-token", created: false }
+        : _settings.token.ok ? { ..._settings.token.resolved, created: false } : { token: "", source: "ephemeral", path: null, created: false }),
     };
     made.push(b);
     setTimeout(() => {
@@ -57,15 +63,16 @@ function bridges({ held = false, bindMs = 0 }: { held?: boolean; bindMs?: number
     }, bindMs);
     return b;
   };
-  return { factory, made };
+  return { factory, made, given };
 }
 
 interface Served { bridge: DaemonBridge; idleMs: number; shutdowns: number; idleOuts: number[]; activity: DaemonActivity; handle: ServeHandle }
 
 /** The daemon side: `live` makes connect() find a daemon; serve() records what it was given, and its shutdown closes
  *  the served bridge, as daemon.ts does. */
-function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = null }: { live?: boolean; assert?: string | null; serveMs?: number; serveFails?: string | null } = {}) {
+function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = null, assertMs = 0 }: { live?: boolean; assert?: string | null; serveMs?: number; serveFails?: string | null; assertMs?: number } = {}) {
   const served: Served[] = [];
+  const keyedOn: BridgeSettings[] = [];
   let connects = 0;
   const conn: DaemonConnection = {
     sock: "/tmp/fake-daemon.sock",
@@ -75,7 +82,7 @@ function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = nul
   const side: DaemonSide = {
     async connect() { connects++; return live ? conn : null; },
     status: async () => null,
-    async assertNoDaemon() { if (assert) throw new Error(assert); return "/tmp/fake-daemon.sock"; },
+    async assertNoDaemon() { await sleep(assertMs); if (assert) throw new Error(assert); return "/tmp/fake-daemon.sock"; },
     async serve(bridge, o) {
       await sleep(serveMs);
       if (serveFails) throw new Error(serveFails);
@@ -93,12 +100,12 @@ function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = nul
       return s.handle;
     },
   };
-  return { side, served, connects: () => connects, setLive(v: boolean) { live = v; } };
+  return { side, served, keyedOn, connects: () => connects, setLive(v: boolean) { live = v; } };
 }
 
 function holder(lifetime: Lifetime, b: ReturnType<typeof bridges>, d: ReturnType<typeof daemonSide>, settings: BridgeSettings = SETTINGS) {
   const logs: string[] = [];
-  const h = bridgeHolder(lifetime, { settings, createBridge: b.factory, daemon: d.side, log: (m) => logs.push(m) });
+  const h = bridgeHolder(lifetime, { settings, createBridge: b.factory, daemon: (s) => { d.keyedOn.push(s); return d.side; }, log: (m) => logs.push(m) });
   let why: string | null = null;
   void h.released.then((w) => { why = w; });
   return { h, logs, released: () => why };
@@ -266,6 +273,26 @@ console.log("\nsession:");
     d.served[0]?.shutdowns === 1 && b.made[0]?.closes === 1);
 }
 
+{
+  // First run: nothing saved, so the settings carry a token that would be minted. The bridge saves it on start.
+  const FIRST: BridgeSettings = { ...SETTINGS, token: { ok: true, resolved: { token: "minted", source: "ephemeral", path: null, created: false } } };
+  const b = bridges();
+  const d = daemonSide();
+  const { h } = holder("session", b, d, FIRST);
+  await h.upstream();
+  await settled();
+  const afterBind = d.keyedOn[d.keyedOn.length - 1];
+  check("a token minted and saved by this process's bridge keys every later daemon lookup (first run, then `dtwin serve` elsewhere)",
+    afterBind?.token.ok === true && afterBind.token.resolved.source === "file" && afterBind.token.resolved.token === "minted");
+  d.served[0]?.handle.shutdown(); // `dtwin stop` (or a rotation stopping it)
+  await settled();
+  await h.upstream();
+  const rebind = b.given[1];
+  check("…and a rebind is given it as saved: never minted (and written over a rotated file) or printed again",
+    b.given.length === 2 && rebind?.token.ok === true && rebind.token.resolved.source === "file" && !rebind.token.resolved.created);
+  h.release();
+}
+
 // ---------------------------------------------------------------- one-shot (a CLI command)
 console.log("\none-shot:");
 {
@@ -285,6 +312,18 @@ console.log("\none-shot:");
   h.release();
   await settled();
   check("release closes it", b.made[0]?.closes === 1 && released() === "released");
+}
+
+{
+  const b = bridges({ bindMs: 30 });
+  const d = daemonSide();
+  const { h } = holder("one-shot", b, d);
+  const p = h.upstream();
+  await sleep(5);
+  h.release();
+  const err = await errOf(p);
+  check("released while its bridge was binding → the call fails and the late bridge is closed, not held",
+    err === "the bridge has been released" && b.made[0]?.closes === 1 && h.held().kind === "none");
 }
 
 // ---------------------------------------------------------------- serve (`dtwin serve`)
@@ -315,6 +354,28 @@ console.log("\nserve:");
   await settled();
   check("a socket another daemon won → the call fails and the bridge is closed, without claiming a shutdown",
     err === "another daemon won the socket" && b.made[0]?.closes === 1 && released() === null);
+}
+
+{
+  const b = bridges();
+  const d = daemonSide({ assertMs: 20 });
+  const { h } = holder("serve", b, d);
+  const p = h.upstream();
+  await sleep(5);
+  h.release();
+  check("released during the already-running probe → no bridge is opened at all",
+    (await errOf(p)) === "the bridge has been released" && b.made.length === 0);
+}
+{
+  const b = bridges();
+  const d = daemonSide({ serveMs: 30 });
+  const { h } = holder("serve", b, d);
+  const p = h.upstream();
+  await sleep(10);
+  h.release();
+  const err = await errOf(p);
+  check("released while the socket was binding → the call fails, the bridge is closed and the late socket shut",
+    err === "the bridge has been released" && b.made[0]?.closes === 1 && d.served[0]?.shutdowns === 1 && h.held().kind === "none");
 }
 
 report();

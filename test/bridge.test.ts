@@ -3059,8 +3059,8 @@ void (async () => {
   ok("[token-boot] it reports which token is in play by fingerprint instead",
     boot2.stderr.includes(String(store.fingerprint(bootTok))));
 
-  // Regression: server-core resolves the token at REQUIRE time, so an unreadable --token-file must not
-  // throw out of a module load — a raw stack trace, before any front-end error handling was in scope.
+  // Regression: an unreadable --token-file once threw out of server-core's module load — a raw stack trace, before
+  // any front-end error handling was in scope. Now settings.ts keeps it as a failure the command reports.
   const badFile = runCli(["--show-token", "--token-file", "/nonexistent/nope"]);
   ok("[token-cli] an unreadable --token-file exits 1", badFile.status === 1);
   ok("[token-cli] with a one-line message, not a stack trace",

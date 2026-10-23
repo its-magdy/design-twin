@@ -795,7 +795,7 @@ async function daemonStatus(settings: BridgeSettings): Promise<void> {
 // `dtwin serve`: the bridge holder's "serve" lifetime (bridge-holder.ts) — refused when a daemon already runs (naming
 // --stop), then this process's bridge, published on the daemon socket with the settings' idle window.
 async function serveDaemon(settings: BridgeSettings): Promise<void> {
-  const holder = bridgeHolder("serve", { settings, createBridge, daemon: daemonSide(settings), log: (m) => console.error("[dtwin] " + m) });
+  const holder = bridgeHolder("serve", { settings, createBridge, daemon: daemonSide, log: (m) => console.error("[dtwin] " + m) });
   const up = await holder.upstream();
   const h = holder.held();
   console.error("[dtwin] bridge listening on " + up.address + " — socket " + (h.kind === "own" ? h.sock ?? "?" : "?"));
@@ -841,7 +841,7 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   const clock = timingsTo ? stageClock() : null;
   // Where requests go: the running daemon, or a bridge of our own for this command only — the bridge holder's
   // "one-shot" lifetime (bridge-holder.ts). Never shared: a process that finds the port held exits on it.
-  const holder = bridgeHolder("one-shot", { settings, createBridge, daemon: daemonSide(settings), log: (m) => console.error("[dtwin] " + m) });
+  const holder = bridgeHolder("one-shot", { settings, createBridge, daemon: daemonSide, log: (m) => console.error("[dtwin] " + m) });
   const up = await holder.upstream();
   const viaDaemon = up.kind === "daemon";
   if (viaDaemon) console.error("[dtwin] using the running daemon (" + up.address + ") — no reconnect needed.");
