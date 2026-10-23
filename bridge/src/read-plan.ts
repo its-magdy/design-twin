@@ -23,7 +23,7 @@ import { READ_OPT_ROWS } from "./read-opts.ts";
 import { TIMEOUTS } from "./timeouts.ts";
 import { ifDefined } from "./json-util.ts";
 import type { ReadOptName, ReadOptRow, ReadScopeKind } from "./read-opts.ts";
-import type { Commands } from "./commands.ts";
+import type { Commands, ExportCmd } from "./commands.ts";
 
 export type { ReadScopeKind } from "./read-opts.ts";
 
@@ -40,7 +40,8 @@ export type ReadScope =
 /** Read options as a caller has them: true asks, false or absent does not. Extra keys are ignored. */
 export type ReadOptsGiven = Partial<Record<ReadOptName, boolean | undefined>>;
 
-export type ReadCmd = "exportNode" | "exportSelection" | "exportFull" | "exportDesignSystem" | "exportLibrary" | "screenshot";
+/** What a read sends: the commands whose run traits say `export` (commands.ts). */
+export type ReadCmd = ExportCmd;
 export interface PlanOf<C extends ReadCmd> {
   cmd: C;
   args: Commands[C]["args"];

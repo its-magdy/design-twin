@@ -735,13 +735,14 @@ stops it too, and a port-in-use error names that socket.
 > could find it under the new token while it still held the port.
 
 Behaviour worth knowing:
-- Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
-  per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
-  exactly like a sequence of one-shot runs. The identity reads the plugin itself answers during an
-  export (`ping`, `whoami`) are not held behind that order: a `whoami` to one file answers while another
-  file exports. The selection and the listings (`list pages` / `list` / `list children`, `list
-  libraries`) stay in order, because they read layers and an export's catalogue walk briefly hides
-  hidden layers inside instances (`skipInvisibleInstanceChildren`).
+- Requests are **forwarded as they arrive**; the **plugin** decides what may run alongside what, in each
+  file, for every caller (a daemon client, the MCP server holding the bridge, the plugin window's own
+  buttons). Each command declares how it runs (`bridge/src/commands.ts` `runKind`): exports, screenshots
+  and writes run one at a time, in arrival order; the selection and the listings (`list pages` / `list` /
+  `list children`, `list libraries`) wait for the run ahead of them, because they read layers and an
+  export's catalogue walk briefly hides hidden layers inside instances (`skipInvisibleInstanceChildren`);
+  the identity reads (`ping`, `whoami`) answer at once, even during an export. Two files are two plugins,
+  so a pull of one file never waits on another file's export.
 - Every request id is unique per bridge (`r<nonce>-<seq>`) and a reply only settles the request on the
   connection it was sent to, so a late reply from an abandoned earlier request cannot answer the
   next one. When the plugin is connected but sends nothing the stall message says so ("the plugin is
@@ -754,8 +755,8 @@ Behaviour worth knowing:
   ended MCP session) disconnects from the daemon before its reply, the bridge tells the plugin to stop
   that work rather than leaving it to finish for nobody (the plugin checks for the cancel at every node, so it
   stops within a node, not at the end of the page; one long single `exportAsync` still runs to its end) —
-  and a request still queued for a departed
-  client is dropped without ever reaching the plugin.
+  and one the plugin still has queued is dropped without ever running. The next run in that file starts
+  when the abandoned one has actually stopped, not when the cancel was sent.
 - `--serve` / `--stop` / `--daemon-status` each own the whole invocation; combining one with a pull or
   a read option is refused rather than silently dropping the export you typed.
 - A stale socket left by a crashed daemon reads as "no daemon" and is replaced, rather than making

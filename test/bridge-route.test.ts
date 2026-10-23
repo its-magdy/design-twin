@@ -24,7 +24,8 @@ process.env.XDG_RUNTIME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-rout
 // server-core reads FIGMA_BRIDGE_TOKEN at load time, so it is imported after the assignment above.
 const core = await import("../bridge/src/server-core.ts");
 const daemon = await import("../bridge/src/daemon.ts");
-const { createRoute, ownUpstream, daemonUpstream, servedBridge, isExportClass } = await import("../bridge/src/route.ts");
+const { createRoute, ownUpstream, daemonUpstream, servedBridge } = await import("../bridge/src/route.ts");
+const { isExportCmd } = await import("../bridge/src/commands.ts");
 
 const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 const failure = (p: Promise<unknown>): Promise<string> => p.then(() => "resolved", (e: unknown) => asErr(e).message);
@@ -208,8 +209,8 @@ async function contract(make: () => Promise<Rig>): Promise<void> {
 // ---------------------------------------------------------------- the rules a route owns, per policy
 
 async function rules(): Promise<void> {
-  check("isExportClass: the six commands that walk a tree", ["exportNode", "exportSelection", "exportFull", "exportDesignSystem", "exportLibrary", "screenshot"].every((c) => isExportClass(c)));
-  check("isExportClass: never the index reads, pings or writes", ["ping", "whoami", "getSelection", "listPages", "listChildren", "listLibraries", "write"].every((c) => !isExportClass(c)));
+  check("isExportCmd: the six commands that walk a tree", ["exportNode", "exportSelection", "exportFull", "exportDesignSystem", "exportLibrary", "screenshot"].every((c) => isExportCmd(c)));
+  check("isExportCmd: never the index reads, pings or writes", ["ping", "whoami", "getSelection", "listPages", "listChildren", "listLibraries", "write"].every((c) => !isExportCmd(c)));
 
   // The stall check: a one-shot route over its own bridge, export-class commands only.
   {

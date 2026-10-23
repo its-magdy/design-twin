@@ -6,6 +6,7 @@ import { errMsg } from "./util";
 import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames, assetNameTableSizes } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
+import type { RunKind } from "../../bridge/src/commands.ts";
 
 /** One exported asset — doc-types' Asset, re-exported under the name every module here imports it by. */
 export type { Asset };
@@ -210,6 +211,27 @@ let runChain: Promise<unknown> = Promise.resolve();
 // reported as queued.
 let inChain = 0;
 export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
+  return enqueue(fn, run, true);
+}
+
+/**
+ * THE run scheduler: every bridge command goes through here with its `RunKind` (bridge/src/commands.ts
+ * runKind), so which commands may run alongside which is decided once, from the contract, for every caller —
+ * a CLI or MCP request through any bridge or daemon, and (through serializeRun) the window's own buttons.
+ *   - exclusive: serializeRun — alone, in arrival order, bracketed.
+ *   - scene: the same chain, so it never overlaps an exclusive run (nor another scene read: listLibraries
+ *     toggles skipInvisibleInstanceChildren itself), but unbracketed — no run-begin/run-end, no asset release.
+ *     It is still a ticket while it waits: told `queued`, and dropped unexecuted if the bridge cancels it.
+ *   - identity: now, whatever is running.
+ * A bridge-side caller therefore needs no queue of its own: the next run starts when this chain says the one
+ * ahead has ENDED — not when someone sent it a cancel.
+ */
+export function scheduleRun<T>(kind: RunKind, fn: () => Promise<T>, run: RunInfo): Promise<T> {
+  if (kind === "identity") return fn();
+  return enqueue(fn, run, kind === "exclusive");
+}
+
+function enqueue<T>(fn: () => Promise<T>, run: RunInfo, bracketed: boolean): Promise<T> {
   const ticket: QueuedRun = { run, abandoned: false };
   queuedRuns.add(ticket);
   if (inChain > 0) postQueued(run);
@@ -220,7 +242,9 @@ export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> 
     // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
     // does after any failed run.
     if (ticket.abandoned) { inChain--; return Promise.reject(abandonedError()); }
-    return bracket(fn, run).finally(() => { inChain--; });
+    // `fn` is called inside a promise chain, so a synchronous throw is a rejection like any other.
+    const ran = bracketed ? bracket(fn, run) : Promise.resolve().then(fn);
+    return ran.finally(() => { inChain--; });
   };
   const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});
@@ -270,9 +294,9 @@ async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
     // Drop the run's asset payloads (tens of MB of base64 PNG/SVG) the moment it settles: a successful
     // collector has already returned its own assets.slice(), and a run that THREW — cancelled or
     // crashed — hands them to nobody. Here, inside the run, and not after the caller posts its reply:
-    // an UNQUEUED bridge command (ping, whoami, listPages, …) answers DURING a queued export, so a
-    // release on every reply emptied the array that export was still filling — and the next queued
-    // run may already have started by the time a caller's continuation runs.
+    // an identity read (ping, whoami — scheduleRun) answers DURING a queued export, so a release on every
+    // reply emptied the array that export was still filling — and the next queued run may already have
+    // started by the time a caller's continuation runs.
     releaseAssets();
     // In `finally`, so the cancellation flag is cleared even on the path that threw BECAUSE of it.
     // (The other per-run toggle a cancel could strand — figma.skipInvisibleInstanceChildren, set by

@@ -807,6 +807,13 @@
   var runChain = Promise.resolve();
   var inChain = 0;
   function serializeRun(fn, run) {
+    return enqueue(fn, run, true);
+  }
+  function scheduleRun(kind, fn, run) {
+    if (kind === "identity") return fn();
+    return enqueue(fn, run, kind === "exclusive");
+  }
+  function enqueue(fn, run, bracketed) {
     const ticket = { run, abandoned: false };
     queuedRuns.add(ticket);
     if (inChain > 0) postQueued(run);
@@ -817,7 +824,8 @@
         inChain--;
         return Promise.reject(abandonedError());
       }
-      return bracket(fn, run).finally(() => {
+      const ran = bracketed ? bracket(fn, run) : Promise.resolve().then(fn);
+      return ran.finally(() => {
         inChain--;
       });
     };
@@ -921,25 +929,28 @@
   }
 
   // ../bridge/src/commands.ts
-  var COMMAND_SET = {
-    ping: true,
-    whoami: true,
-    getSelection: true,
-    listPages: true,
-    listChildren: true,
-    listLibraries: true,
-    exportFull: true,
-    exportDesignSystem: true,
-    exportLibrary: true,
-    exportSelection: true,
-    exportNode: true,
-    screenshot: true,
-    write: true
+  var COMMAND_TRAITS = {
+    ping: { run: "identity", export: false },
+    whoami: { run: "identity", export: false },
+    getSelection: { run: "scene", export: false },
+    listPages: { run: "scene", export: false },
+    listChildren: { run: "scene", export: false },
+    listLibraries: { run: "scene", export: false },
+    exportFull: { run: "exclusive", export: true },
+    exportDesignSystem: { run: "exclusive", export: true },
+    exportLibrary: { run: "exclusive", export: true },
+    exportSelection: { run: "exclusive", export: true },
+    exportNode: { run: "exclusive", export: true },
+    screenshot: { run: "exclusive", export: true },
+    write: { run: "exclusive", export: false }
   };
   function isCmd(x) {
-    return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
+    return Object.prototype.hasOwnProperty.call(COMMAND_TRAITS, x);
   }
-  var COMMANDS = Object.keys(COMMAND_SET).filter(isCmd);
+  var COMMANDS = Object.keys(COMMAND_TRAITS).filter(isCmd);
+  function runKind(cmd) {
+    return COMMAND_TRAITS[cmd].run;
+  }
   var NO_NODE_ID = "No node id provided.";
   var isBool = (v) => typeof v === "boolean";
   var isStr = (v) => typeof v === "string";
@@ -3829,14 +3840,14 @@
   async function handleBridge(cmd, args, id) {
     const parsed = parseCommandRequest(cmd, args);
     if (!parsed.ok) throw new Error(parsed.error);
-    return dispatch(parsed.req, id);
+    const req = parsed.req;
+    return scheduleRun(runKind(req.cmd), work(req), bridgeRun(req.cmd, id));
   }
-  async function dispatch(req, id) {
+  function work(req) {
     switch (req.cmd) {
       // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
-      // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
-      // since "is the other file's connection still alive while this one works?" is half of what it
-      // exists to measure.
+      // An identity read — it must stay answerable DURING a long export, since "is the other file's
+      // connection still alive while this one works?" is half of what it exists to measure.
       //
       // It answers four things in one call:
       //   instanceId / startedAt / uptimeMs — two distinct ids => two instances really do coexist; a
@@ -3845,87 +3856,89 @@
       //   fileKey                          — undefined => `enablePrivatePluginApi` is not in effect for
       //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
       //   file / page                      — human labels for a connection listing, never routing keys.
-      case "whoami": {
-        const fileKey = readFileKey();
-        const r = {
-          instanceId: INSTANCE_ID,
-          startedAt: INSTANCE_STARTED_AT,
-          uptimeMs: Date.now() - INSTANCE_STARTED_AT,
-          file: figma.root.name,
-          page: figma.currentPage.name,
-          pageId: figma.currentPage.id,
-          editorType: figma.editorType,
-          // Baked in at build time (build.ts's esbuild `define`) from
-          // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
-          // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
-          // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
-          // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
-          pluginVersion: "0.1.0",
-          fileKey: fileKey === void 0 ? null : fileKey,
-          fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
+      case "whoami":
+        return async () => {
+          const fileKey = readFileKey();
+          const r = {
+            instanceId: INSTANCE_ID,
+            startedAt: INSTANCE_STARTED_AT,
+            uptimeMs: Date.now() - INSTANCE_STARTED_AT,
+            file: figma.root.name,
+            page: figma.currentPage.name,
+            pageId: figma.currentPage.id,
+            editorType: figma.editorType,
+            // Baked in at build time (build.ts's esbuild `define`) from
+            // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
+            // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
+            // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
+            // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
+            pluginVersion: "0.1.0",
+            fileKey: fileKey === void 0 ? null : fileKey,
+            fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
+          };
+          return r;
         };
-        return r;
-      }
-      case "ping": {
-        const r = { pong: true, page: figma.currentPage.name, file: figma.root.name };
-        const fileKey = readFileKey();
-        if (fileKey !== void 0) r.fileKey = fileKey;
-        return r;
-      }
-      // The extraction/write commands mutate shared per-run state (and the document), so they go through
-      // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
-      // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
+      case "ping":
+        return async () => {
+          const r = { pong: true, page: figma.currentPage.name, file: figma.root.name };
+          const fileKey = readFileKey();
+          if (fileKey !== void 0) r.fileKey = fileKey;
+          return r;
+        };
+      // The extraction/write commands mutate shared per-run state (and the document): exclusive runs, on the
+      // same chain the UI's manual runs use, so a bridge pull and a manual export can never overlap.
       case "exportFull": {
         const a = req.args;
-        return serializeRun(() => collectFull(a), bridgeRun(req.cmd, id));
+        return () => collectFull(a);
       }
       // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
       case "exportDesignSystem": {
         const a = req.args;
-        return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd, id));
+        return () => collectDesignSystemOnly(a);
       }
-      // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
-      // the full catalog build and mutates the same per-run state they do.
+      // The library-file pull: exclusive like its export siblings (listLibraries is only a scene read). It
+      // runs the full catalog build and mutates the same per-run state they do.
       case "exportLibrary": {
         const a = req.args;
-        return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd, id));
+        return () => collectLibraryFile(a);
       }
       case "exportSelection": {
         const a = req.args;
-        return serializeRun(() => collectSelection(a), bridgeRun(req.cmd, id));
+        return () => collectSelection(a);
       }
       case "exportNode": {
         const a = req.args;
-        return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd, id));
+        return () => collectNode(a.nodeId, a);
       }
       // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
       // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
       case "screenshot": {
         const a = req.args;
-        return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd, id));
+        return () => collectScreenshot(a.nodeId, ifDefined("scale", a.scale));
       }
       case "getSelection":
-        return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
-      // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
-      // pull to run, so routing them through serializeRun would queue them behind the very export they
-      // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
-      // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
-      case "listPages":
-        return listPages(req.args);
-      case "listChildren":
-        return listChildren(req.args.nodeId);
-      // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
-      // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
-      // behind a long export would defeat the point of asking. Its document walk is one
-      // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
-      // listPages depth 2, not that of an export.
+        return async () => figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
+      // Scene reads, these three and getSelection: the cheap maps you consult to decide WHICH deep pull to run.
+      // They mutate none of the per-run state an exclusive run owns, but they wait for the run ahead of them (it
+      // may hold skipInvisibleInstanceChildren on — commands.ts RunKind), unbracketed: a listing behind a long
+      // export waits for it, and a listing in an idle file answers at once.
+      case "listPages": {
+        const a = req.args;
+        return () => listPages(a);
+      }
+      case "listChildren": {
+        const nodeId = req.args.nodeId;
+        return () => listChildren(nodeId);
+      }
+      // Its document walk is one findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same
+      // cost class as listPages depth 2, not that of an export.
       case "listLibraries":
-        return listLibraries();
+        return () => listLibraries();
       case "write": {
         const ops = req.args.ops;
-        return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd, id));
+        return () => applyWrites(ops);
       }
       default: {
         const exhaustive = req;

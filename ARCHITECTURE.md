@@ -84,6 +84,10 @@ a second Claude Code session, say — routes through that socket instead of bind
 server re-resolves the owner per call, so it takes the bridge over when the owning session ends. An owning MCP server exits with its client unless others have used its socket, then idles out (`FIGMA_DAEMON_IDLE_MIN`).
 Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
 (`server-core.ts`). `writeToDisk` remains the in-session way to get files.
+Neither front-end nor the daemon orders requests: which commands may run alongside which is declared once
+per command (`bridge/src/commands.ts` `runKind` — exclusive, scene read, identity read) and enforced by the
+plugin's run scheduler (`figma-plugin/src/state.ts` `scheduleRun`) for every caller, the plugin window's
+own buttons included.
 
 **But MANY plugins at once — one per open Figma file.** `server-core.ts` keeps a registry of
 connections (`clients`, keyed by a server-minted `connId`) rather than a single socket, so a design
