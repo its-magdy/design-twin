@@ -9,6 +9,8 @@ import { world } from "./scene.ts";
 
 /** Lets every queued microtask and a timer turn run: long enough for a run that is NOT held to answer. */
 const turn = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+/** Polls `cond` until it holds or ~2 s pass. */
+const until = async (cond: () => boolean): Promise<void> => { for (let i = 0; i < 100 && !cond(); i++) await turn(); };
 
 const resultFor = (posted: PostedMessage[], id: string): PostedMessage | undefined =>
   posted.find((m) => m.type === "bridge-result" && m.id === id);
@@ -131,5 +133,40 @@ export const cases: Case[] = [{
     const r = resultFor(posted, "s-2");
     ok(`[RUN-ORDER] a queued scene read the bridge cancels answers ABANDONED and never reads the scene (reads: ${reads.join(",") || "none"})`,
       r?.ok === false && r.error === ABANDONED && reads.length === 0);
+  },
+}, {
+  // Every command through main.ts's real `bridge` handler, so it is each command's DECLARED trait (commands.ts) that is
+  // checked — not a run a case built itself. The expected sets are written out here, not read from the traits.
+  name: "[RUN-ORDER] every command runs as its trait says: identity answers at once, the rest wait, only exclusive runs are bracketed",
+  async run() {
+    const w = world();
+    const { api, figma, posted } = w;
+    const handler = must(figma.ui.onmessage, "figma.ui.onmessage");
+    w.scene.nodes["9:1"] = cardInstance(() => false);
+    const sent: Array<[string, Record<string, unknown>]> = [
+      ["ping", {}], ["whoami", {}], ["getSelection", {}], ["listPages", { depth: 1 }], ["listChildren", { nodeId: "9:1" }],
+      ["listLibraries", {}], ["exportFull", { css: false }], ["exportDesignSystem", {}], ["exportLibrary", {}],
+      ["exportSelection", { css: false }], ["exportNode", { nodeId: "9:1", css: false }], ["screenshot", { nodeId: "9:1" }],
+      ["write", { ops: [] }],
+    ];
+    const hold = gate();
+    const started = gate();
+    const ui = settle(api.serializeRun(async () => { started.open(); await hold.p; return "ui"; }, { source: "ui", label: "Export full file" }));
+    await started.p;
+    posted.length = 0;
+    for (const [cmd, args] of sent) void handler({ type: "bridge", id: "t-" + cmd, cmd, args });
+    await turn();
+    const answered = sent.map(([c]) => c).filter((c) => resultFor(posted, "t-" + c));
+    ok(`[RUN-ORDER] with a run executing, exactly ping and whoami answer (got ${answered.join(",")})`, answered.join(",") === "ping,whoami");
+    const queued = posted.filter((m) => m.type === "progress" && m.phase === "queued").map((m) => m.requestId);
+    ok(`[RUN-ORDER] …and every other command is told it is queued, in arrival order (got ${queued.join(",")})`,
+      queued.join(",") === sent.map(([c]) => c).filter((c) => c !== "ping" && c !== "whoami").map((c) => "t-" + c).join(","));
+    hold.open();
+    await ui;
+    await until(() => sent.every(([c]) => resultFor(posted, "t-" + c)));
+    const begun = posted.filter((m) => m.type === "run-begin").map((m) => m.label);
+    ok(`[RUN-ORDER] once it ends every command answers, and only the exclusive ones are bracketed, one at a time in order (got ${begun.join(",")})`,
+      sent.every(([c]) => resultFor(posted, "t-" + c)) &&
+      begun.join(",") === "exportFull,exportDesignSystem,exportLibrary,exportSelection,exportNode,screenshot,write");
   },
 }];

@@ -67,8 +67,10 @@ export const SETTLE_MS = ALLOWED_PORTS.length * PLUGIN_REDIAL_MS + 500;
 // wait the daemon may spend before sending — the connect window, then at most NAMED_CLIENT_WAIT_MS for a
 // named target (server-core awaitClient) — and a margin (it also absorbs the settle, SETTLE_MS), so the
 // daemon's own, clearer error normally lands before the guard does. Not always: the MAX_TIMER_MS cap below
-// can cut the sum short. Time a request spends queued in the plugin behind an earlier run in its file
-// (figma-plugin state.ts scheduleRun) counts against both clocks alike, as it does on every other path.
+// can cut the sum short. A request queued in the plugin behind an earlier run in its file (figma-plugin state.ts
+// scheduleRun) gets the daemon's whole budget again when its run starts (server-core re-arms it on the request's
+// `start` frame); the guard hears that frame only when the request takes progress (an export with a listener —
+// any frame re-arms it, as above), so a non-progress request's wait still counts against the guard.
 // Capped at MAX_TIMER_MS: the guard is one setTimeout, which runs a longer delay after 1 ms.
 export const daemonGuardMs = (timeoutMs: number, connectWaitMs: number = 0): number =>
   Math.min(timeoutMs + connectWaitMs + Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS) + 30000, MAX_TIMER_MS);

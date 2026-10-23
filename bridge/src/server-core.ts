@@ -340,6 +340,8 @@ interface PendingRequest {
   reject: (e: Error) => void;
   /** the caller's progress listener, fed every progress tick this request's connection sends */
   onProgress?: (tick: ProgressTick) => void;
+  /** the plugin began this request's run (its own `start` frame): the per-command budget starts over */
+  started: () => void;
 }
 
 /** What a request resolved with, plus WHICH connected file answered it (the client resolveClient picked). */
@@ -833,6 +835,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // feeds nothing (it already counted as life above).
     if (msg.type === "progress") {
       const only = msg.requestId;
+      // A request's OWN `start` (named by id — an id-less one could be anyone's) re-arms its budget: see dispatch.
+      if (only !== null && msg.tick.phase === "start") {
+        const p = pending.get(only);
+        if (p && p.connId === connId) p.started();
+      }
       for (const [id, p] of pending) {
         if (p.connId !== connId || !p.onProgress || (only !== null && id !== only)) continue;
         try { p.onProgress(msg.tick); } catch { /* a listener's failure is its own; the request goes on */ }
@@ -1135,7 +1142,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // many requests never accumulates listeners.
       let onAbort: (() => void) | null = null;
       const unlisten = () => { if (signal && onAbort) signal.removeEventListener("abort", onAbort); onAbort = null; };
-      const timer = setTimeout(() => {
+      // The per-command budget is for the RUN. It is armed at send, which bounds a wait in the plugin's queue behind
+      // an earlier run in that file (figma-plugin state.ts scheduleRun — the one queue on every path, so the wait
+      // is not otherwise bounded here), and re-armed in full when the plugin says this request's run has begun (its
+      // own `start` frame, `started` below): a run that began late is not cut short by the time it spent waiting.
+      const onTimeout = () => {
         if (pending.has(id)) {
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
@@ -1151,7 +1162,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
             `If it never finishes, check the plugin window for a red error.`
           ));
         }
-      }, timeoutMs);
+      };
+      let timer = setTimeout(onTimeout, timeoutMs);
       let stallTimer: ReturnType<typeof setInterval> | null = null;
       if (typeof stallMs === "number" && stallMs > 0) {
         const sentAt = Date.now();
@@ -1198,6 +1210,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         connId: client.connId,
         cmd,
         ...ifDefined("onProgress", onProgress),
+        started: () => { clearTimeout(timer); timer = setTimeout(onTimeout, timeoutMs); },
         resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); settle(v); },
         reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); reject(e); },
       });

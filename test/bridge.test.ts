@@ -4174,6 +4174,55 @@ void (async () => {
       b.close();
     }
 
+    // The per-command budget is for the RUN: the request's own `start` frame re-arms it in full, so time spent queued in
+    // the plugin behind an earlier run (now the only queue on any path — commands.ts runKind) does not cut the run short.
+    // The wait itself is still bounded by the budget armed at send. No listener needed: the daemon passes none for a
+    // non-progress client, and its requests must keep the same budget.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      ws1.hello({ instanceId: "l9", file: "Sample App" });
+      await b.awaitClient(null, 1000);
+      await sleep(20);
+      // queued at once, `start` at 300 ms of a 400 ms budget, the reply at 600 ms: inside the budget counted from start.
+      const pRun = settle(b.request("ping", {}, 400));
+      await sleep(20);
+      const idRun = ws1.commands()[0]?.id;
+      ws1.progress({ phase: "queued", ...ifDefined("requestId", idRun) });
+      await sleep(280);
+      ws1.progress({ phase: "start", ...ifDefined("requestId", idRun) });
+      await sleep(300);
+      ws1.send({ id: idRun, ok: true, result: pingReply("ran") });
+      const rRun = await pRun;
+      // pre-change: fails — the 400 ms timer armed at send fired mid-run, at 400 ms.
+      ok("a request's own `start` frame re-arms its budget: queued 300 ms of a 400 ms budget, it still answers 300 ms into its run",
+        rRun.err === null && rRun.v?.file === "ran");
+      // …but the budget still bounds a run that starts and then goes quiet, and a wait with no start at all.
+      const t0 = Date.now();
+      const pQuiet = settle(b.request("ping", {}, 400));
+      await sleep(20);
+      const idQuiet = ws1.commands()[1]?.id;
+      await sleep(180);
+      ws1.progress({ phase: "start", ...ifDefined("requestId", idQuiet) });
+      const rQuiet = await pQuiet;
+      const quietMs = Date.now() - t0;
+      await until(() => ws1.cancels.includes(idQuiet ?? "?"), 1000);
+      ok(`…a run that starts and never answers times out one budget after its start (${quietMs} ms)`,
+        /did not answer 'ping' within 0s/.test(rQuiet.err?.message ?? "") && quietMs >= 560 && ws1.cancels.includes(idQuiet ?? "?"));
+      const t1 = Date.now();
+      const rWait = await settle(b.request("ping", {}, 300));
+      ok(`…and a request that never starts times out one budget after the send (${Date.now() - t1} ms)`,
+        /did not answer 'ping'/.test(rWait.err?.message ?? "") && Date.now() - t1 < 550);
+      // An id-less `start` (an older plugin, or another request's) re-arms nothing.
+      const t2 = Date.now();
+      const pOld = settle(b.request("ping", {}, 300));
+      await sleep(150);
+      ws1.progress({ phase: "start" });
+      const rOld = await pOld;
+      ok(`…an id-less start frame does not re-arm it (${Date.now() - t2} ms)`, !!rOld.err && Date.now() - t2 < 420);
+      ws1.close();
+      b.close();
+    }
+
     // the daemon client's optional trailing `signal` (the MCP cancel via a daemon): an
     // abort closes the request's socket, so the daemon abandons it on the wire. Without it, the client
     // would let the call run to its reply and the bridge's signal would never abort.
