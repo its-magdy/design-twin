@@ -402,6 +402,10 @@
     if (run.source !== "bridge") return;
     post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
   }
+  function postStarted(run) {
+    if (run.source !== "bridge") return;
+    post({ type: "progress", phase: "start", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
+  }
   function requestCancel() {
     if (!running) return null;
     cancelRequested = "designer";
@@ -816,7 +820,8 @@
   function enqueue(fn, run, bracketed) {
     const ticket = { run, abandoned: false };
     queuedRuns.add(ticket);
-    if (inChain > 0) postQueued(run);
+    const waits = inChain > 0;
+    if (waits) postQueued(run);
     inChain++;
     const go = () => {
       queuedRuns.delete(ticket);
@@ -824,6 +829,7 @@
         inChain--;
         return Promise.reject(abandonedError());
       }
+      if (!bracketed && waits) postStarted(run);
       const ran = bracketed ? bracket(fn, run) : Promise.resolve().then(fn);
       return ran.finally(() => {
         inChain--;

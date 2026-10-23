@@ -3,7 +3,7 @@
 
 import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
-import { abandonedError, beginRun, endRun, isAbandonment, postQueued, requestAbandon, type RunInfo } from "./progress";
+import { abandonedError, beginRun, endRun, isAbandonment, postQueued, postStarted, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames, assetNameTableSizes } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 import type { RunKind } from "../../bridge/src/commands.ts";
@@ -221,7 +221,8 @@ export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> 
  *   - exclusive: serializeRun — alone, in arrival order, bracketed.
  *   - scene: the same chain, so it never overlaps an exclusive run (nor another scene read: listLibraries
  *     toggles skipInvisibleInstanceChildren itself), but unbracketed — no run-begin/run-end, no asset release.
- *     It is still a ticket while it waits: told `queued`, and dropped unexecuted if the bridge cancels it.
+ *     It is still a ticket while it waits: told `queued`, dropped unexecuted if the bridge cancels it, and told
+ *     `start` when it begins after waiting (the bridge restarts its budget there, as on a bracketed run's run-begin).
  *   - identity: now, whatever is running.
  * A bridge-side caller therefore needs no queue of its own: the next run starts when this chain says the one
  * ahead has ENDED — not when someone sent it a cancel.
@@ -234,7 +235,8 @@ export function scheduleRun<T>(kind: RunKind, fn: () => Promise<T>, run: RunInfo
 function enqueue<T>(fn: () => Promise<T>, run: RunInfo, bracketed: boolean): Promise<T> {
   const ticket: QueuedRun = { run, abandoned: false };
   queuedRuns.add(ticket);
-  if (inChain > 0) postQueued(run);
+  const waits = inChain > 0;
+  if (waits) postQueued(run);
   inChain++;
   const go = (): Promise<T> => {
     queuedRuns.delete(ticket);
@@ -242,7 +244,10 @@ function enqueue<T>(fn: () => Promise<T>, run: RunInfo, bracketed: boolean): Pro
     // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
     // does after any failed run.
     if (ticket.abandoned) { inChain--; return Promise.reject(abandonedError()); }
-    // `fn` is called inside a promise chain, so a synchronous throw is a rejection like any other.
+    // `fn` is called inside a promise chain, so a synchronous throw is a rejection like any other. A bracketed run
+    // announces itself (run-begin, which the window relays as `start`); an unbracketed one that waited says `start`
+    // itself, so the bridge restarts its budget there too — one that did not wait began when it was sent.
+    if (!bracketed && waits) postStarted(run);
     const ran = bracketed ? bracket(fn, run) : Promise.resolve().then(fn);
     return ran.finally(() => { inChain--; });
   };

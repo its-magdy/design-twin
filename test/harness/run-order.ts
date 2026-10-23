@@ -80,6 +80,11 @@ export const cases: Case[] = [{
     ok(`[RUN-ORDER] once it ends, the listing runs and sees the hidden layer (got ${JSON.stringify(rows.map((r) => r.name))})`,
       rows.map((r) => r.name).join(",") === "Label,Badge" && rows[1]?.hidden === true);
     ok("[RUN-ORDER] …and the selection read answers too", resultFor(posted, "q-sel")?.ok === true);
+    // The bridge re-arms a request's budget on its own `start` (server-core): a scene read that waited says when it
+    // begins, as a request-scoped progress frame (not run-begin — the window shows no run for it).
+    const starts = posted.filter((m) => m.type === "progress" && m.phase === "start").map((m) => m.requestId);
+    ok(`[RUN-ORDER] …each scene read that waited posts its own \`start\` when it begins (got ${JSON.stringify(starts)})`,
+      starts.join(",") === "q-children,q-sel");
     // A scene read is not a run the window shows: no run-begin/run-end for it (only the window's own export's).
     ok("[RUN-ORDER] a scene read posts no run-begin or run-end",
       !posted.some((m) => (m.type === "run-begin" || m.type === "run-end") && "label" in m && m.label !== "Export full file")

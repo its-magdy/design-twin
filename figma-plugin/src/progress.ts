@@ -35,7 +35,11 @@ export interface ProgressMsg extends ProgressCounters {
  *  ui.html relays it over the socket — the caller's first sign of life when the file is busy with an
  *  earlier export — and never opens the run chrome for it (the run has not begun). */
 export interface QueuedMsg { type: "progress"; phase: "queued"; source: "bridge"; label: string; requestId?: string }
-export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg | QueuedMsg;
+/** A bridge SCENE read that waited (state.ts scheduleRun) has begun. A bracketed run says so with run-begin, which
+ *  ui.html turns into the same `start` frame for the bridge; a scene read is no run of the window's, so it posts this
+ *  instead, which ui.html relays and shows nothing for. The bridge re-arms that request's budget on it. */
+export interface StartMsg { type: "progress"; phase: "start"; source: "bridge"; label: string; requestId?: string }
+export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg | QueuedMsg | StartMsg;
 
 // ---------------------------------------------------------------- the cancellation error
 /** The message a cancelled run fails with. The BRIDGE sees this string VERBATIM: main.ts turns a
@@ -156,6 +160,12 @@ export function endRun(abandoned?: boolean): void {
 export function postQueued(run: RunInfo): void {
   if (run.source !== "bridge") return;
   post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
+}
+
+/** Tell the bridge that an unbracketed bridge run that waited has begun (StartMsg). UI runs post nothing. */
+export function postStarted(run: RunInfo): void {
+  if (run.source !== "bridge") return;
+  post({ type: "progress", phase: "start", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
 }
 
 /** The UI's Cancel click. Returns the run it applies to, or null when nothing is running — the caller
