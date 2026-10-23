@@ -40,7 +40,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { hiddenSelf, walkVisible, walkWithHidden } from "./visible-tree.ts";
+import { hiddenSelf, paintedOver, walkVisible, walkWithHidden } from "./visible-tree.ts";
 import type { Backdrop, WalkContext, WalkFrame } from "./visible-tree.ts";
 import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
@@ -722,7 +722,8 @@ function textChecks(ac: AuditCtx, node: IrNode, backdrop: Backdrop, here: Here):
 // outermost layer in that window — kits put the fill on the instance and the border on an inner frame, and the
 // control's own fill is never the adjacent colour. The fills from that layer down to the stroked one reaching 3:1
 // against the backdrop already mark the boundary (no finding); visible text inside does not. A disabled variant
-// is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only);
+// is exempt (inactive components are). A gradient/image backdrop is not judged (contrast-manual covers text only),
+// nor one the control paints inside and leaves uncovered (visible-tree.ts paintedOver, shared with cross-check);
 // a fully transparent stroke paints nothing (no border to measure).
 function boundaryCheck(ac: AuditCtx, node: IrNode, w: WalkContext, here: Here): void {
   const { boundaries } = ac;
@@ -745,12 +746,10 @@ function boundaryCheck(ac: AuditCtx, node: IrNode, w: WalkContext, here: Here): 
   const base = back.color || WHITE;
   const ratio = contrastRatio(over(sc, base), base);
   if (ratio >= 3) return;
-  let inner: Rgba | null = null;
-  const paints = inside.flatMap((f, i) => [...(i > 0 ? f.beneath.flatMap((s) => s.fills || []) : []), ...(Array.isArray(f.node.fills) ? f.node.fills : [])]);
-  for (const f of paints) {
-    const c = f.type === "solid" ? parseHex(f.color) : null;
-    if (c) inner = over(c, inner || base);
-  }
+  // a gradient / image left uncovered in there makes the rescue unknown: not judged (cross-check's rule too)
+  const painted = paintedOver(base, inside.flatMap((f, i) => [...(i > 0 ? f.beneath : []), f.node]));
+  if (painted && painted.complex) return;
+  const inner = painted && painted.color;
   if (inner && contrastRatio(inner, base) >= 3) return;
   const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.color;
   const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;

@@ -2,7 +2,7 @@
 // state, the ancestor chain and the backdrop each node sits on, through the walk's own interface on small
 // hand-built trees. The last block runs audit.ts and cross-check.ts on one tree: they must name the same backdrop.
 //   bun test/visible-tree.test.ts
-import { walkWithHidden, walkVisible, hiddenIds, hiddenRoots } from "../design-to-code/visible-tree.ts";
+import { walkWithHidden, walkVisible, hiddenIds, hiddenRoots, paintedOver } from "../design-to-code/visible-tree.ts";
 import type { WalkContext } from "../design-to-code/visible-tree.ts";
 import { audit } from "../design-to-code/audit.ts";
 import { crossCheck } from "../design-to-code/cross-check.ts";
@@ -126,6 +126,45 @@ console.log("visible-tree — audit and cross-check name the same backdrop:");
   check("cross-check: the border's row names the same backdrop token", rows.some((r) => r.kind === "non-text" && r.fg === "Border" && r.bg === "Bg/Hero"));
   check("cross-check: the label's row names it too", rows.some((r) => r.kind === "text" && r.fg === "Text/Ink" && r.bg === "Bg/Hero"));
   check("cross-check: no row judges either against the page under the hero", !rows.some((r) => r.bg === "Bg/Page"));
+}
+
+console.log("visible-tree — what a control paints inside (paintedOver):");
+{
+  const white = { r: 255, g: 255, b: 255, a: 1 };
+  const layer = (fills: NonNullable<NodeInput["fills"]>, extra: Partial<NodeInput> = {}) => node({ type: "FRAME", id: "x", fills, ...extra });
+  check("nothing painted → null", paintedOver(white, [layer([]), node({ type: "TEXT", id: "t", fills: [solid("#000000")] })]) === null);
+  check("an opacity-0 or invisible paint and a fully transparent solid paint nothing",
+    paintedOver(white, [layer([{ ...solid("#000000"), opacity: 0 }, { ...solid("#000000"), visible: false }, solid("#00000000")])]) === null);
+  check("a gradient left uncovered is complex", paintedOver(white, [layer([grad])])?.complex === true);
+  check("…an opaque solid laid over it clears that", paintedOver(white, [layer([grad]), layer([solid("#eeeeee")])])?.complex === false);
+  check("a node-level token with no fills[] paints what the resolver says",
+    paintedOver(white, [layer([], { tokens: { fills: "Bg/Dark" } })], (t) => (t === "Bg/Dark" ? { r: 0, g: 0, b: 0, a: 1 } : null))?.color.r === 0);
+}
+
+console.log("visible-tree — audit and cross-check agree on what a control paints inside:");
+{
+  const vars = tokens({
+    collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
+    variables: [
+      { name: "Bg/Page", collection: "Sem", key: "s1", type: "COLOR", values: { Dark: "#ffffff", Light: "#ffffff" } },
+      { name: "Border/Faint", collection: "Sem", key: "s2", type: "COLOR", values: { Dark: "#eeeeee", Light: "#eeeeee" } },
+    ],
+  });
+  // an input with no fill of its own; inside it, an earlier layer, then the bordered frame (the stroke fails 3:1 on white)
+  const screenWith = (under: NodeInput, borderFills: NonNullable<NodeInput["fills"]>) => screenExport([{ type: "FRAME", id: "1:1", name: "Form", resolvedModes: { Sem: "Dark" }, fills: [solid("#ffffff", "Bg/Page")], layout: { display: "flex", flexDirection: "column" }, children: [
+    { type: "INSTANCE", id: "1:2", name: "Input Field", mainComponent: { name: "State=Default", key: "fk", setKey: "fs", setName: "Input Field" }, children: [
+      under,
+      { type: "FRAME", id: "1:4", name: "Container", tokens: { strokes: "Border/Faint" }, strokes: { colors: ["#eeeeee"], weight: 1, align: "inside" }, fills: borderFills },
+    ] },
+  ] }], { screen: "Form" });
+  const both = (doc: ReturnType<typeof screenWith>) => ({
+    audit: audit([{ doc, label: "Form", vars }], { platform: "web", variables: vars }).findings.some((x) => x.code === "non-text-contrast"),
+    cross: (crossCheck({ screens: [{ doc, label: "Form", vars }], variables: vars }).findings.find((x) => x.code === "token-pair-contrast")?.tokenPairs ?? []).some((r) => r.kind === "non-text" && r.fg === "Border/Faint"),
+  });
+  const covered = both(screenWith({ type: "RECTANGLE", id: "1:3", name: "Sheen", fills: [grad] }, [solid("#ffffff")]));
+  check("a gradient covered by the border frame's opaque white fill: both judge the faint border", covered.audit && covered.cross);
+  const invisible = both(screenWith({ type: "RECTANGLE", id: "1:3", name: "Ghost", fills: [{ ...solid("#000000"), opacity: 0 }] }, []));
+  check("an opacity-0 black layer rescues nothing: both judge the faint border", invisible.audit && invisible.cross);
 }
 
 report();

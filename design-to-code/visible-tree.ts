@@ -89,6 +89,32 @@ function paintOver(base: Backdrop, n: IrNode): Backdrop {
   return { color, complex, token };
 }
 
+/**
+ * What a stack of layers (bottom first) paints over `under` — a control's own fills over its backdrop, under the same
+ * paint rules as the backdrop. Null when none of them paints anything. `complex`: a non-solid is left uncovered (the
+ * colour is not what renders). `tokenColor` resolves a node-level `tokens.fills` on a layer with no `fills[]`.
+ */
+function paintedOver(under: Rgba, layers: readonly IrNode[], tokenColor?: (token: string) => Rgba | null): { color: Rgba; complex: boolean } | null {
+  let color = under, complex = false, painted = false;
+  for (const n of layers) {
+    if (n.type === "TEXT") continue;
+    const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+    const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+    const lt = !fills.length && nodeTok && tokenColor ? tokenColor(nodeTok) : null;
+    if (lt && lt.a > 0) { color = compositeOver(lt, color); painted = true; if (lt.a >= 1) complex = false; }
+    for (const f of fills) {
+      if (f.opacity === 0 || f.visible === false) continue;
+      if (f.type !== "solid") { complex = true; painted = true; continue; }
+      const c = parseHex(f.color);
+      if (!c || c.a <= 0) continue;
+      color = compositeOver(c, color);
+      painted = true;
+      if (c.a >= 1) complex = false;
+    }
+  }
+  return painted ? { color, complex } : null;
+}
+
 // An icon's paint, not a surface: an asset leaf (figma-plugin/src/assets.ts) that is a path (VECTOR,
 // BOOLEAN_OPERATION, LINE) or a flattened icon container (FRAME/INSTANCE/GROUP/COMPONENT), with no
 // image/gradient fill. RECTANGLE/ELLIPSE/STAR/POLYGON leaves are shapes and can sit under text.
@@ -173,4 +199,4 @@ function hiddenRoots(roots: readonly IrNode[] | null | undefined): IrNode[] {
   return out;
 }
 
-export { hiddenSelf, isHidden, isIconInk, walkWithHidden, walkVisible, hiddenIds, hiddenRoots };
+export { hiddenSelf, isHidden, isIconInk, paintedOver, walkWithHidden, walkVisible, hiddenIds, hiddenRoots };

@@ -37,7 +37,7 @@ import { readJson, readJsonOrNull } from "./read-json.ts";
 import { isPageIndex, isPagesRootIndex } from "./doc-guards.ts";
 // Every walk here is visible-tree.ts's walkVisible: a layer with `hidden: true` and its whole subtree are skipped,
 // and the contrast checks read the backdrop it works out (the same one the audit reads).
-import { walkVisible } from "./visible-tree.ts";
+import { paintedOver, walkVisible } from "./visible-tree.ts";
 import { outermostControl, isDisabledLayer } from "./control-kind.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
@@ -1422,20 +1422,9 @@ function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | nu
             // what the control paints inside, from its outermost layer down to n (and the siblings stacked under each
             // inner layer), over the backdrop — the rendered hex (the exported mode's value); a gradient / image in
             // there leaves the rescue unknown: no row
-            let inner: Rgba | null = null, unknown = false;
-            for (const l of inside.flatMap((f, i) => [...(i > 0 ? f.beneath : []), f.node])) {
-              const fills = (l.fills || []).filter(Boolean);
-              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
-              if (lt) inner = compositeOver(lt, inner || bg);
-              for (const f of fills) {
-                if (f.opacity === 0) continue;
-                if (f.type !== "solid") { unknown = true; break; }
-                const c = parseHex(f.color);
-                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
-              }
-            }
-            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
-            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+            const inner = paintedOver(bg, inside.flatMap((f, i) => [...(i > 0 ? f.beneath : []), f.node]), resolve);
+            const rescued = !!inner && contrastRatio(inner.color, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !(inner && inner.complex)) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
           }
         }
       });

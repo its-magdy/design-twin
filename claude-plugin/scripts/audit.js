@@ -105,6 +105,34 @@ function paintOver(base, n) {
   }
   return { color, complex, token };
 }
+function paintedOver(under, layers, tokenColor) {
+  let color = under, complex = false, painted = false;
+  for (const n of layers) {
+    if (n.type === "TEXT") continue;
+    const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+    const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+    const lt = !fills.length && nodeTok && tokenColor ? tokenColor(nodeTok) : null;
+    if (lt && lt.a > 0) {
+      color = compositeOver(lt, color);
+      painted = true;
+      if (lt.a >= 1) complex = false;
+    }
+    for (const f of fills) {
+      if (f.opacity === 0 || f.visible === false) continue;
+      if (f.type !== "solid") {
+        complex = true;
+        painted = true;
+        continue;
+      }
+      const c = parseHex(f.color);
+      if (!c || c.a <= 0) continue;
+      color = compositeOver(c, color);
+      painted = true;
+      if (c.a >= 1) complex = false;
+    }
+  }
+  return painted ? { color, complex } : null;
+}
 var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
 function isIconInk(n) {
   if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
@@ -2333,23 +2361,9 @@ function contrastRendered(screens, variables, tokens, push) {
           const outside = inside[0]?.backdrop.token ?? null;
           const bg = outside ? resolve(outside) : null;
           if (typeof st === "string" && outside && bg) {
-            let inner = null, unknown = false;
-            for (const l of inside.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node])) {
-              const fills = (l.fills || []).filter(Boolean);
-              const lt = !fills.length && l.tokens && typeof l.tokens.fills === "string" ? resolve(l.tokens.fills) : null;
-              if (lt) inner = compositeOver(lt, inner || bg);
-              for (const f of fills) {
-                if (f.opacity === 0) continue;
-                if (f.type !== "solid") {
-                  unknown = true;
-                  break;
-                }
-                const c = parseHex(f.color);
-                if (c && c.a > 0) inner = compositeOver(c, inner || bg);
-              }
-            }
-            const rescued = !!inner && contrastRatio(inner, bg) >= NON_TEXT_CONTRAST;
-            if (!rescued && !unknown) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
+            const inner = paintedOver(bg, inside.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node]), resolve);
+            const rescued = !!inner && contrastRatio(inner.color, bg) >= NON_TEXT_CONTRAST;
+            if (!rescued && !(inner && inner.complex)) check("non-text", st, outside, NON_TEXT_CONTRAST, n.id);
           }
         }
       });
@@ -3248,12 +3262,9 @@ function boundaryCheck(ac, node, w, here) {
   const base = back.color || WHITE2;
   const ratio = contrastRatio(over(sc, base), base);
   if (ratio >= 3) return;
-  let inner = null;
-  const paints = inside.flatMap((f, i) => [...i > 0 ? f.beneath.flatMap((s) => s.fills || []) : [], ...Array.isArray(f.node.fills) ? f.node.fills : []]);
-  for (const f of paints) {
-    const c = f.type === "solid" ? parseHex(f.color) : null;
-    if (c) inner = over(c, inner || base);
-  }
+  const painted = paintedOver(base, inside.flatMap((f, i) => [...i > 0 ? f.beneath : [], f.node]));
+  if (painted && painted.complex) return;
+  const inner = painted && painted.color;
   if (inner && contrastRatio(inner, base) >= 3) return;
   const stroke = normHex(hex) ?? hex, backdrop = formatHex(base), assumed = !back.color;
   const k = `${here.label}|${stroke}|${backdrop}|${assumed}`;
