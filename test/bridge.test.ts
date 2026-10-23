@@ -2426,8 +2426,8 @@ void (async () => {
         || (daemon.UNQUEUED_READS.has(c) && daemon.QUEUED_TREE_READS.has(c)));
       ok(`[daemon] every plugin-unqueued command is either skipped past the daemon's queue or named as a queued tree read, and no queued one is either (mismatched: ${mismatched.join(",") || "none"})`,
         mismatched.length === 0 && daemon.UNQUEUED_READS.size > 0);
-      ok("[daemon] the tree-walking listings stay on the daemon's queue",
-        ["listPages", "listChildren", "listLibraries"].every((c) => daemon.QUEUED_TREE_READS.has(c) && !daemon.UNQUEUED_READS.has(c)));
+      ok("[daemon] the scene reads (selection, listings) stay on the daemon's queue",
+        ["getSelection", "listPages", "listChildren", "listLibraries"].every((c) => daemon.QUEUED_TREE_READS.has(c) && !daemon.UNQUEUED_READS.has(c)));
     }
 
     // The frame is CHECKED before anything reads it (daemon.ts isDaemonRequest): a `{}` is not
@@ -4000,7 +4000,7 @@ void (async () => {
         whoami: () => ({ instanceId: "fig-bravo", startedAt: 1, uptimeMs: 5, file: "File Bravo", page: "Home", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: "KEYBRAVO", fileKeyAvailable: true }),
         listPages: () => ({ exportedAt: "2026-10-01T00:00:00.000Z", file: "File Bravo", depth: 1, pages: [], manifest: { pages: 0, warnings: [] } }),
         exportFull: () => fullReply,
-        // getSelection: unhandled → HANG, the in-flight read the cancel check abandons
+        // ping: unhandled → HANG, the in-flight read the cancel check abandons
       };
       let bravo = two("fig-bravo", "File Bravo", "KEYBRAVO", bravoOn);
       await alpha.opened;
@@ -4046,12 +4046,12 @@ void (async () => {
       ok("[two-files] a read of a file that reconnects mid-export waits for it and answers from the new connection, A still running",
         reWho.reply.file === "File Bravo" && !!reWho.client && reWho.client.connId !== oldBravo && !aSettled);
 
-      // Cancellation: an unqueued read in flight to Bravo (it never answers getSelection) whose client leaves
+      // Cancellation: an unqueued read in flight to Bravo (it never answers ping) whose client leaves
       // → Bravo gets the cancel frame for exactly that request; Alpha's export is not touched.
       const ac = new AbortController();
-      const lc = errOf(gcli.request({ cmd: "getSelection", client: "Bravo", timeoutMs: 20000 }, 20000, undefined, ac.signal));
-      await until(() => bravo.commands("getSelection").length === 1);
-      const lcId = bravo.commands("getSelection")[0]?.id;
+      const lc = errOf(gcli.request({ cmd: "ping", client: "Bravo", timeoutMs: 20000 }, 20000, undefined, ac.signal));
+      await until(() => bravo.commands("ping").length === 1);
+      const lcId = bravo.commands("ping")[0]?.id;
       ac.abort();
       await lc;
       await until(() => bravo.cancels.length >= 1);
