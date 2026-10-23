@@ -35,6 +35,7 @@ import * as LAYOUT from "./project-layout.ts";
 // server-core itself, after routing and the --token-file pre-scan.
 import { TIMEOUTS, MAX_TIMER_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
+import { emitTimings, stageClock, timingsTarget } from "./timings.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
 import type { Bridge, ClientRow, ProgressTick } from "./server-core.ts";
@@ -832,6 +833,9 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // Timing (see `doneLine` below): the clock starts before the daemon probe.
   const tStart = Date.now();
   const timing = { connectMs: 0, exportMs: 0, writeMs: 0 };
+  // DTWIN_TIMINGS (timings.ts): the same split plus plugin phase arrival, payload size and peak RSS, as one JSON record
+  const timingsTo = timingsTarget();
+  const clock = timingsTo ? stageClock() : null;
   const d = await daemon.connect();
   if (d) console.error("[dtwin] using the running daemon (" + d.sock + ") — no reconnect needed.");
 
@@ -857,6 +861,7 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   // not mistaken for a hang; --timeout still bounds it.
   let queuedSaid = false;
   const onTick = (tick: ProgressTick): void => {
+    clock?.tick(tick.phase);
     if (tick.phase !== "queued" || queuedSaid) return;
     queuedSaid = true;
     console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
@@ -901,13 +906,22 @@ async function openSession(parsed: ParsedArgs, createBridge: typeof ServerCore.c
   const rawSend = send;
   send = async (cmd, args, timeoutMs) => {
     const t = Date.now();
-    try { return await rawSend(cmd, args, timeoutMs); } finally { timing.exportMs += Date.now() - t; }
+    clock?.sent();
+    try {
+      const r = await rawSend(cmd, args, timeoutMs);
+      clock?.replied(r.reply);
+      return r;
+    } finally { timing.exportMs += Date.now() - t; }
   };
   const timedWrite = <T>(write: () => T): T => {
     const t = Date.now();
     try { return write(); } finally { timing.writeMs += Date.now() - t; }
   };
-  const doneLine = () => formatDone({ totalMs: Date.now() - tStart, ...timing, viaDaemon: d !== null });
+  // Every command that prints the done line calls this once, at its end — so it is also where the opt-in record goes
+  const doneLine = () => {
+    if (clock && timingsTo) emitTimings(clock.record({ command: command.id, viaDaemon: d !== null, ...timing }), timingsTo);
+    return formatDone({ totalMs: Date.now() - tStart, ...timing, viaDaemon: d !== null });
+  };
   // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — one
   // helper so no exit path below has to know which.
   const finish = () => { if (bridge) bridge.close(); };

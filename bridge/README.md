@@ -908,6 +908,11 @@ Pre-approve tools in `.claude/settings.json`:
   4096). A value that is not a number above 0 falls back to 128 with a warning — there is no "unlimited".
   An export over it fails with a message quoting the cap in force.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
+- Profiling: `DTWIN_TIMINGS=1` prints one `[dtwin] timings {…}` JSON line on stderr at the end of a
+  `dtwin` command; `DTWIN_TIMINGS=<file>` appends it to that file instead (JSON Lines). It holds the
+  connect / export / write split, when each plugin phase (`queued`, `page`, `designSystem`, `assets`, …)
+  was first and last heard, the queue wait, the reply's asset count and decoded bytes, and peak RSS —
+  counts and times only, never a file, page or layer name, a key or document content. Off by default.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").
 - Hidden-graphic reuse (`assetFrom`) compares the node's own rotation/flip and box only, not an
