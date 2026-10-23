@@ -150,7 +150,8 @@ export function arbitraryPx(source: string): Map<number, PxHit[]> {
 const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
 
 // The bracketed blocks of a text — `{…}`, `(…)`, `[…]` — each with its HEAD: the text of its opening line up to the
-// bracket (`data class ColorsTokens(`, `export const colorsTokens = {`, `val ColorsTokensLight = ColorsTokens(`).
+// bracket (`data class ColorsTokens(`, `export const colorsTokens = {`, `val ColorsTokensLight = ColorsTokens(`), from
+// after any statement closed earlier on that line at the same depth (a `;` or a `}`): `class A { … } const b = {` → `const b = `.
 // Memoised per text: literalUses asks once per occurrence. An unclosed block runs to the end of the text.
 interface Block { open: number; close: number; head: string }
 const CLOSER: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
@@ -158,8 +159,10 @@ const blockCache = new Map<string, Block[]>();
 function blocksOf(text: string): Block[] {
   const have = blockCache.get(text);
   if (have) return have;
-  const out: Block[] = [], stack: Array<{ open: number; want: string }> = [];
-  const headOf = (open: number): string => text.slice(text.lastIndexOf("\n", open) + 1, open);
+  const out: Block[] = [], stack: Array<{ open: number; want: string; head: string }> = [];
+  const stmtStart: number[] = []; // per depth: where the current statement began (after a `;` or `}` at that depth)
+  const headOf = (open: number): string =>
+    text.slice(Math.max(text.lastIndexOf("\n", open) + 1, stmtStart[stack.length] ?? 0), open);
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
     // a bracket inside a string is not one: skip a quoted string — to its closing quote on the same line (a lone `'` in
@@ -176,15 +179,17 @@ function blocksOf(text: string): Block[] {
       continue;
     }
     const want = CLOSER[c];
-    if (want !== undefined) { stack.push({ open: i, want }); continue; }
+    if (want !== undefined) { stmtStart.length = stack.length + 1; stack.push({ open: i, want, head: headOf(i) }); continue; }
+    if (c === ";") stmtStart[stack.length] = i + 1;
     if (c !== ")" && c !== "]" && c !== "}") continue;
     // a closer closes the nearest block it matches (any unclosed ones inside it end with it); one matching none is stray
     let k = stack.length - 1;
     while (k >= 0 && stack[k]?.want !== c) k--;
     if (k < 0) continue;
-    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: headOf(s.open) });
+    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: s.head });
+    if (c === "}") stmtStart[stack.length] = i + 1;
   }
-  for (const s of stack) out.push({ open: s.open, close: text.length, head: headOf(s.open) });
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: s.head });
   if (blockCache.size > 64) blockCache.clear();
   blockCache.set(text, out);
   return out;

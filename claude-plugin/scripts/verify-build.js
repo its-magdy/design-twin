@@ -2848,7 +2848,8 @@ function blocksOf(text) {
   const have = blockCache.get(text);
   if (have) return have;
   const out = [], stack = [];
-  const headOf = (open) => text.slice(text.lastIndexOf("\n", open) + 1, open);
+  const stmtStart = [];
+  const headOf = (open) => text.slice(Math.max(text.lastIndexOf("\n", open) + 1, stmtStart[stack.length] ?? 0), open);
   for (let i = 0; i < text.length; i++) {
     const c = text.charAt(i);
     if ((c === '"' || c === "'") && text.startsWith(c + c + c, i)) {
@@ -2864,16 +2865,19 @@ function blocksOf(text) {
     }
     const want = CLOSER[c];
     if (want !== void 0) {
-      stack.push({ open: i, want });
+      stmtStart.length = stack.length + 1;
+      stack.push({ open: i, want, head: headOf(i) });
       continue;
     }
+    if (c === ";") stmtStart[stack.length] = i + 1;
     if (c !== ")" && c !== "]" && c !== "}") continue;
     let k = stack.length - 1;
     while (k >= 0 && stack[k]?.want !== c) k--;
     if (k < 0) continue;
-    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: headOf(s.open) });
+    for (const s of stack.splice(k).reverse()) out.push({ open: s.open, close: i, head: s.head });
+    if (c === "}") stmtStart[stack.length] = i + 1;
   }
-  for (const s of stack) out.push({ open: s.open, close: text.length, head: headOf(s.open) });
+  for (const s of stack) out.push({ open: s.open, close: text.length, head: s.head });
   if (blockCache.size > 64) blockCache.clear();
   blockCache.set(text, out);
   return out;

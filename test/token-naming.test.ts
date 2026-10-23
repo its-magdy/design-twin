@@ -203,6 +203,15 @@ check("[enclosing] a bracket inside a multi-line string (\"\"\" or ''') does not
   return literalUses([{ rel: "Card.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
     && literalUses([{ rel: "card.dart", text: dart }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "card.dart";
 })());
+// Review round 6: a head is the opener's own statement, not the statements closed before it on the line.
+check("[enclosing] a statement closed earlier on the opener's line is not part of its head", (() => {
+  const ts = "class ColorsTokens { brand600 = \"#5B5FC7\"; } const styles = {\n  brand600: \"#5B5FC7\",\n};";
+  const kt = "object ColorsTokens { val x = 1 }; fun Card() {\n  val brand600 = Color(0xFF5B5FC7)\n}";
+  const kept = "class AppColors(x: Int) {\n  val primary = Color(0xFF5B5FC7)\n}";
+  return literalUses([{ rel: "Card.tsx", text: ts }], "#5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.tsx"
+    && literalUses([{ rel: "Card.kt", text: kt }], "0xFF5B5FC7", ["ColorsTokens.brand600"]).usedIn.join() === "Card.kt"
+    && literalUses([{ rel: "AppColors.kt", text: kept }], "0xFF5B5FC7", ["AppColors.primary"]).usedIn.length === 0;
+})());
 // Review round 3: a component that binds a container's name (a local alias) is not the container's scope.
 check("[near] a component-local alias of the container does not make the component's styles definitions", (() => {
   const text = "const colorsTokens = useColorsTokens();\nconst styles = {\n  backgroundImage: \"linear-gradient(#5B5FC7, transparent)\",\n  hero: colorsTokens.light.brand600,\n};";
