@@ -104,6 +104,8 @@ export const cases: Case[] = [{
     // pre-change: fails — raceSvgs is ["ar:b"]: the ping's reply released "ar:a" mid-export.
     ok("[ASSET-RACE] a ping answered mid-export leaves the export's earlier assets in its result",
       !!resPing && resPing.ok === true && JSON.stringify(raceSvgs) === '["ar:a","ar:b"]');
+    ok("[ASSET-RACE] …and once that export has settled its asset tables hold nothing",
+      JSON.stringify(w.api.assetRetention()) === JSON.stringify({ assets: 0, byContent: 0, byName: 0 }));
 
     // inside the catalog's variant walk: each variant's serialize is wrapped in a catch that
     // WARNS and moves on (components.ts), so the per-node throw is swallowed there — the collector's

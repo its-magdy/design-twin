@@ -52,13 +52,20 @@ function contentHash(a: { base64?: string; text?: string }): string {
   return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
 }
 
-// Per-run, reset by resetRun() via releaseAssets(): content hash -> the file already written for it,
-// and taken basename -> the hash that owns it.
+// Per-run: content hash -> the file already written for it, and taken basename -> the hash that owns
+// it. Cleared by releaseAssets() (state.ts) both when a run settles and when the next one starts:
+// `byContent` holds the same Asset objects (base64/text payloads) the run returned, so leaving it
+// populated kept the last export's payloads alive for the whole idle period after `assets` was
+// emptied. Clearing drops the references only; the returned objects are never touched.
 const byContent = new Map<string, { file: string; asset: Asset }>();
 const byName = new Map<string, string>();
 export function resetAssetNames(): void {
   byContent.clear();
   byName.clear();
+}
+/** Test surface: how many entries the per-run dedupe tables hold right now. */
+export function assetNameTableSizes(): { byContent: number; byName: number } {
+  return { byContent: byContent.size, byName: byName.size };
 }
 
 // A Figma layer name is often a path (`icons/linear/arrow-down`, `Linear / School / Award`) and may be

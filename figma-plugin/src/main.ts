@@ -15,7 +15,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { cancelBridgeRequest, cancelBridgeRuns, serializeRun, type Asset } from "./state";
+import { assetRetention, cancelBridgeRequest, cancelBridgeRuns, serializeRun, type Asset } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren, type ScreenResult, type FullResult } from "./collect";
 import { serialize } from "./serialize";
@@ -30,8 +30,9 @@ import { isUIToMain, type ExportFile, type ExportLayerFile, type MainToUI } from
 // the isolated plugin realm; not referenced by the UI or bridge.
 // serializeRun/requestCancel ride along because progress + cancellation only exist INSIDE a bracketed
 // run (see progress.ts): a harness that called a collector directly would see neither, so the test
-// surface has to be the same entry point main.ts and bridge.ts use.
-globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
+// surface has to be the same entry point main.ts and bridge.ts use. assetRetention is a read-only
+// count of the run-owned asset tables, so a case can check a settled run holds no payloads.
+globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel, assetRetention };
 
 // themeColors: Figma injects its --figma-color-* variables and a figma-light/figma-dark class into the
 // iframe, which is what lets ui.html follow the user's theme instead of being a white box in dark mode.

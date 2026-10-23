@@ -161,6 +161,8 @@ export interface DesignExportApi {
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
   collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
+  /** state.ts assetRetention: entries the run-owned asset array and dedupe tables still hold. */
+  assetRetention(): { assets: number; byContent: number; byName: number };
 }
 
 // ---- the scene: what is in the file
@@ -237,7 +239,7 @@ const pluginConsole: Pick<Console, "log" | "info" | "warn" | "error" | "debug"> 
 const API_MEMBERS: Record<keyof DesignExportApi, true> = {
   serialize: true, collectSelection: true, collectNode: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
   buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
-  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true,
+  applyWrites: true, serializeRun: true, requestCancel: true, collectScreenshot: true, assetRetention: true,
 };
 const missingApi = (c: Record<string, unknown>): string[] => Object.keys(API_MEMBERS).filter((k) => typeof c[k] !== "function");
 // The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi). Narrowed by a

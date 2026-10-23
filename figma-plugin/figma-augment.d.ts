@@ -32,6 +32,7 @@ declare global {
     collectLibraryComponents: typeof import("./src/libraries").collectLibraryComponents;
     serializeRun: typeof import("./src/state").serializeRun;
     requestCancel: typeof import("./src/progress").requestCancel;
+    assetRetention: typeof import("./src/state").assetRetention;
   } | undefined;
 }
 

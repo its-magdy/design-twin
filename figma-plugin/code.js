@@ -445,6 +445,9 @@
     byContent.clear();
     byName.clear();
   }
+  function assetNameTableSizes() {
+    return { byContent: byContent.size, byName: byName.size };
+  }
   function assetSafe(x) {
     return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
   }
@@ -856,6 +859,10 @@
   }
   function releaseAssets() {
     assets.length = 0;
+    resetAssetNames();
+  }
+  function assetRetention() {
+    return { assets: assets.length, ...assetNameTableSizes() };
   }
   async function loadAllPages(consequence) {
     if (!figma.loadAllPagesAsync) return;
@@ -867,7 +874,6 @@
   }
   function resetRun() {
     releaseAssets();
-    resetAssetNames();
     warnings = [];
     grouped = /* @__PURE__ */ new Map();
     stats = newStats();
@@ -3935,7 +3941,7 @@
   }
 
   // src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel, assetRetention };
   figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   var post2 = (m) => figma.ui.postMessage(m);
