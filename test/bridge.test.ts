@@ -18,6 +18,8 @@ import { WsClient } from "./ws-client.ts";
 import type { ClientOptions, HandshakeRefusal } from "./ws-client.ts";
 import { fakePlugin, HANG, type FakePlugin, type Handler, type Handlers } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
+import { settingsAt } from "./bridge-settings.ts";
+import { maxPayloadFromEnv } from "../bridge/src/settings.ts";
 import { bunSync, dtwinSync, startChild } from "./children.ts";
 import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
 import { screenPaths } from "../bridge/src/pages-layout.ts";
@@ -44,13 +46,15 @@ import type { Check, Report } from "../bridge/src/doctor.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
-// A fixed token so verifyClient's comparisons are deterministic. server-core reads this at require
-// time, so it must be set BEFORE the module is loaded.
+// A fixed token so verifyClient's comparisons are deterministic. Every bridge here is created with settingsAt(),
+// which reads it when called; the dtwin children this suite starts inherit it too.
 const TOKEN = "test-token-abc123";
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
-// A static `import` is hoisted above this env assignment, and server-core reads FIGMA_BRIDGE_TOKEN at
-// load time — so this stays a dynamic import at the exact point the env var is set.
 const core = await import("../bridge/src/server-core.ts");
+// A child script's way to the same: its own settings (its env) at a given port, as a JS expression.
+const SETTINGS_URL = JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/settings.ts")).href);
+const childSettings = (port: string | number): string =>
+  `{ ...(await import(${SETTINGS_URL})).readSettings({ env: { ...process.env, FIGMA_BRIDGE_PORT: undefined } }).settings, port: ${port} }`;
 /** A fake DaemonBridge's answer: its reply as given (a fake may answer a shape the command does not have, which
  *  the daemon client must refuse), and the client it names — null when the fake does not say. */
 const fakeSent = <C extends Cmd>(reply: unknown, client: ClientRow | null = null): Sent<C> => ({ reply: malformed<Commands[C]["reply"]>(reply), client });
@@ -316,7 +320,7 @@ let nextPort = 8797;
 // commands `on` handles: every other one is never answered.
 async function connectedBridge(on: Handlers = {}) {
   const port = nextPort++;
-  const bridge = core.createBridge(port, { settleMs: 0 });
+  const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
   const client = fakePlugin(port, { token: TOKEN, hello: false, on, unhandled: HANG });
   await client.opened;
   return { bridge, client };
@@ -439,7 +443,7 @@ void (async () => {
   // warning (`ws` read <=0 as "unlimited"; Bun.serve has none, and its 0 would refuse every frame); past 4 GiB it is
   // clamped, and `mb` — what the too-big diagnosis quotes — is the clamped cap, not the number typed.
   {
-    const mp = core.maxPayloadFromEnv;
+    const mp = maxPayloadFromEnv;
     ok("[payload] unset, empty or blank: the default 128 MB, no warning", [undefined, "", "  "].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && r.warning === undefined; }));
     ok("[payload] 0, a negative, NaN, Infinity, a word or blanks: the default 128 MB, with a warning naming the value",
       ["0", "-5", "NaN", "Infinity", "-Infinity", "lots", "1e999"].every((v) => { const r = mp(v); return r.mb === 128 && r.bytes === 128 * 1024 * 1024 && !!r.warning && r.warning.includes(JSON.stringify(v)) && /default 128 MB/.test(r.warning); }));
@@ -471,7 +475,7 @@ void (async () => {
   // make that safe are what is tested: it is never a client, and everyone else still gets the 401.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { settleMs: 0 });
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
     // The plugin case is a fake plugin (Bun's WebSocket, as the iframe would dial) that says hello as an intruder
     // the moment it opens; the two refused ones are the raw client (ws-client.ts), the only one that can read the
     // refusal's HTTP status.
@@ -507,7 +511,7 @@ void (async () => {
   // that — and a bad Host is still a 403 at the HTTP layer.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { settleMs: 0 });
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
     await bridge.listening;
     const plain = await new Promise<number | undefined>((res) => {
       http.get({ host: "127.0.0.1", port, path: "/" }, (r) => { r.resume(); res(r.statusCode); }).on("error", () => res(undefined));
@@ -528,14 +532,14 @@ void (async () => {
     // off, and two bridges then both "bound" 8787 (server-core states reusePort:false for that).
     let listenErr: Error | null = null;
     let returnedFirst = false;
-    const second = core.createBridge(port, { settleMs: 0, onListenError: (e) => { listenErr = e; } });
+    const second = core.createBridge(settingsAt(port), { settleMs: 0, onListenError: (e) => { listenErr = e; } });
     returnedFirst = listenErr === null;
     await until(() => listenErr !== null, 2000);
     ok("[bind] a second bridge on a held port reports it through onListenError (after createBridge returned), with the port-in-use text",
       returnedFirst && !!listenErr && (listenErr as Error).message.startsWith(`[bridge] port ${port} is already in use`) && second.boundPort() === null);
     second.close();
     const child = bunSync(["-e",
-      `const c = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)}); c.createBridge(${port});`],
+      `const c = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)}); c.createBridge(${childSettings(port)});`],
     { timeoutMs: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: TOKEN, NODE_ENV: "production" } });
     ok("[bind] …and another process (NODE_ENV=production) exits 1 with it instead of sharing the port",
       child.status === 1 && child.stderr.includes(`[bridge] port ${port} is already in use`));
@@ -555,7 +559,7 @@ void (async () => {
   // before the alive client's pong was read, and terminated it.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { heartbeatMs: 0, settleMs: 0 });
+    const bridge = core.createBridge(settingsAt(port), { heartbeatMs: 0, settleMs: 0 });
     // The alive client is a fake plugin (no hello) that answers ping and nothing else. Its reply is written after
     // its pong on the same socket, so a round trip that resolves proves the bridge has READ the pong — the fence
     // before each tick. The dead one is the raw client: the point of it is a socket that never pongs.
@@ -606,7 +610,7 @@ void (async () => {
   // bound — a loaded machine may run it late, which is not the bug this guards).
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { heartbeatMs: 50, settleMs: 0 });
+    const bridge = core.createBridge(settingsAt(port), { heartbeatMs: 50, settleMs: 0 });
     const dead = new WsClient(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", raw: true });
     let deadClosed = false;
     dead.on("close", () => { deadClosed = true; });
@@ -651,7 +655,7 @@ void (async () => {
   // no single-socket test could reach.
   {
     const port = nextPort++;
-    const bridge = core.createBridge(port, { settleMs: 0 });
+    const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
     // A fake plugin that connects without identifying; given a `result`, it answers whatever it is asked with
     // `{ ...result, cmd }`, and with none it never answers. It identifies itself the way the plugin UI does: a
     // hello once it is open.
@@ -1508,7 +1512,7 @@ void (async () => {
   // A named `client` waits up to NAMED_CLIENT_WAIT_MS for its file (the MCP server's connect window is 0, and the
   // route's named window defaults to it): the server's route must say so. The route's own rule is bridge-route.test.ts's.
   ok("[mcp-multi] the MCP route gives a named client NAMED_CLIENT_WAIT_MS to land",
-    /createRoute\(holder, \{ connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS \}\)/.test(libMcpSrc));
+    /createRoute\(\(\) => session\(\)\.upstream\(\), \{ connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS \}\)/.test(libMcpSrc));
   ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
     /Several Figma files are connected/.test(libMcpSrc));
   // The whoami description must not claim the bridge holds ONE connection.
@@ -1652,13 +1656,11 @@ void (async () => {
   // async write, and the exit are all process-level. Payload is deliberately far over the 64KB pipe
   // buffer, since anything under it passes either way and would not have caught the bug.
   const exitDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-exit-"));
-  // An ESM child: server-core reads FIGMA_BRIDGE_TOKEN at load time and a static import would hoist
-  // above the env assignment, so the module is loaded with a dynamic import after it.
   const exitScript = path.join(exitDir, "drain.mjs");
   fs.writeFileSync(exitScript, [
     'process.env.FIGMA_BRIDGE_TOKEN = "t";',
     `const { createBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)});`,
-    "const bridge = createBridge(0);", // port 0 -> ephemeral, so the suite never fights a real bridge on 8787
+    `const bridge = createBridge(${childSettings(0)});`, // port 0 -> ephemeral, so the suite never fights a real bridge on 8787
     'const big = JSON.stringify({ pages: Array.from({ length: 4000 }, (_, i) => ({ id: "1:" + i, name: "page " + i, w: 100, h: 200 })) }, null, 2);',
     'process.stderr.write("BYTES:" + big.length + "\\n");',
     "console.log(big);",
@@ -3029,14 +3031,14 @@ void (async () => {
     runCli(["--show-token", "--token-file", customFile]).stdout.trim() === "custom-tok-value");
 
   // The mint-on-first-bridge-start path, which no other test reaches: the CLI tests above never open
-  // a bridge, and this suite's own server-core is loaded with FIGMA_BRIDGE_TOKEN set (source "env",
+  // a bridge, and this suite's own bridges are created with FIGMA_BRIDGE_TOKEN set (source "env",
   // which never persists). Driven as a subprocess on a spare port so it neither needs a plugin nor
   // collides with a real bridge on 8787.
   const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
   const bootScript = path.join(bootDir, "boot.mjs");
   fs.writeFileSync(bootScript, `
     import { createBridge } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "..", "bridge", "src", "server-core.ts")).href)};
-    const b = createBridge(19788);
+    const b = createBridge(${childSettings(19788)});
     b.close();
   `);
   const bootEnv: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: bootDir };
@@ -3423,7 +3425,7 @@ void (async () => {
   await new Promise<void>((r) => httpSrv.close(() => r()));
   ok("[doctor] probePort: a free port is free, and the probe leaves nothing listening",
     (await doctor.probePort(freed)).free === true && (await doctor.probePort(freed)).free === true);
-  const held = core.createBridge(nextPort);
+  const held = core.createBridge(settingsAt(nextPort));
   await sleep(50);
   const wsProbe = await doctor.probePort(nextPort);
   ok("[doctor] probePort: a bridge is recognised by its 426 to a plain GET — no WebSocket opened", wsProbe.holder === "websocket" && held.listClients().length === 0);
@@ -3515,7 +3517,7 @@ void (async () => {
   console.log("\nserver-core — awaitClient waits for the hello (--client name race):");
   {
     const port = nextPort++;
-    const b = core.createBridge(port, { settleMs: 0 });
+    const b = core.createBridge(settingsAt(port), { settleMs: 0 });
     const t0 = Date.now();
     await b.awaitClient(null, 200); // no clients at all: resolves at its window, never hangs
     const waited = Date.now() - t0;
@@ -3543,7 +3545,7 @@ void (async () => {
     // runs to the end of the settle, so the second file is seen and the request is refused, not sent to
     // the first.
     const port = nextPort++;
-    const b = core.createBridge(port, { settleMs: 700 });
+    const b = core.createBridge(settingsAt(port), { settleMs: 700 });
     const dial = async (file: string, afterMs: number) => {
       await sleep(afterMs);
       const ws = fakePlugin(port, { token: TOKEN, hello: { instanceId: "i-" + file, file }, unhandled: HANG });
@@ -3840,7 +3842,7 @@ void (async () => {
         'process.env.FIGMA_BRIDGE_TOKEN = "t";',
         `const { createBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)});`,
         `const { WsClient } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "ws-client.ts")).href)});`,
-        `const bridge = createBridge(${port}, { settleMs: 0 });`,
+        `const bridge = createBridge(${childSettings(port)}, { settleMs: 0 });`,
         `const ws = new WsClient("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
         'await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });',
         "const ac = new AbortController();",
@@ -3954,7 +3956,7 @@ void (async () => {
     if (process.platform === "win32") console.log("  (skipped on Windows: drives the POSIX daemon socket at a fixed name — the pipe is daemon-sock.test.ts's)");
     else {
       const port = nextPort++;
-      const b = core.createBridge(port, { settleMs: 0 });
+      const b = core.createBridge(settingsAt(port), { settleMs: 0 });
       const fullReply = malformed<FullExportReply>({ designSystem: {}, layersDoc: {}, assets: [] });
       let releaseA: (() => void) | undefined;
       const two = (instanceId: string, file: string, fileKey: string, on: Handlers): FakePlugin =>

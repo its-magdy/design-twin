@@ -26,13 +26,13 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import * as tokenStore from "./token-store.ts";
 import { AUTH_TIMEOUT_MS, clientHandshake, ipcKey, pipeName, serverHandshake } from "./daemon-auth.ts";
 import type { IpcAuth } from "./daemon-auth.ts";
 import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
 import { bridgePortOrExit } from "./ports.ts";
+import { daemonTokenOf, humanMs, idleMsFromEnv, tokenSetting } from "./settings.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
@@ -178,7 +178,8 @@ export interface DaemonBridge {
 export interface ServeOptions {
   port?: number;
   log?: (m: string) => void;
-  idleMin?: number;
+  /** The idle window in ms (0 = none): the holder passes its settings' (settings.ts idleMs); absent, FIGMA_DAEMON_IDLE_MIN. */
+  idleMs?: number;
   signals?: boolean;
   /** Install installCrashHandlers for this process. Defaults to `signals`: a serve() that owns the
    *  process's signals owns its lifetime too (`dtwin serve`); a host with its own lifetime (the MCP
@@ -217,19 +218,12 @@ const isWin = (place: { platform?: NodeJS.Platform | undefined }): boolean => (p
  *  the hello, and a handshaking server drops a frame that comes first. */
 const handshakeOn = (place: { platform?: NodeJS.Platform | undefined; handshake?: boolean | undefined }): boolean => place.handshake ?? isWin(place);
 
-/** The bridge token the pipe name and the handshake key on: the place's own when it names one, else the
- *  one server-core would use — the same precedence (FIGMA_BRIDGE_TOKEN_FILE, which figma-pull sets from
- *  --token-file before anything loads; then FIGMA_BRIDGE_TOKEN; then the saved file). Never minted: with
- *  nothing saved there is no daemon anyone could have started under it (a bridge saves the token it mints
- *  before it serves), so that is null, and so is a token file that cannot be read. */
+/** The bridge token the pipe name and the handshake key on: the place's own when it names one (an entry passes
+ *  its settings' — settings.ts daemonPlace), else the environment's by the same resolution (settings.ts
+ *  tokenSetting / daemonTokenOf): null when nothing is saved yet or a token file cannot be read. */
 export function daemonToken(place: SockPlace = {}): string | null {
   if (place.token !== undefined) return place.token;
-  try {
-    const r = tokenStore.resolve({ tokenFile: process.env.FIGMA_BRIDGE_TOKEN_FILE || null, persist: false });
-    return r.source === "ephemeral" ? null : r.token;
-  } catch {
-    return null;
-  }
+  return daemonTokenOf(tokenSetting({ ...(place.env ? { env: place.env } : {}) }));
 }
 
 /** Why a handshaking daemon cannot be named or served: no token to key it on. */
@@ -350,8 +344,8 @@ export function sockFileProblem(sock: string, uid: number): string | null {
   return st.uid === uid ? null : `it is owned by uid ${st.uid}, not ${uid}`;
 }
 
-// Without an explicit port, the one server-core binds: FIGMA_BRIDGE_PORT parsed the same way, so " 8788"
-// names the 8788 socket and a value no plugin can reach exits with server-core's message rather than
+// Without an explicit port, the one a bridge binds: FIGMA_BRIDGE_PORT parsed as settings.ts does, so " 8788"
+// names the 8788 socket and a value no plugin can reach exits with the same message rather than
 // naming a socket no bridge ever serves.
 function sockName(port: number | undefined, place: SockPlace): string {
   return `designtwin-${port || bridgePortOrExit((place.env ?? process.env).FIGMA_BRIDGE_PORT)}.sock`;
@@ -562,19 +556,6 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
 // the plugin window's own buttons alike. A queue here could only see this socket's share of a file's runs, held
 // one file's reads behind another file's export, and moved to the next request when an abandoned one's cancel
 // was SENT, while the plugin was still unwinding it. The plugin's own chain moves when the run has ENDED.
-/** The idle window a daemon uses when its host names none: FIGMA_DAEMON_IDLE_MIN minutes (default 120), in
- *  ms. 0 — and an unparsable value, as it always was — disables the idle shutdown. The ONE spelling of the
- *  rule: serve() reads it, and so does the MCP server once its own client has gone (figma-mcp.ts). */
-export function idleMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
-  return minutesToMs(env.FIGMA_DAEMON_IDLE_MIN ?? 120);
-}
-const minutesToMs = (min: unknown): number => Math.max(0, Number(min)) * 60000 || 0;
-
-/** An idle window for a log line: whole minutes from one minute up, else whole seconds. The ONE spelling
- *  (serve()'s idle shutdown line and figma-mcp.ts's after-the-client-left lines). */
-export function humanMs(ms: number): string {
-  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`;
-}
 
 /** What the served socket has seen so far — read by a host that has to decide whether OTHER processes
  *  use it (figma-mcp.ts, after its own client went away). `frames` counts every frame received since
@@ -592,7 +573,7 @@ export interface ServeHandle {
   idleOut(ms: number): void;
 }
 
-export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals, platform, handshake, token }: ServeOptions = {}): Promise<ServeHandle> {
+export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, signals = true, crashHandlers = signals, platform, handshake, token }: ServeOptions = {}): Promise<ServeHandle> {
   const place: SockPlace = { ...ifDefined("platform", platform), ...ifDefined("handshake", handshake), ...ifDefined("token", token) };
   return assertNoDaemon(port, place).then((sock) => {
     // A pipe (win32) has no file: nothing stale to remove before listening, or after.
@@ -608,12 +589,12 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     // Deliberately generous: this exists to reap ABANDONED daemons, not to punish thinking time. The
     // clock resets on every request, and a request in flight holds it off entirely (a 15-minute
     // --all-pages export must never be shot in the back by its own daemon). 0 disables it.
-    // `idleMin` lets a host that has its OWN lifetime (the MCP server lives as long as its Claude
+    // `idleMs` 0 lets a host that has its OWN lifetime (the MCP server lives as long as its Claude
     // session) serve the socket without being reaped from under that session.
-    // `idleOut` (the handle) may change the window later: the MCP server switches from 0 (its session's
-    // lifetime) to FIGMA_DAEMON_IDLE_MIN once its own client has gone and only others use the socket.
+    // `idleOut` (the handle) may change the window later: the bridge holder switches an MCP session's from 0
+    // to the settings' window once its own client has gone and only others use the socket (bridge-holder.ts).
     let stopped = false;
-    let idleMs = idleMin === undefined ? idleMsFromEnv() : minutesToMs(idleMin);
+    let idleMs = idleWindow ?? idleMsFromEnv();
     let lastActivity = Date.now();
     let inFlight = 0;
     let frames = 0;

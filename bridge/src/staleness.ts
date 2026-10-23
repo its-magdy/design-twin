@@ -1,7 +1,6 @@
 // staleness.ts — the plugin/daemon version-staleness notes, split out of server-core.ts so the CLI's
-// pure, test-driven helpers (figma-pull.ts formatClients) and doctor.ts can use them WITHOUT loading
-// server-core, whose module load resolves the bridge token and exits the process on a bad
-// FIGMA_BRIDGE_PORT. This module's only load-time effect is reading bridge/package.json for
+// pure, test-driven helpers (figma-pull.ts formatClients) and doctor.ts use them without loading the bridge
+// itself. This module's only load-time effect is reading bridge/package.json for
 // BRIDGE_VERSION. Every caller, server-core.ts included, imports the three public names from here.
 import fs from "node:fs";
 

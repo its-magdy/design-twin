@@ -84,6 +84,11 @@ a second Claude Code session, say — routes through that socket instead of bind
 server re-resolves the owner per call, so it takes the bridge over when the owning session ends. An owning MCP server exits with its client unless others have used its socket, then idles out (`FIGMA_DAEMON_IDLE_MIN`).
 Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
 (`server-core.ts`). `writeToDisk` remains the in-session way to get files.
+Those rules live in one module, `bridge/src/bridge-holder.ts`: each front-end picks a lifetime (one-shot CLI
+command, `serve`, an MCP session) and turns its own events into "release" or "the client left"; the holder
+probes or binds, publishes, watches whether anyone else used the socket, and lets go exactly once. What it
+works from — port, effective token and its source, payload cap, idle window — is read once at the entry
+(`bridge/src/settings.ts`) and passed in; no bridge module reads them at load.
 Neither front-end nor the daemon orders requests: which commands may run alongside which is declared once
 per command (`bridge/src/commands.ts` `runKind` — exclusive, scene read, identity read) and enforced by the
 plugin's run scheduler (`figma-plugin/src/state.ts` `scheduleRun`) for every caller, the plugin window's

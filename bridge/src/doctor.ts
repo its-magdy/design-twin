@@ -13,11 +13,11 @@
 //     a PLUGIN client, so a probe would disturb routing for whoever owns that bridge (and a
 //     wrong-token probe spams its log). A held port is identified with a plain HTTP GET instead — a
 //     bridge answers 426 Upgrade Required.
-//   - server-core is imported LAZILY (probePlugin's `await import()`) and only once the port is known to
-//     be valid and free: it exits the process on a bad FIGMA_BRIDGE_PORT (at module load) and on
-//     EADDRINUSE (in createBridge). Those are findings for doctor to report, not ways for it to die.
-//     The one server-core helper doctor needs outside that probe, daemonRowStalenessNote, lives in the
-//     side-effect-free staleness.ts and is imported statically from there.
+//   - A bridge is only created once the port is known to be valid and free: createBridge exits the
+//     process on EADDRINUSE, which is a finding for doctor to report, not a way for it to die. Its
+//     settings (port, token) come from settings.ts like every other entry's. server-core is imported
+//     LAZILY (probePlugin's `await import()`) so a doctor run that never probes does not load it. The one
+//     server-core helper doctor needs outside that probe, daemonRowStalenessNote, lives in staleness.ts.
 //
 //   dtwin doctor            # human report; exit 1 only if a check is ✗
 //   dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s)
@@ -40,8 +40,7 @@ import * as LAYOUT from "./project-layout.ts";
 import { isOurMcpEntry, mcpEntryProblems, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
 // The manifest's allowedDomains ports and the FIGMA_BRIDGE_PORT parse — ports.ts, the same list and
-// parse server-core.ts binds from. Its own dependency-free module, so reading it never loads
-// server-core (which exits the process on a bad FIGMA_BRIDGE_PORT — the very case this exists to diagnose).
+// parse settings.ts reads the port with. A bad value is a finding here (the very case this exists to diagnose).
 import { ALLOWED_PORTS, parsePortEnv } from "./ports.ts";
 import { dtwinPortWarning } from "./verbs.ts";
 // The package's own package.json, imported rather than read by a path at run time (so it resolves in a
@@ -49,6 +48,7 @@ import { dtwinPortWarning } from "./verbs.ts";
 import pkg from "../package.json" with { type: "json" };
 import type { ClientRow, Bridge } from "./server-core.ts";
 import { exitCli } from "./stdio.ts";
+import { readSettings, tokenSetting } from "./settings.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
@@ -495,13 +495,15 @@ async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
   console.error = () => {};
   let bridge: Bridge | null = null;
   try {
+    const read = readSettings();
+    if (!read.ok) return { clients: [], error: read.problem };
     const core = await import("./server-core.ts");
-    bridge = core.createBridge(port);
+    const b = core.createBridge({ ...read.settings, port });
+    bridge = b;
     const start = Date.now();
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    // Only a refusal from THIS probe counts — authStats is module-wide.
-    const refused = () => { const b = core.authStats().lastBadToken; return b && b.at >= start ? b : null; };
-    const b = bridge;
+    // Only a refusal from THIS probe counts — the last bad token is kept process-wide.
+    const refused = () => { const bad = b.authStats().lastBadToken; return bad && bad.at >= start ? bad : null; };
     while (Date.now() - start < waitMs && !b.isConnected() && !refused()) await sleep(200);
     if (b.isConnected()) {
       // The file name arrives in a hello just after the socket opens, and a second open file may be a
@@ -513,7 +515,7 @@ async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
       await b.awaitClient(null, Math.max(1, waitMs - (Date.now() - start)));
       return { clients: b.listClients() };
     }
-    return { clients: [], badToken: refused(), expected: core.authStats().expected };
+    return { clients: [], badToken: refused(), expected: b.authStats().expected };
   } catch (e) {
     return { clients: [], error: errMsg(e) };
   } finally {
@@ -564,7 +566,10 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     // and exits on a bad value, where doctor has to report it.
     const refused = daemon.sockProblem(port);
     const st = refused ? null : await daemon.status(port).catch(() => null);
-    const tokenFile = process.env.FIGMA_BRIDGE_TOKEN_FILE || (tok.activeSource === "file" ? tok.path : null);
+    // The file the effective token is read from (none for FIGMA_BRIDGE_TOKEN); a token file that cannot be read
+    // is still the one the setup points at.
+    const token = tokenSetting();
+    const tokenFile = token.ok ? token.resolved.path : (process.env.FIGMA_BRIDGE_TOKEN_FILE || null);
     add(checkDaemon(st, port, refused, sharedTokenNote(tokenFile, process.env.USERPROFILE || os.homedir())));
     const probe = await probePort(port);
     add(checkPort(port, probe, st, process.env.FIGMA_BRIDGE_PORT));

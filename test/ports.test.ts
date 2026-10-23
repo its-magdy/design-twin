@@ -1,5 +1,6 @@
 // FIGMA_BRIDGE_PORT parsing (bridge/src/ports.ts) as pure functions, and the three readers that share
-// it: server-core's load-time exit (bridgePortOrExit), doctor's resolvePort and the daemon's socket name.
+// it: settings.ts readSettings (portProblem), the daemon's fallback reader (bridgePortOrExit), doctor's resolvePort and
+// the daemon's socket name.
 //   bun test/ports.test.ts
 // No bridge, no port, no socket: process.exit and console.error are stubbed, and the daemon socket
 // path is only computed (no uid, so the directory is the temp dir itself and nothing is created).
@@ -54,7 +55,7 @@ function runOrExit(raw: string | undefined): { port?: number; code?: number; pri
   }
 }
 
-console.log("\nbridgePortOrExit (server-core's and the daemon's reader):");
+console.log("\nbridgePortOrExit (the daemon's reader when no port is passed):");
 {
   const good = runOrExit("8789");
   check("a valid value is returned, nothing printed, no exit", good.port === 8789 && good.code === undefined && good.printed.length === 0);

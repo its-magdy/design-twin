@@ -205,7 +205,7 @@ const fake: DaemonBridge = {
 for (const k of ["FIGMA_BRIDGE_TOKEN_FILE", "DTWIN_PORT", "FIGMA_EXPORT_DIR", "MAX_MCP_OUTPUT_TOKENS"]) delete process.env[k];
 process.env.FIGMA_BRIDGE_PORT = String(PORT);
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
-const served = await daemon.serve(fake, { port: PORT, idleMin: 0, signals: false, token: TOKEN });
+const served = await daemon.serve(fake, { port: PORT, idleMs: 0, signals: false, token: TOKEN });
 
 // ---------------------------------------------------------------- figma-mcp.ts, in process
 console.log("\nfigma-mcp.ts loaded as a module starts nothing:");

@@ -26,12 +26,12 @@ import path from "node:path";
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
 import { createBridge } from "./server-core.ts";
-import { createRoute, daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
+import { createRoute } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
 import { TIMEOUTS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import { stampSource } from "./source-stamp.ts";
-import type { Bridge, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
@@ -52,80 +52,25 @@ import type { ReadOptNameFor } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
 import { HEX_COLOR_RE, HEX_COLOR_HINT } from "./hex-color.ts";
 
-// WHO holds the bridge. Port 8787 has one owner at a time, and this server does not insist on being
-// it: with `dtwin serve` running, or a second Claude Code session open, createBridge() would hit
-// EADDRINUSE. So it does what the dtwin CLI does — routes
-// through a live daemon when there is one — and, when it opens the bridge itself, serves the same
-// daemon socket so the NEXT session (or a `dtwin pull`) shares it instead of fighting for the port.
-// Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
+// WHO holds the bridge. Port 8787 has one owner at a time, and this server does not insist on being it: with
+// `dtwin serve` running, or a second Claude Code session open, it routes through that process's daemon socket; when
+// it opens the bridge itself, it publishes it there so the NEXT session (or a `dtwin pull`) shares it instead of
+// fighting for the port — and takes the bridge over when its owner goes. All of that is the bridge holder's
+// "session" lifetime (bridge-holder.ts); this file only tells it when the client has left or a signal says stop.
+import { bridgeHolder, daemonSide } from "./bridge-holder.ts";
+import type { Holder } from "./bridge-holder.ts";
+import { readSettings } from "./settings.ts";
 import * as daemon from "./daemon.ts";
 import { exitFlushed, installQueuedConsole } from "./stdio.ts";
-import type { ServeHandle } from "./daemon.ts";
-// The bridge this process holds (null while a daemon holds it, or before the first call), and its adapter.
-let own: Bridge | null = null;
-let ownUp: Upstream | null = null;
-// The daemon socket this process serves while it holds the bridge (null until serve() has bound it, and
-// again after `dtwin stop` / an idle shutdown). Its activity() is how this process learns, once its own
-// client has gone, whether any OTHER process uses the shared bridge (afterClientGone below).
-let served: ServeHandle | null = null;
-// The held bridge's close wrapper (`shared.close` below), so leave() can close a bridge whose socket
-// never got served. Idempotent.
-let closeOwn: (() => void) | null = null;
-// The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
-// arriving while startServer() is still resolving at startup) each saw no daemon and each called
-// createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
-// dropped after a daemon route or a failure, so the next call re-resolves (that session may have gone).
-let holding: Promise<Upstream> | null = null;
-function holder(): Promise<Upstream> {
-  return (holding ??= resolveHolder().finally(() => { if (!own) holding = null; }));
-}
-async function resolveHolder(): Promise<Upstream> {
-  if (own && ownUp) return ownUp;
-  const via = await daemon.connect();
-  if (via) return daemonUpstream(via, () => daemon.status());
-  // A held port is a TOOL error here, never process.exit: this process is the user's stdio MCP
-  // session, and dying took every tool down with it. `listening` settles the success side.
-  let failed: (e: Error) => void = () => {};
-  const bindFailed = new Promise<never>((_, reject) => { failed = reject; });
-  const mine = createBridge(undefined, { onListenError: (e) => failed(e) });
-  try {
-    await Promise.race([mine.listening, bindFailed]);
-  } catch (e) {
-    mine.close();
-    throw e;
-  }
-  // The client went away while the bridge was still binding: nobody is left to use it.
-  if (clientGone.signal.aborted || leaving) {
-    mine.close();
-    throw new Error("the MCP client went away before the bridge was up");
-  }
-  own = mine;
-  const up = ownUpstream(mine);
-  ownUp = up;
-  // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
-  // talking to a closed server — which means the memo goes with it. Once the client has gone, a
-  // close from outside (`dtwin stop`, the idle shutdown afterClientGone armed) is also this
-  // process's cue to exit: nothing is left for it to do.
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    own = null; ownUp = null; holding = null; served = null; closeOwn = null;
-    mine.close();
-    if (clientGone.signal.aborted) leave("the shared bridge was stopped after the MCP client went away — exiting");
-  };
-  closeOwn = close;
-  // idleMin 0 while the client is here: this server lives as long as its session (afterClientGone
-  // re-arms the window once the session has gone and others still use the socket).
-  daemon.serve(servedBridge(mine, close), { idleMin: 0, signals: false, log: wlog }).then(
-    (h) => {
-      // Gone (or this bridge stopped) while the socket was binding: take it down again at once.
-      if (closed || leaving) { h.shutdown(); return; }
-      served = h;
-    },
-    (e) => wlog("not sharing the bridge with other sessions: " + errMsg(e)),
-  );
-  return up;
+// The holder, made on first use from the settings this process was started with (startServer reads them first and
+// exits on a bad port; a suite that loads this module in process has set its environment before the first call).
+let holder: Holder | null = null;
+function session(): Holder {
+  if (holder) return holder;
+  const r = readSettings();
+  if (!r.ok) throw new Error(r.problem);
+  holder = bridgeHolder("session", { settings: r.settings, createBridge, daemon: daemonSide(r.settings), log: wlog });
+  return holder;
 }
 // Every tool reaches the plugin through ONE route (route.ts), over whichever side holds the bridge — this
 // process or a daemon (holder above, re-resolved per call). The route owns the rules, the same ones the CLI
@@ -140,7 +85,7 @@ async function resolveHolder(): Promise<Upstream> {
 // tools stamp as `sourceFile` and whoami describes. `signal` is the tool call's own: the SDK aborts
 // `extra.signal` on notifications/cancelled, and stdin closing aborts every in-flight call (callSignal below);
 // the plugin then gets a cancel frame for the request, whichever side holds the bridge.
-const route = createRoute(holder, { connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS });
+const route = createRoute(() => session().upstream(), { connectWaitMs: 0, oneShot: false, namedWaitMs: NAMED_CLIENT_WAIT_MS });
 /** A request's reply alone. */
 const ask = async <C extends Cmd>(cmd: C, args: Commands[C]["args"], o: RouteRequest): Promise<Commands[C]["reply"]> => (await route.request(cmd, args, o)).reply;
 // The socket half of whoami for `connId` — the connection a request was answered by, not the first live one.
@@ -262,76 +207,35 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
 const clientGone = new AbortController();
 // The client has gone: stdin ended/closed, or a write to stdout found the client's read end closed.
 // When the client is killed both pipes break at once, and a progress tick can reach stdout before stdin's
-// 'end' is handled — whichever is seen first decides; the rest are no-ops.
-let goneHandled = false;
+// 'end' is handled — whichever is seen first decides; the rest are no-ops (the holder's clientLeft runs once).
+//
+// What happens then is the holder's (bridge-holder.ts clientLeft): exit now unless other processes use the bridge
+// this one shares, in which case it keeps serving them and idles out like `dtwin serve` (FIGMA_DAEMON_IDLE_MIN).
+// This deliberately departs from the MCP stdio binding's "Servers SHOULD exit promptly when their standard
+// input is closed" (spec revision 2026-07-28, the stdio transport): the process is by then the shared daemon
+// other sessions and commands route through, and exiting would cut them off mid-use. The window is how it
+// still goes away on its own once they stop.
 function clientWentAway(how: string): void {
   // stdout is guarded from startup (startServer()); this call is the belt for any path that runs earlier.
   guardStdio();
   if (!clientGone.signal.aborted) clientGone.abort(new Error(`the MCP client went away (${how}) — request abandoned`));
-  // 'end' and 'close' both fire (and with fd 0 closed only 'end' does): decide once.
-  if (goneHandled) return;
-  goneHandled = true;
-  afterClientGone(how);
+  session().clientLeft(how);
 }
 function watchStdin(): void {
   process.stdin.once("end", () => clientWentAway("stdin closed"));
   process.stdin.once("close", () => clientWentAway("stdin closed"));
 }
 
-// What this process does once its MCP client has gone.
-// - Not holding the bridge (routed through someone else's daemon, or no bridge yet): exit now.
-// - Holding it, and the served socket never received a frame: no other process uses it — close the
-//   bridge and exit now.
-// - Holding it, and other processes (a `dtwin` command, another session's MCP server — every frame on
-//   the served socket comes from another process: this one talks to its own bridge directly) have used
-//   it: keep serving them, and idle out like `dtwin serve` does — FIGMA_DAEMON_IDLE_MIN (default 120 min,
-//   0 = never) after the last activity, a request in flight holding it off; checked once at once.
-// This deliberately departs from the MCP stdio binding's "Servers SHOULD exit promptly when their standard
-// input is closed" (spec revision 2026-07-28, the stdio transport): the process is by then the shared daemon
-// other sessions and commands route through, and exiting would cut them off mid-use. The window is how it
-// still goes away on its own once they stop.
-function afterClientGone(how: string): void {
-  if (leaving) return;
-  const s = served;
-  if (!own || !s) return leave(`the MCP client went away (${how}) — exiting`);
-  const a = s.activity();
-  if (a.frames === 0) return leave(`the MCP client went away (${how}) and no other dtwin command or session used the shared bridge — closing it and exiting`);
-  const ms = daemon.idleMsFromEnv();
-  // Already quiet for the whole window (and nothing in flight): idleOut's check-at-once would shut it down
-  // right away, so say that instead of "still serving".
-  if (ms && a.inFlight === 0 && Date.now() - a.lastActivity >= ms) {
-    return leave(`the MCP client went away (${how}); other dtwin commands/sessions used this shared bridge (${a.frames} request(s)), but none in the last ${daemon.humanMs(ms)} (FIGMA_DAEMON_IDLE_MIN) — closing it and exiting`);
-  }
-  const used = `other dtwin commands/sessions use this shared bridge (${a.frames} request(s) so far)`;
-  wlog(ms
-    ? `the MCP client went away (${how}); ${used} — still serving it, shutting down after ${daemon.humanMs(ms)} without one (FIGMA_DAEMON_IDLE_MIN)`
-    : `the MCP client went away (${how}); ${used} — still serving it, and it never shuts down on its own (${idleOffWhy(process.env.FIGMA_DAEMON_IDLE_MIN)}) — stop it with dtwin stop`);
-  // Its shutdown closes the bridge through `shared.close`, which calls leave().
-  s.idleOut(ms);
-}
-// Why the idle window is 0: the variable says 0, or it is not a usable number of minutes (idleMsFromEnv
-// turns an unparsable or negative value into 0 = off, as it always has) — name which, with the raw value.
-function idleOffWhy(raw: string | undefined): string {
-  const v = (raw ?? "").trim();
-  return v !== "" && Number(v) === 0
-    ? `FIGMA_DAEMON_IDLE_MIN=${v}`
-    : `FIGMA_DAEMON_IDLE_MIN=${JSON.stringify(raw ?? "")} is not a number of minutes above 0, which turns the idle shutdown off`;
-}
-
-// Leave: close what this process holds (cancel frames go to the plugin for every request still in flight —
-// server-core's close() sends them before it closes the sockets), then let the loop drain to exit 0, with a
-// backstop for any handle that keeps it open (an unref'd timer never holds the loop, but fires if
-// something else does). Runs once: stdin EOF, a signal and the idle shutdown can race.
-let leaving = false;
+// Leave: the holder lets go of what this process holds (cancel frames go to the plugin for every request still in
+// flight — server-core's close() sends them before it closes the sockets); once it has (`released`, wired in
+// startServer), the loop drains to exit 0, with a backstop for any handle that keeps it open (an unref'd timer never
+// holds the loop, but fires if something else does). The holder releases once: stdin EOF, a signal and the idle
+// shutdown can race.
 function leave(msg: string): void {
-  if (leaving) return;
-  leaving = true;
   guardStdio();
-  wlog(msg);
-  const s = served;
-  served = null;
-  if (s) s.shutdown(); // aborts its forwarded requests, unlinks the socket, closes the bridge (shared.close)
-  else if (closeOwn) closeOwn();
+  session().release(msg);
+}
+function onReleased(): void {
   process.exitCode = 0;
   setTimeout(() => exitFlushed(0, 1000), 3000).unref();
 }
@@ -1150,11 +1054,15 @@ async function startServer() {
   // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). Before that exit waits on
   // stderr, the cleanup lets go of what this process holds — the daemon socket it serves (unlinked) and the bridge's
   // port — synchronously, so a Claude Code that restarts the server at once finds 8787 free.
-  daemon.installCrashHandlers(wlog, () => {
-    const s = served;
-    served = null;
-    try { s?.shutdown(); } finally { own?.close(); } // shutdown closes the bridge through shared.close (own → null); else close it here
-  });
+  // The settings first, as the bridge core once did at its load: a port no plugin can reach leaves nothing to serve.
+  const settings = readSettings();
+  if (!settings.ok) {
+    console.error(settings.problem);
+    exitFlushed(1);
+    return;
+  }
+  daemon.installCrashHandlers(wlog, () => { session().release(); });
+  session().released.then(onReleased, onReleased);
   // Before anything can write to stdout (guardStdio says why it cannot wait for the client to go).
   guardStdio();
   // console.* through the streams' queue (Bun drops a direct console write that meets a full pipe) — and ALL of it to
@@ -1170,7 +1078,7 @@ async function startServer() {
   // call's error (the port may be free by then). Exiting here killed the whole MCP server.
   let h: Upstream;
   try {
-    h = await holder();
+    h = await session().upstream();
   } catch (e) {
     console.error("[figma-mcp] MCP server up (stdio), but no bridge yet: " + errMsg(e) + " Tool calls will retry.");
     return;
