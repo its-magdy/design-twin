@@ -560,7 +560,7 @@ var inside = (root, rel) => rel && !path3.isAbsolute(rel) ? resolveInside(root, 
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(f)) files.push(f);
+    if (f !== null && !files.includes(path3.resolve(f))) files.push(path3.resolve(f));
   };
   const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path3.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
@@ -569,7 +569,18 @@ function pageIndexFiles(root, pageDirs) {
     dirs = fs3.readdirSync(path3.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
-  for (const d of dirs) add(ofDir(d));
+  const mtime = (f) => {
+    try {
+      return fs3.statSync(f).mtimeMs;
+    } catch {
+      return -1;
+    }
+  };
+  const unlisted = dirs.flatMap((d) => {
+    const f = ofDir(d);
+    return f !== null && !files.includes(path3.resolve(f)) ? [{ f, t: mtime(f) }] : [];
+  });
+  for (const u of unlisted.sort((a, b) => b.t - a.t)) add(u.f);
   return files;
 }
 function readExportIndex(exportRoot) {
@@ -580,11 +591,14 @@ function readExportIndex(exportRoot) {
   const byId = /* @__PURE__ */ new Map();
   const files = /* @__PURE__ */ new Set();
   const take = (row) => {
+    const file = row.file;
+    const hasFile = typeof file === "string" && file !== "";
+    const probe = hasFile ? row : { ...row, file: "\0no file " + rows.length };
     const same = byId.get(row.id);
-    if (files.has(row.file) || same?.some((kept) => sameScreenRow(row, kept))) return;
+    if (hasFile && files.has(row.file) || same?.some((kept) => sameScreenRow(probe, kept))) return;
     if (same) same.push(row);
     else byId.set(row.id, [row]);
-    files.add(row.file);
+    if (hasFile) files.add(row.file);
     rows.push(row);
   };
   for (const row of rootDoc?.layers ?? []) take(row);

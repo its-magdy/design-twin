@@ -45,7 +45,7 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { isAlias, isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
-import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
+import { pagesRootOfScreen, readExportIndex } from "./export-index.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -648,10 +648,10 @@ function seed(plan: Plan, from: Plan, label: string): SeedCount {
   return n;
 }
 
-// The screen's row in the export index it sits in (export-index.ts: every screen the export indexes), for its title only
-// (best effort: null outside an indexed export).
+// The screen's row in the indexes of the pages/ tree it sits in (export-index.ts: every screen they index — the page
+// indexes too when the root index is gone), for its title only (best effort: null outside such a tree).
 function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
-  const root = exportRootOfScreen(screenFile);
+  const root = pagesRootOfScreen(screenFile);
   return root === null ? null : readExportIndex(root).rows.find((r) => r.id === nodeId) ?? null;
 }
 

@@ -14,7 +14,7 @@ import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import { locateExport } from "../design-to-code/verify-locate.ts";
 import { exportSiblings } from "../design-to-code/cross-check.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
-import { exportRootOfScreen, findExportRoot, hasExportIndex, readExportIndex } from "../design-to-code/export-index.ts";
+import { exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readExportIndex } from "../design-to-code/export-index.ts";
 import type { IndexRow } from "../design-to-code/types.ts";
 
 const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-index-" + tag + "-"));
@@ -122,6 +122,41 @@ console.log("readExportIndex: every indexed row once");
     ix.rows.map((r) => r.name).join(",") === "Tray Panel,Crates,Pots");
 }
 {
+  // three walks: page Old exported; the page renamed New in Figma (same page id) and walked again, its frame renamed too;
+  // then another page walked — the root lists neither, both page indexes hold the frame: the later write is the true one
+  const root = tmp("renamed-page");
+  const OLD = { page: "Old", pageId: "1:1" }, NEW = { page: "New", pageId: "1:1" };
+  walk(root, [{ ...OLD, id: "10:1", name: "Tray" }], { sourceFile: "Product" });
+  walk(root, [{ ...NEW, id: "10:1", name: "Tray Panel" }], { sourceFile: "Product" });
+  walk(root, [{ ...SETTINGS, id: "20:1", name: "Profile" }], { sourceFile: "Product" });
+  // the walks land within one clock tick: date them as they happened (Old first)
+  const at = (dir: string, secs: number): void => { const d = new Date(Date.UTC(2026, 0, 1, 0, 0, secs)); fs.utimesSync(path.join(root, "pages", dir, "index.json"), d, d); };
+  at("Old", 1); at("New", 2); at("Settings", 3);
+  const rows = readExportIndex(root).rows;
+  check(`two unlisted page indexes holding one screen: the later-written one's row (got ${rows.map((r) => r.name).join(",")})`, rows.map((r) => r.name).join(",") === "Profile,Tray Panel");
+  const r = resolveScreen(root, "10:1");
+  check("…so resolve-screen gives the frame's current name", r.status === "resolved" && r.row.name === "Tray Panel");
+  at("Old", 9);
+  check("(the order is the write order, not the directory name's)", readExportIndex(root).rows.map((x) => x.name).join(",") === "Profile,Tray");
+}
+{
+  // rows without a `file` (hand-edited: the guards ask for id and name only) are not one screen by their missing file
+  const root = tmp("no-file");
+  put(path.join(root, "pages", "index.json"), { pageDirs: [], layers: [{ id: "8:1", name: "A" }, { id: "8:2", name: "B" }, { id: "8:3", name: "C", file: "" }] });
+  check("rows with no file stay distinct screens", ids(readExportIndex(root).rows) === "8:1,8:2,8:3");
+}
+{
+  // a relative export root (verify-screen passes design/export): each page index is read once
+  const root = twoWalks();
+  const orig = fs.readFileSync;
+  const reads: string[] = [];
+  fs.readFileSync = ((...a: Parameters<typeof fs.readFileSync>) => { reads.push(String(a[0])); return orig(...a); }) as typeof fs.readFileSync;
+  let rel: ReturnType<typeof readExportIndex>;
+  try { rel = readExportIndex(path.relative(process.cwd(), root)); } finally { fs.readFileSync = orig; }
+  const homeReads = reads.filter((f) => f.endsWith(path.join("Home", "index.json"))).length;
+  check(`a relative root: the same rows, each page index read once (Home read ${homeReads}x)`, ids(rel.rows) === "10:1,10:2,20:1" && homeReads === 1);
+}
+{
   // a page index reached only through its pageDirs pointer, and pointers that leave the export
   const root = tmp("pointers");
   put(path.join(root, "pages", "index.json"), { pageDirs: [
@@ -172,6 +207,7 @@ console.log("the export root: from a screen file, from a dir");
   const bare = tmp("bare");
   put(path.join(bare, "pages", "Home", "A__1_2.json"), {});
   check("no root index beside it → null", exportRootOfScreen(path.join(bare, "pages", "Home", "A__1_2.json")) === null);
+  check("…its pages/ tree's root all the same (pagesRootOfScreen)", pagesRootOfScreen(path.join(bare, "pages", "Home", "A__1_2.json")) === bare && pagesRootOfScreen(path.join(bare, "x.json")) === null);
   check("a file not at pages/<dir>/ → null", exportRootOfScreen(path.join(root, "pages", "index.json")) === null && exportRootOfScreen(path.join(root, "x.json")) === null);
   const project = tmp("project");
   walk(path.join(project, "design", "export"), [dashboard]);

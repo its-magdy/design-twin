@@ -1389,17 +1389,19 @@ var PAGES = "pages";
 var INDEX = "index.json";
 var rootIndexFile = (exportRoot) => path4.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
-function exportRootOfScreen(screenFile) {
+function pagesRootOfScreen(screenFile) {
   const pages = path4.dirname(path4.dirname(path4.resolve(screenFile)));
-  if (path4.basename(pages) !== PAGES) return null;
-  const root = path4.dirname(pages);
-  return hasExportIndex(root) ? root : null;
+  return path4.basename(pages) === PAGES ? path4.dirname(pages) : null;
+}
+function exportRootOfScreen(screenFile) {
+  const root = pagesRootOfScreen(screenFile);
+  return root !== null && hasExportIndex(root) ? root : null;
 }
 var inside = (root, rel) => rel && !path4.isAbsolute(rel) ? resolveInside(root, rel) : null;
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(f)) files.push(f);
+    if (f !== null && !files.includes(path4.resolve(f))) files.push(path4.resolve(f));
   };
   const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path4.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
@@ -1408,7 +1410,18 @@ function pageIndexFiles(root, pageDirs) {
     dirs = fs4.readdirSync(path4.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
-  for (const d of dirs) add(ofDir(d));
+  const mtime = (f) => {
+    try {
+      return fs4.statSync(f).mtimeMs;
+    } catch {
+      return -1;
+    }
+  };
+  const unlisted = dirs.flatMap((d) => {
+    const f = ofDir(d);
+    return f !== null && !files.includes(path4.resolve(f)) ? [{ f, t: mtime(f) }] : [];
+  });
+  for (const u of unlisted.sort((a, b) => b.t - a.t)) add(u.f);
   return files;
 }
 function readExportIndex(exportRoot) {
@@ -1419,11 +1432,14 @@ function readExportIndex(exportRoot) {
   const byId = /* @__PURE__ */ new Map();
   const files = /* @__PURE__ */ new Set();
   const take = (row) => {
+    const file = row.file;
+    const hasFile = typeof file === "string" && file !== "";
+    const probe = hasFile ? row : { ...row, file: "\0no file " + rows.length };
     const same = byId.get(row.id);
-    if (files.has(row.file) || same?.some((kept) => sameScreenRow(row, kept))) return;
+    if (hasFile && files.has(row.file) || same?.some((kept) => sameScreenRow(probe, kept))) return;
     if (same) same.push(row);
     else byId.set(row.id, [row]);
-    files.add(row.file);
+    if (hasFile) files.add(row.file);
     rows.push(row);
   };
   for (const row of rootDoc?.layers ?? []) take(row);

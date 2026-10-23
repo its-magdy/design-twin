@@ -35,13 +35,18 @@ export const rootIndexFile = (exportRoot: string): string => path.join(exportRoo
 /** Whether `exportRoot` holds an export index (pages/index.json). */
 export const hasExportIndex = (exportRoot: string): boolean => fs.existsSync(rootIndexFile(exportRoot));
 
+/** The root of the pages/ tree a screen file sits in — `<root>/pages/<dir>/<Screen>.json` — whether or not its root
+ *  index is there (readExportIndex still reads the page indexes of such a tree); else null. */
+export function pagesRootOfScreen(screenFile: string): string | null {
+  const pages = path.dirname(path.dirname(path.resolve(screenFile)));
+  return path.basename(pages) === PAGES ? path.dirname(pages) : null;
+}
+
 /** The export root a screen file sits in — `<root>/pages/<dir>/<Screen>.json`, with `<root>/pages/index.json` there —
  *  else null (a legacy design/<Screen>.json, a file outside any export). */
 export function exportRootOfScreen(screenFile: string): string | null {
-  const pages = path.dirname(path.dirname(path.resolve(screenFile)));
-  if (path.basename(pages) !== PAGES) return null;
-  const root = path.dirname(pages);
-  return hasExportIndex(root) ? root : null;
+  const root = pagesRootOfScreen(screenFile);
+  return root !== null && hasExportIndex(root) ? root : null;
 }
 
 /** The export root a mistaken dir points at: the first ancestor holding pages/index.json, else one that sits just below
@@ -74,20 +79,26 @@ export interface ExportIndex {
   fileOf(row: Pick<IndexRow, "file">): string | null;
 }
 
-/** A pointer an index holds ("/"-separated, relative to the export root), resolved inside the root only. */
+/** A pointer an index holds ("/"-separated, relative to the export root), resolved inside the root only. Lexical, as
+ *  verify-shared.ts resolveInside: `..` and absolute pointers are refused; a symlink placed inside the export is followed
+ *  (no writer here makes one). */
 const inside = (root: string, rel: string | undefined): string | null => (rel && !path.isAbsolute(rel) ? resolveInside(root, rel) : null);
 
-// Every page index file, each once: each pageDirs entry's `index` pointer (else pages/<dir>/index.json), then every
-// pages/<dir>/index.json on disk — a page an earlier walk exported is listed by no pageDirs entry any more.
+// Every page index file, each once (absolute), newest first: each pageDirs entry's `index` pointer (else
+// pages/<dir>/index.json) — the pages the newest write lists — then every other pages/<dir>/index.json on disk, the
+// last written first. A page an earlier walk exported is listed by no pageDirs entry any more, and two of those can hold
+// one screen (a page renamed in Figma between walks files it under a second dir): the later write is the true one.
 function pageIndexFiles(root: string, pageDirs: ReadonlyArray<{ dir?: string; index?: string }>): string[] {
   const files: string[] = [];
-  const add = (f: string | null): void => { if (f !== null && !files.includes(f)) files.push(f); };
+  const add = (f: string | null): void => { if (f !== null && !files.includes(path.resolve(f))) files.push(path.resolve(f)); };
   const ofDir = (dir: string | undefined): string | null =>
     dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(path.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { /* no pages/ */ }
-  for (const d of dirs) add(ofDir(d));
+  const mtime = (f: string): number => { try { return fs.statSync(f).mtimeMs; } catch { return -1; } };
+  const unlisted = dirs.flatMap((d) => { const f = ofDir(d); return f !== null && !files.includes(path.resolve(f)) ? [{ f, t: mtime(f) }] : []; });
+  for (const u of unlisted.sort((a, b) => b.t - a.t)) add(u.f); // a stable sort: one mtime keeps the name order
   return files;
 }
 
@@ -99,12 +110,16 @@ export function readExportIndex(exportRoot: string): ExportIndex {
   const rows: IndexRow[] = [];
   const byId = new Map<string, IndexRow[]>();
   const files = new Set<string>();
-  // a row is read after the rows that replace it (see the top of the file): it is dropped when one kept is its screen
+  // a row is read after the rows that replace it (see the top of the file): it is dropped when one kept is its screen.
+  // A row with no `file` (hand-edited; the guards ask only for id and name) shares no file with another such row.
   const take = (row: IndexRow): void => {
+    const file: unknown = row.file;
+    const hasFile = typeof file === "string" && file !== "";
+    const probe = hasFile ? row : { ...row, file: "\u0000no file " + rows.length };
     const same = byId.get(row.id);
-    if (files.has(row.file) || same?.some((kept) => sameScreenRow(row, kept))) return;
+    if ((hasFile && files.has(row.file)) || same?.some((kept) => sameScreenRow(probe, kept))) return;
     if (same) same.push(row); else byId.set(row.id, [row]);
-    files.add(row.file);
+    if (hasFile) files.add(row.file);
     rows.push(row);
   };
   for (const row of rootDoc?.layers ?? []) take(row);
