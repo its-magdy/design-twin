@@ -194,20 +194,27 @@ export interface ServeOptions {
   token?: string | null;
 }
 
-/** connect()'s answer when a daemon is live: its socket, and request functions bound to it.
- *  `onProgress` (optional, so every existing call site is unchanged) opts the request into
- *  progress frames and receives each tick, in order, before the promise settles. A daemon older than
- *  progress frames sends none; the request still answers. While ticks arrive, `timeoutMs` is a SILENCE
- *  budget — each tick re-arms it (request() below says why).
- *  `signal` (optional, LAST): the caller giving up. Aborting it closes this request's socket, which the
- *  daemon reads as its client leaving — a request still waiting for its plugin is never sent, a sent one gets
- *  the plugin a cancel frame (serve()'s `abandon`), which drops it from the plugin's queue or stops it at its
- *  next safe point. Any daemon, old or new, treats a closed socket that way. */
+/** What a request through the daemon takes beside its frame (the frame carries the command, its budget, target
+ *  and connect window). Every field optional.
+ *  `guardMs`: the outer guard for a daemon that stopped answering entirely (route.ts sizes it, daemonGuardMs).
+ *  While ticks arrive it is a SILENCE budget — each tick re-arms it (request() below says why). Absent: none.
+ *  `onProgress` opts the request into progress frames and receives each tick, in order, before the promise
+ *  settles. A daemon older than progress frames sends none; the request still answers.
+ *  `signal`: the caller giving up. Aborting it closes this request's socket, which the daemon reads as its
+ *  client leaving — a request still waiting for its plugin is never sent, a sent one gets the plugin a cancel
+ *  frame (serve()'s `abandon`), which drops it from the plugin's queue or stops it at its next safe point. Any
+ *  daemon, old or new, treats a closed socket that way. */
+export interface DaemonRequestOptions {
+  guardMs?: number | undefined;
+  onProgress?: ((tick: ProgressTick) => void) | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+/** connect()'s answer when a daemon is live: its socket, and the one way to send a command through it — the
+ *  reply, and the connected file the daemon's bridge used (null from an older daemon). */
 export interface DaemonConnection {
   sock: string;
-  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]>;
-  /** As request(), plus the connected file the daemon's bridge used (null from an older daemon). */
-  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
+  request<C extends Cmd>(msg: DaemonCommandRequest<C>, o?: DaemonRequestOptions): Promise<Sent<C>>;
 }
 
 // ---- the handshake: where, and keyed on what
@@ -906,7 +913,7 @@ export function probeAs(sock: string, auth: IpcAuth | null, timeoutMs = 1500): P
 //
 // `signal` (optional): aborted → the socket is DESTROYED and the promise rejects at once, with the
 // signal's reason when it is an Error of the caller's own, else "request aborted by the caller" — the
-// same rule as server-core's requestWithClient. Destroying (not ending) the socket is the cancel: the
+// same rule as server-core's request. Destroying (not ending) the socket is the cancel: the
 // daemon sees its client go and abandons the request on the wire. Aborted before the call → nothing
 // is connected or sent.
 //
@@ -994,17 +1001,13 @@ export async function connect(port?: number, place: SockPlace = {}): Promise<Dae
   // checked it against commands.ts on arrival, but that was another process (and possibly an older
   // build), so it is checked again here — which is what makes the typed reply below honest rather
   // than a guess about what came over the socket.
-  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal) => {
-    const r = await request(sock, msg, timeoutMs, onProgress, signal, auth);
+  const send = async <C extends Cmd>(msg: DaemonCommandRequest<C>, o: DaemonRequestOptions = {}): Promise<Sent<C>> => {
+    const r = await request(sock, msg, o.guardMs, o.onProgress, o.signal, auth);
     const bad = replyShapeError(msg.cmd, r.result);
     if (bad) throw new Error(`the daemon relayed an unexpected shape for ${msg.cmd}: ${bad}`);
     return { reply: r.result as Commands[C]["reply"], client: r.client };
   };
-  return {
-    sock,
-    requestWithClient,
-    request: async (msg, timeoutMs, onProgress, signal) => (await requestWithClient(msg, timeoutMs, onProgress, signal)).reply,
-  };
+  return { sock, request: send };
 }
 
 /** Stops the live daemon for `port`: true when one was stopped, false when none was running. A refused

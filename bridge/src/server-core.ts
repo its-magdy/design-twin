@@ -25,6 +25,7 @@ import { ALLOWED_PORTS } from "./ports.ts";
 import type { BridgeSettings } from "./settings.ts";
 import { legacySock } from "./daemon.ts";
 import { isConnId, connectionFor } from "./route.ts";
+import type { UpstreamRequest } from "./route.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
 // every reply is checked against it once, at the point it enters this process (see the message handler).
 import { replyShapeError } from "./commands.ts";
@@ -369,12 +370,6 @@ function portInUseMessage(port: number, platform: NodeJS.Platform = process.plat
  *  without its file name (an unaddressed request, a listing, an ambiguity). The plugin sends it a beat after the socket opens (ui.html, on every open); a client that never does
  *  (a bundle that predates `hello`) is taken as it is once this passes, so it cannot hold a whole connect window. */
 const IDENTIFY_GRACE_MS = 3000;
-
-/** What requestWithClient takes beyond the positional arguments. `waitMs` (> 0): first wait for the target
- *  to be connected, with that connect window — see the registry's awaitClient. */
-export interface RequestOptions {
-  waitMs?: number;
-}
 
 type Hello = Extract<PluginFrame, { type: "hello" }>;
 
@@ -1030,17 +1025,6 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   // (figma-plugin state.ts / ui.html). So silence here means a plugin too busy to dispatch the frame
   // at all (a long synchronous stretch of an earlier run) — or an older plugin with neither frame.
   const STALL_POLL_MS = 500;
-  // Typed per command from commands.ts: `args` is what the plugin reads for `cmd`, and the reply is
-  // what it sends back — checked structurally on arrival (the message handler above), so the type
-  // here is a promise the runtime keeps rather than a cast.
-  // `onProgress` (optional, last) receives every progress tick the chosen connection sends while this
-  // request is in flight — the plugin relays them during a bridge-triggered export.
-  // `signal`: the caller's way to give up on the request — the daemon aborts it when
-  // ITS client disconnects. See requestWithClient for what an abort does on the wire, and for `opts`.
-  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<Commands[C]["reply"]> {
-    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress, signal, opts).then((o) => o.reply);
-  }
-
   // CANCEL. Whenever this side gives up on a request it has already sent —
   // the per-command timeout, the stall check, close(), or the caller's `signal` — the plugin is told,
   // or it keeps walking the export for nobody and queues every later command behind it. The frame is
@@ -1054,24 +1038,34 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     try { sendFrame(client.ws, { type: "cancel", id }); } catch { /* socket went away — closing it is a cancel too */ }
   }
 
-  // The same, also answering WHICH connected file the command went to — the client resolveClient
-  // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
-  // screen export as `sourceFile` without re-implementing the matching rules.
+  // ONE way to send a command, in the request shape every caller already speaks (route.ts UpstreamRequest): the
+  // route's adapters, the daemon's forwarding and the suites pass their options straight through. Typed per
+  // command from commands.ts: `args` is what the plugin reads for `cmd`, and the reply is what it sends back —
+  // checked structurally on arrival (the message handler above), so the type here is a promise the runtime keeps
+  // rather than a cast. It answers WHICH connected file the command went to too — the client resolveClient picked
+  // for `target`, described exactly as listClients() would (figma-pull.ts stamps it onto a screen export as
+  // `sourceFile` without re-implementing the matching rules).
   //
-  // `opts.waitMs` (> 0): wait for `target` first, with that connect window (awaitClient) — the MCP server
-  // passes it for a named `client`, the daemon for a request that carries a connect window. Without it
-  // the target is resolved against whatever is connected now — once the bridge has settled (awaitClient).
-  //
-  // `signal`: already aborted, or aborted during the wait → rejects with the signal's reason when that is
-  // an Error of the caller's own, else "request aborted before it was sent", and nothing is sent;
-  // aborted while pending → the cancel frame goes to the plugin, the request is forgotten, and the promise rejects with the signal's reason when that is an Error of the
-  // caller's own (the daemon passes one naming its departed client), else "request aborted by the caller".
-  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal, opts: RequestOptions = {}): Promise<RequestOutcome<C>> {
+  //   timeoutMs   the per-command budget (TIMEOUTS.command when absent) — see dispatch for how it is armed.
+  //   target      connId / fileKey / file-name substring; absent = the only connected file.
+  //   waitMs      > 0: wait for `target` first, with that connect window (awaitClient) — the MCP server passes it
+  //               for a named `client`, the daemon for a request that carries a connect window. Without it the
+  //               target is resolved against whatever is connected now — once the bridge has settled.
+  //   stallMs     > 0: the stall check (see STALL_POLL_MS above) — the one-shot CLI's own bridge only.
+  //   onProgress  every progress tick the chosen connection sends while this request is in flight.
+  //   signal      the caller giving up. Already aborted, or aborted during the wait → rejects with the signal's
+  //               reason when that is an Error of the caller's own, else "request aborted before it was sent",
+  //               and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the request
+  //               is forgotten, and the promise rejects with the signal's reason when that is an Error of the
+  //               caller's own (the daemon passes one naming its departed client), else "request aborted by the
+  //               caller".
+  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], o: UpstreamRequest = {}): Promise<RequestOutcome<C>> {
+    const { timeoutMs = TIMEOUTS.command, target, stallMs, onProgress, signal } = o;
     if (signal?.aborted) return Promise.reject(abortReason(signal, "request aborted before it was sent"));
     // A bridge that is still settling holds every request for the rest of that window (awaitClient routes
     // a connId or fileKey at once), so a fresh bridge never routes a vague one to the first file to land.
     // A connect window shorter than the rest of the settle is stretched to it inside awaitClient.
-    const asked = opts.waitMs ?? 0;
+    const asked = o.waitMs ?? 0;
     const waitMs = Math.max(asked > 0 ? asked : 0, registry.settleLeft());
     if (!(waitMs > 0)) return dispatch(cmd, args, timeoutMs, target, stallMs, onProgress, signal);
     return awaitClient(target, waitMs, signal).then(() => {
@@ -1080,7 +1074,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     });
   }
 
-  // requestWithClient after its wait: resolve the target now, send, and settle on the reply.
+  // request() after its wait: resolve the target now, send, and settle on the reply.
   function dispatch<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number, target: string | null | undefined, stallMs: number | undefined, onProgress: ((tick: ProgressTick) => void) | undefined, signal: AbortSignal | undefined): Promise<RequestOutcome<C>> {
     return new Promise<RequestOutcome<C>>((resolve, reject) => {
       let client: ClientEntry;
@@ -1227,7 +1221,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   const boundPort = (): number | null => server?.port ?? null;
 
   return {
-    request, requestWithClient, isConnected, awaitClient, connectionInfo, listClients, resolveClient, close, port, listening, boundPort,
+    request, isConnected, awaitClient, connectionInfo, listClients, resolveClient, close, port, listening, boundPort,
     /** the failed-handshake record, and the fingerprint of the token this bridge checks against (doctor reads both) */
     authStats: () => authStatsFor(token),
     /** the token a daemon serving this bridge is keyed on (settings.ts daemonTokenOf): this bridge's own once it is saved —
