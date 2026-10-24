@@ -59,7 +59,7 @@ export function normWeight(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s); // a computed weight may be fractional ("650.5" — CSS Fonts 4 §2.2)
   // a style name carries the slant beside the weight ("Semibold Italic", "Bold Oblique"); a bare "Italic" is the regular weight's
   const name = s.toLowerCase().replace(/[^a-z]/g, "");
   const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
@@ -71,7 +71,7 @@ const cssWeight = (v: unknown): number | null => (typeof v === "number" && Numbe
  *  it is what the build is told to emit as font-weight (ir-fields.md) — then the applied `wght` axis of a variable font
  *  (`variationSettings`, an export without weightValue), then the style name ("SemiBold", "Bold Italic"). */
 export function fontWeightOf(f: { weight?: string; weightValue?: number; variationSettings?: Record<string, number> }): number | null {
-  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : undefined) ?? normWeight(f.weight);
+  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : undefined) ?? cssWeight(normWeight(f.weight));
 }
 
 // Figma stores a family as one name; CSS reports the whole stack. A match on the FIRST family is the

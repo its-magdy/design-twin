@@ -2141,14 +2141,14 @@ function normWeight(v) {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
   const name = s.toLowerCase().replace(/[^a-z]/g, "");
   const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
   return WEIGHTS[key] != null ? WEIGHTS[key] : null;
 }
 var cssWeight = (v) => typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 1e3 ? v : null;
 function fontWeightOf(f) {
-  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : void 0) ?? normWeight(f.weight);
+  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : void 0) ?? cssWeight(normWeight(f.weight));
 }
 function normFamily(v) {
   if (v == null) return null;

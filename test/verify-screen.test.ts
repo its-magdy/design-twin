@@ -14,7 +14,7 @@ import { liveStatusFile } from "../design-to-code/verify-run.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, tokenFor } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
-import { normColor, normWeight, normFamily, lineHeightPx, FIELDS } from "../design-to-code/verify-shared.ts";
+import { normColor, normWeight, normFamily, lineHeightPx, fontWeightOf, FIELDS } from "../design-to-code/verify-shared.ts";
 import { planCodeFiles } from "../design-to-code/content-hash.ts";
 import { audit } from "../design-to-code/audit.ts";
 import type { ExpectInput } from "../design-to-code/verify-expect.ts";
@@ -64,6 +64,10 @@ ok("[norm] the producer's {unit:'auto'} is unknowable (null) and {value:20, unit
 ok("[norm] a percentage over a 'mixed' or absent font size is null, never NaN", lineHeightPx({ value: 150, unit: "percent" }, "mixed") === null && lineHeightPx({ value: 150, unit: "percent" }, undefined) === null);
 ok("[norm] a style name with Italic/Oblique still names its weight ('Semibold Italic' 600, 'Bold Oblique' 700, 'Italic' 400)",
   normWeight("Semibold Italic") === 600 && normWeight("Bold Oblique") === 700 && normWeight("Italic") === 400 && normWeight("") === null && normWeight("Condensed") === null);
+ok("[norm] a fractional computed weight string is that number ('650.5' → 650.5), as a variable font may compute it", normWeight("650.5") === 650.5);
+ok("[norm] fontWeightOf: a fractional weightValue/wght stays fractional; every branch is bounded to CSS's 1–1000 (a style 'name' of '0' or '1001' is no weight)",
+  fontWeightOf({ weightValue: 650.5 }) === 650.5 && fontWeightOf({ variationSettings: { wght: 650.5 } }) === 650.5
+  && fontWeightOf({ weight: "0" }) === null && fontWeightOf({ weight: "1001" }) === null && fontWeightOf({ weight: "Bold" }) === 700);
 
 // ---------------------------------------------------------------- the expectation is data, not prose
 console.log("verify-screen — the spec as data:");

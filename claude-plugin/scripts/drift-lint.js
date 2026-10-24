@@ -1200,7 +1200,7 @@ function normWeight(v) {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
   const name = s.toLowerCase().replace(/[^a-z]/g, "");
   const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
   return WEIGHTS[key] != null ? WEIGHTS[key] : null;
