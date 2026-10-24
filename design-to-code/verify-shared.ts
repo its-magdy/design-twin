@@ -59,9 +59,19 @@ export function normWeight(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
-  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s); // a computed weight may be fractional ("650.5" — CSS Fonts 4 §2.2)
+  // a style name carries the slant beside the weight ("Semibold Italic", "Bold Oblique"); a bare "Italic" is the regular weight's
+  const name = s.toLowerCase().replace(/[^a-z]/g, "");
+  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
   return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+// CSS Fonts 4 §2.2: a numeric font-weight is valid from 1 to 1000 — and a variable font's `wght` axis is that same scale
+const cssWeight = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 1000 ? v : null);
+/** The weight a font descriptor states, as the number CSS applies. Figma's numeric `fontWeight` (`weightValue`) first —
+ *  it is what the build is told to emit as font-weight (ir-fields.md) — then the applied `wght` axis of a variable font
+ *  (`variationSettings`, an export without weightValue), then the style name ("SemiBold", "Bold Italic"). */
+export function fontWeightOf(f: { weight?: string; weightValue?: number; variationSettings?: Record<string, number> }): number | null {
+  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : undefined) ?? cssWeight(normWeight(f.weight));
 }
 
 // Figma stores a family as one name; CSS reports the whole stack. A match on the FIRST family is the
@@ -72,26 +82,32 @@ export function normFamily(v: unknown): string | null {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 
-// The producer writes a LengthSpec ({value, unit: "px"|"percent"|"auto"}); this also accepts a measured number/string
-// and the older upper-case units, so its input is declared wide here rather than in types.ts.
+// The producer writes a LengthSpec ({value, unit: "px"|"percent"|"auto"}, figma-plugin/src/text.ts lenUnit); this also
+// accepts a measured number/string and Figma's own upper-case units (PIXELS/PERCENT/AUTO), so its input is declared wide
+// here rather than in types.ts. A percent is of the FONT SIZE (the REST API's lineHeightPercentFontSize; Figma's CSS for a
+// 14px 150% line: `150% /* 21px */`) — a font size that is "mixed" or absent resolves nothing.
 type LineHeightInput = number | string | { unit?: string; value?: number } | null | undefined;
 
 export function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined): number | null {
   if (lh == null) return null;
   if (typeof lh === "number") return lh;
+  const size = typeof fontSize === "number" ? fontSize : typeof fontSize === "string" ? Number(fontSize) : NaN;
+  const of = (factor: number): number | null => (Number.isFinite(size) && size > 0 && Number.isFinite(factor) ? r2(factor * size) : null);
   if (typeof lh === "string") {
     const s = lh.trim().toLowerCase();
     if (s === "normal") return null; // genuinely unknowable without the font metrics — not a mismatch
     const n = parseFloat(s);
     if (Number.isNaN(n)) return null;
-    if (s.endsWith("%")) return fontSize ? (n / 100) * Number(fontSize) : null;
+    if (s.endsWith("%")) return of(n / 100);
     if (s.endsWith("px")) return n;
-    return fontSize ? n * Number(fontSize) : null; // unitless multiplier
+    return of(n); // unitless multiplier
   }
   if (typeof lh === "object") {
-    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? (Number(lh.value) / 100) * Number(fontSize) : null;
-    if (lh.unit === "AUTO") return null;
-    return typeof lh.value === "number" ? lh.value : null;
+    const unit = String(lh.unit ?? "px").toLowerCase();
+    if (unit === "percent" || unit === "%") return typeof lh.value === "number" ? of(lh.value / 100) : null;
+    if (unit === "auto") return null;
+    if (unit === "px" || unit === "pixels") return typeof lh.value === "number" ? lh.value : null;
+    return null; // a unit this reader does not know is no px value
   }
   return null;
 }
