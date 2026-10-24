@@ -128,6 +128,20 @@ read the variant from the set's name. A slug is lower-case letters and digits, w
 variant of the node by `-` (`w320` beside `w320-dialog`: `<set>-<state>.png` of one is the other's screenshot) —
 exit 2, with a suggested slug when one fits. There is no `--force`: it is a usage error (exit 2).
 
+**Run it from the project root.** The expectation reads the screen's own export — its index (aliases, exported
+destinations), the reference PNG and `design-system.json` — from `design/export`, and the reference path it records, the
+plans and the verify sets are project-relative. A screen of another project's `design/export` (an absolute path given
+from a sub-directory) is refused, exit 2, naming the project to run from.
+
+**A field's hint is declared, never guessed.** Figma has no placeholder role: a search hint and a typed value are both
+TEXT. A layer or token named "placeholder" is compared as one; any other TEXT the build draws as a form control's
+`placeholder` attribute needs the plan row `{nodeId, field: "placeholder", designed, built, reason}` in `deviations[]`.
+`--expect` then compares its copy and colour as `placeholderText` / `placeholderColor` (still deltas when they differ —
+a lighter `::placeholder` colour is one), prints how many rows it read and drops a row that names no visible TEXT layer,
+with why. The rows' hash binds the expectation like `interactions[]`: change them → re-run `--expect`. A value the field
+holds (a name in an edit dialog) is no placeholder: the probe reads a control's text as its value (`el.value`, a
+`<select>`'s selected option), never its placeholder.
+
 **A legacy-named set** (a nickname, `<Screen>@320`, `<Screen>-r1` — written before sets were named by node) is
 renamed by `verify-screen.js --migrate`. `--expect` writes the `<Layer>__<id>` set beside one and notes it; `--compare`
 and the probe refuse a legacy-named expectation (exit 2), and `--status` refuses a node that has only legacy-named

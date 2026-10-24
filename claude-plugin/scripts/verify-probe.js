@@ -20,6 +20,20 @@ import { setTimeout as sleep6 } from "node:timers/promises";
 function collectCandidates(input) {
   const SKIP = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const controlText = (e) => {
+    const tag = e.tagName.toLowerCase();
+    if (tag === "textarea") return { text: e.value ?? "" };
+    if (tag === "select") {
+      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
+      const o = e.selectedOptions?.[0];
+      return { text: o ? o.label ?? o.text ?? o.textContent ?? "" : "" };
+    }
+    if (tag !== "input") return null;
+    const type = (e.type || "text").toLowerCase();
+    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
+    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
+    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
+  };
   const pageRect = (r) => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
   const paths = /* @__PURE__ */ new Map();
   const childIndex = /* @__PURE__ */ new Map();
@@ -68,7 +82,8 @@ function collectCandidates(input) {
   const cand = (el, withRange) => {
     const r = el.getBoundingClientRect();
     let rangeRect = null;
-    if (withRange) {
+    const ctl = controlText(el);
+    if (withRange && ctl === null) {
       const range = document.createRange();
       range.selectNodeContents(el);
       rangeRect = pageRect(range.getBoundingClientRect());
@@ -95,7 +110,7 @@ function collectCandidates(input) {
         ariaHidden: el.closest('[aria-hidden="true"]') !== null
       },
       taggedAncestors: tagged2,
-      ownText: norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")),
+      ownText: ctl === null ? norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")) : "text" in ctl ? norm(ctl.text) : "",
       order: orderOf.get(el) ?? -1,
       depth: depthOf(el)
     };
@@ -157,22 +172,35 @@ function collectCandidates(input) {
     if (l) l.push(e);
     else m.set(k, [e]);
   };
-  const hasBr = /* @__PURE__ */ new Set();
-  if (wanted.size && document.body) for (const br of Array.from(document.body.querySelectorAll("br"))) for (let p = br.parentElement; p && !hasBr.has(p); p = p.parentElement) hasBr.add(p);
-  const brText = (e) => {
+  const walked = /* @__PURE__ */ new Set();
+  if (wanted.size && document.body) for (const w of Array.from(document.body.querySelectorAll("br, select, textarea"))) for (let p = w.parentElement; p && !walked.has(p); p = p.parentElement) walked.add(p);
+  const shownOf = (c) => {
+    if (c.tagName !== "SELECT" && c.tagName !== "TEXTAREA") return null;
+    const t = controlText(c);
+    return t !== null && "text" in t ? t.text : null;
+  };
+  const flatText = (e) => {
     let out = "", k = 0;
     for (const n of Array.from(e.childNodes)) {
       if (n.nodeType === 3) out += n.nodeValue || "";
       else if (n.nodeType === 1) {
         const c = e.children[k++];
-        if (c) out += c.tagName.toLowerCase() === "br" ? " " : hasBr.has(c) ? brText(c) : c.textContent || "";
+        if (!c) continue;
+        const shown = shownOf(c);
+        out += c.tagName.toLowerCase() === "br" ? " " : shown !== null ? ` ${shown} ` : walked.has(c) ? flatText(c) : c.textContent || "";
       }
     }
     return out;
   };
   if (wanted.size) {
     for (const el of all) {
-      const t = norm(hasBr.has(el) ? brText(el) : el.textContent);
+      if (el.tagName === "OPTION" || el.tagName === "OPTGROUP") {
+        const sel = el.closest("select");
+        const c = sel ? controlText(sel) : null;
+        if (c !== null && "text" in c) continue;
+      }
+      const ctl = controlText(el);
+      const t = ctl !== null ? "text" in ctl ? norm(ctl.text) : "" : norm(walked.has(el) ? flatText(el) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -228,12 +256,35 @@ function measureElements(input) {
           const c = e.children[k++];
           if (!c) continue;
           if (c.tagName.toLowerCase() === "br") out += "\n";
-          else walk(c);
+          else if (c.tagName === "SELECT" || c.tagName === "TEXTAREA") {
+            const t = controlText(c);
+            if (t === null || !("text" in t)) walk(c);
+            else out += ` ${t.text} `;
+          } else walk(c);
         }
       }
     };
     walk(root);
     return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
+  };
+  const controlText = (e) => {
+    const tag = e.tagName.toLowerCase();
+    if (tag === "textarea") return { text: e.value ?? "" };
+    if (tag === "select") {
+      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
+      const o = e.selectedOptions?.[0];
+      return { text: o ? o.label ?? o.text ?? o.textContent ?? "" : "" };
+    }
+    if (tag !== "input") return null;
+    const type = (e.type || "text").toLowerCase();
+    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
+    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
+    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
+  };
+  const specText2 = (el) => {
+    const c = controlText(el);
+    if (c === null) return { text: shownText(el) };
+    return "text" in c ? { text: c.text.replace(/\r\n?/g, "\n").replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim() } : c;
   };
   let ctx = null;
   const rgba = (css) => {
@@ -259,6 +310,11 @@ function measureElements(input) {
   const elementsWithOwnText = (el) => {
     const out = [];
     const walk = (e) => {
+      const t = e.tagName === "SELECT" || e.tagName === "TEXTAREA" ? controlText(e) : null;
+      if (t !== null && "text" in t) {
+        if (t.text.trim()) out.push(e);
+        return;
+      }
       if (ownText(e)) out.push(e);
       for (const c of Array.from(e.children)) walk(c);
     };
@@ -270,7 +326,7 @@ function measureElements(input) {
     const mixed = owners.length > 1;
     let cur = el;
     for (; ; ) {
-      if (ownText(cur)) return { owner: cur, mixed };
+      if (ownText(cur) || controlText(cur) !== null) return { owner: cur, mixed };
       const kids = Array.from(cur.children);
       const only = kids.length === 1 ? kids[0] : void 0;
       if (!only) break;
@@ -302,15 +358,17 @@ function measureElements(input) {
     const fr = input.frameRect;
     let typo = el, typoCs = cs;
     let textBox = null, textBoxWhy = item.isPlaceholder ? "an input placeholder: its characters are not in the DOM (see placeholderText)" : "not a TEXT node";
-    if (item.isText && !item.isPlaceholder) {
+    if (item.isText && !item.isPlaceholder && controlText(el) !== null) textBoxWhy = `a form control (<${tag}>) draws its value itself: no Range reaches its characters`;
+    else if (item.isText && !item.isPlaceholder) {
       const own = textOwner(el);
       if (own) {
         typo = own.owner;
         typoCs = getComputedStyle(typo);
         res.textFrom = typo.tagName.toLowerCase();
         if (own.mixed) res.textFromMixed = true;
+        if (controlText(typo) !== null) textBoxWhy = `its text is a form control's (<${typo.tagName.toLowerCase()}>), which draws its value itself: no Range reaches its characters`;
         let left = Infinity, right = -Infinity;
-        for (const n of Array.from(typo.childNodes)) {
+        for (const n of controlText(typo) === null ? Array.from(typo.childNodes) : []) {
           if (n.nodeType !== 3 || !(n.nodeValue || "").trim()) continue;
           const range = document.createRange();
           range.selectNodeContents(n);
@@ -320,12 +378,12 @@ function measureElements(input) {
           right = Math.max(right, rr.x + rr.w);
         }
         if (Number.isFinite(left)) textBox = { x: r2(left - fr.x), w: r2(right - left) };
-        else textBoxWhy = "the text's own characters have no rendered box";
+        else if (controlText(typo) === null) textBoxWhy = "the text's own characters have no rendered box";
       } else textBoxWhy = "the element holds no text";
     }
     const sides = (prop) => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
     let strokeMemo;
-    const transparentColour = (c) => c === null || c === "transparent" || /,\s*0(?:\.0+)?\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
+    const transparentColour = (c) => c === null || c === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?%?\s*\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
     const splitTop = (v, sep) => {
       const out = [];
       let depth = 0, cur = "";
@@ -371,6 +429,7 @@ function measureElements(input) {
       if (!os5 || os5 === "none" || os5 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
       if (oo === -ow) return strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" };
       if (oo === 0) return strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" };
+      if (Math.abs(oo + ow / 2) < 0.01) return strokeMemo = { width: ow, color: oc, from: "outline", align: "center" };
       return strokeMemo;
     };
     const frameRoot = input.framePath ? document.querySelector(input.framePath) : null;
@@ -504,7 +563,7 @@ function measureElements(input) {
           const ws = sides((s) => `border-${s}-width`);
           const i = ws.findIndex((w) => w !== null && w > 0);
           const st = i === -1 ? drawnStroke() : null;
-          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width");
+          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width / -width/2");
           putStroke();
           break;
         }
@@ -573,9 +632,15 @@ function measureElements(input) {
         case "opacity":
           put(k, px(cs.getPropertyValue("opacity")), "no computed opacity");
           break;
-        case "text":
-          put(k, item.isText && !item.isPlaceholder ? shownText(el) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node");
+        case "text": {
+          if (!item.isText || item.isPlaceholder) {
+            put(k, null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node");
+            break;
+          }
+          const st = specText2(el);
+          put(k, "text" in st ? st.text : null, "why" in st ? st.why : "");
           break;
+        }
         case "tag":
           put(k, tag, "");
           break;
@@ -1020,7 +1085,7 @@ function shapeNode(spec, match, raw, keys) {
   const from = raw.styles.strokeFrom, align = raw.styles.strokeAlign;
   if (from === "border" || from === "box-shadow" || from === "outline") {
     styles.strokeFrom = from;
-    if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
+    if (from !== "border" && (align === "inside" || align === "outside" || align === "center")) styles.strokeAlign = align;
   }
   const pb = raw.styles.paintedBy;
   if (isPaintedBy(pb)) styles.paintedBy = pb;

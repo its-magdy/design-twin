@@ -8,7 +8,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import {
   isBuildIdentity, isMeasuredBehaviour, isMeasuredVisual, isVisualRegion, isPageOverflow, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach,
 } from "./doc-guards.ts";
-import { planInteractionsSha256 } from "./plan-waivers.ts";
+import { planInteractionsSha256, planPlaceholderRows, planPlaceholdersSha256 } from "./plan-waivers.ts";
 import { parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { MEASURED_PHASES, TERMINAL_PHASES } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
@@ -633,6 +633,7 @@ interface Graded {
   highCauses: number;
   planNow: ChosenPlan | null;
   planInteractionsChanged: string | null;
+  planPlaceholdersChanged: string | null;
   reachInput: NonNullable<VerifyReportV2["inputs"]>["reach"];
   probeIdentity: ProbeIdentity | undefined;
   buildNow: BuildIdentity | undefined;
@@ -681,11 +682,12 @@ export function compare(expectation: Expectation, measured: VerifyMeasured | nul
   groupDeltas(cx);
   const { open, high, medium, accepted, highCauses } = openCounts(cx);
   const { planNow, planInteractionsChanged } = planInteractionsCheck(cx);
+  const { planPlaceholdersChanged } = planPlaceholdersCheck(cx, { planNow });
   const { reachInput } = reachInputOf(cx, { planNow });
   const { probeIdentity, buildNow, inputs, staticOnly, artifactCheck, noRender } = evidenceInputs(cx, { st, measuredRun, reachInput });
   const { nodesExpected, reasons, lowConfidence, verdict } = verdictOf(cx, {
     fieldsNeverMeasured, componentsAbsent, integrity, interactionsFailed, interactionsNotProbed, interactionsDescoped, open, high, medium,
-    accepted, planInteractionsChanged, staticOnly, noRender,
+    accepted, planInteractionsChanged, planPlaceholdersChanged, staticOnly, noRender,
   });
   const { coverage } = coverageOf(cx, {
     pageOverflow, fieldsNeverMeasured, bySet, untaggedInstanceSets, setsViaSharedPath, sharedShell, probeBound, interactions, interactionsFailed,
@@ -1003,7 +1005,7 @@ function checkFields(cx: CompareCtx, n: NodeCtx): void {
       if (!ring && cssBorderWidth(want0) !== want0) { want = cssBorderWidth(want0); strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`; }
       // a ring drawn on the other side of the box than the design's stroke: noted, never a delta of its own
       if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign)
-        strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
+        strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign === "center" ? "centred on the edge of" : got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
     }
     if (f.key === "borderRadius") {
       const c = radiusCorners(val);
@@ -1203,12 +1205,23 @@ function checkText(cx: CompareCtx, n: NodeCtx): void {
     }
   }
 }
+/** the measured viewport's size: the page block's, else measured.viewport "WxH"; null when neither says */
+function viewportOf(measured: VerifyMeasured): { w: number; h: number } | null {
+  const ok = (w: unknown, h: unknown): { w: number; h: number } | null => (num(w) && num(h) && w > 0 && h > 0 ? { w, h } : null);
+  const page: unknown = measured.page;
+  if (isPageOverflow(page)) { const v = ok(page.viewport.w, page.viewport.h); if (v) return v; }
+  const vp: unknown = measured.viewport;
+  if (typeof vp === "string") { const m = /^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)$/.exec(vp.trim()); return m ? ok(Number(m[1]), Number(m[2])) : null; }
+  return isJsonObject(vp) ? ok(vp.w ?? vp.width, vp.h ?? vp.height) : null;
+}
 /** placement: a node designed inside the frame that renders outside it */
 function checkPlacement(cx: CompareCtx, n: NodeCtx): void {
-  const { frameOf, deltas, placementGaps, probeFrames, multiFrame } = cx;
+  const { frameOf, deltas, placementGaps, probeFrames, multiFrame, measured } = cx;
   const { spec, got, zeroAtRest } = n;
   // ---- placement: a designed-inside-the-frame node that renders outside it
   const fr = frameOf(spec);
+  // (the frame root's own box IS the frame: a root larger than its design is its width/height delta, never "outside itself")
+  if (fr.nodeId !== undefined && spec.nodeId === fr.nodeId) return;
   const bx = got;
   if (num(fr.w) && num(fr.h)) {
     const BOX_KEYS = ["x", "y", "width", "height"] as const;
@@ -1237,11 +1250,27 @@ function checkPlacement(cx: CompareCtx, n: NodeCtx): void {
       // reads medium — it still blocks the pass, it just does not shout.
       const pf = probeFrames.find((f) => f.nodeId === fr.nodeId) ?? (!multiFrame && probeFrames.length === 1 ? probeFrames[0] : undefined);
       const pageGrew = !!pf && (pf.via === "viewport" || (isJsonObject(pf.rect) && num(pf.rect.h) && pf.rect.h > fr.h + tol));
-      const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
-      deltas.push({ severity: belowFold ? "medium" : "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "),
+      const belowFoldRule = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
+      // past the DESIGNED frame but inside the frame as rendered (a dialog 4px wider than designed, this node at its edge):
+      // the frame grew — its own width/height delta says so — and this node is not past the frame's edge. Medium (still
+      // blocks a pass), never "cannot be seen" (whether an inner ancestor clips it is not judged here).
+      // (an element's box only — a frame taken as the viewport is the page, which the below-the-fold rule above judges)
+      // And only on screen: the node's page box inside the measured viewport (a grown dialog pushed past the window's edge
+      // stays high); no viewport known → no downgrade.
+      const rr = pf && pf.via !== "viewport" && isJsonObject(pf.rect) && num(pf.rect.w) && num(pf.rect.h) && num(pf.rect.x) && num(pf.rect.y)
+        ? { x: pf.rect.x, y: pf.rect.y, w: pf.rect.w, h: pf.rect.h } : null;
+      const vp = viewportOf(measured);
+      const inRendered = rr !== null && vp !== null && (rr.w > fr.w + tol || rr.h > fr.h + tol)
+        && num(bx.x) && bx.x >= -tol && bx.x + w <= rr.w + tol && rr.x + bx.x >= -tol && rr.x + bx.x + w <= vp.w + tol
+        && num(bx.y) && bx.y >= -tol && bx.y + h <= rr.h + tol && rr.y + bx.y >= -tol && rr.y + bx.y + h <= vp.h + tol;
+      // (on screen inside the grown frame wins over "below the fold": a node a person sees is not reached by scrolling)
+      const belowFold = belowFoldRule && !inRendered;
+      deltas.push({ severity: belowFold || inRendered ? "medium" : "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "),
         delta: r2(Math.max(...over)), // px past the frame (no `unit`: `actual` is prose, printed as-is)
         note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge — reachable by scrolling; " +
           "accept it (verify-screen --accept) if the longer page is intended"
+          : inRendered && rr ? `outside the designed ${fr.w}×${fr.h} frame but inside the frame as rendered (${r2(rr.w)}×${r2(rr.h)}): the frame itself renders larger (its width/height delta) — ` +
+            "this node is within the rendered frame and the viewport, not past either edge; fix the frame's size and this goes with it"
           : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
     }
   }
@@ -1868,6 +1897,23 @@ function planInteractionsCheck(cx: CompareCtx): Pick<Graded, "planNow" | "planIn
     : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now — not checked`);
   return { planNow, planInteractionsChanged };
 }
+/** the plan's placeholder rows (deviations[] field "placeholder") against the hash the expectation recorded: they decide
+ *  which TEXT is compared as a placeholder, so a plan that changed them since --expect makes the run incomplete */
+function planPlaceholdersCheck(cx: CompareCtx, g: Pick<Graded, "planNow">): Pick<Graded, "planPlaceholdersChanged"> {
+  const { expectation, opts } = cx;
+  const { planNow } = g;
+  const raw: unknown = expectation.planPlaceholders;
+  const recorded = isJsonObject(raw) && typeof raw.sha256 === "string" && typeof raw.plan === "string" ? { plan: raw.plan, sha256: raw.sha256 } : undefined;
+  // the rows decided what this run compares: with no plan to check them against, the run is not a pass (unlike a note)
+  if (!planNow) return { planPlaceholdersChanged: recorded ? `the expectation read placeholder rows from ${recorded.plan}${opts.recordedPlanGone ? `, which ${opts.recordedPlanGone}` : ""}, and no plan describes this frame now — whether they still hold is not checked; pass --compare … --plan <plan.json>, or re-run --expect` : null };
+  const rowsNow = planPlaceholderRows(planNow.plan).length;
+  const shaNow = planPlaceholdersSha256(planNow.plan);
+  if (recorded ? recorded.sha256 === shaNow : rowsNow === 0) return { planPlaceholdersChanged: null };
+  const plan = planNow.choice === "flag" || planNow.choice === "recorded" ? ` --plan ${planNow.file}` : "";
+  return { planPlaceholdersChanged: recorded
+    ? `the plan's placeholder rows (deviations[] field "placeholder") changed since --expect (${planNow.file}: sha256 ${recorded.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — re-run --expect${plan}`
+    : `the plan declares ${rowsNow} placeholder row(s) (deviations[] field "placeholder") the expectation never read (${planNow.file}) — re-run --expect${plan}` };
+}
 /** the steps the probe replayed to reach the screen, against the plan's navigate[] (never the verdict) */
 function reachInputOf(cx: CompareCtx, g: Pick<Graded, "planNow">): Pick<Graded, "reachInput"> {
   const { measured, inputNotes } = cx;
@@ -1934,13 +1980,13 @@ function verdictOf(
   cx: CompareCtx,
   g: Pick<Graded,
     "fieldsNeverMeasured" | "componentsAbsent" | "integrity" | "interactionsFailed" | "interactionsNotProbed" | "interactionsDescoped" | "open" |
-    "high" | "medium" | "accepted" | "planInteractionsChanged" | "staticOnly" | "noRender"
+    "high" | "medium" | "accepted" | "planInteractionsChanged" | "planPlaceholdersChanged" | "staticOnly" | "noRender"
   >,
 ): Pick<Graded, "nodesExpected" | "reasons" | "lowConfidence" | "verdict"> {
   const { expectation, measured, legacy, specs, notMeasured, fieldsNotMeasured, fieldsReportedNull, folded } = cx;
   const {
     fieldsNeverMeasured, componentsAbsent, integrity, interactionsFailed, interactionsNotProbed, interactionsDescoped, open, high, medium,
-    accepted, planInteractionsChanged, staticOnly, noRender,
+    accepted, planInteractionsChanged, planPlaceholdersChanged, staticOnly, noRender,
   } = g;
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
   // (a spec a plan anchor folded into a measured ancestor is out of the denominator)
@@ -1954,6 +2000,7 @@ function verdictOf(
   const lowConfidence = open.filter((d) => d.cappedFrom !== undefined).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches — tag these elements`);
   if (planInteractionsChanged) reasons.push(planInteractionsChanged);
+  if (planPlaceholdersChanged) reasons.push(planPlaceholdersChanged);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Layer>__<id>.png and list it in artifacts)");

@@ -356,7 +356,7 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
   const from = raw.styles.strokeFrom, align = raw.styles.strokeAlign;
   if (from === "border" || from === "box-shadow" || from === "outline") {
     styles.strokeFrom = from;
-    if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
+    if (from !== "border" && (align === "inside" || align === "outside" || align === "center")) styles.strokeAlign = align;
   }
   // optional keys — only when the page read them
   const pb = raw.styles.paintedBy;

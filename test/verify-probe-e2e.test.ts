@@ -18,7 +18,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
-import { collectCandidates, freeHoverPoint, type CollectOutput } from "../design-to-code/probe-page.ts";
+import { collectCandidates, freeHoverPoint, measureElements, type CollectOutput } from "../design-to-code/probe-page.ts";
 import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
@@ -749,6 +749,59 @@ else {
   check(`[guard] the measured element's box is skipped even where an overlay is what elementFromPoint returns (got ${JSON.stringify(tile)})`,
     tile !== null && tile.hit === "i" && !tile.inAvoid);
   await fhpBrowser.close();
+}
+// A form control's shown text is its value, not its child text: in the page itself, after a person typed / chose (the
+// value property moves; the attribute and a <textarea>'s child text stay the defaults). A placeholder is never the value.
+const ctlBrowser = pwChromium ? await pwChromium.launch(exe !== null ? { executablePath: exe } : {}).catch(() => null) : null;
+if (ctlBrowser === null) console.log("SKIPPED the in-page form-control text checks: no launchable chromium");
+else {
+  const pg = await ctlBrowser.newPage({ viewport: { width: 800, height: 600 } });
+  await pg.setContent(`<!doctype html><body style="margin:0;font:14px sans-serif"><div data-dt-node="80:1" style="width:800px;height:600px">` +
+    `<input data-dt-node="80:2" value="Draft" placeholder="Search crates"><input data-dt-node="80:3" placeholder="Search crates">` +
+    `<textarea data-dt-node="80:4">Default note</textarea><select data-dt-node="80:5" style="font-size:20px"><option style="font-size:10px">Alpha</option><option value="b">Beta</option></select>` +
+    `<select data-dt-node="80:6" multiple><option>Alpha</option></select><input data-dt-node="80:7" type="password" value="secret">` +
+    `<input type="text" value="Untagged crate"><input data-dt-node="80:8" type="submit" value="Send">` +
+    `<select data-dt-node="80:10"><option>One</option><option selected label="Shown Beta">Stored Beta</option></select>` +
+    `<div data-dt-node="80:11"><select><option label="Shown Gamma">Stored Gamma</option></select></div><div data-dt-node="80:12"><textarea>Old note</textarea></div>` +
+    `<div data-dt-node="80:9" style="width:40px;height:20px;outline:2px solid rgb(255, 0, 0);outline-offset:-1px"></div>` +
+    `</div></body>`);
+  await pg.fill('[data-dt-node="80:2"]', "Typed crate");
+  await pg.fill('[data-dt-node="80:4"]', "Line one\nLine  two");
+  await pg.selectOption('[data-dt-node="80:5"]', "b");
+  await pg.fill('[data-dt-node="80:12"] textarea', "New note");
+  const items = ["80:2", "80:3", "80:4", "80:5", "80:6", "80:7", "80:8", "80:10", "80:11", "80:12"].map((id) => ({ nodeId: id, path: `[data-dt-node="${id}"]`, isText: true, isPaint: false, isPlaceholder: false, sharesWith: null }));
+  const fr = await pg.locator('[data-dt-node="80:1"]').boundingBox();
+  const got = await pg.evaluate(measureElements, { frameRect: { x: fr?.x ?? 0, y: fr?.y ?? 0, w: 800, h: 600 }, keys: ["text", "textBox", "fontSize"], items });
+  const text = (id: string): unknown => got.find((r) => r.nodeId === id)?.styles.text;
+  const why = (id: string, k = "text"): string => got.find((r) => r.nodeId === id)?.unmeasured[k] ?? "";
+  check(`a typed <input>'s text is its value, not "" (got ${JSON.stringify(text("80:2"))})`, text("80:2") === "Typed crate");
+  check(`an empty <input> with a placeholder reads "" — the placeholder is never substituted (got ${JSON.stringify(text("80:3"))})`, text("80:3") === "");
+  check(`a typed <textarea> reads its value with its line break, not its default child text (got ${JSON.stringify(text("80:4"))})`, text("80:4") === "Line one\nLine two");
+  check(`a <select> reads its selected option's text, not every option's (got ${JSON.stringify(text("80:5"))})`, text("80:5") === "Beta");
+  check(`a list-box <select> and a password <input> are not measured as a string, each with its reason (got ${JSON.stringify([text("80:6"), why("80:6"), text("80:7"), why("80:7")])})`,
+    text("80:6") === null && /list-box <select>/.test(why("80:6")) && text("80:7") === null && /type="password"/.test(why("80:7")));
+  check(`a submit <input> reads its value (its label) (got ${JSON.stringify(text("80:8"))})`, text("80:8") === "Send");
+  check(`a <select> whose selected option has a label attribute reads the label it shows, not the option's text (got ${JSON.stringify(text("80:10"))})`, text("80:10") === "Shown Beta");
+  check(`a tagged wrapper reads the <select> / <textarea> inside it as what they show — the label, the typed value — never their stale children (got ${JSON.stringify([text("80:11"), text("80:12"), why("80:12", "textBox")])})`,
+    text("80:11") === "Shown Gamma" && text("80:12") === "New note" && /form control's \(<textarea>\)/.test(why("80:12", "textBox")));
+  check(`a control's textBox is null with the control's reason (no Range reaches its value), its font read on it (got ${JSON.stringify([got[0]?.styles.textBox, why("80:2", "textBox"), got[3]?.styles.fontSize])})`,
+    got[0]?.styles.textBox === null && /form control \(<input>\) draws its value itself/.test(why("80:2", "textBox")) && got[3]?.styles.fontSize === 20);
+  const out = await pg.evaluate(collectCandidates, { frames: [], texts: ["Typed crate", "Untagged crate", "Beta", "Alpha Beta", "AlphaBeta", "Search crates", "Shown Beta", "Stored Beta", "Shown Gamma", "Stored Gamma", "Old note", "New note"], positions: [] });
+  const tags = (t: string): string[] => (out.text[t]?.exact ?? []).map((c) => c.tag + (c.dt ?? ""));
+  check(`an untagged and a tagged control are found by their VALUE; a <select> by its selected option, never by all its options' text; a placeholder is not text (got ${JSON.stringify([tags("Typed crate"), tags("Untagged crate"), tags("Beta"), tags("Alpha Beta"), tags("Search crates")])})`,
+    JSON.stringify(tags("Typed crate")) === '["input80:2"]' && JSON.stringify(tags("Untagged crate")) === '["input"]' && JSON.stringify(tags("Beta")) === '["select80:5"]'
+    && tags("Alpha Beta").length === 0 && tags("Search crates").length === 0 && (out.placeholders["Search crates"] ?? []).length === 2
+    && JSON.stringify(tags("Shown Beta")) === '["select80:10"]' && tags("Stored Beta").length === 0 && tags("AlphaBeta").length === 0);
+  check(`a wrapper never owns a control's stale children (an option's text under its label, a typed textarea's default); the control owns what it shows (got ${JSON.stringify([tags("Stored Gamma"), tags("Shown Gamma"), tags("Old note"), tags("New note")])})`,
+    tags("Stored Gamma").length === 0 && JSON.stringify(tags("Shown Gamma")) === '["select"]' && tags("Old note").length === 0 && JSON.stringify(tags("New note")) === '["textarea"]');
+  check("a control candidate's ownText is its value (a tagged control's own text, the matcher's sharing/scoping rule), with no text range",
+    out.text["Typed crate"]?.exact[0]?.ownText === "Typed crate" && out.text["Typed crate"]?.exact[0]?.rangeRect === null);
+  // the profiles' centre stroke (outline + offset −w/2) as Chromium computes it
+  const [ring] = await pg.evaluate(measureElements, { frameRect: { x: fr?.x ?? 0, y: fr?.y ?? 0, w: 800, h: 600 }, keys: ["borderWidth", "borderColor"],
+    items: [{ nodeId: "80:9", path: '[data-dt-node="80:9"]', isText: false, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+  check(`a 2px outline at offset −1px (a centre stroke) → borderWidth 2, its colour, strokeAlign center (got ${JSON.stringify(ring?.styles)})`,
+    ring?.styles.borderWidth === 2 && ring.styles.borderColor === "rgb(255, 0, 0)" && ring.styles.strokeFrom === "outline" && ring.styles.strokeAlign === "center");
+  await ctlBrowser.close();
 }
 const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);
 check("--check --browser-path <missing> → exit 3, one line, no stack", chkBad.status === 3 && chkBad.stderr.trim().split("\n").length === 1 && /is not an executable file/.test(chkBad.stderr));

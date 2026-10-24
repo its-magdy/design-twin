@@ -179,8 +179,8 @@ console.log("[ref-unusable] --expect: a thumbnail or an unreadable file is refus
   const thumbRow = refOf(expect({ index: { layers: [indexRow({ referenceScale: 0.25, referenceOffset: { x: 0, y: 0 } })] }, readReference: reader({ [REF]: png(360, 309) }) }, without(FIRINGS, "renderBox")));
   safe("[ref-unusable] …also when an index row states the thumbnail's scale", () => !!thumbRow && thumbRow.usable === false && /discovery thumbnail\)/.test(thumbRow.why));
   const missing = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({}) }));
-  safe("[ref-unusable] the file missing on disk → usable:false, 'missing on disk — re-pull the screen'", () =>
-    !!missing && missing.usable === false && missing.path === "design/export/" + REF && /missing on disk — re-pull the screen/.test(missing.why));
+  safe("[ref-unusable] the file missing on disk → usable:false, 'missing on disk (relative to the project root --expect runs from) — re-pull the screen'", () =>
+    !!missing && missing.usable === false && missing.path === "design/export/" + REF && /missing on disk \(relative to the project root --expect runs from\) — re-pull the screen/.test(missing.why));
   const notPng = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: Buffer.from("<svg/>") }) }));
   safe("[ref-unusable] not a PNG → usable:false 'is not a PNG'", () => !!notPng && notPng.usable === false && /is not a PNG/.test(notPng.why));
   const cut = refOf(expect({ index: { layers: [indexRow()] }, readReference: reader({ [REF]: REF_PNG.subarray(0, 150) }) }));
@@ -257,6 +257,31 @@ console.log("[expect-cli] --expect CLI: main reads design/export/<pointer> and d
   const e2 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
   safe("[expect-cli] the CLI on a thumbnail: usable:false and a 'no visual diff' note", () =>
     r2.status === 0 && e2?.referenceImage?.usable === false && /note {2}no visual diff for this screen: the reference is a 360 px image/.test(r2.stderr));
+  // the export a screen belongs to is the one it sits in, never the working directory's: an absolute path from the project
+  // root reads it; from a sub-directory (or another project) the run is refused, naming the project — before, the reference
+  // read as "missing — re-pull the screen" and the export's index (aliases, destinations) was silently not read
+  fs.writeFileSync(path.join(cwd, "design/export/" + REF), REF_PNG);
+  const abs = path.join(cwd, scr);
+  const rAbs = runSync(process.execPath, [CLI, "--expect", abs], { cwd });
+  const eAbs = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
+  safe("[expect-cli] an absolute screen path from the project root: usable reference", () => rAbs.status === 0 && eAbs?.referenceImage?.usable === true);
+  const sub = path.join(cwd, "evidence");
+  fs.mkdirSync(sub);
+  const rSub = runSync(process.execPath, [CLI, "--expect", abs, "--out", sub + path.sep], { cwd: sub });
+  safe(`[expect-cli] the same absolute path from a sub-directory → exit 2 naming the project to run from, nothing written, no 're-pull' (got ${String(rSub.status)}: ${rSub.stderr.trim()})`, () =>
+    rSub.status === 2 && rSub.stderr.includes(`is a screen of the export in ${cwd}, `) && rSub.stderr.includes(`run --expect from ${cwd}:`)
+    && !/re-pull/.test(rSub.stderr) && fs.readdirSync(sub).length === 0);
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "verify-visual-other-"));
+  const rOther = runSync(process.execPath, [CLI, "--expect", abs], { cwd: other });
+  safe(`[expect-cli] …and from another project: exit 2, its design/verify not created (got ${String(rOther.status)})`, () =>
+    rOther.status === 2 && /run --expect from /.test(rOther.stderr) && !fs.existsSync(path.join(other, "design")));
+  const loose = path.join(other, "pages", "Somewhere", "Firings__90_1.json");
+  fs.mkdirSync(path.dirname(loose), { recursive: true });
+  fs.copyFileSync(abs, loose);
+  const rLoose = runSync(process.execPath, [CLI, "--expect", loose], { cwd });
+  safe(`[expect-cli] a screen in a pages/ tree that is no project's design/export → exit 2: pull it into design/export (got ${String(rLoose.status)}: ${rLoose.stderr.trim()})`, () =>
+    rLoose.status === 2 && /sits in the export at .* not in this project's design\/export — pull the screen into design\/export/.test(rLoose.stderr));
+  fs.rmSync(other, { recursive: true, force: true });
   fs.rmSync(cwd, { recursive: true, force: true });
 }
 

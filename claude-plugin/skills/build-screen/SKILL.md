@@ -280,7 +280,10 @@ Copy this checklist into your notes and keep it updated:
    **Native control substitution:** when a drawn field becomes a native control (date/time picker, select),
    the native element draws its own text, so carry the drawn placeholder/value colour onto it, record the
    substitution in the plan as a `deviations[]` row `{nodeId, field: "control", designed, built, reason}`, and verify it
-   on the element's own text (the profile says how for its stack).
+   on the element's own text (the profile says how for its stack). A TEXT layer drawn as a field's hint and built as
+   its `placeholder` attribute gets `{nodeId, field: "placeholder", designed, built, reason}` (the TEXT's id) unless its
+   layer or token name already says "placeholder" — the verifier compares it as the placeholder only then; a drawn
+   value (a name in an edit field) is the control's value, never a placeholder.
    *Multi-screen:* scaffold navigation/routing and shared sample data first.
 
    **Names come from Figma, not from you.** A token's, component's or asset's name is the designer's, carried in

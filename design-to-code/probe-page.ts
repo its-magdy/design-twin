@@ -94,6 +94,24 @@ export interface CollectOutput {
 export function collectCandidates(input: CollectInput): CollectOutput {
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s: string | null): string => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  // A form control shows its VALUE, not its children (HTML: an <input> has none; a <textarea>'s child text is its default
+  // value, stale once typed in; a <select>'s is every option's). The shown string; a reason when the control's value is
+  // not the string shown (a password, a date, a list box); null for any other element. (measureElements has its own copy.)
+  const controlText = (e: PageElement): { text: string } | { why: string } | null => {
+    const tag = e.tagName.toLowerCase();
+    if (tag === "textarea") return { text: e.value ?? "" };
+    if (tag === "select") {
+      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
+      const o = e.selectedOptions?.[0];
+      // (HTMLOptionElement.label: its label attribute — what a collapsed <select> shows — else its text)
+      return { text: o ? (o.label ?? o.text ?? o.textContent ?? "") : "" };
+    }
+    if (tag !== "input") return null;
+    const type = (e.type || "text").toLowerCase();
+    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
+    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
+    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
+  };
   const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
   // An element's path is its parent's path plus its own nth-child step, each kept once per call: nothing changes the DOM
   // while this synchronous function runs, so a path or a sibling index read once stays true for the rest of the call. Built
@@ -140,7 +158,9 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   const cand = (el: PageElement, withRange: boolean): Candidate => {
     const r = el.getBoundingClientRect();
     let rangeRect: Rect | null = null;
-    if (withRange) { const range = document.createRange(); range.selectNodeContents(el); rangeRect = pageRect(range.getBoundingClientRect()); }
+    const ctl = controlText(el);
+    // (a control draws its value itself: no Range reaches those characters)
+    if (withRange && ctl === null) { const range = document.createRange(); range.selectNodeContents(el); rangeRect = pageRect(range.getBoundingClientRect()); }
     const tagged: string[] = [];
     for (let p = el.parentElement; p; p = p.parentElement) { const v = p.getAttribute("data-dt-node"); if (v !== null) tagged.push(v); }
     const box = el.getClientRects().length > 0;
@@ -160,7 +180,7 @@ export function collectCandidates(input: CollectInput): CollectOutput {
         ariaHidden: el.closest('[aria-hidden="true"]') !== null,
       },
       taggedAncestors: tagged,
-      ownText: norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")),
+      ownText: ctl === null ? norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")) : "text" in ctl ? norm(ctl.text) : "",
       order: orderOf.get(el) ?? -1,
       depth: depthOf(el),
     };
@@ -213,20 +233,32 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   const exact = new Map<string, PageElement[]>(), caseless = new Map<string, PageElement[]>(), ph = new Map<string, PageElement[]>();
   const push = (m: Map<string, PageElement[]>, k: string, e: PageElement): void => { const l = m.get(k); if (l) l.push(e); else m.set(k, [e]); };
   // A <br> is a line break, which textContent drops ("Line one<br>Line two" reads "Line oneLine two"): an element with
-  // one inside reads its text with each <br> as a space. (Its own walk: a page-side function shares no helper.)
-  const hasBr = new Set<PageElement>();
-  if (wanted.size && document.body) for (const br of Array.from(document.body.querySelectorAll("br"))) for (let p = br.parentElement; p && !hasBr.has(p); p = p.parentElement) hasBr.add(p);
-  const brText = (e: PageElement): string => {
+  // one inside reads its text with each <br> as a space. A <select> or <textarea> inside it reads as what it shows (its
+  // selected option, its value) — never its children (every option; the default text, stale once typed in). (Its own
+  // walk: a page-side function shares no helper.)
+  const walked = new Set<PageElement>();
+  if (wanted.size && document.body) for (const w of Array.from(document.body.querySelectorAll("br, select, textarea"))) for (let p = w.parentElement; p && !walked.has(p); p = p.parentElement) walked.add(p);
+  const shownOf = (c: PageElement): string | null => { if (c.tagName !== "SELECT" && c.tagName !== "TEXTAREA") return null; const t = controlText(c); return t !== null && "text" in t ? t.text : null; };
+  const flatText = (e: PageElement): string => {
     let out = "", k = 0;
     for (const n of Array.from(e.childNodes)) {
       if (n.nodeType === 3) out += n.nodeValue || "";
-      else if (n.nodeType === 1) { const c = e.children[k++]; if (c) out += c.tagName.toLowerCase() === "br" ? " " : hasBr.has(c) ? brText(c) : c.textContent || ""; }
+      else if (n.nodeType === 1) {
+        const c = e.children[k++];
+        if (!c) continue;
+        const shown = shownOf(c);
+        out += c.tagName.toLowerCase() === "br" ? " " : shown !== null ? ` ${shown} ` : walked.has(c) ? flatText(c) : c.textContent || "";
+      }
     }
     return out;
   };
   if (wanted.size) {
     for (const el of all) {
-      const t = norm(hasBr.has(el) ? brText(el) : el.textContent);
+      // a collapsed <select> shows its selected option's text ITSELF: its <option>s are no owners of it (innermost would
+      // otherwise drop the visible <select> for an option with no box of its own)
+      if (el.tagName === "OPTION" || el.tagName === "OPTGROUP") { const sel = el.closest("select"); const c = sel ? controlText(sel) : null; if (c !== null && "text" in c) continue; }
+      const ctl = controlText(el);
+      const t = ctl !== null ? ("text" in ctl ? norm(ctl.text) : "") : norm(walked.has(el) ? flatText(el) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -319,12 +351,40 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           const c = e.children[k++];
           if (!c) continue;
           if (c.tagName.toLowerCase() === "br") out += "\n";
-          else walk(c);
+          else if (c.tagName === "SELECT" || c.tagName === "TEXTAREA") {
+            // a control inside shows its value, never its children (every option; a stale default) — a list box, its options
+            const t = controlText(c);
+            if (t === null || !("text" in t)) walk(c);
+            else out += ` ${t.text} `;
+          } else walk(c);
         }
       }
     };
     walk(root);
     return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
+  };
+  // A form control shows its VALUE, not its children (collectCandidates has its own copy — read it there): the shown string,
+  // a reason when the value is not the string shown, null for any other element.
+  const controlText = (e: PageElement): { text: string } | { why: string } | null => {
+    const tag = e.tagName.toLowerCase();
+    if (tag === "textarea") return { text: e.value ?? "" };
+    if (tag === "select") {
+      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
+      const o = e.selectedOptions?.[0];
+      // (HTMLOptionElement.label: its label attribute — what a collapsed <select> shows — else its text)
+      return { text: o ? (o.label ?? o.text ?? o.textContent ?? "") : "" };
+    }
+    if (tag !== "input") return null;
+    const type = (e.type || "text").toLowerCase();
+    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
+    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
+    return { why: `an <input type="${type}"> draws its own text — its value is not the string shown` };
+  };
+  // a TEXT spec's `text`: a control's value (a <textarea> keeps its line breaks), else the element's shown text
+  const specText = (el: PageElement): { text: string } | { why: string } => {
+    const c = controlText(el);
+    if (c === null) return { text: shownText(el) };
+    return "text" in c ? { text: c.text.replace(/\r\n?/g, "\n").replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim() } : c;
   };
   // Colours as rgba(): the browser may compute oklch()/color(srgb …) (Tailwind v4), which the compare's
   // colour normaliser does not read — so anything that is not already rgb()/rgba() is painted on a 1×1
@@ -344,7 +404,13 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
   const ownText = (el: PageElement): string => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
   const elementsWithOwnText = (el: PageElement): PageElement[] => {
     const out: PageElement[] = [];
-    const walk = (e: PageElement): void => { if (ownText(e)) out.push(e); for (const c of Array.from(e.children)) walk(c); };
+    // (a <select> / <textarea> that shows one string owns it itself: its children are no text of the page's)
+    const walk = (e: PageElement): void => {
+      const t = e.tagName === "SELECT" || e.tagName === "TEXTAREA" ? controlText(e) : null;
+      if (t !== null && "text" in t) { if (t.text.trim()) out.push(e); return; }
+      if (ownText(e)) out.push(e);
+      for (const c of Array.from(e.children)) walk(c);
+    };
     walk(el);
     return out;
   };
@@ -356,7 +422,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     const mixed = owners.length > 1;
     let cur = el;
     for (;;) {
-      if (ownText(cur)) return { owner: cur, mixed };
+      if (ownText(cur) || controlText(cur) !== null) return { owner: cur, mixed };
       const kids = Array.from(cur.children);
       const only = kids.length === 1 ? kids[0] : undefined;
       if (!only) break;
@@ -382,16 +448,19 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
 
     let typo = el, typoCs = cs;
     let textBox: PValue = null, textBoxWhy = item.isPlaceholder ? "an input placeholder: its characters are not in the DOM (see placeholderText)" : "not a TEXT node";
-    if (item.isText && !item.isPlaceholder) {
+    // a form control draws its value itself (no Range reaches it), in its own font — never a child <option>'s
+    if (item.isText && !item.isPlaceholder && controlText(el) !== null) textBoxWhy = `a form control (<${tag}>) draws its value itself: no Range reaches its characters`;
+    else if (item.isText && !item.isPlaceholder) {
       const own = textOwner(el);
       if (own) {
         typo = own.owner; typoCs = getComputedStyle(typo);
         res.textFrom = typo.tagName.toLowerCase();
         if (own.mixed) res.textFromMixed = true;
+        if (controlText(typo) !== null) textBoxWhy = `its text is a form control's (<${typo.tagName.toLowerCase()}>), which draws its value itself: no Range reaches its characters`;
         // over the owner's OWN text nodes only — a Range over the whole element spans its icon children too
         // (<button><svg/>Filter</button> read 50.9 wide for a 28.9 label)
         let left = Infinity, right = -Infinity;
-        for (const n of Array.from(typo.childNodes)) {
+        for (const n of controlText(typo) === null ? Array.from(typo.childNodes) : []) {
           if (n.nodeType !== 3 || !(n.nodeValue || "").trim()) continue;
           const range = document.createRange(); range.selectNodeContents(n);
           const rr = pageRect(range.getBoundingClientRect());
@@ -399,21 +468,22 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           left = Math.min(left, rr.x); right = Math.max(right, rr.x + rr.w);
         }
         if (Number.isFinite(left)) textBox = { x: r2(left - fr.x), w: r2(right - left) };
-        else textBoxWhy = "the text's own characters have no rendered box";
+        else if (controlText(typo) === null) textBoxWhy = "the text's own characters have no rendered box";
       } else textBoxWhy = "the element holds no text";
     }
 
     const sides = (prop: (side: string) => string): Array<number | null> => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
     // a stroke drawn without a border — a ring (`box-shadow: 0 0 0 Npx <colour>`, Tailwind ring / inset-ring)
-    // or an outline at offset 0 / -width — read only when every border side is 0. Parsed by CONTENT, never by
+    // or an outline at offset 0 / -width / -width/2 — read only when every border side is 0. Parsed by CONTENT, never by
     // position: Tailwind v4 always computes FIVE comma-separated shadows, the unused ones "rgba(0, 0, 0, 0) 0px 0px
     // 0px 0px", and the ring may be any of them; Chromium writes the colour first and `inset` last. A shadow with a
     // transparent colour or spread 0 is padding; a ring is offset 0, blur 0, spread > 0 (the spread is not snapped
     // like a border width). Several distinct rings: the inset one when exactly one is inset, else none is read.
-    // An outline with style auto (the UA focus ring) is no designed stroke; a centred one (any other offset) is not read.
-    type Stroke = { width: number; color: string | null; from: "box-shadow" | "outline"; align: "inside" | "outside" };
+    // An outline with style auto (the UA focus ring) is no designed stroke; one at -width/2 is a centre stroke; any other offset is not read.
+    type Stroke = { width: number; color: string | null; from: "box-shadow" | "outline"; align: "inside" | "outside" | "center" };
     let strokeMemo: Stroke | null | undefined;
-    const transparentColour = (c: string | null): boolean => c === null || c === "transparent" || /,\s*0(?:\.0+)?\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
+    // alpha 0: rgba()'s FOURTH component, or a slash alpha — never a 0 blue channel (rgb(255, 0, 0) is opaque red)
+    const transparentColour = (c: string | null): boolean => c === null || c === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?%?\s*\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
     const splitTop = (v: string, sep: RegExp): string[] => {
       const out: string[] = [];
       let depth = 0, cur = "";
@@ -456,6 +526,8 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       if (!os || os === "none" || os === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
       if (oo === -ow) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" });
       if (oo === 0) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" });
+      // a CENTRE stroke (Figma's default for a frame) drawn without taking layout space: offset −width/2 straddles the edge
+      if (Math.abs(oo + ow / 2) < 0.01) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "center" });
       return strokeMemo;
     };
     // who paints an element whose own background-color is transparent — a <td> under a `tr:hover`
@@ -568,7 +640,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           const ws = sides((s) => `border-${s}-width`);
           const i = ws.findIndex((w) => w !== null && w > 0);
           const st = i === -1 ? drawnStroke() : null;
-          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width");
+          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width / -width/2");
           putStroke();
           break;
         }
@@ -620,7 +692,12 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           break;
         }
         case "opacity": put(k, px(cs.getPropertyValue("opacity")), "no computed opacity"); break;
-        case "text": put(k, item.isText && !item.isPlaceholder ? shownText(el) : null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node"); break;
+        case "text": {
+          if (!item.isText || item.isPlaceholder) { put(k, null, item.isPlaceholder ? "an input placeholder: see placeholderText" : "not a TEXT node"); break; }
+          const st = specText(el);
+          put(k, "text" in st ? st.text : null, "why" in st ? st.why : "");
+          break;
+        }
         case "tag": put(k, tag, ""); break;
         case "textBox": put(k, textBox, textBoxWhy); break;
         default: put(k, null, `verify-probe does not know how to read '${k}'`);

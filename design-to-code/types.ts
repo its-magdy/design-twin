@@ -661,6 +661,9 @@ export interface VerifySpec {
   /** an SVG's paint */
   fill?: string | null;
   placeholder?: true;
+  /** who says this TEXT is a placeholder: "plan" = a plan deviations[] row with field "placeholder"; absent = its layer or
+   *  token name says so */
+  placeholderFrom?: "plan";
   placeholderText?: string;
   placeholderColor?: string | null;
   /** Figma's text case on a TEXT node (font.case); `text` keeps the stored string — compare the rendered one */
@@ -752,12 +755,17 @@ export interface VerifyExpectation {
   hidden?: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[] };
   /** the plan whose interactions[] were merged (only their hash binds — a change makes --compare incomplete) */
   planInteractions?: PlanInteractionsInput;
+  /** the plan whose placeholder rows (deviations[] field "placeholder") were read — their hash binds like interactions[] */
+  planPlaceholders?: PlanPlaceholdersInput;
   /** the reference PNG's geometry over the first frame (absent: an older expectation, or no reference) */
   referenceImage?: VerifyReferenceImage | VerifyReferenceUnusable;
 }
 /** expectation.planInteractions: which plan, the hash of its interactions[] (plan-waivers.ts planInteractionsSha256),
  *  how many rows were merged and the ones dropped with why. */
 export interface PlanInteractionsInput { plan: string; sha256: string; merged: number; dropped: Array<{ nodeId: string; why: string }> }
+/** expectation.planPlaceholders: which plan, the hash of its placeholder rows (plan-waivers.ts planPlaceholdersSha256), the
+ *  TEXT nodes compared as placeholders because of them, and the rows dropped with why. */
+export interface PlanPlaceholdersInput { plan: string; sha256: string; nodeIds: string[]; dropped: Array<{ nodeId: string; why: string }> }
 
 /** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open.
  *  `null` = the probe could not read the value (the shipped probe gives the reason in MeasuredNode.unmeasured[key]);
@@ -797,8 +805,8 @@ export interface MeasuredStyles {
   display?: string | null;
   /** where borderWidth/borderColor were read when the element draws no real border (a ring) */
   strokeFrom?: "border" | "box-shadow" | "outline";
-  /** the ring's side of the box — only when strokeFrom is not "border" */
-  strokeAlign?: "inside" | "outside";
+  /** the ring's side of the box (centre: an outline at offset −width/2, straddling the edge) — only when strokeFrom is not "border" */
+  strokeAlign?: "inside" | "outside" | "center";
   transform?: string | null;
   rotate?: string | null;
   visible?: boolean | null;

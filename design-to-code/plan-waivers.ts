@@ -2,7 +2,7 @@
 // need: which verdicts pass, and the hash of a plan's waivers/descopes a report records. verify-build
 // imports this file, never verify-screen.
 import { sha256Hex } from "../bridge/src/hash.ts";
-import type { Plan, PlanWaiver, PlanDescope } from "./types.ts";
+import type { Plan, PlanDeviation, PlanWaiver, PlanDescope } from "./types.ts";
 
 export type { PlanWaiver, PlanDescope };
 
@@ -37,4 +37,16 @@ export function waiversHash(plan: Plan | null | undefined): string {
 export function planInteractionsSha256(plan: Plan | null | undefined): string {
   const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
   return sha256Hex(canonical(rows));
+}
+
+/** The plan's placeholder rows: deviations[] with field "placeholder" — a TEXT layer the builder declares it built as a
+ *  form control's placeholder attribute (Figma has no such role: a hint and a value are both just TEXT). */
+export function planPlaceholderRows(plan: Plan | null | undefined): PlanDeviation[] {
+  return (Array.isArray(plan?.deviations) ? plan.deviations : []).filter((d) => d && d.field === "placeholder");
+}
+
+/** sha256 (hex) of the canonical JSON of the plan's placeholder rows (planPlaceholderRows) — they bind an expectation
+ *  like interactions[] do; none hashes as `[]`. */
+export function planPlaceholdersSha256(plan: Plan | null | undefined): string {
+  return sha256Hex(canonical(planPlaceholderRows(plan)));
 }

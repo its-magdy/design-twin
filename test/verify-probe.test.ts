@@ -1284,7 +1284,20 @@ console.log("verify-probe — tag-alias, display, rings, foreign tags:");
   const outlineOut = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "0px", "outline-color": "rgb(118, 118, 128)" });
   t("an outline at offset 0 → outside", () => outlineOut.borderWidth === 2 && outlineOut.strokeAlign === "outside");
   const centred = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "-1px", "outline-color": "rgb(118, 118, 128)" });
-  t("a centred outline (offset −w/2) is not read", () => centred.borderWidth === 0 && centred.strokeFrom === undefined);
+  // the build-screen profiles draw Figma's CENTRE stroke this way (outline + offset −w/2: no layout space, like Figma's)
+  t("a centred outline (offset −w/2) → borderWidth 2, its colour, strokeFrom outline, centre", () =>
+    centred.borderWidth === 2 && centred.borderColor === "rgb(118, 118, 128)" && centred.strokeFrom === "outline" && centred.strokeAlign === "center");
+  const offCentre = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "-1.5px", "outline-color": "rgb(118, 118, 128)" });
+  t("an outline at any other offset (−1.5 for a 2px outline) is still not read", () => offCentre.borderWidth === 0 && offCentre.strokeFrom === undefined);
+  // a colour whose BLUE channel is 0 is opaque: only rgba()'s fourth component (or a slash alpha) of 0 is transparent
+  const redOutline = measureCss({ "outline-style": "solid", "outline-width": "1px", "outline-offset": "-1px", "outline-color": "rgb(255, 0, 0)" });
+  const greenRing = measureCss({ "box-shadow": tw5(3, "rgb(10, 20, 0) 0px 0px 0px 2px inset") });
+  const clearSlash = measureCss({ "outline-style": "solid", "outline-width": "1px", "outline-offset": "0px", "outline-color": "rgb(255 0 0 / 0)" });
+  t("an outline / ring in a colour with blue 0 (rgb(255, 0, 0), rgb(10, 20, 0)) is read; an alpha-0 one (rgb(255 0 0 / 0)) is not", () =>
+    redOutline.borderWidth === 1 && redOutline.borderColor === "rgb(255, 0, 0)" && greenRing.borderWidth === 2 && greenRing.borderColor === "rgb(10, 20, 0)"
+    && clearSlash.borderWidth === 0 && clearRing.borderWidth === 0);
+  const centredNode = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: { ...centred }, unmeasured: {} }, STYLE_KEYS) : null;
+  t("shapeNode carries a centre strokeAlign through to measured.json", () => centredNode?.styles?.strokeAlign === "center");
   const restingFocus = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "2px", "outline-color": "rgba(0, 0, 0, 0)" });
   const transparentAt0 = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "0px", "outline-color": "rgba(0, 0, 0, 0)" });
   const uaRing = measureCss({ "outline-style": "auto", "outline-width": "1px", "outline-offset": "0px", "outline-color": "rgb(16, 16, 16)" });
@@ -1302,6 +1315,23 @@ console.log("verify-probe — tag-alias, display, rings, foreign tags:");
     return r ? r.styles.fontWeight : undefined;
   };
   t("fontWeight: a computed '650.5' is 650.5 (not truncated to 650); '700' is 700", () => weightOf("650.5") === 650.5 && weightOf("700") === 700);
+  // a form control's TEXT is its value (offline, the page-side function on stand-in controls; the e2e suite runs it in chromium)
+  const textOf = (el: Record<string, unknown>): { text: unknown; why: string | undefined } => {
+    const base = { childNodes: [], children: [], getBoundingClientRect: () => ({ x: 0, y: 0, width: 100, height: 20 }), getAttribute: () => null, hasAttribute: () => false };
+    const e = { ...base, ...el };
+    Object.assign(globalThis, { document: { querySelector: () => e }, getComputedStyle: () => ({ getPropertyValue: () => "" }), scrollX: 0, scrollY: 0 });
+    if (!isMeasureFn(measureFn)) return { text: undefined, why: undefined };
+    const [r] = measureFn({ frameRect: { x: 0, y: 0, w: 800, h: 600 }, keys: ["text"], items: [{ nodeId: "60:32", path: "x", isText: true, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+    return { text: r?.styles.text, why: r?.unmeasured.text };
+  };
+  t("text: an <input>'s value (not its empty child text); an empty one reads '' even with a placeholder attribute", () =>
+    textOf({ tagName: "INPUT", type: "text", value: "Lorem Ipsum" }).text === "Lorem Ipsum" && textOf({ tagName: "INPUT", type: "search", value: "", getAttribute: (k: string) => (k === "placeholder" ? "Find" : null), hasAttribute: (k: string) => k === "placeholder" }).text === "");
+  t("text: a <select>'s selected option — its label (what it shows), else its text; never every option's text", () =>
+    textOf({ tagName: "SELECT", selectedOptions: [{ tagName: "OPTION", label: "Shown Beta", text: "Stored Beta" }], textContent: "OneStored Beta" }).text === "Shown Beta"
+    && textOf({ tagName: "SELECT", selectedOptions: [{ tagName: "OPTION", text: "Beta" }] }).text === "Beta");
+  t("text: a typed <textarea> reads its value (line break kept, spaces collapsed), a password <input> is not read (why)", () =>
+    textOf({ tagName: "TEXTAREA", value: "Line one\r\nLine  two", childNodes: [{ nodeType: 3, nodeValue: "Default" }] }).text === "Line one\nLine two"
+    && textOf({ tagName: "INPUT", type: "password", value: "x" }).text === null && /type="password"/.test(textOf({ tagName: "INPUT", type: "password", value: "x" }).why ?? ""));
   const ringNode = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: { ...inset1 }, unmeasured: {} }, STYLE_KEYS) : null;
   t("shapeNode carries strokeFrom/strokeAlign through to measured.json", () => ringNode?.styles?.strokeFrom === "box-shadow" && ringNode.styles.strokeAlign === "inside");
   const noStroke = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: {}, unmeasured: {} }, STYLE_KEYS) : null;
@@ -2545,7 +2575,9 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     contains(o: FakeEl): boolean { for (let p: FakeEl | null = o; p; p = p.parentElement) if (p === this) return true; return false; }
     querySelectorAll(sel: string): FakeEl[] {
       const out: FakeEl[] = [];
-      const walk = (e: FakeEl): void => { for (const c of e.children) { if (sel === "*" || c.tagName.toLowerCase() === sel) out.push(c); walk(c); } };
+      // a selector list of tag names ("br, select, textarea"), or "*"
+      const tags = sel.split(",").map((t) => t.trim());
+      const walk = (e: FakeEl): void => { for (const c of e.children) { if (sel === "*" || tags.includes(c.tagName.toLowerCase())) out.push(c); walk(c); } };
       walk(this);
       return out;
     }
