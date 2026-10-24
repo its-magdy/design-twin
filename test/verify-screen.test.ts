@@ -57,6 +57,13 @@ ok("[norm] 'Medium' is 500, which is what makes 500-vs-600 a real mismatch", nor
 ok("[norm] a CSS font stack compares on its FIRST family", normFamily('"Poppins", ui-sans-serif, system-ui') === "poppins");
 ok("[norm] a percentage line-height resolves against the font size", lineHeightPx({ value: 150, unit: "PERCENT" }, 16) === 24);
 ok("[norm] line-height 'normal' is unknowable, not a mismatch", lineHeightPx("normal", 16) === null);
+// the producer's own LengthSpec spelling (text.ts lenUnit / lineH): lower-case "percent" | "px" | "auto" — a live 14px
+// "Back to Employees" exported {value:150, unit:"percent"} and Figma's CSS said `150% /* 21px */`
+ok("[norm] the producer's {value:150, unit:'percent'} on 14px text is 21px, not 150", lineHeightPx({ value: 150, unit: "percent" }, 14) === 21);
+ok("[norm] the producer's {unit:'auto'} is unknowable (null) and {value:20, unit:'px'} is 20", lineHeightPx({ unit: "auto" }, 14) === null && lineHeightPx({ value: 20, unit: "px" }, 14) === 20);
+ok("[norm] a percentage over a 'mixed' or absent font size is null, never NaN", lineHeightPx({ value: 150, unit: "percent" }, "mixed") === null && lineHeightPx({ value: 150, unit: "percent" }, undefined) === null);
+ok("[norm] a style name with Italic/Oblique still names its weight ('Semibold Italic' 600, 'Bold Oblique' 700, 'Italic' 400)",
+  normWeight("Semibold Italic") === 600 && normWeight("Bold Oblique") === 700 && normWeight("Italic") === 400 && normWeight("") === null && normWeight("Condensed") === null);
 
 // ---------------------------------------------------------------- the expectation is data, not prose
 console.log("verify-screen — the spec as data:");
@@ -82,6 +89,32 @@ console.log("verify-screen — the spec as data:");
     card.borderRadius === 20 && card.gap === 16 && card.padding?.join(",") === "32,32,32,32" && card.width === 400);
   ok("[expect] a field the export does not state is ABSENT, not defaulted", !("fontWeight" in card) && !("color" in card));
   ok("[expect] the file says out loud not to retype these numbers", /do NOT retype/i.test(must(exp.note, "exp.note")));
+}
+{
+  // Typography in the producer's own shapes (figma-plugin/src/text.ts fontObj): lineHeight is a lower-case LengthSpec,
+  // `weight` the style name verbatim, `weightValue` Figma's numeric fontWeight, `variationSettings` the applied axes, and
+  // mixed text puts the FIRST run's font on the node with every run under `runs`.
+  const run = (text: string, weight: string, weightValue: number): { text: string; font: FontSpec } => ({ text, font: { family: "Inter", size: 20, weight, weightValue } });
+  const exp = buildExpectation([doc([
+    textNode("4:1", "Back", "Back to Employees", { family: "Poppins", size: 14, weight: "Medium", weightValue: 500, lineHeight: { value: 150, unit: "percent" } }),
+    // a numeric weight the style name does not say (a variable font's custom weight under the "Regular" instance name)
+    textNode("4:2", "Custom", "Custom weight", { family: "Inter", size: 16, weight: "Regular", weightValue: 650 }),
+    // no weightValue (an older export): the applied wght axis, then the style name
+    textNode("4:3", "Axis", "Axis only", { family: "Inter", size: 16, weight: "Regular", variationSettings: { wght: 650, slnt: 0 } }),
+    textNode("4:4", "Named", "Name only", { family: "Inter", size: 16, weight: "Semibold Italic" }),
+    textNode("4:5", "Junk", "Out of range", { family: "Inter", size: 16, weight: "Bold", weightValue: 0 }),
+    { ...textNode("4:6", "Rich", "Rich text", { family: "Inter", size: 20, weight: "Bold", weightValue: 700 }), runs: [run("Rich", "Bold", 700), run(" text", "Regular", 400)] },
+    { ...textNode("4:7", "Even", "Even text", { family: "Inter", size: 20, weight: "Bold", weightValue: 700 }), runs: [run("Even", "Bold", 700), run(" text", "Bold", 700)] },
+  ])]);
+  const at = (id: string) => must(exp.nodes.find((n) => n.nodeId === id), `exp.nodes '${id}'`);
+  ok("[expect] a percent line-height in the producer's spelling resolves against the font size (150% of 14px → 21)", at("4:1").lineHeight === 21);
+  ok("[expect] the numeric weightValue wins over the style name ('Regular' + weightValue 650 → 650)", at("4:2").fontWeight === 650);
+  ok("[expect] with no weightValue the applied wght axis is the weight (650), not the 'Regular' name", at("4:3").fontWeight === 650);
+  ok("[expect] with neither, the style name decides — 'Semibold Italic' is 600", at("4:4").fontWeight === 600);
+  ok("[expect] a weightValue outside CSS's 1–1000 is not a weight — the style name decides (Bold → 700)", at("4:5").fontWeight === 700);
+  ok("[expect] mixed runs of different weights state no single node weight: no fontWeight, a font-weight notComparable row",
+    !("fontWeight" in at("4:6")) && exp.notComparable.some((g) => g.nodeId === "4:6" && g.field === "font-weight" && /700.*400/.test(g.why)));
+  ok("[expect] mixed runs that share one weight keep it (700)", at("4:7").fontWeight === 700 && !exp.notComparable.some((g) => g.nodeId === "4:7"));
 }
 {
   // primaryAxisAlignItems SPACE_EVENLY/SPACE_AROUND distribute the frame's free space along the

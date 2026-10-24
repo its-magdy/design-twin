@@ -19,8 +19,8 @@ import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect
 import * as guards from "../design-to-code/doc-guards.ts";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
-import type { IndexRow, MeasuredNode, VerifyReport, MeasuredStyles, MeasuredVisual, ProbeIdentity, ReportVisual, ScreenDoc, VerifyExpectation, VerifyMeasured, VerifyReportV2, VerifySpec, VisualRegion } from "../design-to-code/types.ts";
-import { malformed, screenExport, screenReply } from "./fixtures.ts";
+import type { IndexRow, LayerFile, MeasuredNode, VerifyReport, MeasuredStyles, MeasuredVisual, ProbeIdentity, ReportVisual, ScreenDoc, VerifyExpectation, VerifyMeasured, VerifyReportV2, VerifySpec, VisualRegion } from "../design-to-code/types.ts";
+import { malformed, node, screenExport, screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 
@@ -257,6 +257,41 @@ console.log("[expect-cli] --expect CLI: main reads design/export/<pointer> and d
   const e2 = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
   safe("[expect-cli] the CLI on a thumbnail: usable:false and a 'no visual diff' note", () =>
     r2.status === 0 && e2?.referenceImage?.usable === false && /note {2}no visual diff for this screen: the reference is a 360 px image/.test(r2.stderr));
+  fs.rmSync(cwd, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------- ref-layer: a page-walk layer file's reference
+// A page walk (collect.ts → pages-layout.ts buildPageLayout) writes pages/<Page>/<Layer>__<id>.json as
+// {name, id, page, pageId, sourceFile, tree, reference}: the pointer sits BESIDE the tree, not on its root (a
+// --node pull's place), and the page index row carries no referenceScale/referenceOffset. The PNG is rendered
+// exactly as a --node pull's (serializeWithRefs → collectReference), so the export-root geometry applies.
+console.log("[ref-layer] --expect: a page-walk layer file's root-level reference:");
+{
+  const layerFile = (more: Partial<LayerFile> = {}): LayerFile => ({ name: "Firings", id: "90:1", page: "Studio", pageId: "1:2", sourceFile: KILN, tree: node(without(FIRINGS, "reference")), reference: REF, ...more });
+  const pageRow = (): IndexRow => ({ name: "Firings", id: "90:1", type: "FRAME", page: "Studio", pageId: "1:2", nodes: 11, bytes: 2865, texts: ["Firings", "Cone 4"], sourceFile: KILN, file: "Studio/Firings__90_1.json" });
+  const e = buildExpectation([{ doc: layerFile(), label: "Firings__90_1" }], { index: { layers: [pageRow()] }, readReference: reader({ [REF]: REF_PNG }) });
+  const r = refOf(e);
+  safe("[ref-layer] the expectation keeps the layer's reference pointer", () => e.reference === REF);
+  safe("[ref-layer] referenceImage from:export at s0, offset renderBox − box {-12,-12}, crop {17, 17, 2048, 1024} — the same geometry as the --node shape", () =>
+    !!r && r.usable === true && r.from === "export" && r.scale === S0 && r.offset.x === -12 && r.offset.y === -12 && r.path === "design/export/" + REF
+    && r.crop.x === 17 && r.crop.y === 17 && r.crop.w === 2048 && r.crop.h === 1024 && r.sha256 === sha(REF_PNG));
+  const asNode = refOf(expect({ readReference: reader({ [REF]: REF_PNG }) }));
+  safe("[ref-layer] …identical to the single-screen export of the same frame", () => JSON.stringify(r) === JSON.stringify(asNode));
+  const none = buildExpectation([{ doc: (({ reference: _r, ...rest }: LayerFile) => rest)(layerFile()), label: "Firings__90_1" }], { readReference: reader({ [REF]: REF_PNG }) });
+  safe("[ref-layer] a layer file with no reference still says so (reference null, usable:false)", () => none.reference === null && none.referenceImage?.usable === false);
+
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-visual-layer-"));
+  const put = (rel: string, v: string | Buffer): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), v); return rel; };
+  const scr = put("design/export/pages/Studio/Firings__90_1.json", JSON.stringify(layerFile()));
+  put("design/export/pages/index.json", JSON.stringify({ pageDirs: [{ page: "Studio", pageId: "1:2", dir: "Studio", index: "Studio/index.json", layers: 1 }], layers: [pageRow()], sourceFile: KILN }));
+  put("design/export/pages/Studio/index.json", JSON.stringify({ page: "Studio", pageId: "1:2", layers: [pageRow()] }));
+  put("design/export/" + REF, REF_PNG);
+  const cr = runSync(process.execPath, [CLI, "--expect", scr], { cwd });
+  const ce = readJsonOrNull(path.join(cwd, "design/verify/Firings__90_1.expected.json"), isVerifyExpectation);
+  safe("[ref-layer] the --expect CLI on a page-walk layer file: reference kept, referenceImage usable from:export at s0, no 'no reference PNG' note", () =>
+    cr.status === 0 && !!ce && ce.reference === REF && ce.referenceImage?.usable === true && ce.referenceImage.from === "export" && ce.referenceImage.scale === S0
+    && !/no reference PNG/.test(cr.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 }
 
