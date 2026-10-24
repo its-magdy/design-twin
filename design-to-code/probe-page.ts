@@ -543,7 +543,8 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       switch (k) {
         case "fontFamily": put(k, typoCs.getPropertyValue("font-family") || null, "no computed font-family"); break;
         case "fontSize": put(k, px(typoCs.getPropertyValue("font-size")), "no computed font-size"); break;
-        case "fontWeight": { const w = parseInt(typoCs.getPropertyValue("font-weight"), 10); put(k, Number.isFinite(w) ? w : null, "no numeric font-weight"); break; }
+        // parseFloat, not parseInt: a variable font's computed weight may be fractional ("650.5", CSS Fonts 4 §2.2)
+        case "fontWeight": { const w = parseFloat(typoCs.getPropertyValue("font-weight")); put(k, Number.isFinite(w) ? w : null, "no numeric font-weight"); break; }
         case "lineHeight": { const v = typoCs.getPropertyValue("line-height"); put(k, v === "normal" ? null : px(v), "line-height: normal — its pixel value depends on the font's metrics"); break; }
         case "letterSpacing": { const v = typoCs.getPropertyValue("letter-spacing"); put(k, v === "normal" ? 0 : px(v), "no computed letter-spacing"); break; }
         case "color": put(k, rgba(typoCs.getPropertyValue("color")), "no computed color"); break;

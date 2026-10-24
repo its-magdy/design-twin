@@ -1293,6 +1293,15 @@ console.log("verify-probe — tag-alias, display, rings, foreign tags:");
   t("a real border wins over a ring (the ring is read only when every border side is 0): strokeFrom border, no strokeAlign", () =>
     border.borderWidth === 1 && border.borderColor === "rgb(5, 5, 5)" && border.strokeFrom === "border" && border.strokeAlign === undefined);
   t("display is the computed display", () => measureCss({ display: "inline" }).display === "inline" && inset1.display === "block");
+  // a variable font's computed weight keeps its fraction (CSS Fonts 4 §2.2: every number 1–1000); parseInt read 650.5 as 650
+  const weightOf = (fw: string): unknown => {
+    const el = { tagName: "SPAN", childNodes: [], children: [], getBoundingClientRect: () => ({ x: 0, y: 0, width: 100, height: 20 }) };
+    Object.assign(globalThis, { document: { querySelector: () => el }, getComputedStyle: () => ({ getPropertyValue: (prop: string) => (prop === "font-weight" ? fw : "") }), scrollX: 0, scrollY: 0 });
+    if (!isMeasureFn(measureFn)) return undefined;
+    const [r] = measureFn({ frameRect: { x: 0, y: 0, w: 800, h: 600 }, keys: ["fontWeight"], items: [{ nodeId: "60:31", path: "span", isText: false, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+    return r ? r.styles.fontWeight : undefined;
+  };
+  t("fontWeight: a computed '650.5' is 650.5 (not truncated to 650); '700' is 700", () => weightOf("650.5") === 650.5 && weightOf("700") === 700);
   const ringNode = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: { ...inset1 }, unmeasured: {} }, STYLE_KEYS) : null;
   t("shapeNode carries strokeFrom/strokeAlign through to measured.json", () => ringNode?.styles?.strokeFrom === "box-shadow" && ringNode.styles.strokeAlign === "inside");
   const noStroke = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: {}, unmeasured: {} }, STYLE_KEYS) : null;

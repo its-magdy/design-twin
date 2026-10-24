@@ -2141,9 +2141,14 @@ function normWeight(v) {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
-  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  const name = s.toLowerCase().replace(/[^a-z]/g, "");
+  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
   return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+var cssWeight = (v) => typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 1e3 ? v : null;
+function fontWeightOf(f) {
+  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : void 0) ?? cssWeight(normWeight(f.weight));
 }
 function normFamily(v) {
   if (v == null) return null;
@@ -2152,19 +2157,23 @@ function normFamily(v) {
 function lineHeightPx(lh, fontSize) {
   if (lh == null) return null;
   if (typeof lh === "number") return lh;
+  const size = typeof fontSize === "number" ? fontSize : typeof fontSize === "string" ? Number(fontSize) : NaN;
+  const of = (factor) => Number.isFinite(size) && size > 0 && Number.isFinite(factor) ? r2(factor * size) : null;
   if (typeof lh === "string") {
     const s = lh.trim().toLowerCase();
     if (s === "normal") return null;
     const n = parseFloat(s);
     if (Number.isNaN(n)) return null;
-    if (s.endsWith("%")) return fontSize ? n / 100 * Number(fontSize) : null;
+    if (s.endsWith("%")) return of(n / 100);
     if (s.endsWith("px")) return n;
-    return fontSize ? n * Number(fontSize) : null;
+    return of(n);
   }
   if (typeof lh === "object") {
-    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? Number(lh.value) / 100 * Number(fontSize) : null;
-    if (lh.unit === "AUTO") return null;
-    return typeof lh.value === "number" ? lh.value : null;
+    const unit = String(lh.unit ?? "px").toLowerCase();
+    if (unit === "percent" || unit === "%") return typeof lh.value === "number" ? of(lh.value / 100) : null;
+    if (unit === "auto") return null;
+    if (unit === "px" || unit === "pixels") return typeof lh.value === "number" ? lh.value : null;
+    return null;
   }
   return null;
 }
@@ -3560,12 +3569,14 @@ function expectText({ n, spec, skip }) {
   else if (n.text != null && (fcase === "small_caps" || fcase === "small_caps_forced"))
     skip("text case", fcase, "small caps (font-variant) not compared \u2014 Figma draws the stored characters as small capitals; the build's font-variant is not measured");
 }
-function expectFont({ n, spec }) {
+function expectFont({ n, spec, skip }) {
   if (!n.font) return;
   if (n.font.family !== void 0) spec.fontFamily = n.font.family;
   if (typeof n.font.size === "number") spec.fontSize = n.font.size;
-  const w = normWeight(n.font.weight);
-  if (w != null) spec.fontWeight = w;
+  const runWeights = [...new Set((Array.isArray(n.runs) ? n.runs : []).map((r) => r && r.font ? fontWeightOf(r.font) : null).filter((w2) => w2 != null))];
+  const w = fontWeightOf(n.font);
+  if (runWeights.length > 1) skip("font-weight", runWeights, `mixed text: its runs are ${runWeights.join(" / ")} \u2014 no single weight for the node's element (the build sets each run on its own inline element)`);
+  else if (w != null) spec.fontWeight = w;
   const lh = lineHeightPx(n.font.lineHeight, n.font.size);
   if (lh != null) spec.lineHeight = lh;
   const ls = n.font.letterSpacing;
@@ -3852,6 +3863,7 @@ function expectBuildCtx(opts) {
     rootsByFile: /* @__PURE__ */ new Map(),
     interactionFile: /* @__PURE__ */ new Map(),
     roots: [],
+    referenceOf: /* @__PURE__ */ new Map(),
     rootNodesByFile: /* @__PURE__ */ new Map(),
     visibleById: /* @__PURE__ */ new Map(),
     index: opts && opts.index,
@@ -3866,15 +3878,20 @@ function readInput(bx, { doc, label }) {
   const fileIds = getOrInit(bx.idsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Set());
   if (!bx.screen) bx.screen = exp && exp.screen || label;
   if (!bx.exportedAt) bx.exportedAt = exp ? exp.exportedAt : void 0;
-  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds);
+  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds, rootReference(doc, root));
 }
-function readRoot(bx, root, exp, sourceFile, fileIds) {
+function rootReference(doc, root) {
+  if (typeof root.reference === "string" && root.reference) return root.reference;
+  return isLayerFile(doc) && doc.tree === root && typeof doc.reference === "string" && doc.reference ? doc.reference : void 0;
+}
+function readRoot(bx, root, exp, sourceFile, fileIds, reference) {
   if (root.id) {
     const names = getOrInit(getOrInit(bx.rootsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Map()), root.id, () => /* @__PURE__ */ new Set());
     for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : void 0]) if (typeof n === "string" && n) names.add(n);
   }
   getOrInit(bx.rootNodesByFile, sourceFile ?? "", () => []).push(root);
-  if (!bx.reference && root.reference) bx.reference = root.reference;
+  if (reference) bx.referenceOf.set(root, reference);
+  if (!bx.reference && reference) bx.reference = reference;
   const b = root.box || {};
   const frame = {
     nodeId: root.id,
@@ -4127,6 +4144,7 @@ function firstReferenceImage(bx, opts) {
   return referenceImageFor({
     reference: bx.reference,
     root: first,
+    rootReference: first ? bx.referenceOf.get(first) : void 0,
     sourceFile: firstFile || void 0,
     rows: index ? index.layers : [],
     readReference,
@@ -4176,7 +4194,7 @@ function referenceImageFor(o) {
   if (!reference) return unusable(null, "the export has no reference PNG for this screen \u2014 re-pull it with its reference");
   const p = "design/export/" + reference;
   if (resolveInside(path17.resolve(EXPORT_DIR), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export \u2014 re-pull the screen`);
-  if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one \u2014 only the first frame is diffed");
+  if (!root || o.rootReference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one \u2014 only the first frame is diffed");
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) \u2014 the reference cannot be placed");
   const bytes = o.readReference(reference);

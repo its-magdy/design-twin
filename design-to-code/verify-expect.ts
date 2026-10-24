@@ -12,7 +12,7 @@ import { planInteractionsSha256 } from "./plan-waivers.ts";
 import { pngInfo } from "../bridge/src/png.ts";
 import { actionForExpect, isPlanExpect } from "./probe-steps.ts";
 import { isJsonObject } from "./types.ts";
-import { screenExportOf, screenRoots } from "./export-shape.ts";
+import { isLayerFile, screenExportOf, screenRoots } from "./export-shape.ts";
 import { PAINT_TYPES, idSuffix } from "./probe-match.ts";
 import type {
   Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
@@ -22,7 +22,7 @@ import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { EXPORT_DIR } from "../bridge/src/project-layout.ts";
 import {
-  EXPECTATION_SCHEMA, MEASURED_KEYS_DOC, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, lineHeightPx, normColor, normWeight, num, r2, resolveInside,
+  EXPECTATION_SCHEMA, MEASURED_KEYS_DOC, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, fontWeightOf, lineHeightPx, normColor, num, r2, resolveInside,
 } from "./verify-shared.ts";
 import type { PadSide } from "./verify-shared.ts";
 
@@ -258,12 +258,16 @@ function expectText({ n, spec, skip }: NodeSpecCtx): void {
     skip("text case", fcase, "small caps (font-variant) not compared — Figma draws the stored characters as small capitals; the build's font-variant is not measured");
 }
 /** the typography: family, size, weight, line height, letter spacing and the font colour */
-function expectFont({ n, spec }: NodeSpecCtx): void {
+function expectFont({ n, spec, skip }: NodeSpecCtx): void {
   if (!n.font) return;
   if (n.font.family !== undefined) spec.fontFamily = n.font.family;
   if (typeof n.font.size === "number") spec.fontSize = n.font.size;
-  const w = normWeight(n.font.weight);
-  if (w != null) spec.fontWeight = w;
+  // Mixed text's node `font` is its FIRST run's (text.ts serializeText); runs of different weights state no one weight
+  // for the node's element — which run the build's element carries is not the export's to say.
+  const runWeights = [...new Set((Array.isArray(n.runs) ? n.runs : []).map((r) => (r && r.font ? fontWeightOf(r.font) : null)).filter((w) => w != null))];
+  const w = fontWeightOf(n.font);
+  if (runWeights.length > 1) skip("font-weight", runWeights, `mixed text: its runs are ${runWeights.join(" / ")} — no single weight for the node's element (the build sets each run on its own inline element)`);
+  else if (w != null) spec.fontWeight = w;
   const lh = lineHeightPx(n.font.lineHeight, n.font.size);
   if (lh != null) spec.lineHeight = lh;
   const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
@@ -638,6 +642,8 @@ interface ExpectBuild {
   rootsByFile: Map<string, Map<string, Set<string>>>;
   interactionFile: Map<VerifyInteraction, string | undefined>;
   roots: IrNode[];
+  // each root's reference pointer, wherever its document keeps it (rootReference)
+  referenceOf: Map<IrNode, string>;
   rootNodesByFile: Map<string, IrNode[]>; // each Figma file's input roots
   visibleById: Map<string, { name: string; file: string }>; // a plan row's node — its name and file
   index: ExpectOptions["index"] | undefined;
@@ -657,7 +663,7 @@ function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
   return {
     nodes: [], instances: [], interactions: [], notComparable: [], hidden: { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 },
     frames: [], seen: new Set<string>(), screen: undefined, exportedAt: undefined, reference: null,
-    idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], rootNodesByFile: new Map(), visibleById: new Map(),
+    idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], referenceOf: new Map(), rootNodesByFile: new Map(), visibleById: new Map(),
     index: opts && opts.index, readSibling, sibling,
   };
 }
@@ -671,7 +677,14 @@ function readInput(bx: ExpectBuild, { doc, label }: ExpectInput): void {
   const fileIds = getOrInit(bx.idsByFile, sourceFile ?? "", () => new Set<string>());
   if (!bx.screen) bx.screen = (exp && exp.screen) || label;
   if (!bx.exportedAt) bx.exportedAt = exp ? exp.exportedAt : undefined;
-  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds);
+  for (const root of screenRoots(doc)) readRoot(bx, root, exp, sourceFile, fileIds, rootReference(doc, root));
+}
+/** A root's reference PNG pointer: on the root node in a --node/--selection pull (collect.ts rootTree), BESIDE the tree in
+ *  a page-walk layer file (collect.ts → pages-layout.ts: {name, id, …, tree, reference}). Both are rendered alike
+ *  (serializeWithRefs → collectReference), so only where the pointer sits differs. */
+function rootReference(doc: ExpectInput["doc"], root: IrNode): string | undefined {
+  if (typeof root.reference === "string" && root.reference) return root.reference;
+  return isLayerFile(doc) && doc.tree === root && typeof doc.reference === "string" && doc.reference ? doc.reference : undefined;
 }
 /** one root's walk: its frame, the drawn states and visible ancestors handed down, and the fixed children */
 interface RootWalk {
@@ -679,14 +692,15 @@ interface RootWalk {
   stateOf: WeakMap<IrNode, InheritedState>; chainOf: WeakMap<IrNode, string[]>; fixedNodes: WeakSet<IrNode>;
 }
 /** one screen root: indexed by its file, its frame recorded, and every node under it walked (hiddenNode / visibleNode) */
-function readRoot(bx: ExpectBuild, root: IrNode, exp: ScreenExport | null, sourceFile: string | undefined, fileIds: Set<string>): void {
+function readRoot(bx: ExpectBuild, root: IrNode, exp: ScreenExport | null, sourceFile: string | undefined, fileIds: Set<string>, reference: string | undefined): void {
   if (root.id) {
     const names = getOrInit(getOrInit(bx.rootsByFile, sourceFile ?? "", () => new Map<string, Set<string>>()), root.id, () => new Set<string>());
     // (the title only for the frame the pull is filed under — the index row carries that one id)
     for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
   }
   getOrInit(bx.rootNodesByFile, sourceFile ?? "", () => []).push(root);
-  if (!bx.reference && root.reference) bx.reference = root.reference;
+  if (reference) bx.referenceOf.set(root, reference);
+  if (!bx.reference && reference) bx.reference = reference;
   const b: Partial<Box> = root.box || {};
   const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true,
     ...ifDefined("scroll", root.scroll) }; // a frame designed to scroll sideways
@@ -979,7 +993,7 @@ function firstReferenceImage(bx: ExpectBuild, opts: ExpectOptions | null | undef
   const first = bx.roots[0];
   const firstFile = first ? [...bx.rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : undefined;
   const { index } = bx;
-  return referenceImageFor({ reference: bx.reference, root: first, sourceFile: firstFile || undefined, rows: index ? index.layers : [],
+  return referenceImageFor({ reference: bx.reference, root: first, rootReference: first ? bx.referenceOf.get(first) : undefined, sourceFile: firstFile || undefined, rows: index ? index.layers : [],
     readReference, colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null });
 }
 // expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
@@ -1033,7 +1047,8 @@ const round4 = (n: number): number => Math.round(n * 10000) / 10000;
 export const figmaReferenceScale = (w: number, h: number): number => Math.min(2, 2048 / (Math.max(w, h) || 1));
 const REFERENCE_SCALE_SLACK = 0.02;
 interface ReferenceInput {
-  reference: string | null; root: IrNode | undefined; sourceFile: string | undefined; rows: readonly IndexRow[];
+  /** `rootReference`: the root's own pointer, wherever its document keeps it (rootReference()) */
+  reference: string | null; root: IrNode | undefined; rootReference: string | undefined; sourceFile: string | undefined; rows: readonly IndexRow[];
   readReference: (pointer: string) => Uint8Array | null; colorProfile: string | null;
 }
 /** expectation.referenceImage for the first frame (see the section comment). */
@@ -1044,7 +1059,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const p = "design/export/" + reference;
   // confined to design/export (lexically — the root used here is any absolute one)
   if (resolveInside(path.resolve(EXPORT_DIR), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export — re-pull the screen`);
-  if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one — only the first frame is diffed");
+  if (!root || o.rootReference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one — only the first frame is diffed");
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) — the reference cannot be placed");
   const bytes = o.readReference(reference);

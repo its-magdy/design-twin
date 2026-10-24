@@ -457,8 +457,9 @@ function measureElements(input) {
         case "fontSize":
           put(k, px(typoCs.getPropertyValue("font-size")), "no computed font-size");
           break;
+        // parseFloat, not parseInt: a variable font's computed weight may be fractional ("650.5", CSS Fonts 4 §2.2)
         case "fontWeight": {
-          const w = parseInt(typoCs.getPropertyValue("font-weight"), 10);
+          const w = parseFloat(typoCs.getPropertyValue("font-weight"));
           put(k, Number.isFinite(w) ? w : null, "no numeric font-weight");
           break;
         }
@@ -1107,8 +1108,9 @@ function normWeight(v) {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Number(s);
-  const key = s.toLowerCase().replace(/[^a-z]/g, "");
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  const name = s.toLowerCase().replace(/[^a-z]/g, "");
+  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
   return WEIGHTS[key] != null ? WEIGHTS[key] : null;
 }
 function normFamily(v) {
