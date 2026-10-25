@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-build.ts
-import fs17 from "node:fs";
+import fs18 from "node:fs";
 import path17 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
@@ -406,6 +406,7 @@ function hookHashOf(hook, plan) {
 }
 
 // design-to-code/audit-gate.ts
+import fs10 from "node:fs";
 import path10 from "node:path";
 
 // design-to-code/finding-id.ts
@@ -1726,26 +1727,60 @@ function nodeArtefacts(root, dirs = {}) {
 }
 
 // design-to-code/audit-gate.ts
-function blockerIds(auditDoc) {
-  const findings = reportFindings(auditDoc);
-  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
-  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
-}
+var crossCheckFileOf = (auditFile) => auditFile.replace(/\.json$/, ".cross.json");
 function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
   const str2 = (v) => typeof v === "string" && v ? v : void 0;
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str2(f.code)), ...ifDefined("nodeId", str2(f.nodeId)), ...ifDefined("severity", str2(f.severity)), ...ifDefined("id", str2(f.id)) }));
 }
-function auditGateStatus(cwd, nodeId, screenFile, screenName) {
-  const rel = nodeArtefacts(cwd).auditFor(nodeId, { screenFile, screenName });
-  if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
+function blockerIds(auditDoc) {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+function screenAudit(cwd, screen) {
+  let rel;
+  try {
+    rel = nodeArtefacts(cwd).auditFor(screen.nodeId, { screenFile: screen.screenFile, screenName: screen.screenName });
+  } catch {
+    return { status: "none" };
+  }
+  if (!rel) return { status: "none" };
   const r = readJson(path10.join(cwd, rel), isAuditReport);
-  if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
-  return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
+  if (!("doc" in r)) return { status: "unreadable", auditFile: rel, error: r.error };
+  const cross = crossCheckFileOf(rel);
+  return {
+    status: "read",
+    auditFile: rel,
+    blockers: blockerIds(r.doc),
+    legacyBlockers: legacyBlockerIds(reportFindings(r.doc)),
+    crossCheckFile: cross !== rel && fs10.existsSync(path10.join(cwd, cross)) ? cross : null
+  };
+}
+var POSITIONAL = /^[^@#~]+#\d+$/;
+function judgeGate(audit, gate) {
+  if (audit.status === "none") return { status: "clear" };
+  if (audit.status === "unreadable") return { status: "unchecked", auditFile: audit.auditFile, error: audit.error };
+  const { auditFile, blockers, legacyBlockers } = audit;
+  if (!blockers.length) return { status: "clear" };
+  if (!gate) return { status: "ungated", auditFile, blockers };
+  const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
+  const legacySet = new Set(legacyBlockers);
+  const via = [];
+  blockers.forEach((id, i) => {
+    const old = legacyBlockers[i];
+    if (old !== void 0 && !overridden.has(id) && overridden.has(old)) via.push({ old, id });
+  });
+  const stale = [...overridden].filter((e) => typeof e === "string" && POSITIONAL.test(e) && !legacySet.has(e));
+  const legacy2 = { via, stale };
+  const uncovered = blockers.filter((id, i) => !overridden.has(id) && !overridden.has(legacyBlockers[i] ?? id));
+  if (uncovered.length) return { status: "uncovered", auditFile, uncovered, legacy: legacy2 };
+  if (!gate.reason) return { status: "unreasoned", auditFile, overridden: overridden.size, legacy: legacy2 };
+  return { status: "covered", auditFile, legacy: legacy2 };
 }
 
 // design-to-code/report-freshness.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 import path11 from "node:path";
 
 // design-to-code/plan-binding.ts
@@ -1815,7 +1850,7 @@ function recordedReport(plan, cwd) {
   return reportNamed(rec.report, rec.reportSha256, cwd);
 }
 function reportNamed(report, sha, cwd) {
-  if (!fs10.existsSync(path11.resolve(cwd, report))) return { kind: "missing", report };
+  if (!fs11.existsSync(path11.resolve(cwd, report))) return { kind: "missing", report };
   const bytes = readRegularFile(path11.resolve(cwd, report));
   if (!bytes) return { kind: "unreadable", report };
   if (typeof sha !== "string" || sha256Hex(bytes) !== sha) return { kind: "rewritten", report };
@@ -1842,7 +1877,7 @@ function reportFreshness(root, o = {}) {
     if (!want) return null;
     const expRel = siblingFile(rel, "report", "expected");
     try {
-      return sha256Hex(fs10.readFileSync(path11.resolve(root, expRel))) !== want ? expRel : null;
+      return sha256Hex(fs11.readFileSync(path11.resolve(root, expRel))) !== want ? expRel : null;
     } catch {
       return null;
     }
@@ -2014,7 +2049,7 @@ function isCodeConnectMap(x) {
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 
 // design-to-code/code-scanner.ts
-import fs11 from "node:fs";
+import fs12 from "node:fs";
 import path12 from "node:path";
 
 // design-to-code/token-naming.ts
@@ -2454,8 +2489,8 @@ function readFiles(rels, cwd, bytes) {
   for (const rel of rels) {
     const abs = path12.join(cwd, rel);
     try {
-      if (!fs11.statSync(abs).isFile()) continue;
-      const buf = fs11.readFileSync(abs);
+      if (!fs12.statSync(abs).isFile()) continue;
+      const buf = fs12.readFileSync(abs);
       out.push({ rel, text: buf.toString("utf8") });
       bytes?.set(rel, buf);
     } catch {
@@ -2544,7 +2579,7 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 var TW_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts|mts|cts)$/i;
 var hasTwConfig = (dir) => {
   try {
-    return fs11.readdirSync(dir).some((n) => TW_CONFIG.test(n));
+    return fs12.readdirSync(dir).some((n) => TW_CONFIG.test(n));
   } catch {
     return false;
   }
@@ -2552,7 +2587,7 @@ var hasTwConfig = (dir) => {
 function packageDirOf(cwd, rel) {
   const root = path12.resolve(cwd);
   for (let d = path12.dirname(path12.resolve(cwd, rel)); d.startsWith(root); d = path12.dirname(d)) {
-    if (fs11.existsSync(path12.join(d, "package.json"))) return d;
+    if (fs12.existsSync(path12.join(d, "package.json"))) return d;
     if (d === root) break;
   }
   return root;
@@ -2563,7 +2598,7 @@ function projectScan(cwd, limit = 2e3) {
   const walk2 = (dir) => {
     let entries;
     try {
-      entries = fs11.readdirSync(dir, { withFileTypes: true });
+      entries = fs12.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -2575,7 +2610,7 @@ function projectScan(cwd, limit = 2e3) {
       } else if (e.isFile() && TW_CONFIG.test(e.name)) tailwindConfig = true;
       else if (e.isFile() && /\.css$/i.test(e.name)) {
         try {
-          css.push({ rel: path12.relative(cwd, abs).split(path12.sep).join("/"), text: fs11.readFileSync(abs, "utf8") });
+          css.push({ rel: path12.relative(cwd, abs).split(path12.sep).join("/"), text: fs12.readFileSync(abs, "utf8") });
         } catch {
         }
       }
@@ -2586,11 +2621,11 @@ function projectScan(cwd, limit = 2e3) {
 }
 
 // bridge/src/json-file.ts
-import fs13 from "node:fs";
+import fs14 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto3 from "node:crypto";
-import fs12 from "node:fs";
+import fs13 from "node:fs";
 import path13 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
 var RENAME_RETRY_MS = 2e3;
@@ -2600,14 +2635,14 @@ function renameOver(from, to) {
   const t0 = Date.now();
   for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
     try {
-      fs12.renameSync(from, to);
+      fs13.renameSync(from, to);
       return;
     } catch (e) {
       const code = errCode(e);
       if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
       let dir = false;
       try {
-        dir = fs12.statSync(to).isDirectory();
+        dir = fs13.statSync(to).isDirectory();
       } catch {
       }
       if (dir) throw e;
@@ -2618,36 +2653,36 @@ function renameOver(from, to) {
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs12.openSync(dir, "r");
+    const fd = fs13.openSync(dir, "r");
     try {
-      fs12.fsyncSync(fd);
+      fs13.fsyncSync(fd);
     } finally {
-      fs12.closeSync(fd);
+      fs13.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
   const dir = path13.dirname(path13.resolve(file));
-  fs12.mkdirSync(dir, { recursive: true });
+  fs13.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs12.openSync(tmp, "wx", opts.mode);
+      const fd = fs13.openSync(tmp, "wx", opts.mode);
       try {
-        fs12.writeFileSync(fd, data);
-        fs12.fsyncSync(fd);
+        fs13.writeFileSync(fd, data);
+        fs13.fsyncSync(fd);
       } finally {
-        fs12.closeSync(fd);
+        fs13.closeSync(fd);
       }
     } else {
-      fs12.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs13.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs12.chmodSync(tmp, opts.mode);
+    if (opts.mode !== void 0) fs13.chmodSync(tmp, opts.mode);
     renameOver(tmp, file);
   } catch (e) {
     try {
-      fs12.rmSync(tmp, { force: true });
+      fs13.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -2667,7 +2702,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs13.readFileSync(file, "utf8");
+    return fs14.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -2827,11 +2862,11 @@ function recordedEditFacts(plan, cwd) {
 import path16 from "node:path";
 
 // design-to-code/verify-locate.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import path15 from "node:path";
 
 // bridge/src/export-reader.ts
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 import path14 from "node:path";
 
 // bridge/src/design-system-layout.ts
@@ -2882,7 +2917,7 @@ function pageIndexFiles(root, pageDirs) {
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs14.readdirSync(path14.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs15.readdirSync(path14.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -2906,7 +2941,7 @@ function readExportIndex(exportRoot) {
     if (t === void 0) {
       const f = inside(root, row.file);
       try {
-        t = f === null ? -1 : fs14.statSync(f).mtimeMs;
+        t = f === null ? -1 : fs15.statSync(f).mtimeMs;
       } catch {
         t = -1;
       }
@@ -2978,7 +3013,7 @@ function readExportIndex(exportRoot) {
 // design-to-code/verify-locate.ts
 function exportDirOf(cwd) {
   const e = path15.join(cwd, EXPORT_DIR);
-  return fs15.existsSync(path15.join(e, "pages")) ? e : path15.join(cwd, DESIGN_DIR);
+  return fs16.existsSync(path15.join(e, "pages")) ? e : path15.join(cwd, DESIGN_DIR);
 }
 var locateCache = () => ({ reports: /* @__PURE__ */ new Map(), indexes: /* @__PURE__ */ new Map() });
 function exportIndexOf(exportDir, cache) {
@@ -3074,14 +3109,14 @@ function behaviourRef(x) {
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function reportEntries(dir) {
-  if (!fs15.existsSync(dir)) return null;
+  if (!fs16.existsSync(dir)) return null;
   const out = [];
-  for (const f of fs15.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
+  for (const f of fs16.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
     const abs = path15.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = setBaseOf(f, "report") ?? f;
-    if (!fs15.existsSync(setFile(path15.join(dir, stem), "expected")) && fs15.existsSync(setFile(path15.join(dir, stem), "retired"))) continue;
+    if (!fs16.existsSync(setFile(path15.join(dir, stem), "expected")) && fs16.existsSync(setFile(path15.join(dir, stem), "retired"))) continue;
     out.push({ f, abs, stem, r, facts: null, mtimeMs: null });
   }
   return out;
@@ -3115,7 +3150,7 @@ function locateReports(plan, planFile, cwd, exp, cache) {
     if (x.mtimeMs === null) {
       x.mtimeMs = 0;
       try {
-        x.mtimeMs = fs15.statSync(abs).mtimeMs;
+        x.mtimeMs = fs16.statSync(abs).mtimeMs;
       } catch {
       }
     }
@@ -3263,7 +3298,7 @@ function planStatus(root, o = {}) {
 }
 
 // design-to-code/hook-input.ts
-import fs16 from "node:fs";
+import fs17 from "node:fs";
 function parseHookPayload(raw) {
   if (!raw.trim()) return {};
   try {
@@ -3277,13 +3312,13 @@ function readHookInput(opts) {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs16.fstatSync(0);
+    st = fs17.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parseHookPayload(fs16.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parseHookPayload(fs17.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -3459,7 +3494,7 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs17.statSync(file).mtimeMs > cutoff;
+    return now - fs18.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
@@ -3548,7 +3583,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs17.existsSync(path17.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs18.existsSync(path17.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -3795,7 +3830,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed2 = plan.files || [];
-  const absent = listed2.filter((f) => !fs17.existsSync(path17.join(cwd, f)));
+  const absent = listed2.filter((f) => !fs18.existsSync(path17.join(cwd, f)));
   if (!listed2.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -3803,12 +3838,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs17.statSync(path17.join(cwd, rel)).isFile();
+      return fs18.statSync(path17.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs17.readFileSync(path17.join(cwd, rel), "utf8") });
+  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs18.readFileSync(path17.join(cwd, rel), "utf8") });
   const code = codeOf(byFile);
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -3934,35 +3969,20 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp, planFile) {
-  const screenFile = plan.file ? path17.resolve(cwd, plan.file) : null;
-  const screenName = plan.screenName || exp && exp.layerName || null;
-  let g;
-  try {
-    g = auditGateStatus(cwd, planNode(plan, planFile), screenFile, screenName);
-  } catch {
-    return [];
+  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path17.resolve(cwd, plan.file) : null, screenName: plan.screenName || exp && exp.layerName || null };
+  const v = judgeGate(screenAudit(cwd, screen), plan.auditGate);
+  if (v.status === "clear") return [];
+  if (v.status === "unchecked") return [`${v.auditFile} ${v.error} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
+  if (v.status === "ungated") {
+    return [`${v.auditFile} is Blocked (${v.blockers.length} blocker(s): ${v.blockers.join(", ")}) and this plan has no \`auditGate\` \u2014 either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
-  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
-  if (!g.auditFile || !g.blockers.length) return [];
-  const gate = plan.auditGate;
-  if (!gate) {
-    return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` \u2014 either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
-  }
-  const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
   const out = [];
-  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
-  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`);
-  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`);
-  const legacySet = new Set(g.legacyBlockers);
-  const viaLegacy = [];
-  g.blockers.forEach((id, i) => {
-    const old = g.legacyBlockers[i];
-    if (old !== void 0 && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} \u2192 ${id}`);
-  });
-  const staleLegacy = [...overridden].filter((e) => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
-  if (viaLegacy.length || staleLegacy.length) {
-    const parts = [...viaLegacy, ...staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : []];
-    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id \u2014 a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker \u2014 if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
+  if (v.status === "uncovered") out.push(`${v.auditFile} has ${v.uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${v.uncovered.join(", ")} \u2014 either resolve them or add them with a reason`);
+  else if (v.status === "unreasoned") out.push(`this plan's auditGate overrides ${v.overridden} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${v.auditFile}`);
+  const { via, stale } = v.legacy;
+  if (via.length || stale.length) {
+    const parts = [...via.map((x) => `${x.old} \u2192 ${x.id}`), ...stale.length ? [`no current blocker: ${stale.map((e) => `${e} (drop it)`).join(", ")}`] : []];
+    out.push(`${v.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id \u2014 a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently cover a different blocker. ${via.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker \u2014 if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
   }
   return out;
 }
@@ -4005,12 +4025,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs17.openSync(file, "r");
+  const fd = fs18.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(chunk);
     let carry = [];
     for (; ; ) {
-      const n = fs17.readSync(fd, buf, 0, chunk, null);
+      const n = fs18.readSync(fd, buf, 0, chunk, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -4024,7 +4044,7 @@ function forEachLine(file, onLine, chunk = LINE_CHUNK) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs17.closeSync(fd);
+    fs18.closeSync(fd);
   }
 }
 var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
@@ -4187,7 +4207,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs17.statSync(p.file);
+        const s = fs18.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -4198,7 +4218,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs17.utimesSync(p.file, was.times[0], was.times[1]);
+        fs18.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
