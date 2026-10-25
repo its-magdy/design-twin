@@ -2,7 +2,7 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
 
 
-// design-to-code/export-index.ts
+// bridge/src/export-reader.ts
 import fs3 from "node:fs";
 import path2 from "node:path";
 
@@ -43,234 +43,35 @@ function ifDefined(key, v) {
   return o;
 }
 
-// design-to-code/types.ts
-var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
-function bag(o) {
-  const u = o;
-  return u;
-}
-
-// design-to-code/doc-guards.ts
-function optArrayOf(x, each) {
-  return x === void 0 || Array.isArray(x) && x.every(each);
-}
-var optObj = (x) => x === void 0 || isJsonObject(x);
-var optStr = (x) => x === void 0 || typeof x === "string";
-var anyObject = (x) => isJsonObject(x);
-function isVariable(x) {
-  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
-}
-function isVariableCollection(x) {
-  return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
-}
-function isTokensDoc(x) {
-  return isJsonObject(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
-}
-isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
-function isCatalogComponent(x) {
-  return isJsonObject(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
-}
-function isComponentsCatalog(x) {
-  return isJsonObject(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
-}
-isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
-function isComponentDetailFile(x) {
-  return isJsonObject(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
-}
-isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
-function isTextStylesDoc(x) {
-  return isJsonObject(x) && Array.isArray(x.styles) && x.styles.every((s) => isJsonObject(s) && typeof s.name === "string");
-}
-isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
-function isScreenAssetsDoc(x) {
-  return isJsonObject(x) && optArrayOf(x.heavy, (h) => isJsonObject(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isJsonObject(f) && typeof f.file === "string" && optStr(f.node));
-}
-isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
-function isLibrariesIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isJsonObject(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
-}
-isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
-var SEVERITIES = ["blocker", "warning", "info"];
-function isAuditOverridesDoc(x) {
-  return isJsonObject(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isJsonObject(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
-}
-isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
-function isAuditReport(x) {
-  return isJsonObject(x) && isJsonObject(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isJsonObject(f) && typeof f.severity === "string" && typeof f.code === "string");
-}
-isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
-function isProposal(x) {
-  return isJsonObject(x) && typeof x.name === "string";
-}
-function isProposalList(x) {
-  return Array.isArray(x) && x.every(isProposal);
-}
-isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
-function isVerifyExpectation(x) {
-  return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
-}
-isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-var isNameVersion = (x) => isJsonObject(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
-function isProbeIdentity(x) {
-  return isJsonObject(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
-}
-function isBuildIdentity(x) {
-  return isJsonObject(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
-}
-var isProbeFrame = (x) => isJsonObject(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isJsonObject(x.rect);
-var isCountMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "number");
-var isNavigation = (x) => isJsonObject(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
-var isTagsNotInExpectation = (x) => isJsonObject(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isJsonObject(r) && typeof r.id === "string" && typeof r.elements === "number");
-var isReasonMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
-var isNum = (x) => typeof x === "number" && Number.isFinite(x);
-function isProbeReach(x) {
-  return isJsonObject(x) && Array.isArray(x.steps) && x.steps.every(isJsonObject) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
-}
-function isPageOverflow(x) {
-  return isJsonObject(x) && isJsonObject(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isJsonObject(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
-}
-var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
-var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
-function isBehaviourCheck(x) {
-  return isJsonObject(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
-}
-function isMeasuredBehaviour(x) {
-  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
-}
-function isMeasuredVisual(x) {
-  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
-}
-var MEASURED_EXTRAS = [
-  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
-  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
-  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
-  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
-  ["matchedByCensus", isCountMap, "a {rule: count} map"],
-  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
-  // the run it belongs to and the build it was served
-  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
-  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
-  // the shipped probe's foreign tags
-  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // the steps replayed, the page's overflow, the behaviour/a11y block
-  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
-  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
-  // the visual diff (informational)
-  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
-];
-function isMeasuredCore(x) {
-  return isJsonObject(x) && optArrayOf(x.nodes, (n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
-}
-function isVerifyMeasured(x) {
-  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isJsonObject(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
-}
-isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
-function isEvidence(x) {
-  return isJsonObject(x) && typeof x.nodeId === "string";
-}
-function isInteractionEvidenceList(x) {
-  return Array.isArray(x) && x.every(isEvidence);
-}
-isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
-function isMeasuredComponentList(x) {
-  return Array.isArray(x) && x.every((c) => isJsonObject(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
-}
-isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
-function isVerifyReport(x) {
-  return isJsonObject(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
-}
-isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
-var PLAN_OBJECTS = ["anchors", "verification", "counts"];
-var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
-function planProblem(x) {
-  if (!isJsonObject(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
-  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isJsonObject(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
-  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
-  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
-    const list = x[k];
-    if (Array.isArray(list) && !list.every(isJsonObject)) return `is not a valid plan: every \`${k}\` entry must be an object`;
-  }
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
-  if (Array.isArray(x.components) && !x.components.every((c) => isJsonObject(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
-  if (isJsonObject(x.anchors) && !Object.values(x.anchors).every(isJsonObject)) return "is not a valid plan: every `anchors` entry must be an object";
-  if (x.auditGate !== void 0 && x.auditGate !== null && !isJsonObject(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
-  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isJsonObject(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
-  if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
-  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
-  if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
-  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
-  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
-  return null;
-}
-function isPlan(x) {
-  return planProblem(x) === null;
-}
-isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
-var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
-var recIsStr = (v) => typeof v === "string";
-var recNeed = (ok) => ({ need: true, ok });
-var recOpt = (ok) => ({ need: false, ok });
-var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
-var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
-var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
-var RECORD_FIELDS = {
-  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
-  by: recNeed(recIsStr),
-  at: recNeed(recIsStr),
-  report: recNeed(recIsStr),
-  reportSha256: recNeed(recIsStr),
-  verdict: recNeed(recIsStr),
-  headline: recNeed(recIsStr),
-  behaviourHeadline: recOpt(recIsStr),
-  counts: recNeed(isJsonObject),
-  mode: recNeed((v) => v === "rendered" || v === "static-only"),
-  reason: recOpt(recIsStr),
-  renderer: recOpt(recIsStr),
-  artifacts: recNeed(isStringArray),
-  deltas: recNeed(Array.isArray),
-  a11y: recOpt(isJsonObject)
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
 };
-var RECORD_KEYS = Object.keys(RECORD_FIELDS);
-var reqStr = (v) => typeof v === "string" && v.trim() !== "";
-function isPlanWaiver(x) {
-  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
-}
-isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
-function isPlanDescope(x) {
-  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
-}
-isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
-function isStringRecord(x) {
-  return isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
-}
-isStringRecord.expected = "an object of strings";
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
@@ -306,215 +107,7 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
-// bridge/src/hex-color.ts
-function formatHex(c) {
-  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
-var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
-var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
-function parseCssColor(v) {
-  if (typeof v !== "string") return null;
-  const t = v.trim().toLowerCase();
-  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  if (t.startsWith("#")) return parseHex(t);
-  const leg = RGB_LEGACY.exec(t);
-  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
-  if (rgb) {
-    const ch = (x) => clamp(comp(x, 255), 255);
-    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const ok = OK.exec(t);
-  if (ok) {
-    const L = comp(ok[2], 1);
-    let a, b;
-    if (ok[1] === "oklab") {
-      a = comp(ok[3], 0.4);
-      b = comp(ok[4], 0.4);
-    } else {
-      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
-      a = C * Math.cos(h);
-      b = C * Math.sin(h);
-    }
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
-    const c = {
-      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
-      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
-      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
-      a: alphaOf(ok[5])
-    };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const srgb = SRGB.exec(t);
-  if (srgb) {
-    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
-    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  return null;
-}
-function compositeOver(fg, bg) {
-  return {
-    r: fg.r * fg.a + bg.r * (1 - fg.a),
-    g: fg.g * fg.a + bg.g * (1 - fg.a),
-    b: fg.b * fg.a + bg.b * (1 - fg.a),
-    a: 1
-  };
-}
-
-// design-to-code/verify-shared.ts
-var TOLERANCE = {
-  fontSize: 0.5,
-  // a browser rounds; a different token does not
-  fontWeight: 0,
-  // 500 vs 600 is a different style, never a rendering artifact
-  lineHeight: 2,
-  // normal/unitless line-heights and font-metric rounding genuinely differ
-  letterSpacing: 0.2,
-  radius: 0.5,
-  padding: 1,
-  gap: 1,
-  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
-  size: 1,
-  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
-  position: 2,
-  opacity: 0.02,
-  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
-  stroke: 0.5,
-  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
-  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
-  // in the field runs. Known miss: heavy italics/overhang can exceed it.
-  textInk: 3
-};
-function normColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  const key = colorKey(s);
-  if (key) return key;
-  const c = parseCssColor(s);
-  if (c === null) return s;
-  if (c.a === 0) return "transparent";
-  return colorKey(formatHex(c)) ?? s;
-}
-var WEIGHTS = {
-  thin: 100,
-  extralight: 200,
-  ultralight: 200,
-  light: 300,
-  normal: 400,
-  regular: 400,
-  book: 400,
-  medium: 500,
-  semibold: 600,
-  demibold: 600,
-  bold: 700,
-  extrabold: 800,
-  ultrabold: 800,
-  black: 900,
-  heavy: 900
-};
-function normWeight(v) {
-  if (v == null) return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim();
-  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
-  const name = s.toLowerCase().replace(/[^a-z]/g, "");
-  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
-  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
-}
-function normFamily(v) {
-  if (v == null) return null;
-  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
-}
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
-
-// design-to-code/export-index.ts
+// bridge/src/export-reader.ts
 var PAGES = "pages";
 var INDEX = "index.json";
 function screenSiblingFile(screenFile, kind) {
@@ -530,6 +123,16 @@ function pagesRootOfScreen(screenFile) {
 // design-to-code/design-diff.ts
 import fs7 from "node:fs";
 import path5 from "node:path";
+
+// design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function bag(o) {
+  const u = o;
+  return u;
+}
 
 // design-to-code/export-shape.ts
 function isIrNode(x) {
@@ -801,6 +404,43 @@ function readDocFile(file, what, guard, hint) {
   exitCli(2);
 }
 
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+
 // design-to-code/visible-tree.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
@@ -897,6 +537,205 @@ function walk(root, fn, prune, opts) {
 function walkWithHidden(root, fn, opts) {
   walk(root, fn, false, opts);
 }
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var optObj = (x) => x === void 0 || isJsonObject(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isJsonObject(x);
+function isVariable(x) {
+  return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isJsonObject(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isJsonObject(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isJsonObject(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isJsonObject(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isJsonObject(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isJsonObject(x) && Array.isArray(x.styles) && x.styles.every((s) => isJsonObject(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isJsonObject(x) && optArrayOf(x.heavy, (h) => isJsonObject(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isJsonObject(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isJsonObject(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isJsonObject(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isJsonObject(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isJsonObject(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
+function isAuditReport(x) {
+  return isJsonObject(x) && isJsonObject(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isJsonObject(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isJsonObject(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isVerifyExpectation(x) {
+  return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+var isNameVersion = (x) => isJsonObject(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isJsonObject(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+function isBuildIdentity(x) {
+  return isJsonObject(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
+var isProbeFrame = (x) => isJsonObject(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isJsonObject(x.rect);
+var isCountMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isJsonObject(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isJsonObject(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isJsonObject(r) && typeof r.id === "string" && typeof r.elements === "number");
+var isReasonMap = (x) => isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isJsonObject(x) && Array.isArray(x.steps) && x.steps.every(isJsonObject) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isJsonObject(x) && isJsonObject(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isJsonObject(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isJsonObject(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isMeasuredVisual(x) {
+  return isJsonObject(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // the run it belongs to and the build it was served
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // the steps replayed, the page's overflow, the behaviour/a11y block
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // the visual diff (informational)
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
+];
+function isMeasuredCore(x) {
+  return isJsonObject(x) && optArrayOf(x.nodes, (n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isJsonObject(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isJsonObject(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isJsonObject(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
+function isVerifyReport(x) {
+  return isJsonObject(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "anchorsSuggested", "deviations", "allowedLiterals", "waivers", "descopes"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isJsonObject(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isJsonObject(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "anchorsSuggested", "waivers", "descopes"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isJsonObject)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isJsonObject(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isJsonObject(x.anchors) && !Object.values(x.anchors).every(isJsonObject)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isJsonObject(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== void 0 && x.target !== null && typeof x.target !== "string" && !isJsonObject(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== void 0 && x.tagging !== null && !(isJsonObject(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isJsonObject(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
+  if (isJsonObject(x.verification) && x.verification.hook !== void 0 && !isJsonObject(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  if (isJsonObject(x.verification) && x.verification.recorded !== void 0 && !isJsonObject(x.verification.recorded)) return "is not a valid plan: `verification.recorded` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var recIsCount = (x) => typeof x === "number" && Number.isFinite(x);
+var recIsStr = (v) => typeof v === "string";
+var recNeed = (ok) => ({ need: true, ok });
+var recOpt = (ok) => ({ need: false, ok });
+var RECORD_COUNTS = Object.fromEntries(["high", "medium", "low", "accepted", "notMeasured", "inferred"].map((k) => [k, recNeed(recIsCount)]));
+var RECORD_DELTA = { nodeId: recNeed(recIsStr), field: recNeed(recIsStr), severity: recNeed((v) => v === "high" || v === "medium"), expected: recOpt(() => true), actual: recOpt(() => true) };
+var RECORD_A11Y = { tool: recNeed(recIsStr), violations: recNeed(recIsCount), warnings: recNeed(recIsCount), report: recNeed(recIsStr) };
+var RECORD_FIELDS = {
+  schema: recNeed((v) => v === PLAN_VERIFICATION_RECORD_SCHEMA),
+  by: recNeed(recIsStr),
+  at: recNeed(recIsStr),
+  report: recNeed(recIsStr),
+  reportSha256: recNeed(recIsStr),
+  verdict: recNeed(recIsStr),
+  headline: recNeed(recIsStr),
+  behaviourHeadline: recOpt(recIsStr),
+  counts: recNeed(isJsonObject),
+  mode: recNeed((v) => v === "rendered" || v === "static-only"),
+  reason: recOpt(recIsStr),
+  renderer: recOpt(recIsStr),
+  artifacts: recNeed(isStringArray),
+  deltas: recNeed(Array.isArray),
+  a11y: recOpt(isJsonObject)
+};
+var RECORD_KEYS = Object.keys(RECORD_FIELDS);
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isJsonObject(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isStringRecord(x) {
+  return isJsonObject(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
 
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
@@ -1156,27 +995,6 @@ var FileKeyCache = class extends FileMemo {
   }
 };
 var fileKeyCache = new FileKeyCache();
-
-// bridge/src/design-system-layout.ts
-var DIR = "design-system";
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_DIR = DIR;
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
 
 // bridge/src/library-layout.ts
 var ROOT = "libraries";

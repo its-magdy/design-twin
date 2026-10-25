@@ -49,7 +49,7 @@ import type { PlanResolution } from "./plan-binding.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
-import { readJson, readJsonOrNull } from "./read-json.ts";
+import { readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
@@ -60,8 +60,8 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
-import { pagesRootOfScreen, readExportIndex, rootIndexFile } from "./export-index.ts";
-import { TEXT_BOX_HEIGHT, fmt, resolveInside, scaleText } from "./verify-shared.ts";
+import { pagesRootOfScreen, readDesignSystemStamp, readExportIndex, resolveInside, rootIndexFile } from "../bridge/src/export-reader.ts";
+import { TEXT_BOX_HEIGHT, fmt, scaleText } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
@@ -348,7 +348,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   }
   const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
   // the export's own index (relative to the project root) tells which destinations were exported: every screen it
-  // indexes (export-index.ts) — a page walk replaces the root index, so a destination an earlier walk exported is in
+  // indexes (bridge/src/export-reader.ts) — a page walk replaces the root index, so a destination an earlier walk exported is in
   // its page's own index only
   const ix = readExportIndex(EXPORT_DIR);
   if (ix.rootProblem !== null) console.error(`note  ${rootIndexFile(EXPORT_DIR)} ${ix.rootProblem} — interaction destinations are checked against the given export(s) only`);
@@ -378,8 +378,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
     if (file === null) return null; // (referenceImageFor refuses such a pointer before reading)
     try { return fs.readFileSync(file); } catch { return null; }
   };
-  const ds = readJsonOrNull(path.join(exportRoot, "design-system.json"), isJsonObject);
-  const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
+  const colorProfile = readDesignSystemStamp(exportRoot).stamp?.colorProfile ?? null;
   const expOpts: ExpectOptions = { ...(ix.indexed || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile };
   const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
   const pi = exp.planInteractions;

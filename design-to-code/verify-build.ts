@@ -55,7 +55,7 @@ import { colorKey } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { recordedReport } from "./report-freshness.ts";
 import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
-import { anyJson, readJsonOrNull } from "./read-json.ts";
+import { anyJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import type {
   IrNodeType, Plan, PlanAnchor, PlanHookRecord, PlanLifecycle,

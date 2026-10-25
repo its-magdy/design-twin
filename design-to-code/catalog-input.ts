@@ -13,8 +13,8 @@
 import fs from "node:fs";
 import type { DesignSystemManifest } from "./types.ts";
 import { isJsonObject } from "./types.ts";
-import { anyJson, readJson } from "./read-json.ts";
-import type { DocGuard } from "./doc-guards.ts";
+import { anyJson, readJson } from "../bridge/src/read-json.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
 // exitCli, not process.exit: under runCli the one-line error is never dropped at exit (proc.ts)
 import { exitCli } from "./proc.ts";
 

@@ -71,17 +71,6 @@ function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
   return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
@@ -225,13 +214,13 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;

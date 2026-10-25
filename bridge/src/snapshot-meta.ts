@@ -12,7 +12,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { errMsg } from "./errmsg.ts";
-import { findExportDir } from "./project-layout.ts";
+import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
+import { exportRoot, readExportIndex, rootIndexFile } from "./export-reader.ts";
+
+const MANIFEST = DESIGN_SYSTEM_FILES.MANIFEST;
 
 /** What snapshotAge reports. `problem` is set only when there is no usable age. */
 export interface SnapshotAge {
@@ -93,15 +96,17 @@ function looksLikeExport(doc: unknown): boolean {
 interface SnapshotCandidate { f: string; named: boolean }
 
 function snapshotCandidates(dir: string): SnapshotCandidate[] {
-  const out: SnapshotCandidate[] = [{ f: path.join(dir, "design-system.json"), named: true },
-               { f: path.join(dir, "pages", "index.json"), named: true }];
+  // design-system/tokens.json carries the same stamp as the manifest (design-system-layout.ts stamps every part), so an
+  // export whose manifest is missing — a first design-system pull cut short — still reports its age, as doctor counts it.
+  const out: SnapshotCandidate[] = [{ f: path.join(dir, MANIFEST), named: true }, { f: path.join(dir, DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES.TOKENS), named: true },
+    { f: rootIndexFile(dir), named: true }];
   // Then any other top-level .json, newest first. Top level only — never a recursive walk, since this
   // runs on every figma_status/doctor call and design/assets/ can hold thousands of files.
   let entries: fs.Dirent[] = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   const rest: Array<{ f: string; mtime: number }> = [];
   for (const e of entries) {
-    if (!e.isFile() || !e.name.endsWith(".json") || e.name === "design-system.json") continue;
+    if (!e.isFile() || !e.name.endsWith(".json") || e.name === MANIFEST) continue;
     const f = path.join(dir, e.name);
     try { rest.push({ f, mtime: fs.statSync(f).mtimeMs }); } catch { /* vanished mid-read */ }
   }
@@ -110,9 +115,9 @@ function snapshotCandidates(dir: string): SnapshotCandidate[] {
 }
 
 export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseError | null {
-  // Same resolution order as write-out.ts's resolveOutDir, plus the legacy flat layout: a project
-  // that exported before design/export/ existed must still report its snapshot, not "nothing yet".
-  const dir = outDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).dir;
+  // export-reader.ts's one precedence (the legacy flat layout included: a project that exported before design/export/
+  // existed must still report its snapshot, not "nothing yet"), which write-out.ts writes by too.
+  const dir = exportRoot(outDir);
   const cands = snapshotCandidates(dir);
   let file: string | null = null, doc: unknown = null, parseError: SnapshotParseError | null = null;
   let fallback: { file: string; doc: unknown } | null = null;
@@ -151,8 +156,8 @@ export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseE
   return { file, exportedAt, ageMs, sourceFile, warning };
 }
 
-/** The newest screen row of the root pages/index.json. `file` is the screen JSON's path relative
- *  to the export dir, as the index records it. */
+/** The newest screen row of the export's index. `file` is the screen JSON's path relative to the export dir, as the
+ *  index records it. */
 export interface LastScreenExport {
   name: string | undefined;
   id: string;
@@ -162,34 +167,28 @@ export interface LastScreenExport {
   sourceFile?: string;
 }
 
-// Which screen was exported LAST, read from disk — the root pages/index.json's `layers[]` rows,
-// newest `exportedAt` wins (a page walk's rows carry no stamp of their own and fall back to the index's
-// top-level `exportedAt`). Never throws: a missing, garbled or row-less index (or no parseable stamp) is
+// Which screen was exported LAST, read from disk — every row of the export's index (export-reader.ts: the root
+// pages/index.json and every page index, each screen once), newest stamp wins (a page walk's rows carry no stamp of their
+// own and are dated by the root index's top-level `exportedAt`). Never throws: no index, no rows or no parseable stamp is
 // null, the same "nothing to report" figma_status gives any other absent export.
 export function lastScreenExport(outDir?: string, now?: number): LastScreenExport | null {
-  const dir = outDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).dir;
-  let doc: unknown;
-  try { doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "index.json"), "utf8")) as unknown; } catch { return null; }
-  const rows = field(doc, "layers");
-  if (!Array.isArray(rows)) return null;
-  const rootStamp = asText(field(doc, "exportedAt"));
-  let best: { row: unknown; t: number; at: string } | null = null;
-  for (const row of rows) {
-    const id = field(row, "id");
-    if (typeof id !== "string" || !id) continue;
-    const at = asText(field(row, "exportedAt")) || rootStamp;
+  const ix = readExportIndex(exportRoot(outDir));
+  let best: { row: (typeof ix.rows)[number]; t: number; at: string } | null = null;
+  for (const row of ix.rows) {
+    if (!row.id) continue;
+    const at = ix.exportedAtOf(row);
     const t = at ? Date.parse(at) : NaN;
     if (!at || Number.isNaN(t)) continue;
     if (!best || t >= best.t) best = { row, t, at }; // a tie goes to the later row: merges append the newest pull
   }
   if (!best) return null;
-  const name = field(best.row, "name"), file = field(best.row, "file"), src = field(best.row, "sourceFile");
+  const { name, id, file, sourceFile } = best.row;
   return {
     name: typeof name === "string" ? name : undefined,
-    id: String(field(best.row, "id")),
+    id,
     file: typeof file === "string" ? file : undefined,
     exportedAt: best.at,
     ageMs: (now || Date.now()) - best.t,
-    ...(typeof src === "string" && src ? { sourceFile: src } : {}),
+    ...(typeof sourceFile === "string" && sourceFile ? { sourceFile } : {}),
   };
 }

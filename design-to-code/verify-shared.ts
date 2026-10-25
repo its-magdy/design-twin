@@ -2,7 +2,6 @@
 // tolerances, the value normalisers, the spec fields compared one-to-one and the measured keys a probe is told to send,
 // the schema names, and the small helpers both sides — and the shipped probe (verify-probe.ts, probe-visual.ts) — share.
 // A library with no CLI: importing it never loads verify-screen.ts.
-import path from "node:path";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
 import type { VerifyExpectation } from "./types.ts";
 
@@ -151,14 +150,6 @@ export type Expectation = Partial<VerifyExpectation>;
 
 /** A reference scale as printed (4 decimals): the value itself stays exact — 2048/1440 is captured as 1.4222222…. */
 export const scaleText = (n: number): string => `${Math.round(n * 10000) / 10000}x`;
-
-/** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
- *  null (a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
- *  no file is touched. Shared by --expect and the probe (probe-visual.ts). */
-export function resolveInside(base: string, rel: string, within: string = base): string | null {
-  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path.sep) ? file : null;
-}
 
 /** The spec fields compared one-to-one against a measured style of the same name. */
 type FieldKey = "fontFamily" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing" | "color" | "backgroundColor" | "fill" | "placeholderColor"

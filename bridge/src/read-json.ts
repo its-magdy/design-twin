@@ -1,13 +1,17 @@
-// read-json.ts — the ONE way the design-to-code layer reads a JSON document off disk.
+// read-json.ts — the ONE way a JSON document is read off disk, by the bridge's export reader (export-reader.ts) and
+// the whole design-to-code layer alike.
 //
-// readJson(file, guard) reads, parses and checks the file against a doc-guards.ts guard, and returns
-// either the typed document or a one-line reason. It never throws and never exits: each caller keeps its
-// own reporting convention (a CLI prints the reason and exits 2; a best-effort lookup treats an
-// unreadable file as absent). This replaces the `JSON.parse(fs.readFileSync(f)) as T` reads — and the five
-// generic `<T>(f) => … as T` helpers — that trusted every file to be what its name said.
+// readJson(file, guard) reads, parses and checks the file against a guard (design-to-code/doc-guards.ts holds one per
+// document kind that layer reads; export-reader.ts holds the export index's and manifest's), and returns either the
+// typed document or a one-line reason. It never throws and never exits: each caller keeps its own reporting convention
+// (a CLI prints the reason and exits 2; a best-effort lookup treats an unreadable file as absent). This replaces the
+// `JSON.parse(fs.readFileSync(f)) as T` reads — and the five generic `<T>(f) => … as T` helpers — that trusted every
+// file to be what its name said.
 import fs from "node:fs";
-import { errMsg } from "../bridge/src/errmsg.ts";
-import type { DocGuard } from "./doc-guards.ts";
+import { errMsg } from "./errmsg.ts";
+
+/** A type guard that can say, in words, what it expects (readJson prints it on a mismatch). */
+export type DocGuard<T> = ((x: unknown) => x is T) & { expected?: string };
 
 /** readJson()'s result: the document, or why there is none. `missing` is set when the file does not exist. */
 export type ReadResult<T> = { doc: T } | { error: string; missing?: true };

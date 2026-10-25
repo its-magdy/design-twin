@@ -20,7 +20,7 @@ import { exportContentSha256, fileHashes, planCodeFiles } from "./content-hash.t
 import { isVerifyReport } from "./doc-guards.ts";
 import { waiversHash } from "./plan-binding.ts";
 import { runSync } from "./proc.ts";
-import { readRegularFile } from "./read-json.ts";
+import { readRegularFile } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, Plan, VerifyReport } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";

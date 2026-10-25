@@ -10,7 +10,7 @@ import { cliRunner } from "./cli-runner.ts";
 import { main as designDiffMain, redrawnAssets } from "../design-to-code/design-diff.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import { malformed, manifest, must, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
-import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
 import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
 // design-diff --json: the diff result; only its kind/summary/warnings/against/changed are read here.
 const isDiffResult = (x: unknown): x is DiffResult => isJsonObject(x) && typeof x.kind === "string" && isJsonObject(x.summary) && Array.isArray(x.warnings);

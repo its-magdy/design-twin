@@ -24,7 +24,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";
 import type { BehaviourCheck, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";

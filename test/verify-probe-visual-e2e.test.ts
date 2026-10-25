@@ -18,7 +18,7 @@ import path from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { decodePng, encodePng, pngInfo, resampleBox } from "../bridge/src/png.ts";
 import type { MeasuredVisual, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";

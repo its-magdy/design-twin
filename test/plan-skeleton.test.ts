@@ -13,7 +13,7 @@ import { check, report } from "./assert.ts";
 import { malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isPlan } from "../design-to-code/doc-guards.ts";
-import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { SkeletonPlan } from "../design-to-code/plan-skeleton.ts";

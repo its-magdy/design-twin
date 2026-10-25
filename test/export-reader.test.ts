@@ -1,8 +1,9 @@
-// design-to-code/export-index.ts: every screen an export knows about, read through one module — the root
-// pages/index.json and every page's own pages/<dir>/index.json, merged under one rule.
+// bridge/src/export-reader.ts: the reading side of an export, through one module — which export (exportRoot), every
+// screen it knows about (the root pages/index.json and every page's own pages/<dir>/index.json, merged under one rule),
+// the design system's stamp and its manifest pointers — and the bridge readers that ask it (doctor, snapshot-meta).
 // Invented screens, temp dirs only. The two-walk fixture is written by bridge/src/pages-layout.ts's own
 // buildPageLayout, byte for byte as write-out.ts's writePages lands it: a page walk REPLACES the root index.
-//   bun test/export-index.test.ts
+//   bun test/export-reader.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +15,11 @@ import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import { locateExport } from "../design-to-code/verify-locate.ts";
 import { exportSiblings } from "../design-to-code/screen-inputs.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
-import { exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readExportIndex } from "../design-to-code/export-index.ts";
+import {
+  designSystemPart, exportInDesignDir, exportRoot, exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readDesignSystemStamp, readExportIndex,
+} from "../bridge/src/export-reader.ts";
+import { checkProject } from "../bridge/src/doctor.ts";
+import { lastScreenExport, readSnapshotInfo } from "../bridge/src/snapshot-meta.ts";
 import type { IndexRow } from "../design-to-code/types.ts";
 
 const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-index-" + tag + "-"));
@@ -206,7 +211,12 @@ console.log("readExportIndex: every indexed row once");
   put(path.join(root, "pages", "index.json"), { pageDirs: [{ page: "Home", dir: "Home", layers: 1 }] });
   put(path.join(root, "pages", "Home", "index.json"), { page: "Home", layers: [{ id: "1:2", name: "A", file: "pages/Home/A__1_2.json" }] });
   put(path.join(root, "pages", "Broken", "index.json"), "{ not json");
-  check("an export with no root `layers`: the page indexes' rows; a broken page index adds none", ids(readExportIndex(root).rows) === "1:2");
+  const ix = readExportIndex(root);
+  check("an export with no root `layers`: the page indexes' rows; a broken page index adds none", ids(ix.rows) === "1:2");
+  check(`…and is named, export-relative, among the problems (got ${JSON.stringify(ix.problems)})`,
+    ix.problems.length === 1 && ix.problems[0]?.file === "pages/Broken/index.json" && /not valid JSON/.test(ix.problems[0].error));
+  put(path.join(root, "pages", "Home", "index.json"), { page: "Home", layers: [null, { id: "1:2", name: "A", file: "pages/Home/A__1_2.json" }] });
+  check("a null row (an older index could hold one) is skipped, the index still read", ids(readExportIndex(root).rows) === "1:2");
 }
 {
   const corrupt = tmp("corrupt");
@@ -215,7 +225,8 @@ console.log("readExportIndex: every indexed row once");
   const c = readExportIndex(corrupt);
   check(`a broken root index: why, and the page indexes are still read (got ${c.rootProblem})`, !c.indexed && /not valid JSON/.test(c.rootProblem ?? "") && ids(c.rows) === "1:2");
   const none = readExportIndex(tmp("none"));
-  check("no export at all: no rows, not indexed, no problem to report", !none.indexed && none.rootProblem === null && none.rows.length === 0);
+  check("no export at all: no rows, not indexed, no problem to report", !none.indexed && none.rootProblem === null && none.rows.length === 0 && none.problems.length === 0);
+  check("the broken root is among the problems too", c.problems.some((p) => p.file === "pages/index.json" && p.error === c.rootProblem));
 }
 
 console.log("fileOf: a row's screen file, inside the export only");
@@ -244,6 +255,104 @@ console.log("the export root: from a screen file, from a dir");
   check("findExportRoot: an ancestor holding pages/index.json", findExportRoot(path.join(root, "pages", "Home")) === root);
   check("findExportRoot: the export just below a project dir", findExportRoot(project) === path.join(project, "design", "export"));
   check("findExportRoot: none → null", findExportRoot(tmp("empty")) === null);
+}
+
+console.log("exportedAtOf: when a row's screen was pulled");
+{
+  const root = tmp("stamps");
+  put(path.join(root, "pages", "index.json"), { exportedAt: "2026-01-02T00:00:00.000Z", pageDirs: [], layers: [
+    { id: "1:1", name: "Walked", file: "pages/Home/Walked__1_1.json" },
+    { id: "1:2", name: "Pulled", file: "pages/Home/Pulled__1_2.json", exportedAt: "2026-01-03T00:00:00.000Z" },
+  ] });
+  put(path.join(root, "pages", "Old", "index.json"), { page: "Old", layers: [
+    { id: "2:1", name: "Earlier", file: "pages/Old/Earlier__2_1.json" },
+    { id: "2:2", name: "Single", file: "pages/Old/Single__2_2.json", exportedAt: "2026-01-04T00:00:00.000Z" },
+  ] });
+  const ix = readExportIndex(root);
+  const at = (id: string): string | undefined => { const row = ix.rows.find((r) => r.id === id); return row && ix.exportedAtOf(row); };
+  check("a page walk's root row: the root index's stamp", at("1:1") === "2026-01-02T00:00:00.000Z");
+  check("a row's own stamp wins", at("1:2") === "2026-01-03T00:00:00.000Z" && at("2:2") === "2026-01-04T00:00:00.000Z");
+  check("an earlier walk's unstamped row, listed by no root row: no stamp (the root's is another walk's)", at("2:1") === undefined);
+  const last = lastScreenExport(root, Date.parse("2026-01-05T00:00:00.000Z"));
+  check(`snapshot-meta's last screen is read off every index, not the root's rows alone (got ${last?.id})`, last?.id === "2:2" && last.file === "pages/Old/Single__2_2.json");
+}
+
+console.log("exportRoot: which export a reader reads (and write-out writes)");
+{
+  const saved = process.env.FIGMA_EXPORT_DIR;
+  try {
+    delete process.env.FIGMA_EXPORT_DIR;
+    const modern = tmp("root-modern");
+    check("nothing exported yet: design/export under the cwd", exportRoot(undefined, modern) === path.join(modern, "design", "export"));
+    put(path.join(modern, "design", "design-system.json"), {});
+    check("the older flat layout: design/ itself, when it holds an export", exportRoot(undefined, modern) === path.join(modern, "design"));
+    put(path.join(modern, "design", "export", "design-system.json"), {});
+    check("both: design/export wins", exportRoot(null, modern) === path.join(modern, "design", "export"));
+    process.env.FIGMA_EXPORT_DIR = "elsewhere";
+    check("FIGMA_EXPORT_DIR beats the layout, resolved against the cwd", exportRoot("", modern) === path.join(modern, "elsewhere"));
+    check("a dir given beats both", exportRoot("mine", modern) === path.join(modern, "mine") && (() => { const abs = path.join(tmp("abs"), "x"); return exportRoot(abs, modern) === abs; })());
+  } finally {
+    if (saved === undefined) delete process.env.FIGMA_EXPORT_DIR; else process.env.FIGMA_EXPORT_DIR = saved;
+  }
+  const design = path.join(tmp("design-dir"), "design");
+  check("exportInDesignDir: <design>/export when nothing is there yet", exportInDesignDir(design) === path.join(design, "export"));
+  put(path.join(design, "design-system.json"), {});
+  check("exportInDesignDir: the design dir itself on the older flat layout", exportInDesignDir(design) === design);
+  put(path.join(design, "export", "pages", "index.json"), { pageDirs: [] });
+  check("exportInDesignDir: <design>/export once it holds an export", exportInDesignDir(design) === path.join(design, "export"));
+}
+
+console.log("the design system: its stamp, and the manifest's pointers");
+{
+  const root = tmp("ds");
+  check("no design system: no stamp, no problem", (() => { const r = readDesignSystemStamp(root); return r.stamp === null && r.problems.length === 0; })());
+  put(path.join(root, "design-system", "tokens.json"), { exportedAt: "2026-01-01T00:00:00.000Z", file: "Kit", colorProfile: "srgb", variables: [] });
+  const fromPart = readDesignSystemStamp(root);
+  check("no manifest: a split part's stamp", fromPart.stamp?.file === "Kit" && fromPart.stamp.colorProfile === "srgb" && fromPart.problems.length === 0);
+  const snap = readSnapshotInfo(root);
+  check(`…and snapshot-meta (figma_status, doctor) reports the same export, not "nothing exported" (got ${JSON.stringify(snap)})`,
+    !!snap && "exportedAt" in snap && snap.exportedAt === "2026-01-01T00:00:00.000Z" && snap.sourceFile === "Kit");
+  put(path.join(root, "design-system.json"), { exportedAt: "2026-01-02T00:00:00.000Z", file: "Kit v2", files: { componentsLocal: "design-system/components.local.json", tokens: "../outside.json" } });
+  const fromManifest = readDesignSystemStamp(root);
+  check("the manifest's stamp, the stamp fields only", JSON.stringify(fromManifest.stamp) === JSON.stringify({ exportedAt: "2026-01-02T00:00:00.000Z", file: "Kit v2" }));
+  const part = designSystemPart(root, "componentsLocal");
+  check("a pointer, followed inside the export", "file" in part && part.file === path.join(root, "design-system", "components.local.json"));
+  const out = designSystemPart(root, "tokens");
+  check(`a pointer leaving the export is refused, by name (got ${"error" in out ? out.error : "a file"})`, "error" in out && /files\.tokens \('\.\.\/outside\.json'\) leads outside the export/.test(out.error));
+  const none = designSystemPart(root, "hygiene");
+  check("no such pointer: said", "error" in none && /has no files\.hygiene pointer/.test(none.error));
+  put(path.join(root, "design-system.json"), { exportedAt: "2026-01-02T00:00:00.000Z", file: { name: "x" } });
+  const bad = readDesignSystemStamp(root);
+  check(`a wrong-shaped manifest is a problem, and the part's stamp is read instead (got ${JSON.stringify(bad.problems)})`,
+    bad.problems.length === 1 && bad.problems[0]?.file === "design-system.json" && /`file`/.test(bad.problems[0].error) && bad.stamp?.file === "Kit");
+  check("…and a pointer cannot be followed through it", (() => { const r = designSystemPart(root, "componentsLocal"); return "error" in r && /design-system\.json is not a design-system manifest/.test(r.error); })());
+  const missing = designSystemPart(tmp("ds-none"), "componentsLocal");
+  check("no manifest at all: no design export found", "error" in missing && /no design export found at .*design-system\.json/.test(missing.error));
+}
+
+console.log("doctor counts each screen once (a screen re-filed under a renamed page's dir)");
+{
+  // Two single-screen pulls of one frame, the page renamed in Figma between them: the second files the screen under
+  // pages/New/ and the root lists it there, while pages/Old/index.json keeps the old row — and both page dirs stay in
+  // pageDirs (mergeRootIndex replaces an entry by its dir). One node of one Figma file: one screen. Doctor used to
+  // de-duplicate by `file` alone, and counted two.
+  const project = tmp("doctor-renamed");
+  const root = path.join(project, "design", "export");
+  const at = new Date().toISOString();
+  const row = (dir: string): IndexRow => ({ id: "10:1", name: "Tray", page: dir, pageId: "1:1", file: `pages/${dir}/Tray__10_1.json`, sourceFile: "Product", sourceFileKey: "k1", exportedAt: at });
+  put(path.join(project, "design", "target.json"), {});
+  put(path.join(root, "design-system.json"), { exportedAt: at, file: "Kit" });
+  put(path.join(root, "pages", "index.json"), { pageDirs: [
+    { page: "Old", pageId: "1:1", dir: "Old", index: "pages/Old/index.json", layers: 1 },
+    { page: "New", pageId: "1:1", dir: "New", index: "pages/New/index.json", layers: 1 },
+  ], layers: [row("New")] });
+  put(path.join(root, "pages", "New", "index.json"), { page: "New", pageId: "1:1", layers: [row("New")] });
+  put(path.join(root, "pages", "Old", "index.json"), { page: "Old", pageId: "1:1", layers: [row("Old")] });
+  put(path.join(root, "pages", "New", "Tray__10_1.json"), { exportedAt: at, nodes: [] });
+  put(path.join(root, "pages", "Old", "Tray__10_1.json"), { exportedAt: at, nodes: [] });
+  check("fixture: the reader holds one row for the frame", readExportIndex(root).rows.length === 1);
+  const exp = checkProject(project).filter((c) => c.id === "export");
+  check(`doctor: 1 screen, not 2 (got ${JSON.stringify(exp.map((c) => c.detail))})`, exp.length === 1 && /^1 screen\(s\) from 'Product'/.test(exp[0]?.detail ?? ""));
 }
 
 report();

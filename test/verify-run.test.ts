@@ -11,7 +11,7 @@ import { runSync } from "../design-to-code/proc.ts";
 import type { ProcResult } from "../design-to-code/proc.ts";
 import * as VR from "../design-to-code/verify-run.ts";
 import { scriptCmd, shellArg } from "../design-to-code/cli-args.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 import { POSIX_SH } from "./posix-sh.ts";

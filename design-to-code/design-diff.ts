@@ -38,7 +38,7 @@
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.
-import { hasExportIndex, pagesRootOfScreen, rootIndexFile, screenSiblingFile } from "./export-index.ts";
+import { hasExportIndex, pagesRootOfScreen, rootIndexFile, screenSiblingFile } from "../bridge/src/export-reader.ts";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -51,8 +51,8 @@ import { isLayerFile, isScreenExport, manifestOf, screenRoots } from "./export-s
 import { readJsonFile } from "./catalog-input.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import { isComponentsCatalog, isStringRecord, isTokensDoc } from "./doc-guards.ts";
-import type { DocGuard } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
+import { anyJson, readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { ifDefined, isStringArray } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
@@ -722,14 +722,14 @@ function siblingFilesOf(f: string): string[] {
     return out;
   }
   // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
-  // exact same stem (export-index.ts screenSiblingFile — bridge/src/pages-layout.ts's naming).
+  // exact same stem (bridge/src/export-reader.ts screenSiblingFile — bridge/src/pages-layout.ts's naming).
   if (/\.json$/i.test(base)) {
     for (const kind of ["vars", "assets"] as const) {
       const p = screenSiblingFile(abs, kind);
       if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
     }
   }
-  // pages/index.json — the root index of the pages/ tree the screen file lives in (export-index.ts).
+  // pages/index.json — the root index of the pages/ tree the screen file lives in (bridge/src/export-reader.ts).
   // Read-only evidence for the diff to consult, never a diff TARGET on its own, but worth having a
   // baseline for so a future consumer can tell whether this screen is indexed differently than in the baseline.
   const pagesRoot = pagesRootOfScreen(abs);

@@ -171,7 +171,7 @@ var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` :
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs from "node:fs";
 var anyJson = (_x) => true;
 function readFailure(e) {

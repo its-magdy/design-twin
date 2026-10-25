@@ -68,7 +68,7 @@ import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, updatePlan
 import { reportRecordNames } from "./report-freshness.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen.ts";
-import { hasExportIndex } from "./export-index.ts";
+import { hasExportIndex } from "../bridge/src/export-reader.ts";
 import { MAX_SLUG, RESERVED_SLUGS, allSets, formatSetName, isVariantSlug, parseSetName, screenKey, setFacts, variantOverlap, variantSlug, variantsOf } from "./screen-key.ts";
 import { TERMINAL_PHASES, liveStatusFile, lockFileOfStatus, readStatus } from "./verify-run.ts";
 import { nodeArtefacts, planNode } from "./node-artefacts.ts";
@@ -76,7 +76,7 @@ import { planStatus } from "./plan-status.ts";
 import type { ReportRef } from "./verify-locate.ts";
 import { getOrInit } from "./map-util.ts";
 import { SET_FILE, isJournalFile, journalFile, setFile } from "./verify-sets.ts";
-import { readJsonOrNull } from "./read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
 

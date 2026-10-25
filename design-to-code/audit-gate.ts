@@ -12,7 +12,7 @@ import path from "node:path";
 import { blockerIds, reportFindings } from "./audit.ts";
 import { legacyBlockerIds } from "./finding-id.ts";
 import { isAuditReport } from "./doc-guards.ts";
-import { readJson } from "./read-json.ts";
+import { readJson } from "../bridge/src/read-json.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 
 /** What auditGateStatus knows about a screen's audit file. */
@@ -24,7 +24,7 @@ export interface AuditGateStatus {
    *  them still covers its blockers */
   legacyBlockers: string[];
   unreadable?: true;
-  /** why it is unreadable (read-json.ts wording: "is not valid JSON — …", "is not an audit report …") */
+  /** why it is unreadable (bridge/src/read-json.ts wording: "is not valid JSON — …", "is not an audit report …") */
   error?: string;
 }
 

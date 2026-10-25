@@ -13,9 +13,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TokensDoc } from "./types.ts";
 import { isTokensDoc } from "./doc-guards.ts";
-import { readJson, readJsonOrNull } from "./read-json.ts";
+import { readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { MERGED_VARIABLES_FILE } from "../bridge/src/project-layout.ts";
-import { screenSiblingFile } from "./export-index.ts";
+import { screenSiblingFile } from "../bridge/src/export-reader.ts";
 
 /** Map(variable key -> [screen label]) */
 export type SliceSources = Map<string, string[]>;

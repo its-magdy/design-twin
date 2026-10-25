@@ -451,7 +451,7 @@ const notSameRow = (entry: ScreenIndexRow) => (l: unknown): boolean => {
 };
 
 /** Whether the index row `older` is the screen `newer` names — the row a merge of `newer` replaces (the rules above).
- *  The one identity every reader of the indexes merges rows by (design-to-code/export-index.ts). */
+ *  The one identity every reader of the indexes merges rows by (export-reader.ts). */
 export const sameScreenRow = (older: unknown, newer: ScreenIndexRow): boolean => isObjectLike(older) && !notSameRow(newer)(older);
 
 export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {
