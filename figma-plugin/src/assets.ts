@@ -2,7 +2,7 @@
 // and Dev-Mode resource links.
 import type { Geometry, DevResource as IrDevResource, AssetFormat, AssetKind } from "../../bridge/src/doc-types.ts";
 import { safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
-import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts, runDelivery } from "./state";
+import { type Asset, run } from "./run";
 import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
@@ -53,20 +53,8 @@ function contentHash(a: { base64?: string; text?: string }): string {
 }
 
 // Per-run: content hash -> the file already written for it, and taken basename -> the hash that owns
-// it. Cleared by releaseAssets() (state.ts) both when a run settles and when the next one starts:
-// `byContent` holds the same Asset objects (base64/text payloads) the run returned, so leaving it
-// populated kept the last export's payloads alive for the whole idle period after `assets` was
-// emptied. Clearing drops the references only; the returned objects are never touched.
-const byContent = new Map<string, { file: string; asset: Asset }>();
-const byName = new Map<string, string>();
-export function resetAssetNames(): void {
-  byContent.clear();
-  byName.clear();
-}
-/** Test surface: how many entries the per-run dedupe tables hold right now. */
-export function assetNameTableSizes(): { byContent: number; byName: number } {
-  return { byContent: byContent.size, byName: byName.size };
-}
+// it — the run's own tables (run.ts Run.assetFiles), so a new run starts with none and a settled one
+// drops them with its payloads.
 
 // A Figma layer name is often a path (`icons/linear/arrow-down`, `Linear / School / Award`) and may be
 // empty, emoji-laden or whitespace-padded. Take the LAST segment — that is the icon's actual name —
@@ -95,6 +83,8 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
   // resolve. Source images are already content-addressed by Figma's own hash.
   const dedupable = a.kind !== "reference";
   const hash = contentHash(a);
+  const r = run();
+  const { byContent, byName } = r.assetFiles;
 
   if (dedupable) {
     const hit = byContent.get(hash + "." + fmt);
@@ -126,7 +116,7 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
   byName.set(file.toLowerCase(), hash);
 
   const asset: Asset = { ...a, file, hash };
-  assets.push(asset);
+  r.assets.push(asset);
   if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
   return ASSET_DIR + file;
 }
@@ -152,10 +142,11 @@ function imageFormat(b: Uint8Array): AssetFormat {
 // would be unreachable; try/catch is used instead.
 export function collectSourceImage(hash: string | undefined | null): Promise<{ w: number; h: number } | undefined> {
   if (!hash) return Promise.resolve(undefined);
-  let p = imageSizeCache.get(hash);
+  const sizes = run().imageSizes;
+  let p = sizes.get(hash);
   if (!p) {
     p = readSourceImage(hash);
-    imageSizeCache.set(hash, p); // set BEFORE awaiting, so a concurrent fill joins this fetch
+    sizes.set(hash, p); // set BEFORE awaiting, so a concurrent fill joins this fetch
   }
   return p;
 }
@@ -168,8 +159,8 @@ async function readSourceImage(hash: string): Promise<{ w: number; h: number } |
       const s = await img.getSizeAsync();
       if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
       // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed. A reply that
-      // delivers no assets (runDelivery, state.ts) has no use for the original bytes: the size above is all it keeps.
-      if (runDelivery.sourceBytes) {
+      // delivers no assets (run.ts Delivery) has no use for the original bytes: the size above is all it keeps.
+      if (run().sourceBytes) {
         try {
           const bytes = await img.getBytesAsync();
           if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
@@ -177,7 +168,7 @@ async function readSourceImage(hash: string): Promise<{ w: number; h: number } |
       }
     }
   } catch (e) {
-    warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
+    run().warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
   }
   return size;
 }
@@ -193,6 +184,12 @@ const ICON_CONTAINER_TYPES = new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]
 // --no-assets, `"hidden"` for a hidden graphic (serialize.ts keeps the node a leaf either way — see the
 // note on assetSkipped there). A caller that treats the result as a path can't accidentally write the
 // sentinel into the exported tree.
+/** How a walk treats a node that would render an asset. "run": as the run's reads say — rendered, or under
+ *  --no-assets skipped and counted. "none": never rendered and not counted — a walk whose doc has no asset path
+ *  (components.ts's variant walk rides on a design-system pull), so a render there would orphan a file no writer
+ *  ever looks for. A walk-wide argument, not run state: the run's own reads never change mid-run. */
+export type AssetPolicy = "run" | "none";
+
 export type AssetResult = { path: string } | { geometry: Geometry } | { skipped: true | "hidden" } | undefined;
 
 // Does this node paint ANYTHING? A live export reported 807 "failed" asset exports; the overwhelming
@@ -240,7 +237,9 @@ function geometryOf(node: SceneNode): Geometry | undefined {
 // `hidden`: the node is `visible:false` itself or sits under a hidden ancestor (serialize.ts threads
 // that down). Figma renders nothing for such a node — every one of 477 geometry fallbacks in a real
 // export was hidden, and not one hidden node exported — so the call is not made at all.
-export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<AssetResult> {
+export async function collectAsset(node: SceneNode, hidden: boolean, policy: AssetPolicy): Promise<AssetResult> {
+  const r = run();
+  const stats = r.stats;
   const isVector = VECTOR_TYPES.has(node.type);
   // node.fills / node.children are Plugin-API GETTERS — each read crosses the sandbox bridge and
   // materializes a fresh array of paint/node wrappers. Read each once per node, not three times.
@@ -288,8 +287,10 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
   // stopping at the leaf the normal run produces. That expanded the tree (measured 4.3x larger and
   // 41 -> 161 nodes on a 40-icon sheet), breaking this flag's documented promise that structure is
   // unaffected — and inflating the very payload it exists to shrink. One decision, both paths.
-  if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
-    stats.assetsSkipped++;
+  // A walk whose doc has no asset path (policy "none" — the catalog's variant walk) makes the same leaf, but it is
+  // no --no-assets skip: the run never asked for one, so it is not counted (nor noted) as one.
+  if ((policy === "none" || r.reads.skipAssets) && (isVector || iconLike || hasImage)) {
+    if (policy !== "none") stats.assetsSkipped++;
     return { skipped: true };
   }
   // A hidden graphic: same decision point, same leaf shape, so the tree is identical whether the
@@ -314,7 +315,7 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
   // throttle isn't consumed by the thousands of plain layout nodes that pass through here.
   if (isVector || iconLike || hasImage) {
     checkCancelled();
-    progress("assets", { nodes: stats.nodes, assets: assets.length });
+    progress("assets", { nodes: stats.nodes, assets: r.assets.length });
   }
   if (isVector || iconLike) {
     // The paint pre-check is for VECTOR-ish LEAVES only: an icon CONTAINER paints nothing itself —
@@ -348,7 +349,7 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
       return { geometry: geo };
     }
     stats.assetsFailed++;
-    warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
+    r.warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
     return undefined;
   }
   try {
@@ -358,14 +359,14 @@ export async function collectAsset(node: SceneNode, hidden?: boolean): Promise<A
       const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
       if (!bytes || !bytes.length) {
         stats.assetsFailed++;
-        warnKind("image asset export empty", node.name + " (" + node.id + ")");
+        r.warnKind("image asset export empty", node.name + " (" + node.id + ")");
         return undefined;
       }
       return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
     }
   } catch (e) {
     stats.assetsFailed++;
-    warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
+    r.warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
   }
   return undefined;
 }
@@ -391,12 +392,12 @@ export async function collectReference(node: SceneNode, opts?: { scale?: number 
     const value = referenceScale(node, opts);
     const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
     if (!bytes || !bytes.length) {
-      warn("reference screenshot empty: " + node.name);
+      run().warn("reference screenshot empty: " + node.name);
       return undefined;
     }
     return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
   } catch (e) {
-    warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
+    run().warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
     return undefined;
   }
 }
@@ -420,7 +421,7 @@ export async function devResources(node: BaseNode): Promise<IrDevResource[] | un
       return o;
     });
   } catch (e) {
-    warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
+    run().warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
     return undefined;
   }
 }

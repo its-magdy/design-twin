@@ -404,7 +404,7 @@ export interface TextFields {
  *  its curve params, or — when the easing is bound to an EASING variable (typings `MotionEasing |
  *  VariableAlias`) — the SAME alias shape a top-level variable reference uses: `{aliasOf: <variable
  *  name>}`, falling back to `{aliasOf: <id>}` when the name can't be resolved (variables.ts's
- *  VariableAlias -> {aliasOf} resolution, via state.ts's `varName` memo over
+ *  VariableAlias -> {aliasOf} resolution, via the run's `varName` memo (run.ts) over
  *  `figma.variables.getVariableByIdAsync`). */
 export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } | VariableAlias }
 /** One manually-keyframed field (ManualKeyframeBinding): its base value and the keyframes. */
@@ -580,8 +580,8 @@ export interface IrNode extends Partial<TextFields> {
 
 // ================================================================ the documents a pull writes
 
-/** state.ts manifest(): {nodes, skipped, truncated, assetsFailed, warnings[]} + the raw counters
- *  (every RunStats counter is always present — state.ts newStats() zeroes them all). */
+/** run.ts manifestOf(): {nodes, skipped, truncated, assetsFailed, warnings[]} + the raw counters
+ *  (every RunStats counter is always present — a new Run starts them all at zero). */
 export interface Manifest {
   nodes: number;
   /** derived: === truncated */
@@ -603,7 +603,7 @@ export interface Manifest {
   warnings: string[];
 }
 
-// ---- assets (figma-plugin/src/state.ts Asset — the ONE definition, used by the plugin's collectors
+// ---- assets (figma-plugin/src/run.ts Asset — the ONE definition, used by the plugin's collectors
 // and by the bridge's write-out.ts alike)
 /** What assets.ts registers: an SVG (`text`), a 2x PNG (`base64`), or a source image's own bytes. */
 export type AssetFormat = "svg" | "png" | "jpg" | "webp" | "gif" | "bin";

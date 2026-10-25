@@ -141,7 +141,7 @@ const mcpCases: Array<[string, Record<string, unknown>, string]> = [
   ["figma_export_full", {}, W.page], ["figma_export_full", { page: [] }, W.page], ["figma_export_full", { page: ["P1", "P2"] }, W.pages],
   ["figma_export_full", { page: [""] }, W.blank], ["figma_export_full", { page: "P1" }, W.one], ["figma_export_full", { allPages: true }, W.all],
   ["figma_export_full", { allPages: true, page: ["P1"] }, W.allPlusPage], ["figma_export_full", { allPages: true, page: [] }, W.all],
-  // The one approved change: an omitted variantVisuals is now said as false (applyOpts reads `!!` either way).
+  // The one approved change: an omitted variantVisuals is now said as false (Run.useReads reads `!!` either way).
   ["figma_export_design_system", {}, W.ds], ["figma_export_design_system", { variantVisuals: false }, W.ds], ["figma_export_design_system", { variantVisuals: true }, W.dsVv],
   // Not declared on this tool, so stripped by the SDK before the handler — as it always was.
   ["figma_export_design_system", { css: true, skipAssets: true }, W.ds],

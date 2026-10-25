@@ -8,7 +8,9 @@ import type {
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { OVERRIDE_CAP } from "../../bridge/src/instance-overrides.ts";
 import { propName, propType, errMsg, nonEmpty, putNonEmpty, round, exportedAt, isList } from "./util";
-import { warn, loadAllPages, runOpts } from "./state";
+import { loadAllPages } from "./state";
+import { run } from "./run";
+import type { AssetPolicy } from "./assets";
 import { checkCancelled, enterPage } from "./progress";
 import { simplifyFills, simplifyStrokes } from "./paint";
 import { simplifyEffects } from "./effects";
@@ -71,7 +73,7 @@ export function instanceOverrides(node: SceneNode): InstanceOverride[] | undefin
     .map((o): InstanceOverride => ({ id: o.id, fields: o.overriddenFields }));
   if (!list.length) return undefined;
   if (list.length > OVERRIDE_CAP) {
-    warn("instance '" + node.name + "' has " + list.length + " overrides — truncated to " + OVERRIDE_CAP);
+    run().warn("instance '" + node.name + "' has " + list.length + " overrides — truncated to " + OVERRIDE_CAP);
     return list.slice(0, OVERRIDE_CAP);
   }
   return list;
@@ -144,28 +146,25 @@ function variantValues(main: ComponentNode): Record<string, string> | undefined 
 // Function type of serialize.ts's `serialize` — injected as a parameter rather than imported, since
 // serialize.ts already imports FROM components.ts (instanceComponentRef/componentPropRefs/
 // instanceOverrides) and a direct import back here would be a cycle.
-type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean) => Promise<IrNode | null>;
+type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean, inGrid?: boolean,
+  assets?: AssetPolicy) => Promise<IrNode | null>;
 
-// Per-variant visual/layout truth (opt-in, runOpts.variantVisuals): the master COMPONENT itself, not
+// Per-variant visual/layout truth (opt-in, the variantVisuals read): the master COMPONENT itself, not
 // the COMPONENT_SET wrapper's own selection-chrome visuals. Depth-capped well below serialize.ts's
-// MAX_DEPTH (this rides along on --design-system, which is documented as cheap) and forced to skip
-// asset export — a design-system pull has no asset manifest path, so a real exportAsync render here
-// would silently orphan files no writer ever looks for.
+// MAX_DEPTH (this rides along on --design-system, which is documented as cheap) and walked with asset
+// policy "none" — a design-system pull has no asset manifest path, so a real exportAsync render here
+// would silently orphan files no writer ever looks for. The policy is the walk's own argument, not the
+// run's skipAssets read flipped across the await: that counted every variant graphic as a --no-assets skip.
 const VARIANT_WALK_DEPTH = 3;
-async function serializeVariant(main: ComponentNode, serialize: SerializeFn): Promise<IrNode | null> {
-  const prevSkipAssets = runOpts.skipAssets;
-  try {
-    runOpts.skipAssets = true;
-    return await serialize(main, 60 - VARIANT_WALK_DEPTH); // depth budget: MAX_DEPTH - N levels below main
-  } finally {
-    runOpts.skipAssets = prevSkipAssets;
-  }
+function serializeVariant(main: ComponentNode, serialize: SerializeFn): Promise<IrNode | null> {
+  return serialize(main, 60 - VARIANT_WALK_DEPTH, undefined, undefined, undefined, "none"); // depth budget: MAX_DEPTH - N levels below main
 }
 
 // The component + variant catalog across every page (a feature's states live here).
 // Pushes naming/variant-explosion notes into `hygiene`; per-page and per-component failures are
 // WARNED, never swallowed — an empty catalog must be distinguishable from "this page has none".
 async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, serialize?: SerializeFn): Promise<CatalogComponent[]> {
+  const variantVisuals = run().reads.variantVisuals;
   const components: CatalogComponent[] = [];
   const pendingPublish: { entry: CatalogComponent; node: ComponentNode | ComponentSetNode }[] = [];
   const seenNames = new Set<string>();
@@ -195,14 +194,14 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
       try {
         nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
       } catch (e) {
-        warn("component catalog: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") — its components are missing");
+        run().warn("component catalog: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") — its components are missing");
         continue;
       }
       for (const n of nodes) {
         if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") {
           // A variant — findAllWithCriteria already found it in this same traversal, so record it for
           // the visuals pass below rather than walking the tree a second time to re-find it.
-          if (runOpts.variantVisuals) {
+          if (variantVisuals) {
             const list = variantsBySet.get(n.parent.id);
             if (list) list.push(n); else variantsBySet.set(n.parent.id, [n]);
           }
@@ -263,7 +262,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         } catch (e) {
           // Dropping every prop of a component is exactly the kind of gap the map/drift tooling would
           // then report as "component exposes no props" — say so instead of failing silently.
-          warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") — props omitted");
+          run().warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") — props omitted");
         }
         if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
         if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
@@ -276,18 +275,18 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
           const visuals = await simplifyVisuals(n);
           if (visuals) entry.visuals = visuals;
         } catch (e) {
-          warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — visuals omitted");
+          run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — visuals omitted");
         }
         // Collected, not awaited: one getPublishStatusAsync per component inside the page->component
         // loop would serialize a round trip per component. Fanned out once, after the walk.
         if (asLibrary) pendingPublish.push({ entry, node: n });
-        if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
+        if (variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
         // A standalone COMPONENT (not a variant inside a set — those were already filtered out above)
         // has no COMPONENT_SET wrapper to hang variants[] off of, but it is exactly as "one master node
         // worth walking" as every variant is, so it gets the same serializeVariant treatment (below,
         // after the flag is restored — walked here, Figma would drop the hidden layers of every instance
         // nested in it) and the tree is attached directly as entry.node rather than entry.variants[].node.
-        if (runOpts.variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
+        if (variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
         components.push(entry);
       }
     }
@@ -304,11 +303,11 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         const node = await serializeVariant(n, serialize);
         if (node) entry.node = node;
       } catch (e) {
-        warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
+        run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
       }
     }
   }
-  if (runOpts.variantVisuals && serialize && variantsBySet.size) {
+  if (variantVisuals && serialize && variantsBySet.size) {
     for (const [setId, variants] of variantsBySet) {
       const entry = entriesBySetId.get(setId);
       if (!entry) continue; // the owning COMPONENT_SET entry failed earlier in the loop — nothing to attach to
@@ -323,7 +322,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
           if (node) o.node = node;
           out.push(o);
         } catch (e) {
-          warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") — omitted");
+          run().warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") — omitted");
         }
       }
       if (out.length) entry.variants = out;
@@ -376,7 +375,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
 
   const hygiene: string[] = [];
   // Component + variant catalog across every page (a feature's states live here).
-  await loadAllPages("component catalog may be incomplete");
+  await loadAllPages("component catalog may be incomplete", (m) => run().warn(m));
   const components = await collectComponentCatalog(hygiene, asLibrary, serialize);
 
   // LIBRARY components. findAllWithCriteria({types:["COMPONENT",...]}) above only ever finds mains
@@ -398,7 +397,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
     );
   } else try {
     const seenKeys = new Set<string | undefined>(components.map((c) => c.key).filter(Boolean));
-    const remote = await collectLibraryComponents((m) => warn(m));
+    const remote = await collectLibraryComponents((m) => run().warn(m));
     let added = 0;
     for (const entry of remote) {
       if (seenKeys.has(entry.key)) continue; // already catalogued locally (a library main present in-file)
@@ -413,7 +412,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
       );
     }
   } catch (e) {
-    warn("library component catalog failed (" + errMsg(e) + ") — components consumed from published libraries are missing from the catalog");
+    run().warn("library component catalog failed (" + errMsg(e) + ") — components consumed from published libraries are missing from the catalog");
   }
 
   let colorProfile: string | undefined;

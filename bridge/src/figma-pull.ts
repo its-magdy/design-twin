@@ -55,7 +55,7 @@ import { toNodeId } from "./node-id.ts";
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
 import { stampSource } from "./source-stamp.ts";
-// The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
+// The ONE registry of read options, shared with the plugin's run reads and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
 import type { ReadOptName } from "./read-opts.ts";
 // What a pull SENDS — command, arguments, budget, label — is the read plan's, shared with the MCP export tools.
@@ -385,7 +385,7 @@ function readArgs(args: string[]) {
   // unaffected — a skipped node stays the same LEAF the full export produces, marked
   // `assetSkipped: true` instead of carrying an `asset` path; only assets/ goes missing.
   // Flag -> option name comes from bridge/src/read-opts.ts, the ONE registry shared with the plugin's
-  // runOpts and the MCP tool schema. Building the table from it (rather than restating the six names
+  // run reads and the MCP tool schema. Building the table from it (rather than restating the six names
   // here) is what lets the guards name the offending flags without a second hand-written list —
   // a twin that would silently stop matching the moment a read option is added.
   const readOpts: Partial<Record<ReadOptName, boolean>> = {};

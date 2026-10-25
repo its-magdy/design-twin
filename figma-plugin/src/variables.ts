@@ -5,7 +5,7 @@ import type {
   VariableAlias as IrVariableAlias, VariableComposedColor as IrVariableComposedColor,
 } from "../../bridge/src/doc-types.ts";
 import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
-import { varName, styleNameLookup, getCollection } from "./state";
+import { run } from "./run";
 import { isUnknownArray, ifDefined } from "../../bridge/src/json-util.ts";
 
 // The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
@@ -16,7 +16,7 @@ export function isVariableAlias(v: unknown): v is VariableAlias {
 
 export async function resolveVar(alias: unknown): Promise<string | undefined> {
   if (!isVariableAlias(alias)) return undefined;
-  return varName(alias.id); // e.g. "color/primary" — the semantic token name
+  return run().varName(alias.id); // e.g. "color/primary" — the semantic token name
 }
 
 // Resolve any Figma boundVariables map -> { field: tokenName } (the key win over REST).
@@ -56,7 +56,7 @@ export async function boundTokens(node: SceneNode): Promise<TokenMap | undefined
 // systems name tokens; resolve the id to the style's name.
 export async function styleName(id: string | PluginAPI["mixed"] | undefined | null): Promise<string | undefined> {
   if (!id || id === figma.mixed) return undefined;
-  return styleNameLookup(id);
+  return run().styleName(id);
 }
 
 // [ node field, output key ]. textStyleId only exists on TEXT nodes, so the `in` check gates it.
@@ -93,7 +93,7 @@ async function resolveModeMap(raw: { [collectionId: string]: string } | undefine
   if (!raw || !Object.keys(raw).length) return undefined;
   const out: ModeMap = {};
   for (const [collectionId, modeId] of Object.entries(raw)) {
-    const c = await getCollection(collectionId);
+    const c = await run().collection(collectionId);
     if (!c || !Array.isArray(c.modes)) {
       out[collectionId] = modeId; // collection unreadable (remote) — keep raw ids over dropping the pin
       continue;
@@ -182,7 +182,7 @@ function aliasIds(v: VariableValue): string[] {
 
 // An alias -> {aliasOf: target name}, falling back to the raw id when the target cannot be resolved.
 async function aliasValue(a: VariableAlias): Promise<IrVariableAlias> {
-  return { aliasOf: (await varName(a.id)) || a.id };
+  return { aliasOf: (await run().varName(a.id)) || a.id };
 }
 
 // Each half of a composed colour is emitted the way it would be on its own: an alias as {aliasOf}, the
@@ -260,7 +260,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // defined in this file ("Returns all local variables in the current file" — Plugin API), but node
   // bindings resolve remote ones by id, so a file whose design system lives in a published library
   // would emit screens full of token names with no matching token definitions: the DTCG/CSS emitters
-  // downstream would silently drop exactly the tokens the screens use. varName.ids() is the set of
+  // downstream would silently drop exactly the tokens the screens use. The run's varName.ids() is the set of
   // variable ids anything in this run actually referenced — fetch the non-local ones by id and
   // include them, flagged remote:true. Collections/modes for them are resolved on demand below.
   // varName.obj() reads the run's memo cache — the walk ALREADY fetched each of these ids (that's how
@@ -286,10 +286,10 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   const seen = new Set<string>(localIds);
   // Seed with node-referenced ids AND the alias targets of local variables — a local semantic token
   // pointing at a library primitive is the common case and is not otherwise in ids().
-  let frontier = [...new Set(varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+  let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
   while (frontier.length) {
     for (const id of frontier) seen.add(id);
-    const fetched = ((await Promise.all(frontier.map((id) => varName.obj(id)))))
+    const fetched = ((await Promise.all(frontier.map((id) => run().varName.obj(id)))))
       .filter(Boolean) as Variable[];
     remoteVars.push(...fetched);
     frontier = [...new Set(([] as string[]).concat(...fetched.map(aliasTargets)))].filter((id) => !seen.has(id));
@@ -298,7 +298,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // Merge each referenced remote collection so their values key by readable mode names
   // ("Light"/"Dark") rather than opaque mode ids. Independent id lookups — fetch them concurrently.
   const missingCollIds = [...new Set(remoteVars.map((v) => v.variableCollectionId).filter((cid) => cid && !collById.has(cid)))];
-  for (const c of await Promise.all(missingCollIds.map((cid) => getCollection(cid)))) {
+  for (const c of await Promise.all(missingCollIds.map((cid) => run().collection(cid)))) {
     if (c) collById.set(c.id, c);
   }
   // Built AFTER the merge so remote modes are included; first collection to claim a modeId wins,

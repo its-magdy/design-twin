@@ -6,14 +6,14 @@ import type {
   Annotation as IrAnnotation, ExportSetting as IrExportSetting, Overlay as IrOverlay,
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, numProp, isList } from "./util";
-import { stats, warn, runOpts } from "./state";
+import { run } from "./run";
 import { layout, GRID_SELF, simplifyGrid } from "./layout";
 import { simplifyFills, simplifyStrokes } from "./paint";
 import { simplifyEffects } from "./effects";
 import { serializeText } from "./text";
 import { boundTokens, nodeStyles, variableModes, resolveBoundMap } from "./variables";
 import { simplifyReactions } from "./prototype";
-import { collectAsset } from "./assets";
+import { collectAsset, type AssetPolicy } from "./assets";
 import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./components";
 import { collectMotion } from "./motion";
 import { checkCancelled } from "./progress";
@@ -55,7 +55,7 @@ function radiusOut(out: IrNode, raw: number): number {
 
 // Own-scope plugin data (getPluginData) written by THIS plugin — round-trip metadata (e.g. a future
 // Code-Connect mapping our write plane stamps). Shared namespaces can't be enumerated by the API, so
-// only own-scope keys are read. Opt-in via runOpts.pluginData.
+// only own-scope keys are read. Opt-in via the run's pluginData read.
 // getPluginData(Keys) is declared on PluginDataMixin, which every BaseNode extends (verified: plugin-api.d.ts
 // PluginDataMixin ~6380, BaseNodeMixin extends it ~6220) — real methods, not a beta surface, so no cast.
 function pluginData(node: BaseNode): Record<string, string> | undefined {
@@ -74,7 +74,7 @@ function pluginData(node: BaseNode): Record<string, string> | undefined {
 // token applied per-node (property -> token name); on files that predate/forgo native Figma Variables
 // this is the ONLY place the token layer lives. Values are small uncompressed strings, so this is a
 // cheap sync read. (The document-level compressed+chunked `values`/`themes` blob needs an lz-string
-// decode and is deferred.) Opt-in via runOpts.sharedData. Namespaces must be known ahead of time — the
+// decode and is deferred.) Opt-in via the run's sharedData read. Namespaces must be known ahead of time — the
 // API can't enumerate them — so we probe the well-known ones.
 const SHARED_NAMESPACES = ["tokens"];
 function sharedData(node: BaseNode): Record<string, Record<string, string>> | undefined {
@@ -92,7 +92,7 @@ function sharedData(node: BaseNode): Record<string, Record<string, string>> | un
 }
 
 // Figma's OWN computed CSS for the node — the oracle the paid get_design_context leans on. One async
-// call per node, so opt-in via runOpts.css. Ground truth for a codegen self-correction loop.
+// call per node, so opt-in via the run's css read. Ground truth for a codegen self-correction loop.
 // getCSSAsync is declared directly on BaseNodeMixin (plugin-api.d.ts ~6367), i.e. every SceneNode has
 // it — the original `typeof n.getCSSAsync === "function"` guard predates that and is now unreachable
 // (kept as a try/catch instead, in case a given node type still rejects at runtime).
@@ -130,17 +130,21 @@ function bakeTransform(out: IrNode): void {
 // `underHidden`: some ANCESTOR is `visible:false`. A root's own ancestor chain is computed once by its
 // collector (collect.ts hiddenAncestor); below that it is threaded down here, never re-walked.
 // `inGrid`: the parent is a GRID auto-layout frame. A root never gets it — its parent is not exported.
-export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean, inGrid?: boolean): Promise<IrNode | null> {
+// `assets`: the walk's asset policy (assets.ts AssetPolicy), the same for every node of one walk.
+export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean, inGrid?: boolean,
+  assets: AssetPolicy = "run"): Promise<IrNode | null> {
   // The per-node abort point (b2): a cancel or an abandonment stops the walk within one node, not at
   // the next asset/frame/page — a cold first read of a dense screen can otherwise walk for a minute for
   // a caller that has already gone. Safe to throw here: children are serialized one at a time (never
   // inside a Promise.all), every partial `out` above this frame is dropped as the throw unwinds, every
-  // collector's error path refuses to emit a doc, and the per-run toggles (skipAssets,
-  // skipInvisibleInstanceChildren) are restored by their own `finally` blocks.
+  // collector's error path refuses to emit a doc, and the document toggle a walk sets
+  // (skipInvisibleInstanceChildren) is restored by its own `finally` block.
   checkCancelled();
+  const r = run();
+  const stats = r.stats;
   if (depth > MAX_DEPTH) {
     stats.truncated++;
-    if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached — deep subtrees truncated (first: " + node.name + ")");
+    if (stats.truncated === 1) r.warn("depth limit " + MAX_DEPTH + " reached — deep subtrees truncated (first: " + node.name + ")");
     return null;
   }
   stats.nodes++;
@@ -394,17 +398,17 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if (overrides) out.overrides = overrides;
 
   // Own-scope plugin data (opt-in).
-  if (runOpts.pluginData) {
+  if (r.reads.pluginData) {
     const pd = pluginData(node);
     if (pd) out.pluginData = pd;
   }
   // Motion/animation keyframes & timelines (opt-in) — new free read plane (Plugin API Update 130).
-  if (runOpts.motion) {
+  if (r.reads.motion) {
     const m = await collectMotion(node);
     if (m) out.motion = m;
   }
   // Cross-plugin shared data (opt-in) — e.g. Tokens Studio applied tokens.
-  if (runOpts.sharedData) {
+  if (r.reads.sharedData) {
     const sd = sharedData(node);
     if (sd) out.sharedData = sd;
   }
@@ -414,10 +418,10 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     instanceComponentRef(node),
     boundTokens(node),
     nodeStyles(node),
-    collectAsset(node, hidden),
+    collectAsset(node, hidden, assets),
     simplifyReactions(node),
     variableModes(node),
-    runOpts.css ? nodeCss(node) : Promise.resolve(undefined),
+    r.reads.css ? nodeCss(node) : Promise.resolve(undefined),
   ]);
   // out.component stays the bare name (byte-identical to before) for every existing consumer;
   // mainComponent is purely additive — the join keys (id/key/setId/setKey) back to the catalog.
@@ -502,7 +506,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     for (let i = 0; i < children.length; i++) {
       const c = children[i];
       if (!c) continue;
-      const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
+      const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid, assets);
       if (s) kids.push(s);
     }
     if (kids.length) out.children = kids;

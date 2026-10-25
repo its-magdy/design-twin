@@ -1,7 +1,7 @@
 // read-opts.ts — THE registry of the extractor's opt-in read options.
 //
-// The same six names would otherwise be written out by hand in four places: the plugin's `runOpts`
-// (state.ts), the `CollectOpts` interface (collect.ts), the CLI's flag table (figma-pull.ts), and the
+// The same six names would otherwise be written out by hand in four places: the plugin's run reads
+// (run.ts), the `CollectOpts` interface (collect.ts), the CLI's flag table (figma-pull.ts), and the
 // MCP tool schema (figma-mcp.ts). Every one of those is a place a new option can be forgotten, and
 // the failure is SILENT in both front-ends: the CLI just never sets the flag, and the MCP SDK's Zod
 // object mode STRIPS undeclared keys before the handler runs. That is not hypothetical — `skipAssets`
@@ -18,7 +18,7 @@
 // type-check under the plugin's tsconfig too (ES2019 lib, no Node types).
 //
 // ReadOptName is DERIVED from the registry below (`as const satisfies`), so the names are typed in
-// exactly one place: CollectOpts and runOpts both derive from it, and adding a row here makes
+// exactly one place: CollectOpts and the run's reads both derive from it, and adding a row here makes
 // TypeScript fail loudly at every site that must handle the new option rather than letting one
 // drift silently.
 
@@ -116,8 +116,8 @@ export const READ_OPT_ROWS: readonly ReadOptRow[] = READ_OPTS;
 export type ReadOptNameFor<K extends ReadScopeKind> = RowNameFor<(typeof READ_OPTS)[number], K>;
 type RowNameFor<R, K> = R extends { name: infer N; scopes: readonly (infer S)[] } ? (K extends S ? N : never) : never;
 
-// Every option defaulted off, as a fresh object per call (callers mutate it — runOpts is reassigned
-// per run). Derived here so no consumer restates the names just to zero them.
+// Every option defaulted off, as a fresh object per call (callers fill it in — each run builds its own
+// reads from one). Derived here so no consumer restates the names just to zero them.
 export function readOptDefaults(): Record<ReadOptName, boolean> {
   const o: Partial<Record<ReadOptName, boolean>> = {};
   for (const d of READ_OPTS) o[d.name] = false;

@@ -335,7 +335,7 @@
       libraryComponents: library.length,
       hygiene: hygiene.length
     };
-    const manifest2 = {
+    const manifest = {
       ...stamp,
       files: {
         tokens: join(TOKENS),
@@ -348,326 +348,12 @@
     };
     const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
     if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
-      manifest2.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+      manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
     }
-    files.push({ path: MANIFEST, data: manifest2 });
-    return { files, manifest: manifest2, counts, dir: DIR };
+    files.push({ path: MANIFEST, data: manifest });
+    return { files, manifest, counts, dir: DIR };
   }
   var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
-
-  // src/progress.ts
-  var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
-  var ABANDONED_MESSAGE = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
-  var CANCELLED = "__designTwinCancelled";
-  var ABANDONED = "__designTwinAbandoned";
-  function cancelledError() {
-    const e = new Error(CANCELLED_MESSAGE);
-    e[CANCELLED] = true;
-    return e;
-  }
-  function abandonedError() {
-    const e = new Error(ABANDONED_MESSAGE);
-    e[CANCELLED] = true;
-    e[ABANDONED] = true;
-    return e;
-  }
-  function isAbandonment(e) {
-    return !!e && typeof e === "object" && e[ABANDONED] === true;
-  }
-  var running = null;
-  var cancelRequested = null;
-  var lastPost = 0;
-  var page;
-  var MIN_INTERVAL_MS = 250;
-  function post(m) {
-    try {
-      if (figma && figma.ui && typeof figma.ui.postMessage === "function") figma.ui.postMessage(m);
-    } catch (e) {
-    }
-  }
-  function beginRun(info) {
-    running = info;
-    cancelRequested = null;
-    page = void 0;
-    lastPost = 0;
-    post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
-  }
-  function endRun(abandoned) {
-    running = null;
-    cancelRequested = null;
-    page = void 0;
-    post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
-  }
-  function postQueued(run) {
-    if (run.source !== "bridge") return;
-    post({ type: "progress", phase: "queued", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
-  }
-  function postStarted(run) {
-    if (run.source !== "bridge") return;
-    post({ type: "progress", phase: "start", source: "bridge", label: run.label, ...ifDefined("requestId", run.requestId) });
-  }
-  function requestCancel() {
-    if (!running) return null;
-    cancelRequested = "designer";
-    return running;
-  }
-  function requestAbandon(matches) {
-    if (!running || !matches(running)) return null;
-    if (cancelRequested === null) cancelRequested = "abandoned";
-    return running;
-  }
-  function checkCancelled() {
-    if (cancelRequested === "designer") throw cancelledError();
-    if (cancelRequested === "abandoned") throw abandonedError();
-  }
-  function progress(phase, extra, force) {
-    if (!running) return;
-    const now = Date.now();
-    if (!force && now - lastPost < MIN_INTERVAL_MS) return;
-    lastPost = now;
-    post({ type: "progress", phase, source: running.source, label: running.label, ...ifDefined("page", page), ...extra });
-  }
-  function enterPage(phase, index, of, name, pageId, extra) {
-    page = { index, of, name, ...ifDefined("pageId", pageId) };
-    progress(phase, extra, true);
-  }
-
-  // src/assets.ts
-  var ASSET_DIR = "assets/";
-  function contentHash(a) {
-    const src = a.text != null ? normalizeSvgText(a.text) : a.base64 != null ? a.base64 : "";
-    let h = 2166136261;
-    for (let i = 0; i < src.length; i++) {
-      h ^= src.charCodeAt(i);
-      h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
-    }
-    return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
-  }
-  var byContent = /* @__PURE__ */ new Map();
-  var byName = /* @__PURE__ */ new Map();
-  function resetAssetNames() {
-    byContent.clear();
-    byName.clear();
-  }
-  function assetNameTableSizes() {
-    return { byContent: byContent.size, byName: byName.size };
-  }
-  function assetSafe(x) {
-    return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
-  }
-  function baseNameFor(a) {
-    if (a.kind === "reference") return safe(a.id.replace(/:ref$/, "")) + "_ref";
-    if (a.kind === "source") return safe(a.id);
-    const last = String(a.name || "").split("/").pop() || "";
-    const cleaned = assetSafe(last.trim()).replace(/^[-_]+|[-_]+$/g, "");
-    return cleaned || safe(a.id);
-  }
-  function register(a) {
-    const fmt = safe(a.format);
-    const dedupable = a.kind !== "reference";
-    const hash = contentHash(a);
-    if (dedupable) {
-      const hit = byContent.get(hash + "." + fmt);
-      if (hit) {
-        (hit.asset.from || (hit.asset.from = [hit.asset.id])).push(a.id);
-        return ASSET_DIR + hit.file;
-      }
-    }
-    const base = baseNameFor(a);
-    let file = base + "." + fmt;
-    const key = file.toLowerCase();
-    const taken = byName.get(key);
-    if (taken !== void 0 && taken !== hash) {
-      const [head = ""] = hash.split("-");
-      file = base + "-" + head.slice(0, 6) + "." + fmt;
-    }
-    byName.set(file.toLowerCase(), hash);
-    const asset = { ...a, file, hash };
-    assets.push(asset);
-    if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
-    return ASSET_DIR + file;
-  }
-  function imageFormat(b) {
-    if (b.length >= 8 && b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return "png";
-    if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "jpg";
-    if (b.length >= 12 && b[0] === 82 && b[1] === 73 && b[8] === 87 && b[9] === 69 && b[10] === 66 && b[11] === 80) return "webp";
-    if (b.length >= 6 && b[0] === 71 && b[1] === 73 && b[2] === 70) return "gif";
-    return "bin";
-  }
-  function collectSourceImage(hash) {
-    if (!hash) return Promise.resolve(void 0);
-    let p = imageSizeCache.get(hash);
-    if (!p) {
-      p = readSourceImage(hash);
-      imageSizeCache.set(hash, p);
-    }
-    return p;
-  }
-  async function readSourceImage(hash) {
-    let size;
-    try {
-      const img = figma.getImageByHash(hash);
-      if (img) {
-        const s = await img.getSizeAsync();
-        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-        if (runDelivery.sourceBytes) {
-          try {
-            const bytes = await img.getBytesAsync();
-            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-          } catch (e) {
-          }
-        }
-      }
-    } catch (e) {
-      warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
-    }
-    return size;
-  }
-  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
-  var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
-  function paints(v) {
-    return Array.isArray(v) ? v : null;
-  }
-  function hasVisiblePaint(node, fills) {
-    if (fills && fills.some((p) => p.visible !== false)) return true;
-    const s = paints("strokes" in node ? node.strokes : void 0);
-    return !!s && s.some((p) => p.visible !== false);
-  }
-  function hasArea(node) {
-    if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
-    return node.width > 0 && node.height > 0;
-  }
-  function paintsNothing(node, isVector, fills) {
-    return !hasArea(node) || isVector && !hasVisiblePaint(node, fills);
-  }
-  function geometryOf(node) {
-    const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
-    const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
-    const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : void 0);
-    if (!fills.length && !strokes.length) return void 0;
-    const out = {};
-    if (fills.length) out.fills = fills;
-    if (strokes.length) out.strokes = strokes;
-    if ("width" in node && typeof node.width === "number") {
-      out.w = round(node.width);
-      out.h = round(node.height);
-    }
-    return out;
-  }
-  async function collectAsset(node, hidden) {
-    const isVector = VECTOR_TYPES.has(node.type);
-    const rawFills = "fills" in node ? node.fills : void 0;
-    const fills = Array.isArray(rawFills) ? rawFills : null;
-    const kids = "children" in node && Array.isArray(node.children) ? node.children : null;
-    const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
-    let iconLike = false;
-    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && "findOne" in node && Math.max(node.width, node.height) <= 96) {
-      try {
-        iconLike = !node.findOne((x) => x.type === "TEXT");
-      } catch (e) {
-        iconLike = false;
-      }
-    }
-    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && node.isAsset === true && "findOne" in node) {
-      try {
-        iconLike = !node.findOne((x) => x.type === "TEXT");
-      } catch (e) {
-        iconLike = false;
-      }
-    }
-    if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
-      stats.assetsSkipped++;
-      return { skipped: true };
-    }
-    if (hidden && (isVector || iconLike || hasImage)) {
-      if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
-        stats.assetsSkippedInvisible++;
-        return void 0;
-      }
-      stats.assetsHidden++;
-      return { skipped: "hidden" };
-    }
-    if (isVector || iconLike || hasImage) {
-      checkCancelled();
-      progress("assets", { nodes: stats.nodes, assets: assets.length });
-    }
-    if (isVector || iconLike) {
-      if (paintsNothing(node, isVector, fills)) {
-        stats.assetsSkippedInvisible++;
-        return void 0;
-      }
-      let svg = null;
-      let reason = "empty/invalid SVG";
-      try {
-        if ("exportAsync" in node) svg = await node.exportAsync({ format: "SVG_STRING" });
-      } catch (e) {
-        reason = errMsg(e);
-      }
-      if (svg && svg.indexOf("<svg") !== -1) {
-        return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
-      }
-      const geo = isVector ? geometryOf(node) : void 0;
-      if (geo) {
-        stats.assetsGeometry++;
-        return { geometry: geo };
-      }
-      stats.assetsFailed++;
-      warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
-      return void 0;
-    }
-    try {
-      if (hasImage && "exportAsync" in node) {
-        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
-        if (!bytes || !bytes.length) {
-          stats.assetsFailed++;
-          warnKind("image asset export empty", node.name + " (" + node.id + ")");
-          return void 0;
-        }
-        return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
-      }
-    } catch (e) {
-      stats.assetsFailed++;
-      warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
-    }
-    return void 0;
-  }
-  function referenceScale(node, opts) {
-    if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
-    const w = "width" in node ? node.width || 0 : 0;
-    const h = "height" in node ? node.height || 0 : 0;
-    return Math.min(2, 2048 / (Math.max(w, h) || 1));
-  }
-  async function collectReference(node, opts) {
-    if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
-    try {
-      const value = referenceScale(node, opts);
-      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
-      if (!bytes || !bytes.length) {
-        warn("reference screenshot empty: " + node.name);
-        return void 0;
-      }
-      return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
-    } catch (e) {
-      warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
-      return void 0;
-    }
-  }
-  async function devResources(node) {
-    if (!node) return void 0;
-    try {
-      const rs = await node.getDevResourcesAsync({ includeChildren: true });
-      if (!Array.isArray(rs) || !rs.length) return void 0;
-      return rs.map((r) => {
-        const o = { name: r.name, url: r.url };
-        if (r.nodeId) o.nodeId = r.nodeId;
-        if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;
-        return o;
-      });
-    } catch (e) {
-      warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
-      return void 0;
-    }
-  }
 
   // ../bridge/src/read-opts.ts
   var WALK = ["node", "selection", "pages"];
@@ -729,56 +415,7 @@
     return o;
   }
 
-  // src/state.ts
-  var assets = [];
-  var runOpts = readOptDefaults();
-  var imageSizeCache = /* @__PURE__ */ new Map();
-  var runDelivery = { sourceBytes: true };
-  var warnings = [];
-  var newStats = () => ({
-    nodes: 0,
-    assetsFailed: 0,
-    assetsSkipped: 0,
-    assetsSkippedInvisible: 0,
-    assetsGeometry: 0,
-    assetsHidden: 0,
-    hiddenNodes: 0,
-    truncated: 0
-  });
-  var stats = newStats();
-  function warn(msg) {
-    warnings.push(msg);
-  }
-  var WARN_EXAMPLES = 10;
-  var grouped = /* @__PURE__ */ new Map();
-  function warnKind(kind, ref) {
-    let g = grouped.get(kind);
-    if (!g) {
-      g = { count: 0, examples: [] };
-      grouped.set(kind, g);
-    }
-    g.count++;
-    if (ref && g.examples.length < WARN_EXAMPLES) g.examples.push(ref);
-  }
-  function groupedWarnings() {
-    const out = [];
-    grouped.forEach((g, kind) => {
-      let line = kind + ": " + g.count + " node(s)";
-      if (g.examples.length) {
-        line += " \u2014 e.g. " + g.examples.join("; ");
-        if (g.count > g.examples.length) line += " (+" + (g.count - g.examples.length) + " more)";
-      }
-      out.push(line);
-    });
-    return out;
-  }
-  var SKIP_ASSETS_NOTE = (n) => `--no-assets: ${n} node(s) that would have exported an SVG/PNG were skipped; each is marked 'assetSkipped: true' in the tree and stays a leaf, exactly as the full export serializes it (structure, layout and tokens are unaffected). The per-root reference screenshot is still captured \u2014 it is one render per exported root, not per node.`;
-  function manifest() {
-    const note = runOpts.skipAssets && stats.assetsSkipped ? SKIP_ASSETS_NOTE(stats.assetsSkipped) : null;
-    const all = warnings.concat(groupedWarnings());
-    const reads = Object.keys(runOpts).filter((k) => runOpts[k]);
-    return { ...stats, skipped: stats.truncated, reads, warnings: note ? all.concat(note) : all };
-  }
+  // src/run.ts
   function memoName(fetch) {
     const cache = /* @__PURE__ */ new Map();
     const get = (id) => {
@@ -797,31 +434,251 @@
       const o = await get(id);
       return o ? o.name : void 0;
     });
-    fn.reset = () => cache.clear();
     fn.obj = get;
     fn.ids = () => Array.from(cache.keys());
     return fn;
   }
-  var varName = memoName((id) => figma.variables.getVariableByIdAsync(id));
-  var styleNameLookup = memoName((id) => figma.getStyleByIdAsync(id));
-  var nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id));
-  var collectionLookup = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null));
-  var getCollection = collectionLookup.obj;
+  var WARN_EXAMPLES = 10;
+  var Run = class {
+    constructor(info) {
+      this.readOpts = readOptDefaults();
+      this.readsFixed = false;
+      this.delivery = { sourceBytes: true };
+      this.claimed = false;
+      this.stats = {
+        nodes: 0,
+        assetsFailed: 0,
+        assetsSkipped: 0,
+        assetsSkippedInvisible: 0,
+        assetsGeometry: 0,
+        assetsHidden: 0,
+        hiddenNodes: 0,
+        truncated: 0
+      };
+      /** Per-run diagnostics so the agent knows what was and wasn't captured (never silent truncation). */
+      this.warnings = [];
+      this.grouped = /* @__PURE__ */ new Map();
+      /** The run's exported assets — { id, name, format, file, base64/text }. */
+      this.assets = [];
+      /** assets.ts's naming tables: content hash -> the file already written for it, and taken basename (case-folded)
+       *  -> the hash that owns it. `byContent` holds the same Asset objects (base64/text payloads) as `assets`. */
+      this.assetFiles = { byContent: /* @__PURE__ */ new Map(), byName: /* @__PURE__ */ new Map() };
+      /** Intrinsic pixel size per image hash, resolved once per run via getImageByHash().getSizeAsync(). A design
+       *  reuses the same image across many fills/nodes, so memoize to avoid O(nodes) downloads. Holds the in-flight
+       *  PROMISE: paints resolve concurrently, so a value-cache let two fills sharing a hash both miss — costing a
+       *  second download AND pushing the source bytes into `assets` twice. */
+      this.imageSizes = /* @__PURE__ */ new Map();
+      this.varName = memoName((id) => figma.variables.getVariableByIdAsync(id));
+      this.styleName = memoName((id) => figma.getStyleByIdAsync(id));
+      /** Prototype destinations. */
+      this.nodeName = memoName((id) => figma.getNodeByIdAsync(id));
+      /** Variable collections, read to turn a node's pinned variable-mode ids into human names (theming). A file has a
+       *  handful reused across every node, so the whole object is cached per run (its .modes list too) — the same
+       *  memo, through `.obj`. */
+      this.collection = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null)).obj;
+      /** Who asked this run to stop, if anyone: the designer's Cancel button, or the bridge giving up on the request
+       *  (progress.ts requestAbandon). One field rather than two flags so the run fails with exactly one, truthful
+       *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
+       *  was meant for had already finished — cannot kill the next one. */
+      this.cancel = null;
+      /** The page the walk is on (progress.ts enterPage), so the ticks that are not page boundaries can say WHERE they
+       *  are. */
+      this.page = void 0;
+      /** When this run last posted a throttled progress frame. */
+      this.lastPost = 0;
+      /** Bound, so it can be handed on as a warning sink (`findNodeById(id, r.warn)`). */
+      this.warn = (msg) => {
+        this.warnings.push(msg);
+      };
+      /** `kind` is the stable grouping key (a sentence with no node-specific text in it); `ref` identifies
+       *  the node — pass "<name> (<id>)" so the examples are actionable. */
+      this.warnKind = (kind, ref) => {
+        let g = this.grouped.get(kind);
+        if (!g) {
+          g = { count: 0, examples: [] };
+          this.grouped.set(kind, g);
+        }
+        g.count++;
+        if (ref && g.examples.length < WARN_EXAMPLES) g.examples.push(ref);
+      };
+      this.info = info;
+    }
+    /** The opt-in reads this run makes: all off until its collector names them (useReads). */
+    get reads() {
+      return this.readOpts;
+    }
+    /** Fix this run's read options. Once per run: a read cannot change what it reads halfway through, so a walk that
+     *  needs a different policy says so in its own arguments (serialize.ts AssetPolicy). */
+    useReads(opts) {
+      if (this.readsFixed) throw new Error("a run's read options are fixed once, by its collector");
+      this.readsFixed = true;
+      const r = readOptDefaults();
+      for (const k of Object.keys(r)) r[k] = !!(opts && opts[k]);
+      this.readOpts = r;
+    }
+    /** See Delivery.sourceBytes. */
+    get sourceBytes() {
+      return this.delivery.sourceBytes;
+    }
+    /** The run's warnings: the one-off lines, then one line per kind (warnKind). A fresh array per call. */
+    warningLines() {
+      const out = this.warnings.slice();
+      this.grouped.forEach((g, kind) => {
+        let line = kind + ": " + g.count + " node(s)";
+        if (g.examples.length) {
+          line += " \u2014 e.g. " + g.examples.join("; ");
+          if (g.count > g.examples.length) line += " (+" + (g.count - g.examples.length) + " more)";
+        }
+        out.push(line);
+      });
+      return out;
+    }
+    /** @internal claimRun's bookkeeping: the first collector to claim a scheduled run sets its delivery. */
+    claim(delivery) {
+      if (this.claimed) return false;
+      this.claimed = true;
+      if (delivery && delivery.sourceBytes === false) this.delivery = { sourceBytes: false };
+      return true;
+    }
+    /** Drop the run's asset payloads (tens of MB of base64 PNG/SVG). A collector has already returned its own
+     *  assets.slice(), and a run that THREW hands them to nobody; the dedupe tables go too, since `byContent` points
+     *  at the same objects. Clearing drops the references only; the returned objects are never touched. */
+    release() {
+      this.assets.length = 0;
+      this.assetFiles.byContent.clear();
+      this.assetFiles.byName.clear();
+    }
+  };
+  var SKIP_ASSETS_NOTE = (n) => `--no-assets: ${n} node(s) that would have exported an SVG/PNG were skipped; each is marked 'assetSkipped: true' in the tree and stays a leaf, exactly as the full export serializes it (structure, layout and tokens are unaffected). The per-root reference screenshot is still captured \u2014 it is one render per exported root, not per node.`;
+  function manifestOf(r) {
+    const note = r.reads.skipAssets && r.stats.assetsSkipped ? SKIP_ASSETS_NOTE(r.stats.assetsSkipped) : null;
+    const all = r.warningLines();
+    const reads = Object.keys(r.reads).filter((k) => r.reads[k]);
+    return { ...r.stats, skipped: r.stats.truncated, reads, warnings: note ? all.concat(note) : all };
+  }
+  var current = null;
+  var last = null;
+  function install(r) {
+    if (current && current !== r) current.release();
+    current = r;
+    last = r;
+    return r;
+  }
+  function openRun(info) {
+    return install(new Run(info));
+  }
+  function closeRun(r) {
+    r.release();
+    if (current === r) current = null;
+  }
+  function activeRun() {
+    return current && current.info ? current : null;
+  }
+  function run() {
+    return current || install(new Run(null));
+  }
+  function claimRun(delivery) {
+    if (current && current.info) {
+      if (!current.claim(delivery)) throw new Error("one collector per run: '" + current.info.label + "' already has its read");
+      return current;
+    }
+    const r = install(new Run(null));
+    r.claim(delivery);
+    return r;
+  }
+  function assetRetention() {
+    return last ? { assets: last.assets.length, byContent: last.assetFiles.byContent.size, byName: last.assetFiles.byName.size } : { assets: 0, byContent: 0, byName: 0 };
+  }
+
+  // src/progress.ts
+  var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
+  var ABANDONED_MESSAGE = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+  var CANCELLED = "__designTwinCancelled";
+  var ABANDONED = "__designTwinAbandoned";
+  function cancelledError() {
+    const e = new Error(CANCELLED_MESSAGE);
+    e[CANCELLED] = true;
+    return e;
+  }
+  function abandonedError() {
+    const e = new Error(ABANDONED_MESSAGE);
+    e[CANCELLED] = true;
+    e[ABANDONED] = true;
+    return e;
+  }
+  function isAbandonment(e) {
+    return !!e && typeof e === "object" && e[ABANDONED] === true;
+  }
+  var MIN_INTERVAL_MS = 250;
+  function post(m) {
+    try {
+      if (figma && figma.ui && typeof figma.ui.postMessage === "function") figma.ui.postMessage(m);
+    } catch (e) {
+    }
+  }
+  function postRunBegin(info) {
+    post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
+  }
+  function postRunEnd(abandoned) {
+    post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
+  }
+  function postQueued(run2) {
+    if (run2.source !== "bridge") return;
+    post({ type: "progress", phase: "queued", source: "bridge", label: run2.label, ...ifDefined("requestId", run2.requestId) });
+  }
+  function postStarted(run2) {
+    if (run2.source !== "bridge") return;
+    post({ type: "progress", phase: "start", source: "bridge", label: run2.label, ...ifDefined("requestId", run2.requestId) });
+  }
+  function requestCancel() {
+    const r = activeRun();
+    if (!r || !r.info) return null;
+    r.cancel = "designer";
+    return r.info;
+  }
+  function requestAbandon(matches) {
+    const r = activeRun();
+    if (!r || !r.info || !matches(r.info)) return null;
+    if (r.cancel === null) r.cancel = "abandoned";
+    return r.info;
+  }
+  function checkCancelled() {
+    const r = activeRun();
+    if (!r) return;
+    if (r.cancel === "designer") throw cancelledError();
+    if (r.cancel === "abandoned") throw abandonedError();
+  }
+  function progress(phase, extra, force) {
+    const r = activeRun();
+    if (!r || !r.info) return;
+    const now = Date.now();
+    if (!force && now - r.lastPost < MIN_INTERVAL_MS) return;
+    r.lastPost = now;
+    post({ type: "progress", phase, source: r.info.source, label: r.info.label, ...ifDefined("page", r.page), ...extra });
+  }
+  function enterPage(phase, index, of, name, pageId, extra) {
+    const r = activeRun();
+    if (!r) return;
+    r.page = { index, of, name, ...ifDefined("pageId", pageId) };
+    progress(phase, extra, true);
+  }
+
+  // src/state.ts
   var queuedRuns = /* @__PURE__ */ new Set();
   var runChain = Promise.resolve();
   var inChain = 0;
-  function serializeRun(fn, run) {
-    return enqueue(fn, run, true);
+  function serializeRun(fn, run2) {
+    return enqueue(fn, run2, true);
   }
-  function scheduleRun(kind, fn, run) {
+  function scheduleRun(kind, fn, run2) {
     if (kind === "identity") return fn();
-    return enqueue(fn, run, kind === "exclusive");
+    return enqueue(fn, run2, kind === "exclusive");
   }
-  function enqueue(fn, run, bracketed) {
-    const ticket = { run, abandoned: false };
+  function enqueue(fn, run2, bracketed) {
+    const ticket = { run: run2, abandoned: false };
     queuedRuns.add(ticket);
     const waits = inChain > 0;
-    if (waits) postQueued(run);
+    if (waits) postQueued(run2);
     inChain++;
     const go = () => {
       queuedRuns.delete(ticket);
@@ -829,8 +686,8 @@
         inChain--;
         return Promise.reject(abandonedError());
       }
-      if (!bracketed && waits) postStarted(run);
-      const ran = bracketed ? bracket(fn, run) : Promise.resolve().then(fn);
+      if (!bracketed && waits) postStarted(run2);
+      const ran = bracketed ? bracket(fn, run2) : Promise.resolve().then(fn);
       return ran.finally(() => {
         inChain--;
       });
@@ -861,8 +718,9 @@
     if (requestAbandon((r) => r.source === "bridge")) hit++;
     return hit;
   }
-  async function bracket(fn, run) {
-    beginRun(run);
+  async function bracket(fn, run2) {
+    const ctx = openRun(run2);
+    postRunBegin(run2);
     let abandoned = false;
     try {
       return await fn();
@@ -870,36 +728,17 @@
       abandoned = isAbandonment(e);
       throw e;
     } finally {
-      releaseAssets();
-      endRun(abandoned);
+      closeRun(ctx);
+      postRunEnd(abandoned);
     }
   }
-  function releaseAssets() {
-    assets.length = 0;
-    resetAssetNames();
-  }
-  function assetRetention() {
-    return { assets: assets.length, ...assetNameTableSizes() };
-  }
-  async function loadAllPages(consequence) {
+  async function loadAllPages(consequence, sink) {
     if (!figma.loadAllPagesAsync) return;
     try {
       await figma.loadAllPagesAsync();
     } catch (e) {
-      warn("loadAllPagesAsync failed (" + consequence + "): " + errMsg(e));
+      sink("loadAllPagesAsync failed (" + consequence + "): " + errMsg(e));
     }
-  }
-  function resetRun() {
-    releaseAssets();
-    warnings = [];
-    grouped = /* @__PURE__ */ new Map();
-    stats = newStats();
-    varName.reset();
-    styleNameLookup.reset();
-    nodeNameLookup.reset();
-    collectionLookup.reset();
-    imageSizeCache.clear();
-    runDelivery.sourceBytes = true;
   }
 
   // ../bridge/src/node-id.ts
@@ -1143,7 +982,7 @@
   }
   async function resolveVar(alias) {
     if (!isVariableAlias(alias)) return void 0;
-    return varName(alias.id);
+    return run().varName(alias.id);
   }
   async function resolveBoundMap(bound) {
     if (!bound) return void 0;
@@ -1166,7 +1005,7 @@
   }
   async function styleName(id) {
     if (!id || id === figma.mixed) return void 0;
-    return styleNameLookup(id);
+    return run().styleName(id);
   }
   var STYLE_FIELDS = [
     ["fillStyleId", "fill"],
@@ -1195,7 +1034,7 @@
     if (!raw || !Object.keys(raw).length) return void 0;
     const out = {};
     for (const [collectionId, modeId] of Object.entries(raw)) {
-      const c = await getCollection(collectionId);
+      const c = await run().collection(collectionId);
       if (!c || !Array.isArray(c.modes)) {
         out[collectionId] = modeId;
         continue;
@@ -1246,7 +1085,7 @@
     return out;
   }
   async function aliasValue(a) {
-    return { aliasOf: await varName(a.id) || a.id };
+    return { aliasOf: await run().varName(a.id) || a.id };
   }
   async function composedValue(v) {
     if (colorIsAlias(v)) {
@@ -1296,15 +1135,15 @@
     };
     const remoteVars = [];
     const seen = new Set(localIds);
-    let frontier = [...new Set(varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+    let frontier = [...new Set(run().varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
     while (frontier.length) {
       for (const id of frontier) seen.add(id);
-      const fetched = (await Promise.all(frontier.map((id) => varName.obj(id)))).filter(Boolean);
+      const fetched = (await Promise.all(frontier.map((id) => run().varName.obj(id)))).filter(Boolean);
       remoteVars.push(...fetched);
       frontier = [...new Set([].concat(...fetched.map(aliasTargets)))].filter((id) => !seen.has(id));
     }
     const missingCollIds = [...new Set(remoteVars.map((v) => v.variableCollectionId).filter((cid) => cid && !collById.has(cid)))];
-    for (const c of await Promise.all(missingCollIds.map((cid) => getCollection(cid)))) {
+    for (const c of await Promise.all(missingCollIds.map((cid) => run().collection(cid)))) {
       if (c) collById.set(c.id, c);
     }
     const allCollections = [...collById.values()];
@@ -1392,6 +1231,239 @@
       variables,
       hygiene
     };
+  }
+
+  // src/assets.ts
+  var ASSET_DIR = "assets/";
+  function contentHash(a) {
+    const src = a.text != null ? normalizeSvgText(a.text) : a.base64 != null ? a.base64 : "";
+    let h = 2166136261;
+    for (let i = 0; i < src.length; i++) {
+      h ^= src.charCodeAt(i);
+      h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+    }
+    return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
+  }
+  function assetSafe(x) {
+    return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
+  }
+  function baseNameFor(a) {
+    if (a.kind === "reference") return safe(a.id.replace(/:ref$/, "")) + "_ref";
+    if (a.kind === "source") return safe(a.id);
+    const last2 = String(a.name || "").split("/").pop() || "";
+    const cleaned = assetSafe(last2.trim()).replace(/^[-_]+|[-_]+$/g, "");
+    return cleaned || safe(a.id);
+  }
+  function register(a) {
+    const fmt = safe(a.format);
+    const dedupable = a.kind !== "reference";
+    const hash = contentHash(a);
+    const r = run();
+    const { byContent, byName } = r.assetFiles;
+    if (dedupable) {
+      const hit = byContent.get(hash + "." + fmt);
+      if (hit) {
+        (hit.asset.from || (hit.asset.from = [hit.asset.id])).push(a.id);
+        return ASSET_DIR + hit.file;
+      }
+    }
+    const base = baseNameFor(a);
+    let file = base + "." + fmt;
+    const key = file.toLowerCase();
+    const taken = byName.get(key);
+    if (taken !== void 0 && taken !== hash) {
+      const [head = ""] = hash.split("-");
+      file = base + "-" + head.slice(0, 6) + "." + fmt;
+    }
+    byName.set(file.toLowerCase(), hash);
+    const asset = { ...a, file, hash };
+    r.assets.push(asset);
+    if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
+    return ASSET_DIR + file;
+  }
+  function imageFormat(b) {
+    if (b.length >= 8 && b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return "png";
+    if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "jpg";
+    if (b.length >= 12 && b[0] === 82 && b[1] === 73 && b[8] === 87 && b[9] === 69 && b[10] === 66 && b[11] === 80) return "webp";
+    if (b.length >= 6 && b[0] === 71 && b[1] === 73 && b[2] === 70) return "gif";
+    return "bin";
+  }
+  function collectSourceImage(hash) {
+    if (!hash) return Promise.resolve(void 0);
+    const sizes = run().imageSizes;
+    let p = sizes.get(hash);
+    if (!p) {
+      p = readSourceImage(hash);
+      sizes.set(hash, p);
+    }
+    return p;
+  }
+  async function readSourceImage(hash) {
+    let size;
+    try {
+      const img = figma.getImageByHash(hash);
+      if (img) {
+        const s = await img.getSizeAsync();
+        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
+        if (run().sourceBytes) {
+          try {
+            const bytes = await img.getBytesAsync();
+            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+          } catch (e) {
+          }
+        }
+      }
+    } catch (e) {
+      run().warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
+    }
+    return size;
+  }
+  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+  var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+  function paints(v) {
+    return Array.isArray(v) ? v : null;
+  }
+  function hasVisiblePaint(node, fills) {
+    if (fills && fills.some((p) => p.visible !== false)) return true;
+    const s = paints("strokes" in node ? node.strokes : void 0);
+    return !!s && s.some((p) => p.visible !== false);
+  }
+  function hasArea(node) {
+    if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
+    return node.width > 0 && node.height > 0;
+  }
+  function paintsNothing(node, isVector, fills) {
+    return !hasArea(node) || isVector && !hasVisiblePaint(node, fills);
+  }
+  function geometryOf(node) {
+    const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
+    const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
+    const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : void 0);
+    if (!fills.length && !strokes.length) return void 0;
+    const out = {};
+    if (fills.length) out.fills = fills;
+    if (strokes.length) out.strokes = strokes;
+    if ("width" in node && typeof node.width === "number") {
+      out.w = round(node.width);
+      out.h = round(node.height);
+    }
+    return out;
+  }
+  async function collectAsset(node, hidden, policy) {
+    const r = run();
+    const stats = r.stats;
+    const isVector = VECTOR_TYPES.has(node.type);
+    const rawFills = "fills" in node ? node.fills : void 0;
+    const fills = Array.isArray(rawFills) ? rawFills : null;
+    const kids = "children" in node && Array.isArray(node.children) ? node.children : null;
+    const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
+    let iconLike = false;
+    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && "findOne" in node && Math.max(node.width, node.height) <= 96) {
+      try {
+        iconLike = !node.findOne((x) => x.type === "TEXT");
+      } catch (e) {
+        iconLike = false;
+      }
+    }
+    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && node.isAsset === true && "findOne" in node) {
+      try {
+        iconLike = !node.findOne((x) => x.type === "TEXT");
+      } catch (e) {
+        iconLike = false;
+      }
+    }
+    if ((policy === "none" || r.reads.skipAssets) && (isVector || iconLike || hasImage)) {
+      if (policy !== "none") stats.assetsSkipped++;
+      return { skipped: true };
+    }
+    if (hidden && (isVector || iconLike || hasImage)) {
+      if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      stats.assetsHidden++;
+      return { skipped: "hidden" };
+    }
+    if (isVector || iconLike || hasImage) {
+      checkCancelled();
+      progress("assets", { nodes: stats.nodes, assets: r.assets.length });
+    }
+    if (isVector || iconLike) {
+      if (paintsNothing(node, isVector, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      let svg = null;
+      let reason = "empty/invalid SVG";
+      try {
+        if ("exportAsync" in node) svg = await node.exportAsync({ format: "SVG_STRING" });
+      } catch (e) {
+        reason = errMsg(e);
+      }
+      if (svg && svg.indexOf("<svg") !== -1) {
+        return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
+      }
+      const geo = isVector ? geometryOf(node) : void 0;
+      if (geo) {
+        stats.assetsGeometry++;
+        return { geometry: geo };
+      }
+      stats.assetsFailed++;
+      r.warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
+      return void 0;
+    }
+    try {
+      if (hasImage && "exportAsync" in node) {
+        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
+        if (!bytes || !bytes.length) {
+          stats.assetsFailed++;
+          r.warnKind("image asset export empty", node.name + " (" + node.id + ")");
+          return void 0;
+        }
+        return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
+      }
+    } catch (e) {
+      stats.assetsFailed++;
+      r.warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
+    }
+    return void 0;
+  }
+  function referenceScale(node, opts) {
+    if (opts && typeof opts.scale === "number" && opts.scale > 0) return opts.scale;
+    const w = "width" in node ? node.width || 0 : 0;
+    const h = "height" in node ? node.height || 0 : 0;
+    return Math.min(2, 2048 / (Math.max(w, h) || 1));
+  }
+  async function collectReference(node, opts) {
+    if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
+    try {
+      const value = referenceScale(node, opts);
+      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
+      if (!bytes || !bytes.length) {
+        run().warn("reference screenshot empty: " + node.name);
+        return void 0;
+      }
+      return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
+    } catch (e) {
+      run().warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
+      return void 0;
+    }
+  }
+  async function devResources(node) {
+    if (!node) return void 0;
+    try {
+      const rs = await node.getDevResourcesAsync({ includeChildren: true });
+      if (!Array.isArray(rs) || !rs.length) return void 0;
+      return rs.map((r) => {
+        const o = { name: r.name, url: r.url };
+        if (r.nodeId) o.nodeId = r.nodeId;
+        if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;
+        return o;
+      });
+    } catch (e) {
+      run().warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
+      return void 0;
+    }
   }
 
   // src/paint.ts
@@ -1847,12 +1919,12 @@
       out.missingFont = true;
       const name = "name" in node ? node.name : void 0;
       const id = "id" in node ? node.id : void 0;
-      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
+      run().warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
     }
     if ("width" in node && node.width === 0) {
       const name = "name" in node ? node.name : void 0;
       const id = "id" in node ? node.id : void 0;
-      warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
+      run().warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
     }
     return out;
   }
@@ -1876,7 +1948,7 @@
     if (!vd || typeof vd !== "object") return vd;
     const v = "value" in vd ? vd.value : vd;
     if (isVariableAlias(v)) {
-      return { token: await varName(v.id) || v.id };
+      return { token: await run().varName(v.id) || v.id };
     }
     return v;
   }
@@ -1890,18 +1962,18 @@
     } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
       if (a.destinationId) {
         ao.destinationId = a.destinationId;
-        const dn = await nodeNameLookup(a.destinationId);
+        const dn = await run().nodeName(a.destinationId);
         if (dn) ao.destination = dn;
       }
       ao.mediaAction = String(a.mediaAction).toLowerCase();
       if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
       if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;
     } else if (a.type === "SET_VARIABLE") {
-      if (a.variableId) ao.variable = await varName(a.variableId) || a.variableId;
+      if (a.variableId) ao.variable = await run().varName(a.variableId) || a.variableId;
       if (a.variableValue != null) ao.value = await simplifyVariableData(a.variableValue);
     } else if (a.type === "SET_VARIABLE_MODE") {
       if (a.variableCollectionId) {
-        const c = await getCollection(a.variableCollectionId);
+        const c = await run().collection(a.variableCollectionId);
         ao.collection = c ? c.name : a.variableCollectionId;
         if (a.variableModeId) {
           const m = c && Array.isArray(c.modes) ? c.modes.find((x) => x.modeId === a.variableModeId) : null;
@@ -1920,7 +1992,7 @@
     } else if (a.type === "NODE") {
       if (a.destinationId) {
         ao.destinationId = a.destinationId;
-        const dn = await nodeNameLookup(a.destinationId);
+        const dn = await run().nodeName(a.destinationId);
         if (dn) ao.destination = dn;
       }
       if (a.navigation) ao.navigation = a.navigation.toLowerCase();
@@ -1983,7 +2055,7 @@
     }
   }
   async function allInstances(sink) {
-    await loadAllPages("library component scan may be incomplete");
+    await loadAllPages("library component scan may be incomplete", sink);
     const out = [];
     const prevSkip = figma.skipInvisibleInstanceChildren;
     try {
@@ -1991,11 +2063,11 @@
         figma.skipInvisibleInstanceChildren = true;
       } catch (e) {
       }
-      for (const page2 of figma.root.children) {
+      for (const page of figma.root.children) {
         try {
-          out.push(...page2.findAllWithCriteria({ types: ["INSTANCE"] }));
+          out.push(...page.findAllWithCriteria({ types: ["INSTANCE"] }));
         } catch (e) {
-          sink("library scan: page '" + page2.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its library components are missing");
+          sink("library scan: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its library components are missing");
         }
       }
     } finally {
@@ -2059,7 +2131,7 @@
     return nonEmpty(props);
   }
   async function collectLibraryComponents(sinkIn) {
-    const sink = sinkIn || warn;
+    const sink = sinkIn || ((m) => run().warn(m));
     const registry = readRegistry(sink);
     const instances = await allInstances(sink);
     const mains = await Promise.all(instances.map((i) => mainOf(i)));
@@ -2146,8 +2218,8 @@
     return byLibrary;
   }
   async function listLibraries() {
-    const warnings2 = [];
-    const sink = (m) => warnings2.push(m);
+    const warnings = [];
+    const sink = (m) => warnings.push(m);
     const [varsByLibrary, components] = await Promise.all([
       libraryVariableCollections(sink),
       collectLibraryComponents(sink).catch((e) => {
@@ -2207,7 +2279,7 @@
         note: source === UNKNOWN_LIBRARY ? "components consumed from published libraries that the API cannot attribute to a source (only VARIABLES carry a libraryName). componentCount counts DISTINCT components USED IN THIS FILE, not what any library offers." : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers"
       });
     }
-    return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings: warnings2 };
+    return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings };
   }
 
   // src/motion.ts
@@ -2242,7 +2314,7 @@
     }
   }
   async function aliasValue2(id) {
-    return { aliasOf: await varName(id) || id };
+    return { aliasOf: await run().varName(id) || id };
   }
   async function motionEasing(ez) {
     if (!ez || !ez.type) return void 0;
@@ -2399,7 +2471,7 @@
     }
   }
   async function customStyleDetail(styleId) {
-    const style = await styleNameLookup.obj(styleId);
+    const style = await run().styleName.obj(styleId);
     if (!style || style.type !== "CUSTOM_ANIMATION") return {};
     try {
       const detail = {};
@@ -2453,7 +2525,7 @@
     const list = overrides.filter((o) => o && Array.isArray(o.overriddenFields) && o.overriddenFields.length).map((o) => ({ id: o.id, fields: o.overriddenFields }));
     if (!list.length) return void 0;
     if (list.length > OVERRIDE_CAP) {
-      warn("instance '" + node.name + "' has " + list.length + " overrides \u2014 truncated to " + OVERRIDE_CAP);
+      run().warn("instance '" + node.name + "' has " + list.length + " overrides \u2014 truncated to " + OVERRIDE_CAP);
       return list.slice(0, OVERRIDE_CAP);
     }
     return list;
@@ -2507,16 +2579,11 @@
     return nonEmpty(out);
   }
   var VARIANT_WALK_DEPTH = 3;
-  async function serializeVariant(main, serialize2) {
-    const prevSkipAssets = runOpts.skipAssets;
-    try {
-      runOpts.skipAssets = true;
-      return await serialize2(main, 60 - VARIANT_WALK_DEPTH);
-    } finally {
-      runOpts.skipAssets = prevSkipAssets;
-    }
+  function serializeVariant(main, serialize2) {
+    return serialize2(main, 60 - VARIANT_WALK_DEPTH, void 0, void 0, void 0, "none");
   }
   async function collectComponentCatalog(hygiene, asLibrary, serialize2) {
+    const variantVisuals = run().reads.variantVisuals;
     const components = [];
     const pendingPublish = [];
     const seenNames = /* @__PURE__ */ new Set();
@@ -2531,26 +2598,26 @@
       }
       const catalogPages = figma.root.children;
       let catalogIndex = 0;
-      for (const page2 of catalogPages) {
+      for (const page of catalogPages) {
         checkCancelled();
-        enterPage("design-system", ++catalogIndex, catalogPages.length, page2.name, page2.id, { components: components.length });
+        enterPage("design-system", ++catalogIndex, catalogPages.length, page.name, page.id, { components: components.length });
         let nodes = [];
         try {
-          nodes = page2.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
+          nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
         } catch (e) {
-          warn("component catalog: page '" + page2.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its components are missing");
+          run().warn("component catalog: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its components are missing");
           continue;
         }
         for (const n of nodes) {
           if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") {
-            if (runOpts.variantVisuals) {
+            if (variantVisuals) {
               const list = variantsBySet.get(n.parent.id);
               if (list) list.push(n);
               else variantsBySet.set(n.parent.id, [n]);
             }
             continue;
           }
-          const entry = { name: n.name, id: n.id, type: n.type, page: page2.name, pageId: page2.id };
+          const entry = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
           if (n.key) entry.key = n.key;
@@ -2591,7 +2658,7 @@
               if (variantCombos > 30) hygiene.push("variant explosion: '" + n.name + "' has " + variantCombos + " combinations (>30 \u2014 consider boolean/instance-swap props)");
             }
           } catch (e) {
-            warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") \u2014 props omitted");
+            run().warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") \u2014 props omitted");
           }
           if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
@@ -2600,11 +2667,11 @@
             const visuals = await simplifyVisuals(n);
             if (visuals) entry.visuals = visuals;
           } catch (e) {
-            warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 visuals omitted");
+            run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 visuals omitted");
           }
           if (asLibrary) pendingPublish.push({ entry, node: n });
-          if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
-          if (runOpts.variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
+          if (variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
+          if (variantVisuals && n.type === "COMPONENT") standalone.push({ entry, node: n });
           components.push(entry);
         }
       }
@@ -2620,11 +2687,11 @@
           const node = await serializeVariant(n, serialize2);
           if (node) entry.node = node;
         } catch (e) {
-          warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
+          run().warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") \u2014 node tree omitted");
         }
       }
     }
-    if (runOpts.variantVisuals && serialize2 && variantsBySet.size) {
+    if (variantVisuals && serialize2 && variantsBySet.size) {
       for (const [setId, variants] of variantsBySet) {
         const entry = entriesBySetId.get(setId);
         if (!entry) continue;
@@ -2639,7 +2706,7 @@
             if (node) o.node = node;
             out.push(o);
           } catch (e) {
-            warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") \u2014 omitted");
+            run().warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") \u2014 omitted");
           }
         }
         if (out.length) entry.variants = out;
@@ -2680,7 +2747,7 @@
       safeList(() => figma.getLocalCustomAnimationStylesAsync ? figma.getLocalCustomAnimationStylesAsync() : Promise.resolve([]))
     ]);
     const hygiene = [];
-    await loadAllPages("component catalog may be incomplete");
+    await loadAllPages("component catalog may be incomplete", (m) => run().warn(m));
     const components = await collectComponentCatalog(hygiene, asLibrary, serialize2);
     if (asLibrary) {
       hygiene.push(
@@ -2688,7 +2755,7 @@
       );
     } else try {
       const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
-      const remote = await collectLibraryComponents((m) => warn(m));
+      const remote = await collectLibraryComponents((m) => run().warn(m));
       let added = 0;
       for (const entry of remote) {
         if (seenKeys.has(entry.key)) continue;
@@ -2702,7 +2769,7 @@
         );
       }
     } catch (e) {
-      warn("library component catalog failed (" + errMsg(e) + ") \u2014 components consumed from published libraries are missing from the catalog");
+      run().warn("library component catalog failed (" + errMsg(e) + ") \u2014 components consumed from published libraries are missing from the catalog");
     }
     let colorProfile;
     try {
@@ -2898,11 +2965,13 @@
     }
     putNonEmpty(out, "sourceTransform", st);
   }
-  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid) {
+  async function serialize(node, depth, parentControlsLayout, underHidden, inGrid, assets = "run") {
     checkCancelled();
+    const r = run();
+    const stats = r.stats;
     if (depth > MAX_DEPTH) {
       stats.truncated++;
-      if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
+      if (stats.truncated === 1) r.warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
       return null;
     }
     stats.nodes++;
@@ -3081,15 +3150,15 @@
     if (propRefs) out.propRefs = propRefs;
     const overrides = instanceOverrides(node);
     if (overrides) out.overrides = overrides;
-    if (runOpts.pluginData) {
+    if (r.reads.pluginData) {
       const pd = pluginData(node);
       if (pd) out.pluginData = pd;
     }
-    if (runOpts.motion) {
+    if (r.reads.motion) {
       const m = await collectMotion(node);
       if (m) out.motion = m;
     }
-    if (runOpts.sharedData) {
+    if (r.reads.sharedData) {
       const sd = sharedData(node);
       if (sd) out.sharedData = sd;
     }
@@ -3097,10 +3166,10 @@
       instanceComponentRef(node),
       boundTokens(node),
       nodeStyles(node),
-      collectAsset(node, hidden),
+      collectAsset(node, hidden, assets),
       simplifyReactions(node),
       variableModes(node),
-      runOpts.css ? nodeCss(node) : Promise.resolve(void 0)
+      r.reads.css ? nodeCss(node) : Promise.resolve(void 0)
     ]);
     if (mainRef) {
       out.component = mainRef.name;
@@ -3126,12 +3195,12 @@
     }
     if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
       const grid = await Promise.all(
-        Array.from({ length: node.numRows }, (_, r) => Promise.all(
+        Array.from({ length: node.numRows }, (_, r2) => Promise.all(
           Array.from({ length: node.numColumns }, async (__, cc) => {
             try {
-              const cell = node.cellAt(r, cc);
+              const cell = node.cellAt(r2, cc);
               if (!cell) return void 0;
-              const co = { row: r, col: cc };
+              const co = { row: r2, col: cc };
               if (cell.text) Object.assign(co, await serializeText(cell.text));
               const cfills = await simplifyFills(cell.fills);
               if (cfills) co.fills = cfills;
@@ -3155,7 +3224,7 @@
       for (let i = 0; i < children.length; i++) {
         const c = children[i];
         if (!c) continue;
-        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid);
+        const s = await serialize(c, depth + 1, controlsChildren && !(nFixed > 0 && i >= pinnedFrom), hidden, grid, assets);
         if (s) kids.push(s);
       }
       if (kids.length) out.children = kids;
@@ -3177,11 +3246,11 @@
     }
     return false;
   }
-  async function rootTree(node) {
+  async function rootTree(r, node) {
     const self = "visible" in node && node.visible === false;
     const underHidden = hiddenAncestor(node);
     if (self || underHidden) {
-      warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") + ' \u2014 its graphics are not exported (assetSkipped:"hidden") and its reference image may be blank');
+      r.warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") + ' \u2014 its graphics are not exported (assetSkipped:"hidden") and its reference image may be blank');
     }
     const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
     if (!tree) return null;
@@ -3189,20 +3258,20 @@
     if (dev) tree.devResources = dev;
     return tree;
   }
-  async function screenResult(title, fileBase, nodes, origin) {
-    const screen = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
-    const page2 = origin && origin.page;
-    if (page2) {
-      screen.page = page2.name;
-      screen.pageId = page2.id;
+  async function screenResult(r, title, fileBase, nodes, origin) {
+    const screen = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifestOf(r) };
+    const page = origin && origin.page;
+    if (page) {
+      screen.page = page.name;
+      screen.pageId = page.id;
     }
     if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
-    const measurements = collectMeasurements();
+    const measurements = collectMeasurements(r);
     if (measurements) screen.measurements = measurements;
-    const out = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
-    if (page2) {
-      out.page = page2.name;
-      out.pageId = page2.id;
+    const out = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: r.assets.slice() };
+    if (page) {
+      out.page = page.name;
+      out.pageId = page.id;
     }
     if (origin && origin.nodeId) out.nodeId = origin.nodeId;
     return out;
@@ -3342,29 +3411,29 @@
     });
     return [];
   }
-  async function loadPageSafely(page2, sink, what) {
-    if (typeof page2.loadAsync !== "function") return false;
+  async function loadPageSafely(page, sink, what) {
+    if (typeof page.loadAsync !== "function") return false;
     try {
-      await page2.loadAsync();
+      await page.loadAsync();
     } catch (e) {
-      sink("page '" + page2.name + "' failed to load" + (what ? " " + what : "") + ": " + errMsg(e));
+      sink("page '" + page.name + "' failed to load" + (what ? " " + what : "") + ": " + errMsg(e));
       return false;
     }
     return true;
   }
-  function pageChildren(page2, sink, consequence) {
+  function pageChildren(page, sink, consequence) {
     try {
-      return page2.children;
+      return page.children;
     } catch (e) {
-      sink("page '" + page2.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + errMsg(e));
+      sink("page '" + page.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + errMsg(e));
       return null;
     }
   }
   async function findNodeById(nodeId, sink) {
     let node = await figma.getNodeByIdAsync(nodeId);
     if (!node) {
-      for (const page2 of figma.root.children) {
-        if (!await loadPageSafely(page2, sink, "during node lookup")) continue;
+      for (const page of figma.root.children) {
+        if (!await loadPageSafely(page, sink, "during node lookup")) continue;
         node = await figma.getNodeByIdAsync(nodeId);
         if (node) break;
       }
@@ -3399,9 +3468,6 @@
     }
     return picked;
   }
-  function applyOpts(opts) {
-    for (const k of Object.keys(runOpts)) runOpts[k] = !!(opts && opts[k]);
-  }
   var CSS_AUTO_NODE_CAP = 60;
   function subtreeIsSmall(node) {
     let count = 0;
@@ -3426,11 +3492,11 @@
     const only = f[0];
     return f.length === 1 && only !== void 0 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
   }
-  async function pageBackground(page2) {
+  async function pageBackground(page) {
     const out = {};
-    const bg = await simplifyFills(page2.backgrounds);
+    const bg = await simplifyFills(page.backgrounds);
     if (bg && !isDefaultBg(bg)) out.background = bg;
-    const proto = await simplifyFills(page2.prototypeBackgrounds);
+    const proto = await simplifyFills(page.prototypeBackgrounds);
     if (proto && !isDefaultBg(proto)) out.prototypeBackground = proto;
     return nonEmpty(out);
   }
@@ -3440,40 +3506,40 @@
     if (Array.isArray(kids)) for (const k of kids) n += countNodes(k);
     return n;
   }
-  function collectMeasurements(pages) {
-    if (!runOpts.measurements) return void 0;
+  function collectMeasurements(r, pages) {
+    if (!r.reads.measurements) return void 0;
     const targets = pages && pages.length ? pages : [figma.currentPage];
     const out = [];
-    for (const page2 of targets) {
-      if (typeof page2.getMeasurements !== "function") continue;
+    for (const page of targets) {
+      if (typeof page.getMeasurements !== "function") continue;
       try {
-        const ms = page2.getMeasurements();
+        const ms = page.getMeasurements();
         if (!Array.isArray(ms) || !ms.length) continue;
         const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
         for (const m of ms) {
-          const o = { page: page2.name, pageId: page2.id, ...ifDefined("start", side(m.start)), ...ifDefined("end", side(m.end)) };
+          const o = { page: page.name, pageId: page.id, ...ifDefined("start", side(m.start)), ...ifDefined("end", side(m.end)) };
           if (m.freeText) o.text = m.freeText;
           if (m.offset != null) o.offset = m.offset;
           out.push(o);
         }
       } catch (e) {
-        warn("measurements unavailable for page '" + page2.name + "': " + errMsg(e));
+        r.warn("measurements unavailable for page '" + page.name + "': " + errMsg(e));
       }
     }
     return out.length ? out : void 0;
   }
   async function collectSelection(opts) {
-    resetRun();
+    const r = claimRun();
     const sel = figma.currentPage.selection;
     const first2 = sel[0];
     if (!first2) throw new Error("Select at least one frame first.");
-    applyOpts(sel.length === 1 ? autoCss(opts, first2) : opts);
+    r.useReads(sel.length === 1 ? autoCss(opts, first2) : opts);
     const nodes = [];
     for (const nd of sel) {
-      const tree = await rootTree(nd);
+      const tree = await rootTree(r, nd);
       if (tree) nodes.push(tree);
     }
-    return screenResult(sel.length === 1 ? first2.name : "selection", first2.name, nodes, { page: figma.currentPage, nodeId: first2.id });
+    return screenResult(r, sel.length === 1 ? first2.name : "selection", first2.name, nodes, { page: figma.currentPage, nodeId: first2.id });
   }
   function pageOf(node) {
     let n = node;
@@ -3481,33 +3547,33 @@
     return n && n.type === "PAGE" ? n : null;
   }
   async function collectNode(rawId, opts) {
-    resetRun();
+    const r = claimRun();
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error(NO_NODE_ID);
-    const node = await findNodeById(nodeId, warn);
-    applyOpts(autoCss(opts, node));
+    const node = await findNodeById(nodeId, r.warn);
+    r.useReads(autoCss(opts, node));
     try {
-      const page2 = pageOf(node);
-      if (page2 && page2 !== figma.currentPage) await figma.setCurrentPageAsync(page2);
+      const page = pageOf(node);
+      if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
       if ("visible" in node && node.parent) figma.currentPage.selection = [node];
       if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
     } catch (e) {
     }
-    const tree = await rootTree(node);
+    const tree = await rootTree(r, node);
     if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
-    return screenResult(node.name, node.name, [tree], { page: pageOf(node), nodeId });
+    return screenResult(r, node.name, node.name, [tree], { page: pageOf(node), nodeId });
   }
   async function collectScreenshot(rawId, opts) {
-    resetRun();
+    const r = claimRun();
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error(NO_NODE_ID);
-    const node = await findNodeById(nodeId, warn);
+    const node = await findNodeById(nodeId, r.warn);
     const reference = await collectReference(node, opts);
     if (!reference) {
       throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
     }
     const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
-    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifest(), assets: assets.slice() };
+    return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node, opts), reference, manifest: manifestOf(r), assets: r.assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -3537,18 +3603,18 @@
     if (depth >= 2) {
       await Promise.all(roots.map((p) => loadPageSafely(p, sink, "\u2014 its frames may be missing")));
     }
-    for (const page2 of roots) {
-      const entry = { name: page2.name, id: page2.id };
-      if (page2.id === currentId) entry.current = true;
+    for (const page of roots) {
+      const entry = { name: page.name, id: page.id };
+      if (page.id === currentId) entry.current = true;
       if (depth >= 2) {
-        const children = pageChildren(page2, sink, "its frames are NOT listed");
+        const children = pageChildren(page, sink, "its frames are NOT listed");
         if (!children) {
           entry.unreadable = true;
           pages.push(entry);
           continue;
         }
         const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
-        for (const g of collisionGroups(frames)) sink("page '" + page2.name + "': " + collisionNote(g, "frames", "`childCount`"));
+        for (const g of collisionGroups(frames)) sink("page '" + page.name + "': " + collisionNote(g, "frames", "`childCount`"));
         frameCount += frames.length;
         entry.frames = frames;
       }
@@ -3616,9 +3682,8 @@
     };
   }
   async function collectDesignSystemOnly(opts) {
-    resetRun();
-    applyOpts(opts);
-    runDelivery.sourceBytes = false;
+    const r = claimRun({ sourceBytes: false });
+    r.useReads(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
     checkCancelled();
     if ((designSystem.variables || []).some((v) => v && v.remote === true) || (designSystem.components || []).some((c) => c && c.remote === true)) {
@@ -3630,9 +3695,8 @@
     return { designSystem };
   }
   async function collectLibraryFile(opts) {
-    resetRun();
-    applyOpts(opts);
-    runDelivery.sourceBytes = false;
+    const r = claimRun({ sourceBytes: false });
+    r.useReads(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
     const designSystem = await buildDesignSystem({ asLibrary }, serialize);
     checkCancelled();
@@ -3643,13 +3707,13 @@
     return { designSystem };
   }
   async function collectFull(opts) {
-    resetRun();
-    applyOpts(opts);
+    const r = claimRun();
+    r.useReads(opts);
     const allPages = !!(opts && opts.allPages);
-    if (allPages) await loadAllPages("all-pages export may miss pages");
+    if (allPages) await loadAllPages("all-pages export may miss pages", r.warn);
     const rawWanted = opts && opts.page !== void 0 ? (Array.isArray(opts.page) ? opts.page : [opts.page]).map((s) => String(s).trim()) : [];
     if (rawWanted.length && rawWanted.every((s) => !s)) {
-      warn("page selector was empty after trimming \u2014 ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
+      r.warn("page selector was empty after trimming \u2014 ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
     }
     const wanted = rawWanted.filter(Boolean);
     if (allPages && wanted.length) {
@@ -3660,7 +3724,7 @@
       pages = figma.root.children;
     } else if (wanted.length) {
       const picked = resolvePages(wanted, figma.root.children);
-      await Promise.all(picked.map((p) => loadPageSafely(p, warn, "")));
+      await Promise.all(picked.map((p) => loadPageSafely(p, r.warn, "")));
       pages = picked;
     } else {
       pages = [figma.currentPage];
@@ -3670,44 +3734,44 @@
     const flows = [];
     const pageSettings = [];
     let pageIndex = 0;
-    for (const page2 of pages) {
+    for (const page of pages) {
       checkCancelled();
-      enterPage("pages", ++pageIndex, pages.length, page2.name, page2.id, { nodes: stats.nodes, assets: assets.length });
-      const children = pageChildren(page2, warn, "its frames are missing from this export");
+      enterPage("pages", ++pageIndex, pages.length, page.name, page.id, { nodes: r.stats.nodes, assets: r.assets.length });
+      const children = pageChildren(page, r.warn, "its frames are missing from this export");
       if (!children) continue;
-      const bg = await pageBackground(page2);
-      if (bg) pageSettings.push({ page: page2.name, pageId: page2.id, ...bg });
-      if (isList(page2.flowStartingPoints)) {
-        for (const fp of page2.flowStartingPoints) flows.push({ page: page2.name, pageId: page2.id, nodeId: fp.nodeId, name: fp.name });
+      const bg = await pageBackground(page);
+      if (bg) pageSettings.push({ page: page.name, pageId: page.id, ...bg });
+      if (isList(page.flowStartingPoints)) {
+        for (const fp of page.flowStartingPoints) flows.push({ page: page.name, pageId: page.id, nodeId: fp.nodeId, name: fp.name });
       }
       const frames = [];
       for (const nd of children) {
         if (TOP_LEVEL_TYPES.has(nd.type)) frames.push(nd);
-        else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page2.name + "' not exported (unhandled top-level type)");
+        else if (nd.visible !== false) r.warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
       }
       for (const f of frames) {
         checkCancelled();
         const { tree, ref, dev } = await serializeWithRefs(f);
         if (tree) {
-          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, ...ifDefined("reference", ref), ...ifDefined("devResources", dev) });
+          layers.push({ name: f.name, id: f.id, page: page.name, pageId: page.id, tree, ...ifDefined("reference", ref), ...ifDefined("devResources", dev) });
           index.push({
             name: f.name,
             id: f.id,
             type: f.type,
-            page: page2.name,
-            pageId: page2.id,
+            page: page.name,
+            pageId: page.id,
             nodes: countNodes(tree),
             bytes: JSON.stringify(tree).length
           });
         }
-        progress("pages", { nodes: stats.nodes, assets: assets.length });
+        progress("pages", { nodes: r.stats.nodes, assets: r.assets.length });
       }
     }
     checkCancelled();
-    progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
+    progress("design-system", { nodes: r.stats.nodes, assets: r.assets.length }, true);
     const designSystem = await buildDesignSystem(void 0, serialize);
     checkCancelled();
-    const measurements = collectMeasurements(pages);
+    const measurements = collectMeasurements(r, pages);
     const layersDoc = {
       exportedAt: exportedAt(),
       // Three cases, not two. Folding an explicit --page into "current-page" left the consumer unable
@@ -3723,9 +3787,9 @@
       ...ifDefined("measurements", measurements || void 0),
       index,
       layers,
-      manifest: manifest()
+      manifest: manifestOf(r)
     };
-    return { designSystem, layersDoc, assets: assets.slice() };
+    return { designSystem, layersDoc, assets: r.assets.slice() };
   }
 
   // src/writes.ts
@@ -3982,8 +4046,8 @@
       post2({ type: "error", message: errMsg(e) });
       return;
     }
-    const { files, layerFiles, summary, warnings: warnings2 } = toFiles(r);
-    post2({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
+    const { files, layerFiles, summary, warnings } = toFiles(r);
+    post2({ type: "files", files, ...ifDefined("layerFiles", layerFiles), assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
   }
   var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [

@@ -4,11 +4,13 @@
 // stop it. A whole-file `allPages` pull measured 10+ minutes on a real design system (see the note on
 // collect.ts's cheap structural index) and a static "Exporting…" for all of it would leave the designer guessing.
 //
-// Why a module rather than fields on state.ts: this is the only extractor state that is written from
-// OUTSIDE the run (the UI's Cancel click lands on the main thread while the walk is mid-await), and
-// the only one whose whole job is to talk to the iframe. state.ts imports it — never the reverse — so
-// there is no cycle, and a collector can be unit-driven with no run bracketing it at all (see `running`).
+// What it tracks — who asked, the cancel flag, the page, the throttle clock — lives on the run (run.ts), so a new
+// run starts with none of it set. This module is the half that talks to the iframe and the one entry point for a
+// stop request, which is the only run state written from OUTSIDE the run (the UI's Cancel click lands on the main
+// thread while the walk is mid-await). A directly-driven collector (no scheduler) has no RunInfo, so it posts
+// nothing and no cancel reaches it.
 import { ifDefined } from "../../bridge/src/json-util.ts";
+import { activeRun } from "./run";
 
 // ---------------------------------------------------------------- what this module posts to the UI
 /** The page the walk is on: 1-based `index` of `of` pages walked. `pageId` is the identity (page names
@@ -99,22 +101,6 @@ export interface RunInfo {
   requestId?: string;
 }
 
-// `null` whenever no run is bracketed by beginRun/endRun — which is also how a directly-driven
-// collector (the test harness, a future internal caller) stays completely silent instead of posting
-// progress nobody asked for.
-let running: RunInfo | null = null;
-// Who asked the executing run to stop, if anyone: the designer's Cancel button, or the bridge giving up
-// on the request (requestAbandon). One field rather than two flags so the run fails with exactly one,
-// truthful message. A designer's click overrides an earlier abandonment (a human did ask); an
-// abandonment never overrides a click.
-let cancelRequested: "designer" | "abandoned" | null = null;
-let lastPost = 0;
-// The page the walk is currently on, remembered here so the phases that are NOT page-boundaries (the
-// per-asset ticks below) can still say WHERE they are without every caller threading it through.
-// Carries `pageId` next to `name` for the usual reason: Figma allows duplicate page names, so the name
-// is a display label and the id is the identity (see collect.ts resolvePages).
-let page: ProgressPage | undefined;
-
 // Throttle floor for the ticks INSIDE a page. postMessage crosses the main-thread -> iframe boundary,
 // and the per-asset checkpoint fires once per exported icon/image — thousands of times on a real file.
 // At ~250ms the bar still reads as live while the walk pays essentially nothing. Page boundaries and
@@ -132,26 +118,16 @@ function post(m: ProgressPost): void {
   }
 }
 
-/** Bracket the start of a run. Called from serializeRun (state.ts) — i.e. at the moment the run really
+/** A run has begun executing. Posted by the scheduler (state.ts bracket) — i.e. at the moment the run really
  *  begins, not when it was queued — so the two can never disagree about what is executing. */
-export function beginRun(info: RunInfo): void {
-  running = info;
-  // Requirement: the flag resets at the START of every run, not only at the end. A cancel that landed
-  // while nothing was running, or after the run it was meant for had already finished, must not kill
-  // the NEXT export — that is a failure with no visible cause, which is the worst kind.
-  cancelRequested = null;
-  page = undefined;
-  lastPost = 0;
+export function postRunBegin(info: RunInfo): void {
   post({ type: "run-begin", source: info.source, label: info.label, ...ifDefined("requestId", info.requestId) });
 }
 
-/** Bracket the end of a run — success, failure or cancellation alike. `abandoned` is true only when the
- *  run actually THREW the abandonment error: a flag that landed too late to reach a safe point changed
- *  nothing, and the window must not claim otherwise. */
-export function endRun(abandoned?: boolean): void {
-  running = null;
-  cancelRequested = null;
-  page = undefined;
+/** A run has ended — success, failure or cancellation alike. `abandoned` is true only when the run actually THREW
+ *  the abandonment error: a flag that landed too late to reach a safe point changed nothing, and the window must
+ *  not claim otherwise. */
+export function postRunEnd(abandoned?: boolean): void {
   post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
 }
 
@@ -171,19 +147,21 @@ export function postStarted(run: RunInfo): void {
 /** The UI's Cancel click. Returns the run it applies to, or null when nothing is running — the caller
  *  reports that back so a click on a stale button is visibly a no-op rather than a silently armed flag. */
 export function requestCancel(): RunInfo | null {
-  if (!running) return null;
-  cancelRequested = "designer";
-  return running;
+  const r = activeRun();
+  if (!r || !r.info) return null;
+  r.cancel = "designer"; // a designer's click overrides an earlier abandonment (a human did ask)
+  return r.info;
 }
 
 /** The bridge gave up on a request. If the EXECUTING run matches, arm the flag exactly as the Cancel
  *  button does (the run aborts at its next safe point), but so that it fails with ABANDONED_MESSAGE.
  *  Returns the run it hit, or null when nothing running matches. Queued runs are state.ts's business
- *  (serializeRun owns the queue) — this module only ever knows the one run that is executing. */
+ *  (the scheduler owns the queue) — this module only ever knows the one run that is executing. */
 export function requestAbandon(matches: (run: RunInfo) => boolean): RunInfo | null {
-  if (!running || !matches(running)) return null;
-  if (cancelRequested === null) cancelRequested = "abandoned";
-  return running;
+  const r = activeRun();
+  if (!r || !r.info || !matches(r.info)) return null;
+  if (r.cancel === null) r.cancel = "abandoned"; // an abandonment never overrides a click
+  return r.info;
 }
 
 /** Throw if the designer pressed Cancel (CANCELLED_MESSAGE) or the bridge abandoned the request that
@@ -195,8 +173,10 @@ export function requestAbandon(matches: (run: RunInfo) => boolean): RunInfo | nu
  *  emit a doc, and the per-run toggles are restored in `finally` blocks. A catch that swallows errors
  *  around one of these points must be followed by another check (see collect.ts's catalog backstop). */
 export function checkCancelled(): void {
-  if (cancelRequested === "designer") throw cancelledError();
-  if (cancelRequested === "abandoned") throw abandonedError();
+  const r = activeRun();
+  if (!r) return;
+  if (r.cancel === "designer") throw cancelledError();
+  if (r.cancel === "abandoned") throw abandonedError();
 }
 
 // ---------------------------------------------------------------- emission
@@ -205,16 +185,20 @@ export type Phase = "pages" | "assets" | "design-system";
 /** Emit a throttled progress frame for the current phase. `extra` carries the running counters
  *  (`nodes`, `assets`) the UI renders next to the page name. */
 export function progress(phase: Phase, extra?: ProgressCounters, force?: boolean): void {
-  if (!running) return;
+  const r = activeRun();
+  if (!r || !r.info) return;
   const now = Date.now();
-  if (!force && now - lastPost < MIN_INTERVAL_MS) return;
-  lastPost = now;
-  post({ type: "progress", phase, source: running.source, label: running.label, ...ifDefined("page", page), ...extra });
+  if (!force && now - r.lastPost < MIN_INTERVAL_MS) return;
+  r.lastPost = now;
+  post({ type: "progress", phase, source: r.info.source, label: r.info.label, ...ifDefined("page", r.page), ...extra });
 }
 
-/** Cross a page boundary: remember the page and emit an UNTHROTTLED frame for it. `index` is 1-based
- *  so the UI can render it as "page 3 of 25" without doing arithmetic on the wire format. */
+/** Cross a page boundary: remember the page on the run (Figma allows duplicate page names, so it carries `pageId`
+ *  as the identity — see collect.ts resolvePages) and emit an UNTHROTTLED frame for it. `index` is 1-based so the
+ *  UI can render it as "page 3 of 25" without doing arithmetic on the wire format. */
 export function enterPage(phase: Phase, index: number, of: number, name: string, pageId?: string, extra?: ProgressCounters): void {
-  page = { index, of, name, ...ifDefined("pageId", pageId) };
+  const r = activeRun();
+  if (!r) return;
+  r.page = { index, of, name, ...ifDefined("pageId", pageId) };
   progress(phase, extra, true);
 }

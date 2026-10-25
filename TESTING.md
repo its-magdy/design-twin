@@ -27,8 +27,8 @@ The plugin's extraction transforms are TypeScript (`figma-plugin/src/*.ts`), bun
 builds its own world with `test/fake-figma.ts`: a fresh VM running the plugin bundle against a fake
 `figma` derived from a scene (pages, selection, the nodes / styles / variables / images reachable by id)
 over the representative file in `test/harness/scene.ts` (mixed text, gradient, reaction, effects, bound
-token, scroll frame, multi-mode variables). The plugin keeps its run state at module level
-(`figma-plugin/src/state.ts`), so the fresh VM is what keeps a case's result independent of the cases
+token, scroll frame, multi-mode variables). The plugin keeps the run in progress and its run chain at module level
+(`figma-plugin/src/run.ts`, `figma-plugin/src/state.ts`), so the fresh VM is what keeps a case's result independent of the cases
 before it. The bundle is built once per run, in memory, from the current `figma-plugin/src`
 (`figma-plugin/build-options.ts`, the same options `build.ts` writes `code.js` with), so the harness never
 tests a stale `code.js`. One check fails while the committed `code.js` is not what `src/` builds to (a run

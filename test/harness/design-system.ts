@@ -7,8 +7,8 @@ import { STYLE_KINDS } from "../../bridge/src/design-system-layout.ts";
 import { aliasOf, flatPaint, type Case } from "./helpers.ts";
 import { world, CAS1_ENTRIES } from "./scene.ts";
 
-/** `buildDesignSystem()` called directly, after a `collectSelection()` on the same file. That read leaves the variable-name memo holding every id the selection referenced (state.ts
- *  varName), and dumpVariables reads `varName.ids()` as the reference set it resolves library variables from — so
+/** `buildDesignSystem()` called directly, after a `collectSelection()` on the same file. That read leaves the variable-name memo holding every id the selection referenced (run.ts
+ *  Run.varName — the selection's run is still the one in progress), and dumpVariables reads `varName.ids()` as the reference set it resolves library variables from — so
  *  the selection read runs first here too, rather than building the catalog from an empty memo. */
 async function designSystem(delta: Scene = {}) {
   const w = world(delta);
@@ -59,7 +59,7 @@ export const cases: Case[] = [{
   async run() {
     const { api } = world();
     // No page/frame walk, no assets, just { designSystem }. Exercises the actual collector (not just buildDesignSystem
-    // directly), since collectDesignSystemOnly is a resetRun()+applyOpts() wrapper around it.
+    // directly), since collectDesignSystemOnly is a claimRun()+useReads() wrapper around it.
     const dsOnly = await api.collectDesignSystemOnly();
     ok("collectDesignSystemOnly returns ONLY a designSystem (no layersDoc/assets keys)",
       !!dsOnly.designSystem && !("layersDoc" in dsOnly) && !("assets" in dsOnly));

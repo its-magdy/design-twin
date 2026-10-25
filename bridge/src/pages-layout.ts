@@ -9,7 +9,7 @@
 // still can't collide — and pages themselves are bucketed by their ID, since page NAMES aren't unique
 // either), a per-page index.json (so an agent working ONE page never has to load every
 // OTHER page's manifest), plus a slim root pages/index.json carrying the run-wide manifest (manifest
-// is accumulated per-RUN, not per-layer — see state.ts) and a `pageDirs` pointer to each page's
+// is accumulated per-RUN, not per-layer — see run.ts) and a `pageDirs` pointer to each page's
 // directory + index file.
 //
 // TWO writers materialise this: bridge/src/figma-pull.ts writes real nested directories, and the plugin's

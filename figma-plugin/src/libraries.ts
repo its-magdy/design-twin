@@ -21,7 +21,8 @@
 //     only honest way to attribute them.
 import type { CatalogComponent, ComponentPropDef } from "../../bridge/src/doc-types.ts";
 import { propName, propType, errMsg, nonEmpty, exportedAt } from "./util";
-import { warn, loadAllPages } from "./state";
+import { loadAllPages } from "./state";
+import { run } from "./run";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 // listLibraries' reply is the bridge's wire contract (rendered by bridge/src/figma-pull.ts).
 import type { LibraryCollection, LibraryRow, ListLibrariesReply } from "../../bridge/src/commands.ts";
@@ -67,7 +68,7 @@ function readRegistry(sink: (m: string) => void): { [componentKey: string]: stri
 // name and keep going, exactly as the component catalog does. An empty result must never be
 // indistinguishable from a document we could not read.
 async function allInstances(sink: (m: string) => void): Promise<InstanceNode[]> {
-  await loadAllPages("library component scan may be incomplete");
+  await loadAllPages("library component scan may be incomplete", sink);
   const out: InstanceNode[] = [];
   const prevSkip = figma.skipInvisibleInstanceChildren;
   try {
@@ -164,7 +165,7 @@ function aggregateFromInstances(instances: InstanceNode[]): Record<string, Compo
 // Deduped by `.key` and NOT by name: two libraries can ship a "Button", and a component that was
 // renamed in the library still has to merge with its older instances. The key is the durable identity.
 export async function collectLibraryComponents(sinkIn?: (m: string) => void): Promise<CatalogComponent[]> {
-  const sink = sinkIn || warn;
+  const sink = sinkIn || ((m: string) => run().warn(m));
   const registry = readRegistry(sink);
   const instances = await allInstances(sink);
   // One awaited getMainComponentAsync per instance, serialized, is a round trip per instance — a

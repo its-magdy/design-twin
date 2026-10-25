@@ -20,7 +20,8 @@ src/
   components.ts   instances, component-prop refs/overrides, whole-file design-system catalog
   assets.ts      vector/icon -> SVG, image -> PNG, reference PNG (whole-frame + on-demand single-node), dev-resource links
   writes.ts      minimal, explicit, no-eval write ops (code -> design)
-  state.ts       per-run mutable state + id->name memo caches + read options
+  run.ts         one run's context: read options, counters, warnings, asset tables, memo caches, cancel flag
+  state.ts       the run scheduler: queue, bracket (opens/closes each run's context), bridge cancels
   progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
   util.ts        pure helpers (hex, base64, rounding)
 figma-augment.d.ts  local typing shims for API newer than the pinned typings (empty by default)

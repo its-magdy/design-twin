@@ -99,7 +99,7 @@ export function codeMap(components: Record<string, MapEntryInput>, extra: Omit<C
 
 // ------------------------------------------------------------------ IR nodes / screen exports
 
-/** A pull's manifest: every counter the producer (state.ts manifest()) writes, zero unless given. */
+/** A pull's manifest: every counter the producer (run.ts manifestOf()) writes, zero unless given. */
 export function manifest(m: Partial<Manifest> = {}): Manifest {
   return { nodes: 0, skipped: 0, truncated: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, warnings: [], ...m };
 }

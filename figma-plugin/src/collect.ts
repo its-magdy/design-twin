@@ -1,5 +1,6 @@
-// Collectors (return data; shared by manual export AND the bridge). Each resets per-run state,
-// applies read options, walks the requested scope, and returns the compact screen/layer/design-system docs.
+// Collectors (return data; shared by manual export AND the bridge). Each claims the run it reads into (run.ts
+// claimRun — a fresh context, so there is nothing to reset), fixes its read options on it, walks the requested
+// scope, and returns the compact screen/layer/design-system docs.
 import type {
   IrNode, ScreenExport, Manifest, Measurement as IrMeasurement, DevResource as IrDevResource, Paint as IrPaint,
   PageSettings, PrototypeFlow, LayersDoc, LayersDocLayer, LayersDocIndexRow,
@@ -17,7 +18,8 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // NodeSummary is the bridge's own row type (commands.ts), not a copy: a field added there reaches summarize() here.
 import { NO_NODE_ID, type ListPagesArgs, type NodeSummary } from "../../bridge/src/commands.ts";
 import { deriveTitle, firstText, collectTexts, PLACEHOLDER_TEXT, type TextWalkNode } from "../../bridge/src/pages-layout.ts";
-import { type Asset, assets, stats, resetRun, manifest, runOpts, runDelivery, warn, loadAllPages } from "./state";
+import { loadAllPages } from "./state";
+import { type Asset, type Run, claimRun, manifestOf } from "./run";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
 import { serialize } from "./serialize";
@@ -101,11 +103,11 @@ function hiddenAncestor(node: BaseNode): boolean {
 // A root that is hidden itself or sits under a hidden ancestor (a frame pulled by id out of a hidden panel)
 // exports as usual, but none of its graphics is rendered (`assetSkipped:"hidden"`) and Figma may render
 // its reference blank — the root itself carries no flag for an ancestor, so the pull says so.
-async function rootTree(node: SceneNode): Promise<IrNode | null> {
+async function rootTree(r: Run, node: SceneNode): Promise<IrNode | null> {
   const self = "visible" in node && node.visible === false;
   const underHidden = hiddenAncestor(node);
   if (self || underHidden) {
-    warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") +
+    r.warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") +
       " — its graphics are not exported (assetSkipped:\"hidden\") and its reference image may be blank");
   }
   const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
@@ -125,17 +127,17 @@ async function rootTree(node: SceneNode): Promise<IrNode | null> {
 // both called "Popup" silently overwrote each other and why a --node pull could not join the pages/
 // layout a --page pull writes. pageId (not the page NAME) is the identity:
 // PageNode.name is user-editable and the Plugin API documents no uniqueness constraint on it.
-async function screenResult(title: string, fileBase: string, nodes: IrNode[], origin?: { page: PageNode | null; nodeId?: string }): Promise<ScreenResult> {
-  const screen: ScreenResult["screen"] = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
+async function screenResult(r: Run, title: string, fileBase: string, nodes: IrNode[], origin?: { page: PageNode | null; nodeId?: string }): Promise<ScreenResult> {
+  const screen: ScreenResult["screen"] = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifestOf(r) };
   const page = origin && origin.page;
   if (page) { screen.page = page.name; screen.pageId = page.id; }
   if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
-  const measurements = collectMeasurements();
+  const measurements = collectMeasurements(r);
   if (measurements) screen.measurements = measurements;
   // Repeated at the TOP level as well as inside `screen`: write-out.ts routes the file into
   // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
   // envelope to a caller that may never write to disk at all.
-  const out: ScreenResult = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+  const out: ScreenResult = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: r.assets.slice() };
   if (page) { out.page = page.name; out.pageId = page.id; }
   if (origin && origin.nodeId) out.nodeId = origin.nodeId;
   return out;
@@ -398,10 +400,6 @@ function resolvePages(wanted: ReadonlyArray<string>, all: ReadonlyArray<PageNode
   return picked;
 }
 
-function applyOpts(opts?: CollectOpts): void {
-  for (const k of Object.keys(runOpts) as Array<keyof typeof runOpts>) runOpts[k] = !!(opts && opts[k]);
-}
-
 // getCSSAsync (Figma's own CSS oracle) is opt-in because it's one async call PER NODE — O(nodes) on a
 // big frame. But for the "inspect one small component" path it's cheap and high-value, so DEFAULT it
 // ON when the caller didn't specify AND the exported subtree is small. Large/full exports keep it off
@@ -466,8 +464,8 @@ function countNodes(tree: IrNode): number {
 // note: getMeasurements(), not getMeasurementsAsync(). Read from the page(s) BEING EXPORTED: reading
 // figma.currentPage would silently attach the open page's redlines to a --page export of a non-current
 // page. Each entry is tagged with its page.
-function collectMeasurements(pages?: ReadonlyArray<PageNode>): IrMeasurement[] | undefined {
-  if (!runOpts.measurements) return undefined;
+function collectMeasurements(r: Run, pages?: ReadonlyArray<PageNode>): IrMeasurement[] | undefined {
+  if (!r.reads.measurements) return undefined;
   const targets = pages && pages.length ? pages : [figma.currentPage];
   const out: IrMeasurement[] = [];
   for (const page of targets) {
@@ -489,28 +487,28 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): IrMeasurement[] |
       // NOT "Dev Mode only" — per developers.figma.com only addMeasurement/editMeasurement/
       // deleteMeasurement carry that restriction; the READ does not. Naming the wrong cause sends
       // someone off to open Dev Mode instead of reading the actual error.
-      warn("measurements unavailable for page '" + page.name + "': " + errMsg(e));
+      r.warn("measurements unavailable for page '" + page.name + "': " + errMsg(e));
     }
   }
   return out.length ? out : undefined;
 }
 
 export async function collectSelection(opts?: CollectOpts): Promise<ScreenResult> {
-  resetRun();
+  const r = claimRun();
   const sel = figma.currentPage.selection;
   const first = sel[0]; // selection is ReadonlyArray<SceneNode>: undefined exactly when it is empty
   if (!first) throw new Error("Select at least one frame first.");
   // Single small selection ("inspect one component") auto-enables the CSS oracle; multi-select keeps
   // it opt-in (a several-frame selection is closer to a full export than a component inspect).
-  applyOpts(sel.length === 1 ? autoCss(opts, first) : opts);
+  r.useReads(sel.length === 1 ? autoCss(opts, first) : opts);
   const nodes: IrNode[] = [];
   for (const nd of sel) {
-    const tree = await rootTree(nd);
+    const tree = await rootTree(r, nd);
     if (tree) nodes.push(tree);
   }
   // A selection is always on the current page by construction, so no walk is needed — but the id of
   // the FIRST selected node is what the file is named after, so that is the one recorded.
-  return screenResult(sel.length === 1 ? first.name : "selection", first.name, nodes, { page: figma.currentPage, nodeId: first.id });
+  return screenResult(r, sel.length === 1 ? first.name : "selection", first.name, nodes, { page: figma.currentPage, nodeId: first.id });
 }
 
 // Walk up to the owning PAGE node (needed to switch pages before selecting a linked node).
@@ -522,11 +520,11 @@ function pageOf(node: BaseNode): PageNode | null {
 
 // Export a single node addressed by id — the plane behind "paste a Figma link and ask".
 export async function collectNode(rawId: string, opts?: CollectOpts): Promise<ScreenResult> {
-  resetRun();
+  const r = claimRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error(NO_NODE_ID);
-  const node = await findNodeById(nodeId, warn);
-  applyOpts(autoCss(opts, node)); // single-node export → auto-enable the CSS oracle when the tree is small
+  const node = await findNodeById(nodeId, r.warn);
+  r.useReads(autoCss(opts, node)); // single-node export → auto-enable the CSS oracle when the tree is small
   // Bring it into view so you can see what's being read. Best-effort.
   try {
     const page = pageOf(node);
@@ -534,9 +532,9 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Sc
     if ("visible" in node && node.parent) figma.currentPage.selection = [node];
     if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
   } catch (e) {}
-  const tree = await rootTree(node as SceneNode);
+  const tree = await rootTree(r, node as SceneNode);
   if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
-  return screenResult(node.name, node.name, [tree], { page: pageOf(node), nodeId });
+  return screenResult(r, node.name, node.name, [tree], { page: pageOf(node), nodeId });
 }
 
 // On-demand visual reference for ONE node — the cheap, single-node twin of the whole-frame reference
@@ -546,11 +544,12 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Sc
 // Figma's own get_screenshot (single-node/selection scope, pulled on demand for visual validation)
 // rather than a bulk pre-render pass over every node/instance in a dense screen, which would pay the
 // same O(nodes) cost --no-assets exists to avoid for a much bigger payload (PNG > structural JSON).
+// It takes no read options, so its run makes none and its manifest says so (`reads: []`).
 export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotResult> {
-  resetRun();
+  const r = claimRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error(NO_NODE_ID);
-  const node = await findNodeById(nodeId, warn);
+  const node = await findNodeById(nodeId, r.warn);
   const reference = await collectReference(node as SceneNode, opts);
   if (!reference) {
     throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed — see warnings).");
@@ -558,7 +557,7 @@ export async function collectScreenshot(rawId: string, opts?: { scale?: number }
   // What was rendered — the node's own size and the scale used (the same referenceScale the
   // render just used), so a caller can tell a 2x render of a small node from a capped big one.
   const size = "width" in node && "height" in node ? { w: round(node.width), h: round(node.height) } : {};
-  return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node as SceneNode, opts), reference, manifest: manifest(), assets: assets.slice() };
+  return { id: node.id, name: node.name, type: node.type, ...size, scale: referenceScale(node as SceneNode, opts), reference, manifest: manifestOf(r), assets: r.assets.slice() };
 }
 
 // Containers first, then loose top-level canvas content — a standalone TEXT note, a logo VECTOR, an
@@ -729,9 +728,8 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
 // be silently dropped by that split, and dropped again by figma_export_design_system's
 // `writeToDisk: true` MCP path — the one place a caller can't fall back to reading the CLI's stderr.
 export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult> {
-  resetRun();
-  applyOpts(opts);
-  runDelivery.sourceBytes = false; // the reply has no `assets`: an image fill keeps its size, its original bytes go unread
+  const r = claimRun({ sourceBytes: false }); // the reply has no `assets`: an image fill keeps its size, its original bytes go unread
+  r.useReads(opts);
   const designSystem = await buildDesignSystem(undefined, serialize);
   // A cancel armed during the catalog's opt-in variant walk is caught there per variant (each one
   // warned "unreadable" and skipped, components.ts), so it must not end here as a delivered doc with
@@ -760,9 +758,8 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
 // exactly that of its sibling importShaderAsync), i.e. it would make a read-plane command mutate the
 // user's file — hundreds of subscribed variables, undoable but real. This path reads and writes nothing.
 export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult> {
-  resetRun();
-  applyOpts(opts);
-  runDelivery.sourceBytes = false; // as collectDesignSystemOnly: the reply has no `assets`
+  const r = claimRun({ sourceBytes: false }); // as collectDesignSystemOnly: the reply has no `assets`
+  r.useReads(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
   const designSystem = await buildDesignSystem({ asLibrary }, serialize);
   checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly
@@ -780,10 +777,10 @@ export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: stri
 // Export the design system + frame trees. Frame trees default to the CURRENT page; pass
 // { allPages:true } to walk every page (opt-in — a whole multi-page file can be very large).
 export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
-  resetRun();
-  applyOpts(opts);
+  const r = claimRun();
+  r.useReads(opts);
   const allPages = !!(opts && opts.allPages);
-  if (allPages) await loadAllPages("all-pages export may miss pages");
+  if (allPages) await loadAllPages("all-pages export may miss pages", r.warn);
   // NAMED pages — the tier between "whatever page happens to be open" and "all 25 of them".
   // A real file makes --all-pages unfinishable, and the current-page default forces a human to
   // navigate in the UI first, which an agent driving the bridge cannot do. Pairs with listPages:
@@ -798,7 +795,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
   if (rawWanted.length && rawWanted.every((s) => !s)) {
     // Name the scope actually used. Hardcoding "the current page" was wrong whenever allPages was
     // also set, which is the one case where this warning fires and the fallback ISN'T the open page.
-    warn("page selector was empty after trimming — ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
+    r.warn("page selector was empty after trimming — ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
   }
   const wanted = rawWanted.filter(Boolean);
   // Mutually exclusive scopes, refused HERE rather than only in the CLI's arg parser. The branch
@@ -821,7 +818,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     // in large files... only load pages as needed"), and paying for all 25 to read one is the exact
     // cost this option exists to avoid. No setCurrentPageAsync either: that would yank the user's
     // editor to another page during a read-only export.
-    await Promise.all(picked.map((p) => loadPageSafely(p, warn, "")));
+    await Promise.all(picked.map((p) => loadPageSafely(p, r.warn, "")));
     pages = picked;
   } else {
     pages = [figma.currentPage];
@@ -841,9 +838,9 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     // The coarsest safe abort point: nothing is half-built between pages. Checked BEFORE the page
     // boundary frame so a cancel doesn't first announce a page it will never walk.
     checkCancelled();
-    enterPage("pages", ++pageIndex, pages.length, page.name, page.id, { nodes: stats.nodes, assets: assets.length });
+    enterPage("pages", ++pageIndex, pages.length, page.name, page.id, { nodes: r.stats.nodes, assets: r.assets.length });
     // A page that failed to load must be skipped with a word, not abort the whole export.
-    const children = pageChildren(page, warn, "its frames are missing from this export");
+    const children = pageChildren(page, r.warn, "its frames are missing from this export");
     if (!children) continue;
     // Only once the page is known readable — the same dynamic-page rule applies to its other props.
     const bg = await pageBackground(page);
@@ -854,7 +851,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     const frames: SceneNode[] = [];
     for (const nd of children) {
       if (TOP_LEVEL_TYPES.has(nd.type)) frames.push(nd);
-      else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
+      else if (nd.visible !== false) r.warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
     }
     for (const f of frames) {
       // Second safe abort point: between TOP-LEVEL frames. One frame's serializeWithRefs is the unit
@@ -873,13 +870,13 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
       }
       // Throttled (no `force`): a page of 200 small frames would otherwise post 200 frames the UI
       // renders for one animation tick each. The page boundary above is the one that must never drop.
-      progress("pages", { nodes: stats.nodes, assets: assets.length });
+      progress("pages", { nodes: r.stats.nodes, assets: r.assets.length });
     }
   }
   // Phase change — unthrottled, because the page walk going quiet while the catalog builds is exactly
   // when a static status line reads as "stuck". buildDesignSystem has its own per-page ticks inside it.
   checkCancelled();
-  progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
+  progress("design-system", { nodes: r.stats.nodes, assets: r.assets.length }, true);
   // AFTER the page walk: buildDesignSystem ends in dumpVariables, which uses the ids resolved during
   // that walk to also emit the LIBRARY variables the layers reference (see variables.ts). Building it
   // first would run the dump against an empty reference set.
@@ -888,7 +885,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
   // Measurements are a PER-PAGE read. Scoping them to figma.currentPage while exporting a DIFFERENT
   // page attached another page's redlines to this doc — silently, and mislabelled. Read them from
   // the page(s) actually walked.
-  const measurements = collectMeasurements(pages);
+  const measurements = collectMeasurements(r, pages);
   const layersDoc: LayersDoc = {
     exportedAt: exportedAt(),
     // Three cases, not two. Folding an explicit --page into "current-page" left the consumer unable
@@ -904,7 +901,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     ...ifDefined("measurements", measurements || undefined),
     index,
     layers,
-    manifest: manifest(),
+    manifest: manifestOf(r),
   };
-  return { designSystem, layersDoc, assets: assets.slice() };
+  return { designSystem, layersDoc, assets: r.assets.slice() };
 }

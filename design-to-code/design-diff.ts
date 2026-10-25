@@ -175,7 +175,7 @@ function nodeFields(old: IndexEntry, neu: IndexEntry, raw = false): FieldDiff[] 
 }
 
 interface SwapCount { gone: number; came: number }
-// Older export spelling, still read: the producer (state.ts) writes `truncated` as a count; an older
+// Older export spelling, still read: the producer (run.ts) writes `truncated` as a count; an older
 // export wrote `true`, and the message below still spells that case out.
 interface LegacyManifest { truncated?: number | boolean }
 const truncatedOf = (m: LegacyManifest | undefined): number | boolean | undefined => m && m.truncated;
