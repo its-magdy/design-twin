@@ -190,7 +190,7 @@ console.log("\nrunDriftLint — an input it cannot use is a value, never an exit
   check("a file that is not a catalog: unusable (never linted as 'no catalog')", notCat.status === "unusable" && /is not a component catalog/.test(notCat.message));
   const noMap = run({ ...base, mapFile: path.join(p.root, "design", "none.json") });
   check("a missing map: unusable, and the scaffold hint writes that map with --out (never a `>` redirect)",
-    noMap.status === "unusable" && /component map: '[^']*none\.json' does not exist\./.test(noMap.message) && /map-bootstrap\.ts["']? <components\.local\.json> --out ["']?\S*none\.json/.test(noMap.message) && !/ > /.test(noMap.message));
+    noMap.status === "unusable" && /component map: '[^']*none\.json' does not exist\./.test(noMap.message) && /map-bootstrap\.ts["']? <components\.local\.json> --out ["']?[^"'\n]*none\.json/.test(noMap.message) && !/ > /.test(noMap.message));
   const notScreen = run({ ...base, screenFiles: [p.notCatalog] });
   check("a screen file that is not a screen export: unusable, naming it", notScreen.status === "unusable" && /screen export: '[^']*not-a-catalog\.json' is not a screen export/.test(notScreen.message));
   const brokenExtra = run({ ...base, extraCatalogFiles: [put(path.join(p.root, "vendor", "broken.json"), "{ not json")] });
