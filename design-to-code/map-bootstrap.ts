@@ -22,7 +22,7 @@ import { isComponentsCatalog, isProposalList } from "./doc-guards.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import { cliArity, cliParse, scriptCmd } from "./cli-args.ts";
 import { visibleInstances } from "./component-match.ts";
-import { isCodeConnectMap, validateMap } from "./map-validate.ts";
+import { isCodeConnectMap, validateMap } from "./map-validate-core.ts";
 import { readCatalogSet, unionCatalog, catalogSetLine } from "./design-system-dir.ts";
 import { runCli } from "./proc.ts";
 import { nullProto } from "../bridge/src/json-util.ts";

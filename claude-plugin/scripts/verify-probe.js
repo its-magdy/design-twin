@@ -1468,7 +1468,6 @@ function census(nodes, notMeasured) {
 }
 
 // design-to-code/verify-shared.ts
-import path from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1535,10 +1534,6 @@ function normFamily(v) {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
-function resolveInside(base, rel, within = base) {
-  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path.sep) ? file : null;
-}
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
   { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
@@ -1560,37 +1555,6 @@ var FIELDS = [
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
 var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts
@@ -1668,17 +1632,6 @@ function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
   return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
@@ -1828,7 +1781,7 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
@@ -1836,7 +1789,7 @@ var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
@@ -1873,7 +1826,7 @@ function readJsonOrNull(file, guard) {
 }
 
 // design-to-code/cli-args.ts
-import path3 from "node:path";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -1881,7 +1834,7 @@ import { parseArgs } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import fs2 from "node:fs";
 import os from "node:os";
-import path2 from "node:path";
+import path from "node:path";
 
 // bridge/src/stdio.ts
 import { format, inspect } from "node:util";
@@ -2077,11 +2030,11 @@ function syncOnce(cmd, args, o, attempt) {
   };
   let dir = null;
   if (o.capture !== "pipe") try {
-    dir = fs2.mkdtempSync(path2.join(os.tmpdir(), "dt-spawn-"));
+    dir = fs2.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
   } catch {
   }
   if (dir === null) return piped();
-  const outF = path2.join(dir, "out"), errF = path2.join(dir, "err");
+  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
   try {
     let out = null, err = null;
     try {
@@ -2111,7 +2064,7 @@ function runSync(cmd, args, o = {}) {
   const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
   let r = syncOnce(cmd, args, o, 1);
   if (!valid(r) && r.status === 0 && !r.error) {
-    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path2.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
 `);
     r = syncOnce(cmd, args, o, 2);
   }
@@ -2125,7 +2078,7 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path3.join(path3.dirname(SELF), name + path3.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -4300,29 +4253,29 @@ function scrimRead(_arg) {
     const stack = document.elementsFromPoint(pt.x, pt.y);
     const top = stack[0];
     if (top && hitDesc === "nothing") hitDesc = window.__dt.describe(top, ["id"]);
-    let safe = true, found = false;
+    let safe2 = true, found = false;
     for (const e of stack) {
       if (native && e === d) {
         found = true;
         break;
       }
       if (box && (e === box || box.contains(e))) {
-        safe = false;
+        safe2 = false;
         break;
       }
       if (e.matches(CONTROL) || e.closest(CONTROL) !== null) {
-        safe = false;
+        safe2 = false;
         break;
       }
       if (!covers(e) || !layered(e)) {
-        safe = false;
+        safe2 = false;
         break;
       }
       const bg = getComputedStyle(e).getPropertyValue("background-color");
       const a = alpha(bg);
       if (a === null) {
         unreadable = unreadable ?? bg;
-        safe = false;
+        safe2 = false;
         break;
       }
       if (a > 0.05) {
@@ -4331,7 +4284,7 @@ function scrimRead(_arg) {
         break;
       }
     }
-    if (found && safe) {
+    if (found && safe2) {
       point = pt;
       break;
     }
@@ -5660,21 +5613,59 @@ function renderDiff(build, d) {
   return { w, h, data: out };
 }
 
-// bridge/src/project-layout.ts
+// bridge/src/export-reader.ts
 import path4 from "node:path";
+
+// bridge/src/project-layout.ts
+import path3 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path4.join(DESIGN_DIR, ".sync");
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path4.sep).join("/");
+var slashed = (p) => p.split(path3.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
+// bridge/src/design-system-layout.ts
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// bridge/src/export-reader.ts
+function resolveInside(base, rel, within = base) {
+  const root = path4.resolve(within), file = path4.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path4.sep) ? file : null;
+}
 
 // design-to-code/probe-visual.ts
 var FONTS_CAP_MS = 5e3;
@@ -5872,18 +5863,6 @@ function visualLine(v) {
 // design-to-code/verify-sets.ts
 import fs7 from "node:fs";
 import path9 from "node:path";
-
-// bridge/src/pages-layout.ts
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
 
 // design-to-code/verify-status.ts
 import path8 from "node:path";
@@ -6371,9 +6350,6 @@ function writeFileAtomic(file, data, opts = {}) {
 // bridge/src/node-id.ts
 var ID = "[A-Za-z0-9%:;_-]+";
 var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
-
-// design-to-code/resolve-screen.ts
-if (false) runCli2(main, { name: "resolve-screen" });
 
 // design-to-code/verify-run.ts
 var PROBE_ATTEMPTS = 2;

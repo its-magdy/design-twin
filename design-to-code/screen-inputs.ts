@@ -13,7 +13,7 @@
 //     screen whose own has none. Read in either layout (design-system-dir.ts readDesignSystemDir).
 //   - map: --map (read fail-loud), else design/codeconnect.local.json or ./codeconnect.local.json; a found map that is
 //     broken only labels nothing (a warning), since it labels proposals and decides nothing.
-//   - siblings: every other screen the export indexes (export-index.ts), read only when a report has proposals.
+//   - siblings: every other screen the export indexes (bridge/src/export-reader.ts), read only when a report has proposals.
 //
 // An optional input that is not there is no input (crossCheck says which checks that cost) and a note saying where it
 // was looked for; one that is there but broken is an error (variables) or the fail-loud exit of readDocFile (a screen,
@@ -25,14 +25,14 @@ import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import { readDocFile } from "./catalog-input.ts";
 import { findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
 import type { DesignSystemDir, LibraryExport } from "./design-system-dir.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
+import { isCodeConnectMap } from "./map-validate-core.ts";
 import { isScreenAssetsDoc } from "./doc-guards.ts";
-import { exportRootOfScreen, pagesRootOfScreen, readExportIndex, screenSiblingFile } from "./export-index.ts";
+import { exportRootOfScreen, pagesRootOfScreen, readExportIndex, screenSiblingFile } from "../bridge/src/export-reader.ts";
 import { isScreenDoc } from "./export-shape.ts";
-import { readJson, readJsonOrNull } from "./read-json.ts";
+import { readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
-import type { CrossCheckInput, CrossCheckScreen } from "./cross-check.ts";
+import type { CrossCheckInput, CrossCheckScreen } from "./cross-check-core.ts";
 import type { CodeConnectMap, ComponentsCatalog, ScreenAssetsDoc, ScreenDoc, TokensDoc } from "./types.ts";
 
 /** One screen as both CLIs read it: crossCheck's screen, plus its file and asset manifest (null when absent or unreadable —
@@ -72,7 +72,7 @@ export interface ScreenInputsFlags {
 }
 
 // The OTHER screens of the export a screen file sits in (<root>/pages/<Page>/<Screen>.json; every screen its index
-// knows about — export-index.ts), minus the files being checked. A thunk: nothing is read until a report has proposals
+// knows about — bridge/src/export-reader.ts), minus the files being checked. A thunk: nothing is read until a report has proposals
 // to label. null when a file is not inside such an export (a legacy design/<Screen>.json) — sharedWith is then unknown, not 0.
 export function exportSiblings(files: readonly string[]): (() => CrossCheckScreen[]) | null {
   const checked = new Set(files.map((f) => path.resolve(f)));

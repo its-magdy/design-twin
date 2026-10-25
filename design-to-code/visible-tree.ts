@@ -1,5 +1,5 @@
 // visible-tree.ts — the ONE walk over an export's node tree, shared by every script that reads one (audit.ts,
-// cross-check.ts, verify-expect.ts, plan-skeleton.ts, drift-lint.ts, component-match.ts, design-system-dir.ts).
+// cross-check.ts, verify-expect.ts, plan-skeleton.ts, verify-build.ts, drift-lint.ts, component-match.ts, design-system-dir.ts).
 // It owns three answers a visitor would otherwise work out by hand: does this layer render, what is it inside,
 // and what does it sit on.
 //
@@ -19,7 +19,7 @@
 // checks (audit.ts per screen, cross-check.ts per token pair) read this one backdrop, so they name the same surface.
 import { parseHex, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
-import type { Box, IrNode, Paint } from "./types.ts";
+import type { Box, IrNode, Paint, PlanHiddenRoot } from "./types.ts";
 
 /**
  * What a layer sits on. `color`: the composited colour (null = nothing painted; callers assume a white page).
@@ -199,4 +199,47 @@ function hiddenRoots(roots: readonly IrNode[] | null | undefined): IrNode[] {
   return out;
 }
 
-export { hiddenSelf, isHidden, isIconInk, paintedOver, walkWithHidden, walkVisible, hiddenIds, hiddenRoots };
+/** What walkNodes hands its visitor beside the node. */
+export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoot: boolean; insideInstance: string | null }
+export type NodeVisitor = (n: IrNode, ctx: NodeContext) => void;
+
+/** Walk every node of `roots` with its ancestry and hidden state. `hiddenRoot`: the top of a hidden subtree;
+ *  `insideInstance`: the nearest INSTANCE above the node — its internals belong to that component. */
+function walkNodes(roots: readonly IrNode[] | null | undefined, visit: NodeVisitor): void {
+  for (const r of roots || []) {
+    walkWithHidden(r, (n, c) => {
+      const above = c.ancestors.findLast((a) => a.node.type === "INSTANCE");
+      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above ? above.node.id || null : null });
+    });
+  }
+}
+
+export interface VisibleEntry { node: IrNode; parentId: string | null; insideInstance: string | null }
+/** A screen split by the one predicate: every layer that renders (by id, with its parent and enclosing instance), every
+ *  hidden id, and the top of each hidden subtree with how many nodes it hides (itself included). */
+export interface Visibility { visible: Map<string, VisibleEntry>; hidden: Set<string>; hiddenRoots: PlanHiddenRoot[] }
+
+/** The visibility of the tree under `roots` (plan-skeleton's anchors and hidden[], verify-build's anchor and tag coverage). */
+function visibility(roots: readonly IrNode[] | null | undefined): Visibility {
+  const visible = new Map<string, VisibleEntry>(), hidden = new Set<string>(), hiddenRoots: PlanHiddenRoot[] = [];
+  const count = new Map<string, PlanHiddenRoot>();
+  walkNodes(roots, (n, ctx) => {
+    if (!n.id) return;
+    if (ctx.hidden) {
+      hidden.add(n.id);
+      if (ctx.hiddenRoot) { const root: PlanHiddenRoot = { id: n.id, name: n.name, type: n.type, nodes: 0 }; hiddenRoots.push(root); count.set(n.id, root); }
+    } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
+  });
+  // how many nodes each hidden root hides (itself included)
+  const tally = (n: IrNode | null | undefined, root: string | null): void => {
+    if (!n || typeof n !== "object") return;
+    const r = root || (count.has(n.id) ? n.id : null);
+    const entry = r ? count.get(r) : undefined; // r is always a key of count (root, or n.id when count has it)
+    if (entry) entry.nodes++;
+    for (const c of n.children || []) tally(c, r);
+  };
+  for (const r of roots || []) tally(r, null);
+  return { visible, hidden, hiddenRoots };
+}
+
+export { hiddenSelf, isHidden, isIconInk, paintedOver, walkWithHidden, walkVisible, walkNodes, visibility, hiddenIds, hiddenRoots };

@@ -17,14 +17,14 @@ import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition 
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./visible-tree.ts";
 import { loadDocFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
-import { anyJson } from "./read-json.ts";
+import { anyJson } from "../bridge/src/read-json.ts";
 import { isComponentsCatalog } from "./doc-guards.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import { isCodeConnectMap, validateMap } from "./map-validate.ts";
+import { isCodeConnectMap, validateMap } from "./map-validate-core.ts";
 import type {
   CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, MapValidationResult, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,

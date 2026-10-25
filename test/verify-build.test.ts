@@ -8,12 +8,11 @@ import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import type { Writable } from "node:stream";
-import { blockerIds } from "../design-to-code/audit.ts";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-binding.ts";
-import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
+import { build, seamViolations, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import { checkPlan, isStale, validatePlanHeader, anchorCoverage, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import type { CheckPlanResult } from "../design-to-code/verify-build.ts";
 import { moduleImported, projectGraph } from "../design-to-code/code-scanner.ts";
@@ -28,9 +27,9 @@ import type { BehaviourCheck, CodeConnectMap, MeasuredBehaviour, MeasuredNode, M
 import { check, report } from "./assert.ts";
 import { hookRunsScript } from "./plugin-invocation.ts";
 import { codeMap, must, parseAs, readFixture, screenExport } from "./fixtures.ts";
-import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
+import { isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
-import { isCodeConnectMap } from "../design-to-code/map-validate.ts";
+import { isCodeConnectMap } from "../design-to-code/map-validate-core.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
 
@@ -1969,7 +1968,24 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 // An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
-void build(tmp).then(async () => {
+void build(tmp).then(async (results) => {
+  // The seam rule (build-scripts.ts header): no entry module imports another, no other module carries a CLI guard. The
+  // build above would have thrown on a breach — these show the check reads the build's real input names, and fires.
+  const inputsOf = (i: number): string[] => Object.keys(results[i]?.metafile?.inputs ?? {});
+  check("each build's metafile names its own entry as design-to-code/<entry>.ts (the names the seam check reads)",
+    ENTRIES.every((n, i) => inputsOf(i).includes(`design-to-code/${n}.ts`)));
+  const vb = ENTRIES.indexOf("verify-build");
+  const src = (input: string): string => fs.readFileSync(path.join(import.meta.dirname, "..", input), "utf8");
+  check("the seam check holds on a real bundle", seamViolations("verify-build", inputsOf(vb), src).length === 0);
+  const breach = seamViolations("verify-build", [...inputsOf(vb), "design-to-code/plan-skeleton.ts", "design-to-code/lib.ts"],
+    (input) => (input === "design-to-code/lib.ts" ? "export const x = 1;\nif (import.meta.main) run();\n" : src(input)));
+  check(`…and names an inlined entry and a library's CLI guard (got ${JSON.stringify(breach)})`,
+    breach.length === 2 && /imports the entry module design-to-code\/plan-skeleton\.ts/.test(breach[0] ?? "") && /lib\.ts carries an import\.meta\.main guard/.test(breach[1] ?? ""));
+  const bridgeCli = seamViolations("verify-build", ["design-to-code/verify-build.ts", "bridge/src/cli.ts", "node_modules/dep/index.ts"],
+    (input) => (input === "design-to-code/verify-build.ts" ? "" : "if (import.meta.main) run();\n"));
+  check(`…and a bridge module's CLI guard too, never a dependency's (got ${JSON.stringify(bridgeCli)})`,
+    bridgeCli.length === 1 && /^bridge\/src\/cli\.ts carries an import\.meta\.main guard/.test(bridgeCli[0] ?? ""));
+  check("…but not a guard mentioned in a comment", seamViolations("verify-build", ["design-to-code/lib.ts"], () => "// the import.meta.main guard of a CLI\n").length === 0);
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
   check("claude-plugin/scripts/ is in sync with design-to-code/ (else: bun claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   // the exec bit is part of the build: a bundle with a shebang (design-diff.js) 0755, every other 0644 — in a rebuild and in
@@ -2038,125 +2054,38 @@ void build(tmp).then(async () => {
     gate.ok && gate.form === "exec" && h.timeout > 60);
 
   // ---------------------------------------------------------------- first-class auditGate
-  // Real audit: design/audit/Studio_Configurations.json (5 blockers, copied verbatim from a
-  // recorded run). auditGateWarnings is a WARNING only — this file blocks on exactly two things
-  // (a raw colour, an unanchored node) — never a `blocking` entry.
-  {
-    const auditDoc = readFixture(path.join(import.meta.dirname, "fixtures", "livetest3", "plan", "audit", "Studio_Configurations.json"), isAuditReport);
-    const ids = blockerIds(auditDoc);
-    check("the real Studio_Configurations audit has 5 blocker ids", ids.length === 5 && ids[0] === "catalog-covers-nothing");
-    const mkCwd = () => {
-      const d = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-"));
-      fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
-      fs.writeFileSync(path.join(d, "design", "audit", "Studio_Configurations.json"), JSON.stringify(auditDoc));
-      return d;
-    };
-    {
-      const cwd = mkCwd();
-      const plan = { screenName: "Studio Configurations" };
-      const w = auditGateWarnings(plan, cwd, null);
-      const msg = must(w[0], "w[0]");
-      check("a Blocked audit with no auditGate at all on the plan WARNS, naming the file and every blocker id",
-        w.length === 1 && /Studio_Configurations\.json/.test(msg) && ids.every((id) => msg.includes(id)));
-    }
-    {
-      const cwd = mkCwd();
-      const overrideFirstTwo = [must(ids[0], "ids[0]"), must(ids[1], "ids[1]")];
-      const plan = { screenName: "Studio Configurations", auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked", overridden: overrideFirstTwo, reason: "provenance issues, not build issues" } } satisfies Plan;
-      const w = auditGateWarnings(plan, cwd, null);
-      const msg = must(w[0], "w[0]");
-      check("an auditGate that overrides only 2 of 5 blockers WARNS about the 3 not covered",
-        w.length === 1 && ids.slice(2).every((id) => msg.includes(id)) && !msg.includes(must(ids[0], "ids[0]")));
-    }
-    {
-      const cwd = mkCwd();
-      const plan = { screenName: "Studio Configurations", auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked", overridden: ids } } satisfies Plan;
-      const w = auditGateWarnings(plan, cwd, null);
-      check("every blocker overridden but no `reason` still WARNS (a reason is required)", w.length === 1 && /reason/.test(must(w[0], "w[0]")));
-    }
-    {
-      const cwd = mkCwd();
-      const plan = { screenName: "Studio Configurations", auditGate: { auditFile: "design/audit/Studio_Configurations.json", verdict: "blocked", overridden: ids, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-09-23" } } satisfies Plan;
-      const w = auditGateWarnings(plan, cwd, null);
-      check("every blocker overridden with a reason: no warning at all", w.length === 0);
-    }
-    {
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-noaudit-"));
-      const w = auditGateWarnings({ screenName: "Nothing Here" }, cwd, null);
-      check("no audit file at all for this screen: no warning (nothing to gate)", w.length === 0);
-    }
-    {
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-bad-"));
-      fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
-      fs.writeFileSync(path.join(cwd, "design", "audit", "Studio_Configurations.json"), "{ truncated");
-      const w = auditGateWarnings({ screenName: "Studio Configurations" }, cwd, null);
-      check("an audit file that cannot be read WARNS that the gate was not checked (not silently no blockers)",
-        w.length === 1 && /Studio_Configurations\.json is not valid JSON .*the audit gate was NOT checked/.test(must(w[0], "w[0]")));
-    }
-  }
-  // ---------------------------------------------------------------- stable ids, legacy + bare codes accepted
-  // An audit written before findings carried an `id`: a missing-font blocker on node 1:1, a node-less
-  // token-name-collision. Ids now: `missing-font@1:1`, `token-name-collision`; legacy: `missing-font#0`,
-  // `token-name-collision#1`.
+  // The verdict is audit-gate.ts's (test/audit-gate.test.ts); here, that verify-build finds the plan's screen audit and
+  // renders each verdict as a WARNING — never a `blocking` entry (this file blocks on a raw colour and an unanchored node).
   {
     const auditDoc = { summary: { blockers: 2, warnings: 1, info: 0 }, findings: [
       { severity: "blocker", code: "missing-font", message: "font", nodeId: "1:1" },
       { severity: "blocker", code: "token-name-collision", message: "collision" },
       { severity: "warning", code: "fixed-size-text", message: "fixed", nodeId: "1:2" },
     ] };
-    const mk = () => {
-      const d = fs.mkdtempSync(path.join(os.tmpdir(), "f44-"));
+    const mk = (body: unknown = auditDoc): string => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "gate-render-"));
       fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
-      fs.writeFileSync(path.join(d, "design", "audit", "Sample_Screen__1_1.json"), JSON.stringify(auditDoc));
+      fs.writeFileSync(path.join(d, "design", "audit", "Sample_Screen__1_1.json"), typeof body === "string" ? body : JSON.stringify(body));
       return d;
     };
-    const gateWith = (overridden: string[]): string[] => auditGateWarnings({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } }, mk(), null);
-    const legacy = gateWith(["missing-font#0", "token-name-collision#1"]);
-    const notListed = (w: string[]): string[] => w.filter((x) => /not listed in this plan's auditGate\.overridden/.test(x));
-    const legacyWarn = (w: string[]): string[] => w.filter((x) => /old positional id/.test(x));
-    check(`a plan overriding the legacy positional ids (missing-font#0, token-name-collision#1) still covers its blockers — no "not listed" warning (got ${JSON.stringify(legacy)})`, notListed(legacy).length === 0);
-    // …but exactly ONE non-blocking warning maps each legacy entry to its stable id.
-    const lw = legacyWarn(legacy);
-    check(`legacy ids: exactly one warning, naming both → pairs (got ${JSON.stringify(legacy)})`,
-      legacy.length === 1 && lw.length === 1 && (lw[0] ?? "").includes("missing-font#0 → missing-font@1:1") && (lw[0] ?? "").includes("token-name-collision#1 → token-name-collision") && !/drop it/.test(lw[0] ?? ""));
-    const stableOnly = gateWith(["missing-font@1:1", "token-name-collision"]);
-    check(`stable ids only: no legacy warning at all (got ${JSON.stringify(stableOnly)})`, stableOnly.length === 0);
-    const stale = gateWith(["missing-font@1:1", "token-name-collision", "contrast#3"]);
-    check(`a positional entry matching no blocker is named "(drop it)" (got ${JSON.stringify(stale)})`,
-      stale.length === 1 && /no current blocker: contrast#3 \(drop it\)/.test(stale[0] ?? "")
-      // only stale entries → no "Replace each with its stable id" (there is nothing to replace)
-      && /None of them covers a current blocker/.test(stale[0] ?? "") && !/Replace each with its stable id/.test(stale[0] ?? ""));
-    const both = gateWith(["missing-font#0", "token-name-collision", "contrast#3"]);
-    check(`a legacy cover and a stale entry share ONE warning (got ${JSON.stringify(both)})`,
-      both.length === 1 && (both[0] ?? "").includes("missing-font#0 → missing-font@1:1") && (both[0] ?? "").includes("contrast#3 (drop it)")
-      && /Replace each with its stable id/.test(both[0] ?? ""));
-    const bare = gateWith(["missing-font@1:1", "token-name-collision"]);
-    check(`a plan overriding the bare code of a node-less blocker (token-name-collision) covers it (got ${JSON.stringify(bare)})`, bare.length === 0);
-    const none = gateWith([]);
-    const msg = none[0] ?? "";
-    check(`a plan overriding nothing: the warning lists the NEW ids, not #i (got ${JSON.stringify(none)})`,
-      none.length === 1 && msg.includes("missing-font@1:1") && msg.includes("token-name-collision") && !/#\d/.test(msg));
-    const mixed = gateWith(["missing-font#0"]);
-    check("a legacy id covers only its own blocker — the other is still listed by its new id",
-      notListed(mixed).length === 1 && (notListed(mixed)[0] ?? "").includes("token-name-collision") && !(notListed(mixed)[0] ?? "").includes("missing-font"));
-  }
-  // a position shifts when an earlier blocker is fixed. Two missing-font blockers; the
-  // plan overrode `missing-font#0` (the first). Once 1:1 is fixed the audit holds only missing-font@2:2 — which is
-  // now `missing-font#0`, so the old entry silently covers a DIFFERENT blocker. The warning must say so.
-  {
-    const mkAudit = (nodes: string[]): string => {
-      const d = fs.mkdtempSync(path.join(os.tmpdir(), "leg1-"));
-      fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
-      fs.writeFileSync(path.join(d, "design", "audit", "Sample_Screen__1_1.json"), JSON.stringify({ summary: { blockers: nodes.length, warnings: 0, info: 0 }, findings: nodes.map((nodeId) => ({ severity: "blocker", code: "missing-font", message: "font", nodeId })) }));
-      return d;
-    };
-    const planOver = (overridden: string[]): Plan => ({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } });
-    const before = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["1:1", "2:2"]), null);
-    check(`with 1:1 and 2:2 both open: missing-font#0 covers 1:1, 2:2 is still not listed (got ${JSON.stringify(before)})`,
-      before.some((x) => /not listed/.test(x) && x.includes("missing-font@2:2")) && before.some((x) => x.includes("missing-font#0 → missing-font@1:1")));
-    const after = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["2:2"]), null);
-    check(`1:1 fixed: the shifted missing-font#0 now covers 2:2 — the warning names missing-font#0 → missing-font@2:2 (got ${JSON.stringify(after)})`,
-      after.length === 1 && (after[0] ?? "").includes("missing-font#0 → missing-font@2:2"));
+    const warn = (auditGate?: Plan["auditGate"], cwd = mk()): string[] => auditGateWarnings({ screenName: "Sample Screen", ...(auditGate ? { auditGate } : {}) }, cwd, null);
+    const g = (overridden: string[], reason: string | null = "acknowledged"): Plan["auditGate"] => ({ auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason });
+    const ungated = warn();
+    check(`ungated: one warning naming the file and every blocker id (got ${JSON.stringify(ungated)})`,
+      ungated.length === 1 && /Sample_Screen__1_1\.json is Blocked \(2 blocker\(s\): missing-font@1:1, token-name-collision\) and this plan has no `auditGate`/.test(ungated[0] ?? ""));
+    const part = warn(g(["missing-font@1:1"]));
+    check("uncovered: the blockers not listed, by their stable ids", part.length === 1 && /has 1 blocker\(s\) not listed in this plan's auditGate\.overridden: token-name-collision/.test(part[0] ?? ""));
+    check("unreasoned: asks for the reason", /overrides 2 blocker\(s\) but gives no `reason`/.test(warn(g(["missing-font@1:1", "token-name-collision"], null))[0] ?? ""));
+    check("covered: no warning", warn(g(["missing-font@1:1", "token-name-collision"])).length === 0);
+    check("no audit for the screen: no warning", auditGateWarnings({ screenName: "Nothing Here" }, fs.mkdtempSync(path.join(os.tmpdir(), "gate-none-")), null).length === 0);
+    const bad = warn(undefined, mk("{ truncated"));
+    check("unchecked: the gate was NOT checked, with why", bad.length === 1 && /Sample_Screen__1_1\.json is not valid JSON .*the audit gate was NOT checked/.test(bad[0] ?? ""));
+    const both = warn(g(["missing-font#0", "token-name-collision", "contrast#3"]));
+    check(`legacy: ONE warning maps a positional cover and names a stale entry (got ${JSON.stringify(both)})`,
+      both.length === 1 && (both[0] ?? "").includes("missing-font#0 → missing-font@1:1") && (both[0] ?? "").includes("no current blocker: contrast#3 (drop it)") && /Replace each with its stable id/.test(both[0] ?? ""));
+    const stale = warn(g(["missing-font@1:1", "token-name-collision", "contrast#3"]));
+    check("legacy, stale only: nothing to replace", stale.length === 1 && /None of them covers a current blocker/.test(stale[0] ?? "") && !/Replace each/.test(stale[0] ?? ""));
+    check("…beside an uncovered blocker: both warnings", warn(g(["missing-font#0"])).length === 2);
   }
 
   {

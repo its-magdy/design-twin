@@ -10,7 +10,7 @@ import { variableResolver, defaultModeName, baseValue, readColour, type ModeRequ
 import { toCSS, main as tokensMain } from "../design-to-code/tokens.ts";
 import { toNative } from "../design-to-code/tokens-native.ts";
 import { buildTokens } from "../design-to-code/plan-skeleton.ts";
-import { crossCheck } from "../design-to-code/cross-check.ts";
+import { crossCheck } from "../design-to-code/cross-check-core.ts";
 import { malformed, screenExport, tokens, variable, type CollectionInput, type NodeInput, type VariableInput } from "./fixtures.ts";
 import type { ScreenDoc, TokensDoc, Variable } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";

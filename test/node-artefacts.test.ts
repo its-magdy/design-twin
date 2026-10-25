@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { nodeArtefacts, planNode } from "../design-to-code/node-artefacts.ts";
-import { planRows } from "../design-to-code/resolve-screen.ts";
+import { planRows } from "../design-to-code/resolve-screen-core.ts";
 import { writeStatus } from "../design-to-code/verify-run.ts";
 import { check, report } from "./assert.ts";
 

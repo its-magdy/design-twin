@@ -25,8 +25,8 @@ import type { Asset, VariablesDoc } from "../bridge/src/doc-types.ts";
 import type { ScreenReply } from "../bridge/src/commands.ts";
 import type { Stamped } from "../bridge/src/write-out.ts";
 import type { ClientRow } from "../bridge/src/server-core.ts";
-import type { DocGuard } from "../design-to-code/doc-guards.ts";
-import { readJson } from "../design-to-code/read-json.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
+import { readJson } from "../bridge/src/read-json.ts";
 
 /** A fixture failed to be what the test assumed. Thrown by the readers below. */
 export class FixtureError extends Error {

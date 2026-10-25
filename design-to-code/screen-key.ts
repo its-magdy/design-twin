@@ -13,8 +13,8 @@
 // text-search (5) hit never names a set: a writer that took one could write a screen's evidence under another screen.
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { isNodeId } from "../bridge/src/node-id.ts";
-import { resolveScreen } from "./resolve-screen.ts";
-import { hasExportIndex } from "./export-index.ts";
+import { resolveScreen } from "./resolve-screen-core.ts";
+import { hasExportIndex } from "../bridge/src/export-reader.ts";
 import { STEM_RE, parseSetName, verifySets } from "./verify-sets.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 import type { Claim, ClaimOpts } from "./node-artefacts.ts";

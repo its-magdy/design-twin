@@ -30,7 +30,7 @@ const twRaw = read("claude-plugin/skills/build-screen/profiles/web-tailwind.md")
 const tw = flat(twRaw);
 const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md"));
 const builder = flat(read("claude-plugin/agents/screen-builder.md"));
-const validate = read("design-to-code/map-validate.ts");
+const validate = read("design-to-code/map-validate-core.ts");
 const step = (n: number): string => skill.split(new RegExp(` ${n}\\. \\*\\*`))[1]?.split(/ \d\. \*\*/)[0] ?? "";
 
 console.log("build-screen docs:");
@@ -52,7 +52,7 @@ check("web-tailwind names `data-theme-<collection>` scoping for shared mode name
 check("web-css-modules tokens.css note: `data-theme-<collection>` and the tokens.js warning", /data-theme-<collection>.{0,120}tokens\.js. warns which attributes/.test(cssm));
 check("web-tailwind: `--font-figma-*` and STRING tokens left out of theme.css", /font-figma-\*/.test(tw) && /STRING/.test(tw));
 const statuses = /const STATUSES = \[([^\]]*)\]/.exec(validate)?.[1]?.match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
-check("the map `status` enum in SKILL.md equals map-validate.ts STATUSES", statuses.length > 0 && skill.includes("`" + statuses.join("` | `") + "`"));
+check("the map `status` enum in SKILL.md equals map-validate-core.ts STATUSES", statuses.length > 0 && skill.includes("`" + statuses.join("` | `") + "`"));
 check("SKILL.md mentions the optional `note` and that other keys are rejected", /`note`/.test(skill) && /any other key.{0,200}rejected/i.test(skill));
 check("drift-lint does not say 'exits non-zero at 0%'; 0% is a warning with a confirm", !/exits non-zero at 0%/.test(skill) && /0% \(and `catalog-rekeyed`\) is a warning/.test(skill));
 check("drift-lint/map-bootstrap read the library catalogs (`components.library.json`, `libraries/`)", /components\.library\.json/.test(skill) && /libraries\/\*\/components\.json.{0,80}libraries\/index\.json/.test(skill) && /design_drift_lint/.test(skill) && /map-bootstrap does the same only with `--screen`/.test(skill));

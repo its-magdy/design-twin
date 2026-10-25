@@ -28,12 +28,12 @@ import net from "node:net";
 import os from "node:os";
 import http from "node:http";
 import path from "node:path";
-import { z } from "zod";
 import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
 import * as daemon from "./daemon.ts";
 import type { DaemonStatusView } from "./daemon.ts";
 import { readSnapshotInfo } from "./snapshot-meta.ts";
+import { readDesignSystemStamp, readExportIndex } from "./export-reader.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
@@ -287,71 +287,25 @@ function checkPlugin(r: PluginProbe, waitSec?: number): Check {
 
 const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
 
-// The root pages/index.json's `layers[]` already carries every screen's `sourceFile` and
-// `exportedAt` (write-out.ts stamps both; a screen pulled before that field existed simply has no
-// `sourceFile`, which is told apart from a real value rather than defaulting to the design system's).
-// Reading it directly means this never has to guess by opening each screen file, or fall back to
-// whichever document snapshot-meta happened to pick first — which would
-// attribute the whole export to the wrong Figma file.
-// The fields read off pages/index.json, each page's index.json, and the design-system manifest —
-// JSON from disk that an older bridge or a hand edit may have written, so each is checked before it
-// is read. Loose: only the fields read here are checked. A row may be null (an older index could hold
-// one); it is skipped, as it always was.
-const IndexRowSchema = z.looseObject({ file: z.string().optional(), sourceFile: z.string().optional(), exportedAt: z.string().optional() });
-const IndexSchema = z.looseObject({
-  pageDirs: z.array(z.looseObject({ index: z.string() })).optional(),
-  layers: z.array(IndexRowSchema.nullable()).optional(),
-});
-const DsStampSchema = z.looseObject({ file: z.string().optional(), exportedAt: z.string().optional() });
-type IndexRowView = z.infer<typeof IndexRowSchema>;
-
-// A zod error on one line, for a doctor detail.
-const oneLine = (e: z.ZodError): string => z.prettifyError(e).replace(/\n\s*/g, " ");
-
-// Read + parse + check one export file. null when it is absent; `bad` names a corrupt or wrong-shaped
-// one, so the caller can say so instead of quietly counting nothing.
-function readExportJson<T>(file: string, schema: z.ZodType<T>): { doc: T } | { bad: string } | null {
-  let text: string;
-  try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
-  let raw: unknown;
-  try { raw = JSON.parse(text) as unknown; } catch (e) { return { bad: "is not valid JSON: " + errMsg(e) }; }
-  const r = schema.safeParse(raw);
-  return r.success ? { doc: r.data } : { bad: "is not the expected shape: " + oneLine(r.error) };
-}
-
+// Every screen row already carries its `sourceFile` and `exportedAt` (write-out.ts stamps both; a screen pulled before
+// that field existed simply has no `sourceFile`, which is told apart from a real value rather than defaulting to the
+// design system's). Reading the rows means this never has to guess by opening each screen file, or fall back to
+// whichever document snapshot-meta happened to pick first — which would attribute the whole export to the wrong Figma
+// file. The rows are export-reader.ts's: every page index on disk, each screen once by the writer's identity (a screen
+// re-filed under a renamed page's dir is one screen, not two), and every index or manifest that is there but unusable
+// named, so the caller can say so instead of quietly counting nothing.
 function exportSourceCounts(exportDir: string, now: number): { parts: string[]; newestOverall: number | null; problems: string[] } {
   const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
-  const problems: string[] = [];
-  const note = (l: IndexRowView) => { const key = l.sourceFile || ""; let ats = screensByFile.get(key); if (!ats) { ats = []; screensByFile.set(key, ats); } ats.push(l.exportedAt); };
-  // `/`-spelt like the index's own pageDirs[].index paths it is listed with (path.join takes it on Windows too)
-  const rootRel = "pages/index.json";
-  const rootRead = readExportJson(path.join(exportDir, rootRel), IndexSchema);
-  if (rootRead && "bad" in rootRead) problems.push(`${rootRel} ${rootRead.bad}`);
-  // No (readable) page index — a design-system-only or as-yet-empty export.
-  if (rootRead && "doc" in rootRead) {
-    const idx = rootRead.doc;
-    // The root `layers[]` only ever holds what write-out.ts's writeScreen path has merged into it — a
-    // whole-page pull's layers never backfill it (mergeRootIndex only appends the ONE entry its own
-    // call passed). So the true, complete list is every PAGE's own index, keyed by `file` so a screen
-    // present in BOTH (a single-screen re-pull of a frame the original page walk also wrote) counts
-    // once — root wins that merge since it is the more recently written of the two.
-    const byFile = new Map<string, IndexRowView>();
-    for (const p of idx.pageDirs || []) {
-      const pi = readExportJson(path.join(exportDir, p.index), IndexSchema);
-      if (pi && "bad" in pi) problems.push(`${p.index} ${pi.bad}`);
-      if (pi && "doc" in pi) for (const l of pi.doc.layers || []) if (l && l.file) byFile.set(l.file, l);
-    }
-    for (const l of idx.layers || []) if (l && l.file) byFile.set(l.file, l);
-    for (const l of byFile.values()) note(l);
+  const ix = readExportIndex(exportDir);
+  const ds = readDesignSystemStamp(exportDir);
+  const problems = [...ix.problems, ...ds.problems].map((p) => `${p.file} ${p.error}`);
+  for (const row of ix.rows) {
+    const key = row.sourceFile || "";
+    let ats = screensByFile.get(key);
+    if (!ats) { ats = []; screensByFile.set(key, ats); }
+    ats.push(ix.exportedAtOf(row));
   }
-  let designSystem: { file: string; exportedAt: string | undefined } | null = null;
-  const maybe = (rel: string): z.infer<typeof DsStampSchema> | null => {
-    const r = readExportJson(path.join(exportDir, rel), DsStampSchema);
-    if (r && "bad" in r) problems.push(`${rel} ${r.bad}`);
-    return r && "doc" in r ? r.doc : null;
-  };
-  const dsDoc = maybe("design-system.json") || maybe(path.join("design-system", "tokens.json"));
-  if (dsDoc && dsDoc.file) designSystem = { file: dsDoc.file, exportedAt: dsDoc.exportedAt };
+  const designSystem = ds.stamp?.file ? { file: ds.stamp.file, exportedAt: ds.stamp.exportedAt } : null;
 
   const parts: string[] = [];
   let newestOverall: number | null = null;

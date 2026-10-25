@@ -3,7 +3,7 @@
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue } from "../design-to-code/tokens.ts";
 import { cssVarName } from "../design-to-code/token-naming.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
-import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate.ts";
+import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate-core.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
 import { isManifest } from "../design-to-code/catalog-input.ts";
@@ -16,7 +16,7 @@ import {
 } from "./fixtures.ts";
 import { bag, isJsonObject } from "../design-to-code/types.ts";
 import { isComponentsCatalog, isTokensDoc } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { CodeConnectMap, ComponentPropDef, ComponentsCatalog, DesignSystemDoc, DriftFinding, TokensDoc } from "../design-to-code/types.ts";
 import type { GetComponentResult } from "../design-to-code/get-component.ts";
 import type { DtcgGroup } from "../design-to-code/tokens.ts";

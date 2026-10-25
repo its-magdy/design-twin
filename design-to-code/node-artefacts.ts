@@ -18,7 +18,7 @@ import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
 import { AUDIT_DIR, PLAN_DIR, VERIFY_DIR, listPlans } from "../bridge/src/project-layout.ts";
 import { parsePlan } from "./doc-guards.ts";
 import { alnumKey } from "./map-util.ts";
-import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { anyJson, readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
 import { nodeIdFromSetName, parseSetName, setFacts, stemHolders, verifySets, type SetFacts } from "./verify-sets.ts";

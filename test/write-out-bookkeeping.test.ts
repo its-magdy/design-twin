@@ -12,7 +12,7 @@ import { node, screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
 import { buildPageLayout } from "../bridge/src/pages-layout.ts";
-import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen-core.ts";
 import type { Asset, IrNode, ScreenExport } from "../bridge/src/doc-types.ts";
 
 const t = (name: string, cond: () => boolean): void => {

@@ -5,7 +5,7 @@
 // whose only trace is an open run keeps its stem) do not bundle verify-run.
 import path from "node:path";
 import fs from "node:fs";
-import { anyJson, readJson } from "./read-json.ts";
+import { anyJson, readJson } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { runCacheDir } from "./run-cache.ts";
 import { setBaseOf, setFile } from "./verify-sets.ts";

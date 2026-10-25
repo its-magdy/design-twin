@@ -25,7 +25,8 @@ import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owner
 import { FileMemo } from "./file-memo.ts";
 import type { FileMemoOptions } from "./file-memo.ts";
 import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
-import { EXPORT_DIR as DEFAULT_OUT_DIR, MERGED_VARIABLES_FILE } from "./project-layout.ts";
+import { MERGED_VARIABLES_FILE } from "./project-layout.ts";
+import { exportRoot } from "./export-reader.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { errMsg, errCode } from "./errmsg.ts";
 import { pngSize } from "./png.ts";
@@ -56,8 +57,8 @@ export interface ChangeReport {
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
-// next to the bridge's own source. FIGMA_EXPORT_DIR is the same env var snapshot-meta.ts already
-// reads, so figma_status looks for the snapshot exactly where this wrote it.
+// next to the bridge's own source. FIGMA_EXPORT_DIR is the same env var every reader honours
+// (export-reader.ts exportRoot), so figma_status looks for the snapshot exactly where this wrote it.
 //
 // The default is design/EXPORT, not design/. design/ had become two kinds of file under one name:
 // what a pull writes and may overwrite (pages/, design-system/, assets/, variables.json) and what a
@@ -65,8 +66,11 @@ export interface ChangeReport {
 // verify/). "Delete design/ and re-pull" is the obvious recovery move and it silently destroyed the
 // second kind. One subdirectory draws the line where it can be seen: everything dtwin writes is under
 // design/export/, and nothing else is.
+//
+// The precedence is export-reader.ts exportRoot's — the one every reader reads by — so a project still on the older
+// flat layout (its export directly in design/) is written where it is read, as the CLI's positional default always did.
 function resolveOutDir(outDir?: string | null): string {
-  return path.resolve(process.cwd(), outDir || process.env.FIGMA_EXPORT_DIR || DEFAULT_OUT_DIR);
+  return exportRoot(outDir);
 }
 
 // The CLI's outDir is a positional the USER typed — an absolute path or a sibling directory there is
@@ -1248,4 +1252,4 @@ function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   return Math.min(Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8), INLINE_CHAR_CAP);
 }
 
-export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny, screenReuseKeys, resetScreenReuseKeys };
+export { inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny, screenReuseKeys, resetScreenReuseKeys };

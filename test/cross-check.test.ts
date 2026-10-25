@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { crossCheck, toMarkdown } from "../design-to-code/cross-check.ts";
+import { crossCheck, toMarkdown } from "../design-to-code/cross-check-core.ts";
 import { audit } from "../design-to-code/audit.ts";
 import { clampOpacityPct, composeAlpha, formatHex, compositeOver, parseCssColor } from "../design-to-code/color.ts";
 import { formatHex as bridgeFormatHex } from "../bridge/src/hex-color.ts";
@@ -24,13 +24,13 @@ import { catalog, codeMap, must, node, parseAs, readFixture, screenExport, token
 import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isComponentsCatalog, isTokensDoc } from "../design-to-code/doc-guards.ts";
-import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { findingIds } from "../design-to-code/finding-id.ts";
 import { matchByNameAndSignature, nameVerdict, visibleInstances } from "../design-to-code/component-match.ts";
 // cross-check --json: the report; only summary/findings/coverage/componentProposals are read here.
 const isCrossCheckReport = (x: unknown): x is CrossCheckReport => isJsonObject(x) && Array.isArray(x.findings) && isJsonObject(x.summary);
-import type { CrossCheckScreen } from "../design-to-code/cross-check.ts";
+import type { CrossCheckScreen } from "../design-to-code/cross-check-core.ts";
 import type {
   ComponentPropValues, CoverageBucket, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode,
   CrossCheckReport, IrNode, TextStylesDoc,

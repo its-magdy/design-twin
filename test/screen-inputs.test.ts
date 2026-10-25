@@ -9,7 +9,7 @@ import path from "node:path";
 import { check, report } from "./assert.ts";
 import { catalog, collection, screenExport, tokens, variable } from "./fixtures.ts";
 import { crossCheckInputOf, readScreenInputs, withCatalog } from "../design-to-code/screen-inputs.ts";
-import { screenSiblingFile } from "../design-to-code/export-index.ts";
+import { screenSiblingFile } from "../bridge/src/export-reader.ts";
 import type { ScreenInputs } from "../design-to-code/screen-inputs.ts";
 import { cliRunner } from "./cli-runner.ts";
 import { main as auditMain } from "../design-to-code/audit.ts";

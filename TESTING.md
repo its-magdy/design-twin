@@ -112,7 +112,7 @@ bun test/verify-sets.test.ts          # expect: all checks pass, exit 0 — a ve
 bun test/mcp-share.test.ts            # expect: all checks pass, exit 0 — two MCP servers on one port share the bridge
 bun test/mcp-smoke.test.ts            # expect: all checks pass, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts design-to-code/node-artefacts.ts design-to-code/report-freshness.ts design-to-code/plan-binding.ts design-to-code/plan-status.ts
+bun build --no-bundle --outdir "$(mktemp -d)" design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/hook-input.ts design-to-code/shell-words.ts design-to-code/verifier-guard.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/cross-check-core.ts design-to-code/map-validate-core.ts design-to-code/resolve-screen-core.ts design-to-code/verify-screen.ts design-to-code/verify-shared.ts design-to-code/verify-expect.ts design-to-code/verify-compare.ts design-to-code/verify-report-md.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts design-to-code/node-artefacts.ts design-to-code/report-freshness.ts design-to-code/plan-binding.ts design-to-code/plan-status.ts
 ```
 
 `test/audit.test.ts` drives `design-to-code/audit.ts` (the pre-build design audit behind the
@@ -235,7 +235,7 @@ pass can introduce its own bugs (reviewing this suite's first round of 28 fixes 
 fixes introduced).
 
 When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.ts` with the new
-behavior. `design-to-code/map-validate.ts` is the single source of truth for that shape — update its KEYS/PROP
+behavior. `design-to-code/map-validate-core.ts` is the single source of truth for that shape — update its KEYS/PROP
 tables and the prose in `design-to-code/README.md` together. If you add a token field, assert both the DTCG
 output and the CSS output.
 

@@ -33,11 +33,11 @@ const resolveCli = cliRunner(path.join(import.meta.dirname, "..", "design-to-cod
 import { check as ok, report } from "./assert.ts";
 import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths, screenStem } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
-import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen-core.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
 import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
 import { must, readFixture } from "./fixtures.ts";
-import { isPagesRootIndex } from "../design-to-code/doc-guards.ts";
+import { isRecord } from "../bridge/src/json-util.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 
 type Unresolved = Exclude<ResolveScreenResult, { status: "resolved" }>;
@@ -51,7 +51,8 @@ const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
 
 console.log("resolve-screen — title/texts derivation over the REAL export:");
 
-// The fixture files as this suite reads them: a screen export and the root index, each checked by its guard.
+// The fixture files as this suite reads them: a screen export and the root index, each checked by a guard.
+const isPagesRootIndex = (x: unknown): x is PagesRootIndex => isRecord(x) && Array.isArray(x.pageDirs) && (x.layers === undefined || Array.isArray(x.layers));
 const readRoot = (dir: string): PagesRootIndex => readFixture(path.join(dir, "pages", "index.json"), isPagesRootIndex);
 
 function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {

@@ -16,12 +16,15 @@
 //   bun bridge/src/seed-components.ts [codeRoot=.] [outDir=design] [--dry-run]    (the same, run directly)
 //
 // Merges into design/components.json fill-missing-only (never clobbers hand-authored fields) and, for
-// forms that carry only a node-id, resolves it to the Figma component NAME via design/design-system.json.
+// forms that carry only a node-id, resolves it to the Figma component NAME via the export's design-system.json
+// (design/export/, or design/ itself on the older flat layout).
 
 import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
-import { ifDefined, nullProto } from "./json-util.ts";
+import { ifDefined, isRecord, nullProto } from "./json-util.ts";
+import { designSystemManifestFile, designSystemPart, exportInDesignDir, readDesignSystemManifest } from "./export-reader.ts";
+import { readJson } from "./read-json.ts";
 import { writeJsonLike } from "./json-file.ts";
 import { exitCli, runCli } from "./stdio.ts";
 import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
@@ -117,31 +120,33 @@ function loadJson(p: string): unknown {
 // pointer manifest with NO `components` array — reading `ds.components` off it silently yields an
 // empty map, and every node-id-only mapping is then dropped at the `if (!name) continue` below. That
 // reads as a clean run that just "found fewer mappings", which is the silent-wrong-answer failure
-// design-to-code/catalog-input.ts exists to prevent. So follow the `files.componentsLocal` pointer instead,
-// and keep accepting an inline array for pre-split exports.
-// The fields read off design-system.json (either shape) and off a components catalog. Untyped JSON
-// from disk: only a row whose `id` AND `name` are strings can be a lookup entry, so the map is filled
-// under that guard and typed by it.
-interface DsJson { components?: unknown; files?: { componentsLocal?: unknown } }
-const isDsJson = (x: unknown): x is DsJson => typeof x === "object" && x !== null && !Array.isArray(x);
+// design-to-code/catalog-input.ts exists to prevent. So the `files.componentsLocal` pointer is followed
+// (export-reader.ts designSystemPart: inside the export only, one reason when it cannot be), and an
+// inline array is still accepted for pre-split exports. The export is the one the design dir holds
+// (design/export, or design/ itself on the older flat layout). `problem` is why an export that IS there
+// could not be read; only a row whose `id` AND `name` are strings can be a lookup entry.
+const isCatalogLike = (x: unknown): x is { components: unknown[] } => isRecord(x) && Array.isArray(x.components);
+isCatalogLike.expected = "a component catalog: an object with a `components` array";
 
-function loadIdToName(dir: string): Map<string, string> {
+function loadIdToName(designDir: string): { idToName: Map<string, string>; problem: string | null } {
   const idToName = new Map<string, string>();
-  const ds = loadJson(path.join(dir, "design-system.json"));
-  if (!isDsJson(ds)) return idToName;
-  const inline = Array.isArray(ds.components) ? ds.components : null;
-  const pointer = ds.files && typeof ds.files === "object" ? ds.files.componentsLocal : null;
-  // A pointer that is not a string is a corrupt manifest — nothing to follow.
-  const pointed = typeof pointer === "string" ? loadJson(path.join(dir, pointer)) : null;
-  const rows: unknown[] | null = inline ?? (isDsJson(pointed) && Array.isArray(pointed.components) ? pointed.components : null);
-  if (rows) {
-    for (const c of rows) {
-      if (typeof c !== "object" || c === null) continue;
-      const { id, name } = c as { id?: unknown; name?: unknown };
-      if (typeof id === "string" && id && typeof name === "string") idToName.set(id, name);
-    }
+  const root = exportInDesignDir(designDir);
+  const manifest = readDesignSystemManifest(root);
+  if ("error" in manifest) return { idToName, problem: manifest.missing ? null : `${designSystemManifestFile(root)} ${manifest.error}` };
+  let rows: unknown[] | null = Array.isArray(manifest.doc.components) ? manifest.doc.components : null;
+  if (!rows) {
+    const part = designSystemPart(root, "componentsLocal");
+    if ("error" in part) return { idToName, problem: part.error };
+    const catalog = readJson(part.file, isCatalogLike);
+    if ("error" in catalog) return { idToName, problem: `${part.file} ${catalog.error}` };
+    rows = catalog.doc.components;
   }
-  return idToName;
+  for (const c of rows) {
+    if (!isRecord(c)) continue;
+    const { id, name } = c;
+    if (typeof id === "string" && id && typeof name === "string") idToName.set(id, name);
+  }
+  return { idToName, problem: null };
 }
 
 /** One components.json entry (hand-authored or seeded). */
@@ -172,7 +177,8 @@ export function main(argv: string[]): void {
 }
 
 function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
-  const idToName = loadIdToName(outDir);
+  const { idToName, problem } = loadIdToName(outDir);
+  if (problem) console.error(`[seed-components] warning: ${problem} — node-id-only mappings cannot be named`);
 
   const files: string[] = [];
   walk(codeRoot, files);
@@ -231,7 +237,7 @@ function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
   }
   console.error(`[seed-components] ${dry}${found.length} mapping(s) from ${files.length} scanned file(s) → ${outPath}`);
   console.error(`[seed-components] ${dry}${added} new entr(ies), ${filled} field(s) filled. Fill in each entry's "import" and "props".`);
-  if (!idToName.size) console.error("[seed-components] tip: export design-system.json first so node-id-only mappings resolve to real component names.");
+  if (!idToName.size && !problem) console.error("[seed-components] tip: export design-system.json first so node-id-only mappings resolve to real component names.");
 }
 
 // Only when RUN directly (it is a CLI, driven by the tests as a subprocess). `dtwin seed` imports this

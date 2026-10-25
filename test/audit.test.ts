@@ -5,10 +5,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES, blockerIds } from "../design-to-code/audit.ts";
+import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES } from "../design-to-code/audit.ts";
+import { blockerIds } from "../design-to-code/audit-gate.ts";
 import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
-import { auditGateStatus } from "../design-to-code/audit-gate.ts";
+import { screenAudit } from "../design-to-code/audit-gate.ts";
+import type { ScreenAudit } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
 import { cliRunner, stdoutOf } from "./cli-runner.ts";
 import { main as auditMain } from "../design-to-code/audit.ts";
@@ -381,17 +383,6 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
 }
 
-// ---------- audit-gate: which audit file belongs to a screen is node-artefacts.ts auditFor (test/node-artefacts.test.ts) ----------
-// A file in design/audit/ that is not an audit report is `unreadable` — never "this screen has no blockers".
-(() => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-gate-shape-"));
-  fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
-  fs.writeFileSync(path.join(cwd, "design", "audit", "Home__1_1.json"), JSON.stringify({ findings: "none" }));
-  const g = auditGateStatus(cwd, null, null, "Home");
-  check("[gate-shape] an audit file that is not an audit report is reported unreadable, not read blindly as 0 blockers",
-    g.auditFile === "design/audit/Home__1_1.json" && g.unreadable === true && g.blockers.length === 0);
-})();
-
 // ================================================================ audit correctness
 // Shapes below are the plugin's real ones (serialize.ts / write-out.ts / library-layout.ts) as seen in
 // the field-test exports; names are invented.
@@ -694,10 +685,10 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const listed = [...line.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
   check("[doc-guard] SKILL.md's 'Blocker codes:' list equals BLOCKER_CODES", JSON.stringify(listed) === JSON.stringify([...BLOCKER_CODES].sort()));
   const emitted = new Set<string>();
-  for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check.ts"]) {
+  for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check-core.ts"]) {
     for (const m of readRepo(f).matchAll(/"blocker"(?:\s*:\s*"(?:warning|info)")?,\s*"([a-z]+(?:-[a-z]+)+)"/g)) if (m[1]) emitted.add(m[1]);
   }
-  check("[doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check.ts is in BLOCKER_CODES (and the scan found some)",
+  check("[doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check-core.ts is in BLOCKER_CODES (and the scan found some)",
     emitted.size >= 3 && [...emitted].every((c) => (BLOCKER_CODES as readonly string[]).includes(c)));
   check("[doc-guard] the scan also sees the conditional token-name-collision emit", emitted.has("token-name-collision"));
 }
@@ -719,7 +710,9 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   fs.mkdirSync(path.dirname(ovFile), { recursive: true });
   const run = (args: string[] = []) => auditCli([path.relative(cwd, screenFile), "--platform", "ios", ...args], { cwd });
   const before = run();
-  const beforeGate = auditGateStatus(cwd, "1:1", screenFile, "Login");
+  const blockersOf = (a: ScreenAudit): readonly string[] => (a.status === "read" ? a.blockers : []);
+  const gate = (): ScreenAudit => screenAudit(cwd, { nodeId: "1:1", screenFile, screenName: "Login" });
+  const beforeGate = blockersOf(gate());
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [
     { code: "missing-font", nodeId: "1:11", severity: "warning", reason: "the font files are licensed and in the repo", decidedBy: "user", decidedAt: "2026-09-30T00:00:00Z" },
     { code: "export-truncated", severity: "info", reason: "stale decision" },
@@ -728,11 +721,11 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const json = parseAs(fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.json"), "utf8"), isAuditReport, "audit report");
   const md = fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.md"), "utf8");
   const font = json.findings.find((f) => f.code === "missing-font");
-  check("before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font@1:11"));
+  check("before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.includes("missing-font@1:11"));
   check("an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
     after.status === 0 && json.summary.blockers === 0 && font?.severity === "warning" && font.overridden?.from === "blocker" && font.overridden.decidedBy === "user");
   check("…and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
-  check("the gate reads the same decision: no blockers left", auditGateStatus(cwd, "1:1", screenFile, "Login").blockers.length === 0);
+  check("the gate reads the same decision: no blockers left", (() => { const g = gate(); return g.status === "read" && g.blockers.length === 0; })());
   check("an override that matches nothing is reported (JSON, .md, stderr), not dropped",
     json.overridesUnmatched?.length === 1 && json.overridesUnmatched[0]?.code === "export-truncated" && /matched no finding/.test(md) && /override for export-truncated NOT applied: matched no finding/.test(after.stderr));
   fs.writeFileSync(ovFile, JSON.stringify({ overrides: [{ code: "missing-font", severity: "warning", reason: "" }] }));
@@ -783,7 +776,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
 }
 {
   // every CLI remediation hint in finding text names its MCP twin, or says it has none.
-  const lines = ["design-to-code/cross-check.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
+  const lines = ["design-to-code/cross-check.ts", "design-to-code/cross-check-core.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
   const asLib = lines.filter((l) => /dtwin pull --as-library/.test(l));
   const listLib = lines.filter((l) => /dtwin list libraries/.test(l));
   check("every `dtwin pull --as-library` hint says it is CLI only", asLib.length >= 2 && asLib.every((l) => /CLI only/.test(l)));

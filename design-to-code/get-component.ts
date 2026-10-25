@@ -11,8 +11,8 @@
 // same handle that drift-lint or map-bootstrap printed for a component also works here.
 import path from "node:path";
 import { isComponentDetailFile, isComponentsCatalog } from "./doc-guards.ts";
-import type { DocGuard } from "./doc-guards.ts";
-import { anyJson, readJson } from "./read-json.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
+import { anyJson, readJson } from "../bridge/src/read-json.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { assertNotManifest } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";

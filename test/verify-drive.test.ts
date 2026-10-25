@@ -18,7 +18,7 @@ import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect
 import { planInteractionsSha256 } from "../design-to-code/plan-binding.ts";
 import { actionForExpect, parseSteps, stepsSha256 } from "../design-to-code/probe-steps.ts";
 import { isVerifyExpectation, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import type {
   InteractionEvidence, MeasuredNode, MeasuredStyles, PageOverflow, Plan, PlanWaiver, ProbeIdentity, ProbeStep, ScreenDoc, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec,
