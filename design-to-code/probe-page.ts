@@ -2,11 +2,12 @@
 //
 // page.evaluate serialises a function with Function.prototype.toString() and runs the TEXT in the page, so
 // each function here must be SELF-CONTAINED: no reference to anything outside its own body (no module
-// constant, no imported helper, no other function in this file) — every helper is nested inside it, and
-// its argument and return value are plain JSON. A stray outer reference is a ReferenceError in the page,
-// not a type error here, which is why test/verify-probe-e2e.test.ts runs the BUILT bundle in a real
-// browser. (esbuild does not hoist or rename a function's nested locals without minification; the e2e
-// run is the check that it still does not.)
+// constant, no imported helper, no other function in this file) but the page's globals and the probe's page runtime,
+// window.__dt (page-runtime.ts: element paths, a control's shown text, shown text, visibility — installed in every probe
+// document by the init script) — every other helper is nested inside it, and its argument and return value are plain JSON. A
+// stray outer reference is a ReferenceError in the page, not a type error here, which is why
+// test/verify-probe-e2e.test.ts runs the BUILT bundle in a real browser. (esbuild does not hoist or rename a function's
+// nested locals without minification; the e2e run is the check that it still does not.)
 //
 // The DOM is typed by page-dom.ts (types only, imported with `import type`), not lib:dom: the test/design-to-code
 // tsconfig has no DOM lib (the rest of this layer runs in Node, where `document` does not exist), and
@@ -16,10 +17,11 @@
 // Every decision — which element is a spec's, which frame root wins, what a null means — is in
 // probe-match.ts, which is pure and unit-tested without a browser.
 
-import type { PageCanvasContext, PageDocument, PageElement, PageRect, PageStyle } from "./page-dom.ts";
+import type { PageCanvasContext, PageDocument, PageElement, PageRect, PageStyle, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
 declare const document: PageDocument;
+declare const window: PageWindow;
 declare const scrollX: number;
 declare const scrollY: number;
 declare const innerWidth: number;
@@ -45,7 +47,7 @@ export interface ElemFlags {
   /** inside [aria-hidden="true"] — recorded, never a reason to reject (decorative ≠ invisible) */
   ariaHidden: boolean;
 }
-/** One element the page offered: an nth-child CSS path (unique in this document), where it is, and whether it shows. */
+/** One element the page offered: its path (window.__dt.path — unique in this document), where it is, and whether it shows. */
 export interface Candidate {
   path: string;
   tag: string;
@@ -92,65 +94,12 @@ export interface CollectOutput {
  * SELF-CONTAINED — see the file header.
  */
 export function collectCandidates(input: CollectInput): CollectOutput {
+  const dt = window.__dt;
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s: string | null): string => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-  // A form control shows its VALUE, not its children (HTML: an <input> has none; a <textarea>'s child text is its default
-  // value, stale once typed in; a <select>'s is every option's). The shown string; a reason when the control's value is
-  // not the string shown (a password, a date, a list box); null for any other element. (measureElements has its own copy.)
-  const controlText = (e: PageElement): { text: string } | { why: string } | null => {
-    const tag = e.tagName.toLowerCase();
-    if (tag === "textarea") return { text: e.value ?? "" };
-    if (tag === "select") {
-      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
-      const o = e.selectedOptions?.[0];
-      // (HTMLOptionElement.label: its label attribute — what a collapsed <select> shows — else its text)
-      return { text: o ? (o.label ?? o.text ?? o.textContent ?? "") : "" };
-    }
-    if (tag !== "input") return null;
-    const type = (e.type || "text").toLowerCase();
-    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
-    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
-    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
-  };
   const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  // An element's path is its parent's path plus its own nth-child step, each kept once per call: nothing changes the DOM
-  // while this synchronous function runs, so a path or a sibling index read once stays true for the rest of the call. Built
-  // from scratch per candidate, every step scanned its parent's children again — the text records of one long list
-  // re-scanned that list's children once per record (about 4.6 of 11 s at 25,000 elements with a 1,800-child list).
-  const paths = new Map<PageElement, string>();
-  const childIndex = new Map<PageElement, Map<PageElement, number>>();
-  const indexIn = (parent: PageElement, el: PageElement): number => {
-    let idx = childIndex.get(parent);
-    if (!idx) {
-      const m = new Map<PageElement, number>();
-      Array.from(parent.children).forEach((c, i) => m.set(c, i + 1));
-      childIndex.set(parent, m);
-      idx = m;
-    }
-    return idx.get(el) ?? 0;
-  };
-  const pathOf = (el: PageElement): string => {
-    // up to the nearest ancestor whose path is known (or the top: <html>, or an element with no parent — both "html"),
-    // then down again, keeping each element's path on the way (a loop, not recursion: no depth limit)
-    const up: PageElement[] = [];
-    let cur: PageElement = el;
-    let base: string | undefined = paths.get(cur);
-    while (base === undefined) {
-      const parent: PageElement | null = cur.parentElement;
-      if (cur === document.documentElement || !parent) { base = "html"; paths.set(cur, base); break; }
-      up.push(cur);
-      cur = parent;
-      base = paths.get(cur);
-    }
-    for (let i = up.length - 1; i >= 0; i--) {
-      const e = up[i];
-      const parent = e?.parentElement;
-      if (!e || !parent) break;
-      base = `${base} > ${e.tagName.toLowerCase()}:nth-child(${indexIn(parent, e)})`;
-      paths.set(e, base);
-    }
-    return base;
-  };
+  // each path kept for the rest of this call (many candidates share their ancestors' steps)
+  const pathOf = dt.paths();
   const all: PageElement[] = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
   const orderOf = new Map<PageElement, number>();
   all.forEach((e, i) => orderOf.set(e, i));
@@ -158,7 +107,7 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   const cand = (el: PageElement, withRange: boolean): Candidate => {
     const r = el.getBoundingClientRect();
     let rangeRect: Rect | null = null;
-    const ctl = controlText(el);
+    const ctl = dt.controlText(el);
     // (a control draws its value itself: no Range reaches those characters)
     if (withRange && ctl === null) { const range = document.createRange(); range.selectNodeContents(el); rangeRect = pageRect(range.getBoundingClientRect()); }
     const tagged: string[] = [];
@@ -172,7 +121,7 @@ export function collectCandidates(input: CollectInput): CollectOutput {
       rangeRect,
       flags: {
         box,
-        visible: box && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true }),
+        visible: dt.visible(el),
         zeroSize: r.width === 0 || r.height === 0,
         inClosedDialog: el.closest("dialog:not([open])") !== null,
         inert: el.closest("[inert]") !== null,
@@ -180,7 +129,7 @@ export function collectCandidates(input: CollectInput): CollectOutput {
         ariaHidden: el.closest('[aria-hidden="true"]') !== null,
       },
       taggedAncestors: tagged,
-      ownText: ctl === null ? norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")) : "text" in ctl ? norm(ctl.text) : "",
+      ownText: ctl === null ? norm(dt.ownText(el)) : "text" in ctl ? norm(ctl.text) : "",
       order: orderOf.get(el) ?? -1,
       depth: depthOf(el),
     };
@@ -232,33 +181,19 @@ export function collectCandidates(input: CollectInput): CollectOutput {
   for (const t of wanted) { const k = t.toLowerCase(); wantedLower.set(k, [...(wantedLower.get(k) || []), t]); }
   const exact = new Map<string, PageElement[]>(), caseless = new Map<string, PageElement[]>(), ph = new Map<string, PageElement[]>();
   const push = (m: Map<string, PageElement[]>, k: string, e: PageElement): void => { const l = m.get(k); if (l) l.push(e); else m.set(k, [e]); };
-  // A <br> is a line break, which textContent drops ("Line one<br>Line two" reads "Line oneLine two"): an element with
-  // one inside reads its text with each <br> as a space. A <select> or <textarea> inside it reads as what it shows (its
-  // selected option, its value) — never its children (every option; the default text, stale once typed in). (Its own
-  // walk: a page-side function shares no helper.)
+  // A <br> is a line break, which textContent drops ("Line one<br>Line two" reads "Line oneLine two"), and a <select> or
+  // <textarea> shows its selected option or value, never its children (every option; the default text, stale once typed
+  // in): an element holding one reads its text as the page shows it (dt.shownText, each break a space); any other element
+  // by its textContent.
   const walked = new Set<PageElement>();
   if (wanted.size && document.body) for (const w of Array.from(document.body.querySelectorAll("br, select, textarea"))) for (let p = w.parentElement; p && !walked.has(p); p = p.parentElement) walked.add(p);
-  const shownOf = (c: PageElement): string | null => { if (c.tagName !== "SELECT" && c.tagName !== "TEXTAREA") return null; const t = controlText(c); return t !== null && "text" in t ? t.text : null; };
-  const flatText = (e: PageElement): string => {
-    let out = "", k = 0;
-    for (const n of Array.from(e.childNodes)) {
-      if (n.nodeType === 3) out += n.nodeValue || "";
-      else if (n.nodeType === 1) {
-        const c = e.children[k++];
-        if (!c) continue;
-        const shown = shownOf(c);
-        out += c.tagName.toLowerCase() === "br" ? " " : shown !== null ? ` ${shown} ` : walked.has(c) ? flatText(c) : c.textContent || "";
-      }
-    }
-    return out;
-  };
   if (wanted.size) {
     for (const el of all) {
       // a collapsed <select> shows its selected option's text ITSELF: its <option>s are no owners of it (innermost would
       // otherwise drop the visible <select> for an option with no box of its own)
-      if (el.tagName === "OPTION" || el.tagName === "OPTGROUP") { const sel = el.closest("select"); const c = sel ? controlText(sel) : null; if (c !== null && "text" in c) continue; }
-      const ctl = controlText(el);
-      const t = ctl !== null ? ("text" in ctl ? norm(ctl.text) : "") : norm(walked.has(el) ? flatText(el) : el.textContent);
+      if (el.tagName === "OPTION" || el.tagName === "OPTGROUP") { const sel = el.closest("select"); const c = sel ? dt.controlText(sel) : null; if (c !== null && "text" in c) continue; }
+      const ctl = dt.controlText(el);
+      const t = ctl !== null ? ("text" in ctl ? norm(ctl.text) : "") : norm(walked.has(el) ? dt.shownText(el, false) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -323,67 +258,16 @@ export interface MeasureResult {
  * value cannot be read). SELF-CONTAINED — see the file header.
  */
 export function measureElements(input: MeasureInput): MeasureResult[] {
+  const dt = window.__dt;
   const px = (v: string): number | null => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
   const r2 = (n: number): number => Math.round(n * 100) / 100;
   const pageRect = (r: PageRect): Rect => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  // The text as a TEXT spec's `text`: textContent with each run of spaces, tabs and line breaks read as one space (HTML
-  // collapses them — MDN white-space), except a line break the page shows, which stays "\n": a <br>, or a newline in an
-  // element whose white-space keeps it (white-space-collapse preserve / preserve-breaks / break-spaces, i.e. white-space
-  // pre, pre-wrap, pre-line, break-spaces). Spaces beside a kept break are dropped, as pre-line renders them.
-  const keepsBreaks = (e: PageElement): boolean => {
-    const s = getComputedStyle(e);
-    const c = s.getPropertyValue("white-space-collapse").trim();
-    if (c) return c === "preserve" || c === "preserve-breaks" || c === "break-spaces";
-    return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(s.getPropertyValue("white-space").trim());
-  };
-  const shownText = (root: PageElement): string => {
-    let out = "";
-    const walk = (e: PageElement): void => {
-      let keep: boolean | null = null;
-      let k = 0; // e.children lists the element nodes of e.childNodes, in the same order
-      for (const n of Array.from(e.childNodes)) {
-        if (n.nodeType === 3) {
-          const v = n.nodeValue || "";
-          if (!/[\n\r]/.test(v)) { out += v; continue; }
-          keep ??= keepsBreaks(e);
-          out += keep ? v.replace(/\r\n?/g, "\n") : v.replace(/[\n\r]/g, " ");
-        } else if (n.nodeType === 1) {
-          const c = e.children[k++];
-          if (!c) continue;
-          if (c.tagName.toLowerCase() === "br") out += "\n";
-          else if (c.tagName === "SELECT" || c.tagName === "TEXTAREA") {
-            // a control inside shows its value, never its children (every option; a stale default) — a list box, its options
-            const t = controlText(c);
-            if (t === null || !("text" in t)) walk(c);
-            else out += ` ${t.text} `;
-          } else walk(c);
-        }
-      }
-    };
-    walk(root);
-    return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
-  };
-  // A form control shows its VALUE, not its children (collectCandidates has its own copy — read it there): the shown string,
-  // a reason when the value is not the string shown, null for any other element.
-  const controlText = (e: PageElement): { text: string } | { why: string } | null => {
-    const tag = e.tagName.toLowerCase();
-    if (tag === "textarea") return { text: e.value ?? "" };
-    if (tag === "select") {
-      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
-      const o = e.selectedOptions?.[0];
-      // (HTMLOptionElement.label: its label attribute — what a collapsed <select> shows — else its text)
-      return { text: o ? (o.label ?? o.text ?? o.textContent ?? "") : "" };
-    }
-    if (tag !== "input") return null;
-    const type = (e.type || "text").toLowerCase();
-    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
-    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
-    return { why: `an <input type="${type}"> draws its own text — its value is not the string shown` };
-  };
-  // a TEXT spec's `text`: a control's value (a <textarea> keeps its line breaks), else the element's shown text
+  const controlText = dt.controlText;
+  // a TEXT spec's `text`: a control's value (a <textarea> keeps its line breaks), else the element's shown text with the
+  // line breaks the page shows (dt.shownText)
   const specText = (el: PageElement): { text: string } | { why: string } => {
     const c = controlText(el);
-    if (c === null) return { text: shownText(el) };
+    if (c === null) return { text: dt.shownText(el) };
     return "text" in c ? { text: c.text.replace(/\r\n?/g, "\n").replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim() } : c;
   };
   // Colours as rgba(): the browser may compute oklch()/color(srgb …) (Tailwind v4), which the compare's
@@ -401,7 +285,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     const [r = 0, g = 0, b = 0, a = 255] = [d[0], d[1], d[2], d[3]];
     return a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Math.round((a / 255) * 1000) / 1000})`;
   };
-  const ownText = (el: PageElement): string => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
+  const ownText = (el: PageElement): string => dt.ownText(el).trim();
   const elementsWithOwnText = (el: PageElement): PageElement[] => {
     const out: PageElement[] = [];
     // (a <select> / <textarea> that shows one string owns it itself: its children are no text of the page's)
@@ -437,7 +321,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     const styles: Record<string, PValue> = {};
     const unmeasured: Record<string, string> = {};
     const res: MeasureResult = { nodeId: item.nodeId, found: false, styles, unmeasured };
-    const el = document.querySelector(item.path);
+    const el = dt.find(item.path);
     const put = (k: string, v: PValue | undefined, why: string): void => { if (v === null || v === undefined) { styles[k] = null; unmeasured[k] = why; } else styles[k] = v; };
     if (!el) { for (const k of input.keys) put(k, null, "the element was gone when measured"); return res; }
     res.found = true;
@@ -539,7 +423,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     // and its centre each lie on a painting child — a transparent row whose cells carry the hover), no ancestor's colour
     // shows on it: no answer either. Ancestor opacity/filter, ::before painters and a sibling/overlay painting over the
     // element are not looked at (known misses: an overlay may make it pass — LIMITS).
-    const frameRoot = input.framePath ? document.querySelector(input.framePath) : null;
+    const frameRoot = input.framePath ? dt.find(input.framePath) : null;
     const paintOf = (e: PageElement): { color: string | null; image: boolean } => {
       const s = getComputedStyle(e), img = s.getPropertyValue("background-image").trim();
       return { color: rgba(s.getPropertyValue("background-color")), image: img !== "" && img !== "none" };
@@ -719,9 +603,10 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
 export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: number; y: number } | null {
   // tabindex="-1" is not a control — ARIA-grid cells carry it (roving focus); hovering one is a free point
   const INTERACTIVE = "a, button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]:not([tabindex='-1'])";
-  const owner = document.querySelector(arg.owner);
+  const dt = window.__dt;
+  const owner = dt.find(arg.owner);
   if (!owner) return null;
-  const avoidEl = document.querySelector(arg.avoid);
+  const avoidEl = dt.find(arg.avoid);
   const o = owner.getBoundingClientRect();
   const a = avoidEl ? avoidEl.getBoundingClientRect() : null;
   const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
@@ -743,19 +628,10 @@ export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: numb
  *  SELF-CONTAINED — see the file header. */
 export function focusablePath(path: string): string | null {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path);
+  const dt = window.__dt;
+  const el = dt.find(path);
   const f = el ? el.closest(FOCUSABLE) : null;
-  if (!f) return null;
-  const parts: string[] = [];
-  let cur: PageElement | null = f;
-  while (cur && cur !== document.documentElement) {
-    const parent: PageElement | null = cur.parentElement;
-    if (!parent) break;
-    parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-    cur = parent;
-  }
-  parts.unshift("html");
-  return parts.join(" > ");
+  return f ? dt.path(f) : null;
 }
 /** What screenTags reads: `ids` — the expectation's own node ids (its first root's, the frame's own excepted); `known` —
  *  every id the expectation names (any root, hidden ones, the frames, every spec's aliases); `alias` — an own node's
@@ -792,9 +668,10 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
     const viaPath = ownBySuffix.get(s);
     return viaPath !== undefined ? { id: viaPath, by: "path" } : knownSuffix.has(s) ? "" : null;
   };
+  const dt = window.__dt;
+  // (checkVisibility with visibilityProperty is Playwright's checkVisibility() and computed visibility "visible")
   const visible = (el: PageElement): boolean => {
-    const st = getComputedStyle(el);
-    if (st.getPropertyValue("display") === "contents") {
+    if (getComputedStyle(el).getPropertyValue("display") === "contents") {
       for (const c of Array.from(el.children)) if (visible(c)) return true;
       for (const n of Array.from(el.childNodes)) {
         if (n.nodeType !== 3) continue;
@@ -804,10 +681,7 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
       }
       return false;
     }
-    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
-    if (st.getPropertyValue("visibility") !== "visible") return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
+    return dt.visible(el, { sized: true });
   };
   /** an own node's visible elements, by how their tags show it */
   const hits = new Map<string, { tag: PageElement[]; alias: PageElement[]; path: PageElement[] }>(), foreign: Array<{ id: string; el: PageElement }> = [];
@@ -847,7 +721,7 @@ export function screenTags(a: ScreenTagsInput): ScreenTags {
 }
 /** Whether the element at `path` has focus, and whether it matches :focus-visible. SELF-CONTAINED. */
 export function focusInfo(path: string): { focused: boolean; focusVisible: boolean } {
-  const el = document.querySelector(path);
+  const el = window.__dt.find(path);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }

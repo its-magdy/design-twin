@@ -57,6 +57,7 @@ import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response } from "playwright";
 import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements, screenTags } from "./probe-page.ts";
+import { PAGE_RUNTIME } from "./page-runtime.ts";
 import type { Candidate, CollectOutput, ForeignRoot, MeasureInput, MeasureItem, Rect, ScreenTags } from "./probe-page.ts";
 import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
@@ -265,7 +266,10 @@ function gitState(dir: string, git: Git = systemGit): { gitHead: string | null; 
 // <style>; by experiment, Chromium does not block a constructed sheet — CSP3 §6.1.13 gates CSSOM's insertRule / cssText on
 // 'unsafe-eval', and MDN notes no browser enforces that). Put back at DOMContentLoaded and load when the page replaced the
 // array by then; a page replacing it later drops it (and under such a CSP then has its own transitions).
-export const INIT_SCRIPT = `(() => {
+// First of all it installs the probe's page runtime (page-runtime.ts, window.__dt) — the readers every page-side function
+// calls — on its own: a runtime that failed to install never stops the rest.
+export const INIT_SCRIPT = `try { ${PAGE_RUNTIME} } catch (e) {}
+(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
   const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
   let sheet = null;

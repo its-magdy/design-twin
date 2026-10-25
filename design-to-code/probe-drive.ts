@@ -16,7 +16,7 @@
 // The page-side functions (readPageOverflow, openerState, armDetector, pollDetector, saveScroll, restoreScroll, scrollHeld, syntheticClick, submitGuard,
 // clickPointControl, and ownMark / ownShot / ownClear)
 // are handed to page.evaluate, so — as in probe-page.ts — each one is SELF-CONTAINED: no reference to anything
-// outside its own body, plain JSON in and out. The DOM is typed by page-dom.ts (types only; this layer
+// outside its own body but the page's globals and the probe's page runtime (window.__dt, page-runtime.ts), plain JSON in and out. The DOM is typed by page-dom.ts (types only; this layer
 // has no DOM lib); test/verify-probe-drive-e2e.test.ts runs the BUILT bundle in a real browser to prove it.
 //
 // Platform facts this relies on (Chromium 153 / Playwright 1.63, verified):
@@ -33,7 +33,7 @@ import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActiva
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { decodePng } from "../bridge/src/png.ts";
-import type { DriveScroll, PageBox, PageDocument, PageElement, PageNode, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
+import type { DriveScroll, PageDocument, PageElement, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
 declare const document: PageDocument;
@@ -64,18 +64,7 @@ export function readPageOverflow(_arg: null): PageOverflow & { compatMode: strin
   const scrollable = scrollWidth > clientWidth + 1 && overflowX !== "hidden" && overflowX !== "clip";
   const offenders: PageOverflow["offenders"] = [];
   if (scrollWidth > clientWidth + 1 && body) {
-    const pathOf = (el: PageElement): string => {
-      const parts: string[] = [];
-      let cur: PageElement | null = el;
-      while (cur && cur !== document.documentElement) {
-        const parent: PageElement | null = cur.parentElement;
-        if (!parent) break;
-        parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-        cur = parent;
-      }
-      parts.unshift("html");
-      return parts.join(" > ");
-    };
+    const pathOf = window.__dt.path;
     // An element does not widen the page when an ancestor ON ITS CONTAINING-BLOCK CHAIN clips or scrolls its overflow, or
     // when it is fixed to the viewport. An absolutely positioned element escapes every ancestor that is static and
     // creates no containing block. L-d (Chromium 153, verified): transform / translate / rotate / scale / perspective /
@@ -142,27 +131,10 @@ export interface OpenerState {
 }
 /** In the page: find the opener, say whether a person can see it, and what to hover when not. SELF-CONTAINED. */
 export function openerState(arg: { id: string }): OpenerState {
-  const pathOf = (el: PageElement): string => {
-    const parts: string[] = [];
-    let cur: PageElement | null = el;
-    while (cur && cur !== document.documentElement) {
-      const parent: PageElement | null = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const hasBox = (el: PageElement): boolean => el.getClientRects().length > 0;
-  const sees = (el: PageElement, opacity: boolean): boolean => {
-    if (!hasBox(el)) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity });
-  };
-  const sel = `[data-dt-node="${arg.id.replace(/["\\]/g, "\\$&")}"]`;
-  let els = Array.from(document.querySelectorAll(sel)).filter((e) => e.closest("dialog:not([open])") === null);
-  if (els.length > 1) els = els.filter(hasBox);
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const sees = (el: PageElement, opacity: boolean): boolean => dt.visible(el, { sized: true, opacity });
+  const els = dt.tagged(arg.id);
   const el = els.length === 1 ? els[0] : undefined;
   if (!el) return { count: els.length, path: null, visible: false, disabled: false, hoverPath: null, hoverDt: null };
   const visible = sees(el, true);
@@ -187,28 +159,14 @@ export const DIALOG_CONTRACT = [":modal", "dialog[open]", "[role=dialog]", "[rol
 
 /** In the page, BEFORE the click: remember every visible dialog-like element and destination tag. SELF-CONTAINED. */
 export function armDetector(arg: { destId: string | null; contract: readonly string[] }): boolean {
-  const pathOf = (el: PageElement): string => {
-    const parts: string[] = [];
-    let cur: PageElement | null = el;
-    while (cur && cur !== document.documentElement) {
-      const parent: PageElement | null = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const seen = (el: PageElement): boolean => {
-    if (el.getClientRects().length === 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
-  };
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const seen = (el: PageElement): boolean => dt.visible(el, { sized: true, opacity: true });
   const before: PageElement[] = [];
   for (const s of arg.contract) {
     try { for (const el of Array.from(document.querySelectorAll(s))) if (seen(el)) before.push(el); } catch { /* a selector this browser does not parse */ }
   }
-  const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+  const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(dt.tagSel(arg.destId))).filter(seen);
   // every OPEN modal root rendered now, whatever its box (Headless UI's root is 0 px, so `before` never has it) — the
   // behaviour battery never climbs to one of these as "what opened"; the detector itself does not read it
   const roots = Array.from(document.querySelectorAll("dialog[open], [aria-modal=\"true\" i]")).filter((el) => el.getClientRects().length > 0);
@@ -230,23 +188,9 @@ export interface DetectorRead {
 export function pollDetector(arg: { destId: string | null; contract: readonly string[] }): DetectorRead {
   const st = window.__dtDrive;
   if (!st) return { lost: true, detectedBy: null, opened: null, dest: null };
-  const pathOf = (el: PageElement): string => {
-    const parts: string[] = [];
-    let cur: PageElement | null = el;
-    while (cur && cur !== document.documentElement) {
-      const parent: PageElement | null = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const seen = (el: PageElement): boolean => {
-    if (el.getClientRects().length === 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
-  };
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const seen = (el: PageElement): boolean => dt.visible(el, { sized: true, opacity: true });
   let opened: PageElement | null = null, detectedBy: string | null = null;
   for (const s of arg.contract) {
     let hits: PageElement[] = [];
@@ -256,7 +200,7 @@ export function pollDetector(arg: { destId: string | null; contract: readonly st
   }
   let dest: DetectorRead["dest"] = null;
   if (arg.destId !== null) {
-    const tags = Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+    const tags = Array.from(document.querySelectorAll(dt.tagSel(arg.destId))).filter(seen);
     // newly visible: not one seen before the click — nor a re-mounted copy in the same place (L-b; same path)
     const fresh = tags.filter((t) => !st.destBefore.includes(t) && !st.destPaths.includes(pathOf(t)));
     // planner default 1: the destination tag newly appearing with no contract match IS what opened
@@ -362,12 +306,12 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
   // a shadow root would inherit the hidden host in every shot (A equals B whatever it shows): refused (openers are found by
   // document.querySelectorAll today, so none is in a shadow root — a guard for a later lookup)
   if ((box.getRootNode?.()?.host ?? null) !== null) return { ctl: "its sole control", keep: 0, why: "the opener lies inside a shadow root, where its pixels cannot be compared", scrolled: false };
-  const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const dt = window.__dt;
+  const up = dt.parent;
   // Chromium blurs a focused element once it is hidden: ownClear focuses it again (inside the container); one outside stays shown
   const active = document.activeElement;
   if (active && active !== document.body) o.focus = active;
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const { w: vw, h: vh } = dt.viewport();
   const r0 = box.getBoundingClientRect();
   if (r0.x < 0 || r0.y < 0 || r0.right > vw || r0.bottom > vh) {
     const boxes: DriveScroll["boxes"] = [];
@@ -425,8 +369,7 @@ export function ownMark(_arg: null): { ctl: string; keep: number; why: string | 
     const covers = r.x <= x0 + 1 && r.y <= y0 + 1 && r.right >= x1 - 1 && r.bottom >= y1 - 1 && plainFill(e);
     if (hugs || covers) { e.setAttribute("data-dt-own-keep", ""); keep++; }
   }
-  const label = ctl.getAttribute("aria-label");
-  return { ctl: `<${ctl.tagName.toLowerCase()}${ctl.getAttribute("type") ? ` type="${ctl.getAttribute("type") ?? ""}"` : ""}${ctl.getAttribute("role") ? ` role="${ctl.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`, keep, why: null, scrolled: !!o.saved };
+  return { ctl: dt.describe(ctl, ["type", "role", "aria-label"]), keep, why: null, scrolled: !!o.saved };
 }
 /** A rounded rect (viewport CSS px) with its corner radii [top-left x, y, top-right x, y, bottom-right x, y, bottom-left x, y],
  *  already scaled down as CSS does when adjacent radii overlap (CSS Backgrounds 3 §5.5). */
@@ -631,7 +574,7 @@ export function ownClear(_arg: null): boolean {
 
 /** In the page: the fallback activation — a synthetic click event (never a user activation). SELF-CONTAINED. */
 export function syntheticClick(path: string): boolean {
-  const el = document.querySelector(path);
+  const el = window.__dt.find(path);
   if (!el) return false;
   el.click();
   return true;
@@ -661,18 +604,9 @@ export function submitGuard(el: PageElement): string | null {
   };
   const own = why(el);
   if (own !== null) return own;
-  const r = el.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return null;
-  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-  // Playwright clips to the layout viewport — without the scrollbars (documentElement.clientWidth/Height); never
-  // more than the window (in quirks mode documentElement.clientHeight is the PAGE's height)
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
-  for (const q of Array.from(el.getClientRects())) {
-    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
-    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
-    if ((x1 - x0) * (y1 - y0) > 0.99) { onScreen = true; cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; break; }
-  }
+  const pt = window.__dt.clickPoint(el);
+  if (!pt) return null;
+  const { onScreen, x: cx, y: cy } = pt;
   const at: PageElement[] = [];
   const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
   if (hit && hit !== el && el.contains(hit)) at.push(hit);
@@ -712,329 +646,11 @@ export function clickPointControl(el: PageElement, arg?: { mark: boolean }): str
   const ACT = `${BTN}, [role=checkbox i], [role=switch i], [role=radio i], [role=option i], [role=menuitemcheckbox i], [role=menuitemradio i], input[type=checkbox i], input[type=radio i], input[type=submit i], input[type=button i], input[type=image i], input[type=reset i], input[type=file i]`;
   // a focusable opener is never exempt — its inner control at the point is another control, not its own
   const self = el.matches(FOC);
-  // the same check as markOpener's in probe-behaviour.ts (keep the two in step: test/verify-probe.test.ts runs both on the
-  // same fake DOMs, the e2e tests on real pages): what the container shows of its OWN outside its one control, walked through the
-  // flat tree (open shadow roots and their slots) with an explicit stack, each ancestor test memoised per element (an 8000-deep
-  // DOM is linear work, never a stack overflow). An element is SHOWN when the nearest box at or above it (a
-  // display:contents wrapper has none) passes checkVisibility with visibility and content-visibility (hidden, and auto while
-  // skipped), it is not visibility:hidden itself, and no OUT-OF-FLOW box (position absolute / fixed) from that box up to the
-  // container has opacity 0 — a hover tooltip or popover shows nothing; an in-flow opacity-0 box keeps its place and is about to
-  // show (a reveal-on-scroll or staggered entrance: the drive has just scrolled it in), so it counts. The
-  // container's own opacity is the opener's visibility, judged before this. An AREA counts after the clipping on the element's
-  // containing-block chain up to the container (CSS 2.1 §11.1.1): each box's overflow on that axis — an absolute
-  // box skips the static ancestors that make no containing block, a fixed one every ancestor without a transform / translate /
-  // rotate / scale / perspective / filter / backdrop-filter / preserve-3d / will-change of those / contain layout|paint|strict|
-  // content / content-visibility auto|hidden — and, on every ancestor, a clip-path inset() and an absolute box's clip rect()
-  // (another clip-path shape is not read: what it covers counts), overflow:clip on both axes widened by its overflow-clip-margin;
-  // what lies past the document's top edge, or its left edge in a left-to-right document (an sr-only label at
-  // left:-9999px), is never on screen nor scrolled to — that edge moved out by the scroll of the container and
-  // every box above it (an app shell's scroller reaches what lies above its top). SHOWN CONTENT:
-  // a non-blank text node whose clipped Range rects cover more than 1 px² (an sr-only label — 1 × 1 px overflow:hidden, clip
-  // rect(0,0,0,0), clip-path inset(50%), off the document's start edge — and whitespace show nothing); an img / svg / canvas /
-  // video / audio / picture / object / embed / iframe / input / progress / meter with a clipped box over 1 px²; a list
-  // item's marker — a list-style type or image, or ::marker content (the container's own too); a ::before / ::after (not display:none, not
-  // hidden, not an out-of-flow opacity 0) whose content is not none / normal and that paints — a non-blank string (an icon font's
-  // glyph, a generated label), an image, counter or attr(), a background-image or mask-image under any content, "" included (a
-  // CSS logo or icon), a background colour under a blank string, or under "" unless its element holds the control or lies over
-  // the control's centre — with its element's clipped box over 1 px²; on a DESCENDANT with a clipped box over 1 px²: a
-  // background-image (an avatar, a logo), a mask-image (a CSS-mask icon) unless it holds the control, a non-transparent
-  // background colour (a swatch, a status dot: other visible content) unless it holds the control or lies over the
-  // control's centre (a filled wrapper, a hover tint: the cell's own chrome). The container's own background colour, a border in
-  // one colour (a 1-px divider on one side too) and padding are decoration, as is a clearfix's empty content; its own
-  // background image (a gradient, a url), border image, border sides in different colours or widths 2 px or more apart (a stripe)
-  // are content, and so are its own inset box-shadow offset 2 px or more or blurred, sharp box-shadow rings in
-  // more than one colour (its border's included), and its own paint under a mask or a clip-path other than a rounded inset(0).
-  // A scroll container's ::scroll-button (focusable, pressed like a button) and a scroll-marker group
-  // are a second control: content. A label laid over the container from outside its subtree (see the walk at the end).
-  // Not seen: a closed shadow root, the inside of an iframe
-  // (the iframe itself counts). Bounded: past 20000 steps (elements walked, ancestor steps of the areas) it
-  // answers "content". null = nothing of its own as far as the DOM shows — the caller's pixel check (probe-drive.ts
-  // ownPixels) has the last word, content when EITHER says so; else what shows.
-  const ownContent = (box: PageElement, ctl: PageElement): string | null => {
-    const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
-    const css = (e: PageElement, prop: string, pseudo: string | null = null): string => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
-    const set = (e: PageElement, prop: string, pseudo: string | null = null): boolean => { const v = css(e, prop, pseudo); return v !== "" && v !== "none"; };
-    // does `test` hold for the element or an ancestor below the container? memoised per element
-    const chain = (test: (p: PageElement) => boolean): ((e: PageElement | null) => boolean) => {
-      const memo = new Map<PageElement, boolean>();
-      return (e: PageElement | null): boolean => {
-        const seen: PageElement[] = [];
-        let hit = false;
-        for (let p = e; p && p !== box; p = up(p)) {
-          const m = memo.get(p);
-          if (m !== undefined) { hit = m; break; }
-          seen.push(p);
-          if (test(p)) { hit = true; break; }
-        }
-        for (const s of seen) memo.set(s, hit);
-        return hit;
-      };
-    };
-    // bounded — every element walked and every ancestor step of an area counts; past OWN_WORK_CAP the check answers
-    // "content" (the control is not the opener's: the safe side) instead of spending seconds on a huge or deep container
-    let work = 0;
-    const OWN_WORK_CAP = 20_000;
-    const tick = (): boolean => ++work > OWN_WORK_CAP;
-    const inCtl = chain((p) => p === ctl);
-    const outOfFlow = (e: PageElement, pseudo: string | null = null): boolean => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
-    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
-    const boxed = (e: PageElement): PageElement | null => { let p: PageElement | null = e; while (p && css(p, "display") === "contents") p = up(p); return p; };
-    const shown = (e: PageElement): boolean => {
-      const b = boxed(e);
-      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
-    };
-    // a containing block for fixed (and absolute) descendants
-    const holdsFixed = (p: PageElement): boolean => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k))
-      || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change"))
-      || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
-    const de = document.documentElement;
-    const horizontal = !/^(vertical|sideways)/.test(css(de, "writing-mode"));
-    // the start edge moves out by the scroll of the container and every box above it — in an app shell (a fixed
-    // inset:0 scroller) what lies above the shell's top is reached by scrolling the shell, not the window
-    let sx = scrollX, sy = scrollY;
-    for (let p: PageElement | null = box; p && p !== de; p = up(p)) { sx += Math.abs(p.scrollLeft || 0); sy += Math.abs(p.scrollTop || 0); }
-    const startX = horizontal && css(de, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
-    // the part of q (a box or text rect of e) left after that clipping (null: out of work — the caller answers "content")
-    const clipped = (e: PageElement, q: PageBox): { x0: number; y0: number; x1: number; y1: number } | null => {
-      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
-      let flow: "in" | "absolute" | "fixed" = "in";
-      for (let p: PageElement | null = e; p; p = p === box ? null : up(p)) {
-        if (tick()) return null;
-        if (css(p, "display") === "contents") continue;
-        const pr = p.getBoundingClientRect();
-        const pos = css(p, "position");
-        // not on the containing-block chain: its overflow does not clip what escapes it
-        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
-        if (!skip) {
-          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
-          // overflow:clip on both axes paints overflow-clip-margin past the box (from the border box here: an upper bound)
-          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
-          if (ox !== "visible") { x0 = Math.max(x0, pr.x - cm); x1 = Math.min(x1, pr.right + cm); }
-          if (oy !== "visible") { y0 = Math.max(y0, pr.y - cm); y1 = Math.min(y1, pr.bottom + cm); }
-          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
-        }
-        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
-        if (ins) {
-          const [t = "0", r = t, b = t, l = r] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
-          const len = (s: string, size: number): number => (s.endsWith("%") ? (parseFloat(s) / 100) * size : parseFloat(s));
-          const T = len(t, pr.height), R = len(r, pr.width), B = len(b, pr.height), L = len(l, pr.width);
-          if (![T, R, B, L].some(Number.isNaN)) { x0 = Math.max(x0, pr.x + L); x1 = Math.min(x1, pr.right - R); y0 = Math.max(y0, pr.y + T); y1 = Math.min(y1, pr.bottom - B); }
-        }
-        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
-        if (rc && /^(absolute|fixed)$/.test(pos)) {
-          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
-          const at = (s: string | undefined, auto: number): number => (s === undefined || s === "auto" ? auto : parseFloat(s));
-          const T = at(v[0], 0), R = at(v[1], pr.width), B = at(v[2], pr.height), L = at(v[3], 0);
-          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) { x0 = Math.max(x0, pr.x + L); x1 = Math.min(x1, pr.x + R); y0 = Math.max(y0, pr.y + T); y1 = Math.min(y1, pr.y + B); }
-        }
-      }
-      return { x0, y0, x1, y1 };
-    };
-    const area = (e: PageElement, q: PageBox): number => { const c = clipped(e, q); return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity; };
-    const els: PageElement[] = [];
-    const texts: Array<{ t: PageNode; e: PageElement }> = [];
-    // an explicit stack, the same order as the recursion it replaces (an element, its text, its shadow root's
-    // text and elements, then its light children)
-    const todo: PageElement[] = [box];
-    for (let e = todo.pop(); e; e = todo.pop()) {
-      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
-      els.push(e);
-      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-      const sr = e.shadowRoot;
-      let kids = Array.from(e.children);
-      if (sr) {
-        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-        kids = Array.from(sr.children).concat(kids);
-      }
-      for (let i = kids.length - 1; i >= 0; i--) { const k = kids[i]; if (k) todo.push(k); }
-    }
-    // the cell's own chrome: a box holding the control, or over its centre (a filled wrapper, a hover tint)
-    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
-    const chrome = (e: PageElement): boolean => { if (e.contains(ctl)) return true; const r = e.getBoundingClientRect(); return mx >= r.x && mx <= r.right && my >= r.y && my <= r.bottom; };
-    const clear = (v: string): boolean => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
-    for (const e of els) {
-      if (inCtl(e) || !shown(e)) continue;
-      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
-      const host = boxed(e) ?? e;
-      for (const ps of ["::before", "::after"]) {
-        const c = css(e, "content", ps);
-        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || (css(e, "opacity", ps) === "0" && outOfFlow(e, ps))) continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str ? str[1] ?? "" : null;
-        const fill = !clear(css(e, "background-color", ps));
-        const paints = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || (fill && (s !== "" || !chrome(host)));
-        if (paints && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
-      }
-      // a list item's marker (the container's own too) — a list-style type or image, or a ::marker content
-      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker")))
-        && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
-      // a scroll container's ::scroll-button (generated when its content is set — focusable and pressed like a
-      // button: a second control) and a scroll-marker group (its markers are focusable too), the container's own included
-      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)"))
-        && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
-      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
-      if (e === box) {
-        // the container's OWN paint is decoration only when plain — a background image (a gradient, a url: a progress fill),
-        // a border image, border sides in different colours or widths 2 px or more apart (a status stripe) are content; one colour
-        // all round, or a 1-px divider on one side, stays decoration
-        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
-        if (set(e, "border-image-source")) return "its own border image";
-        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
-        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
-        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
-        const ws = sides.map((d) => (d.w > 0 && !clear(d.c) ? d.w : 0));
-        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
-        // its own box-shadow and mask paint too — an inset layer offset 2 px or more (a stripe, a progress
-        // fill) or blurred (an inner glow), sharp ring layers (blur 0) in more than one colour (the ring layers only — not its
-        // border; a layer in its own background colour where that cannot show — an outer one (a ring-offset), or an inset one over
-        // its own opaque border-box / padding-box background — and a transparent one do not count), and a mask or a
-        // clip-path other than a rounded inset(0) over its own paint (a progress band) are content; one sharp ring colour (a
-        // focus / hover ring, a ring-inset frame, a Tailwind ring-offset + ring) stays decoration, as a uniform border does
-        const layers: Array<{ c: string; n: number[]; inset: boolean }> = [];
-        let depth = 0, cur = "";
-        for (const ch of `${css(e, "box-shadow")},`) {
-          if (ch === "(") depth++;
-          else if (ch === ")") depth--;
-          if (ch !== "," || depth > 0) { cur += ch; continue; }
-          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
-          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
-          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
-          cur = "";
-        }
-        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
-        const ownBg = css(e, "background-color");
-        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
-        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
-        const paints = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
-        if (paints && set(e, "mask-image")) return "its own paint under a mask";
-        const cp = css(e, "clip-path");
-        if (paints && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
-        continue;
-      }
-      if (css(e, "display") === "contents") continue;
-      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
-      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
-      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
-    }
-    for (const { t, e } of texts) {
-      const text = (t.nodeValue || "").trim();
-      if (!text || inCtl(e) || !shown(e)) continue;
-      const range = document.createRange();
-      range.selectNodeContents(t);
-      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
-    }
-    // a label laid over the container from OUTSIDE its subtree — a positioned sibling, an ancestor's ::before / ::after —
-    // is its content too when it is in the page's flow or absolute (an element with a fixed or sticky box between it and the root
-    // that does not also hold the container — a toast, a banner, a sticky header — is foreign). Read: text (its clipped Range
-    // rects; bare text in its open shadow root too), an img / svg / canvas / video / audio / picture / object / embed / iframe /
-    // input / progress / meter, a background image, and a ::before / ::after that paints a label or an image (its box: the
-    // element's, or for an absolute one its offsets in its containing block) — over the container when the part of it left after
-    // clipping is over 1 px² and at least HALF of it lies inside the container's box, and it is not proven to lie under it
-    // (proven: it is hit-testable — pointer-events not none — and at the middle of that overlap the container's subtree is hit
-    // first, and the container's own background colour is opaque rgb() / rgba(…, 1) with no opacity below 1 or blend mode on it
-    // or above it). Never foreign content — the sole control's own tooltip ([role=tooltip], or what its aria-describedby
-    // names; a role-less one still counts), only when the probe's hover revealed it (not shown before: tipPreMark), and a
-    // label at effective opacity 0. Not seen: an element whose box does not meet the
-    // container's (a relative ::before shifted over it from a sibling lying elsewhere), an in-flow box under a parent that does not
-    // meet it (text overflowing a 0-height wrapper). Bounded: past FOREIGN_CAP elements it answers "content".
-    const br = box.getBoundingClientRect();
-    const anc = new Set<PageElement>();
-    for (let p = up(box); p; p = up(p)) anc.add(p);
-    const bg = css(box, "background-color");
-    // "under it" is proven only when nothing of it shows through — its background opaque, and no opacity below 1
-    // or blend mode on it or above it
-    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
-    for (let p: PageElement | null = box; p && opaque; p = up(p)) {
-      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
-      if ((op !== "" && parseFloat(op) < 1) || (bm !== "" && bm !== "normal")) opaque = false;
-    }
-    const meets = (q: PageBox): boolean => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
-    const over = (f: PageElement, c: { x0: number; y0: number; x1: number; y1: number } | null, events: string): boolean => {
-      if (!c) return true;
-      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
-      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
-      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
-      if (events === "none" || !opaque) return true;
-      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
-      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
-      return iF < 0 || iB < 0 || iF < iB;
-    };
-    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
-    // The sole control's own tooltip — [role=tooltip] (MUI, Radix, Tippy, Bootstrap, Floating UI set it) or
-    // what its aria-describedby names, shown by the drive's hover — is never foreign content (its subtree is skipped). Only one
-    // the probe's hover revealed — not shown before the probe acted on the page (tipPreMark); a label
-    // already on screen with role=tooltip, or that the control's aria-describedby names, is the card's own; no set, no exemption
-    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
-    const tipPre = window.__dtTipPre;
-    const tip = (f: PageElement): boolean => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
-    // a foreign label at effective opacity 0 (itself or an ancestor) shows nothing — never foreign content
-    const gone = chain((p) => css(p, "opacity") === "0");
-    // bounded at 500000 elements (a 150000-element table: about 0.3 s per check) — past it, "content" (refused)
-    const FOREIGN_CAP = 500_000;
-    let walked = 0;
-    // a box is measured only when its parent's box meets the container, it holds the container, or it is moved out of its
-    // parent's flow (positioned or transformed) — an in-flow box under a parent that does not meet the container is taken not to
-    // meet it either (nested inline boxes make every getBoundingClientRect walk all below it: 8000 of them cost seconds)
-    // (one computed style read per element: the walk visits every element of the page)
-    const moved = (f: PageElement): boolean => { const s = getComputedStyle(f); return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => { const v = s.getPropertyValue(k); return v !== "" && v !== "none"; }); };
-    const ftodo: Array<{ f: PageElement; near: boolean }> = [{ f: de, near: true }];
-    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
-      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
-      const f = t.f;
-      if (f === box || tip(f)) continue;
-      const isAnc = anc.has(f);
-      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
-      const near = isAnc || (fr !== null && meets(fr));
-      const sr = f.shadowRoot;
-      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
-      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
-      if (!fr || !near || pinned(f) || !shown(f) || gone(f)) continue;
-      const events = css(f, "pointer-events");
-      // its text, and bare text in its open shadow root
-      for (const t of [...Array.from(f.childNodes), ...(sr ? Array.from(sr.childNodes) : [])]) {
-        const text = t.nodeType === 3 ? (t.nodeValue || "").trim() : "";
-        if (!text) continue;
-        const range = document.createRange();
-        range.selectNodeContents(t);
-        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
-      }
-      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
-      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
-      for (const ps of ["::before", "::after"]) {
-        const c = css(f, "content", ps);
-        const pos = css(f, "position", ps);
-        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
-        let q: PageBox = fr;
-        if (pos === "absolute") {
-          // its containing block: the closest box at or above it that is positioned or holds fixed boxes (its padding box), else the page
-          let cb: PageElement | null = f;
-          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up(cb);
-          const cr0 = cb ? cb.getBoundingClientRect() : null;
-          const n = (k: string): number => parseFloat(css(f, k, ps)) || 0;
-          const x = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
-          const y = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
-          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
-          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
-          q = { x, y, width: w, height: h, right: x + w, bottom: y + h };
-        } else if (isAnc) continue;
-        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
-      }
-    }
-    return null;
-  };
-  const r = el.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return null;
+  const dt = window.__dt;
   // Playwright's point: the middle of the first client rect's part on screen (submitGuard, fixes 4–6)
-  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
-  for (const q of Array.from(el.getClientRects())) {
-    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
-    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
-    if ((x1 - x0) * (y1 - y0) > 0.99) { onScreen = true; cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; break; }
-  }
+  const pt = dt.clickPoint(el);
+  if (!pt) return null;
+  const { onScreen, x: cx, y: cy } = pt;
   const inner = Array.from(el.querySelectorAll(FOC));
   // what the mouse presses at the point — the deepest element there, through open shadow roots (a web
   // component's own <button>; text slotted into a shadow control starts at its <slot>), then up the flat tree (a slotted node's
@@ -1044,7 +660,7 @@ export function clickPointControl(el: PageElement, arg?: { mark: boolean }): str
   // label inside a Delete is focusable, but the click still bubbles to the Delete) — the innermost activating one is named. A
   // nested browsing context there — <iframe>, <frame>, <object>, <embed>, <fencedframe> — is a control (what is inside it cannot
   // be seen). Not seen: a closed shadow root, a bare listener (an <svg onclick>, no role).
-  const up = (n: PageElement): PageElement | null => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const up = dt.parent;
   const framed = (e: PageElement): boolean => /^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME)$/.test(e.tagName.toUpperCase());
   const pick = (e: PageElement): PageElement | null => (e.tagName.toUpperCase() === "LABEL" ? e.control ?? null : e.matches(FOC) || e.matches(ACT) || framed(e) ? e : null);
   const presses = (e: PageElement | null): e is PageElement => !!e && (e.matches(ACT) || framed(e));
@@ -1083,14 +699,13 @@ export function clickPointControl(el: PageElement, arg?: { mark: boolean }): str
   // the container's only focusable, button-like, under its centre, with nothing of the container's own outside it —
   // the opener's own control (never for a focusable opener)
   if (!self && inner.length === 1 && inner[0] === at && at.matches(BTN)) {
-    const own = ownContent(el, at);
+    const own = dt.ownContent(el, at);
     // the DOM sees nothing of the container's own — the caller's pixel check (ownPixels) has the last word
     if (own === null) { if (mark) window.__dtOwn = { box: el, ctl: at }; return null; }
     // why the DOM rule refused it (ownWhy reads it for the row's detail)
     if (mark) window.__dtOwnWhy = `its own content: ${own}`;
   }
-  const label = at.getAttribute("aria-label");
-  return `<${at.tagName.toLowerCase()}${at.getAttribute("type") ? ` type="${at.getAttribute("type") ?? ""}"` : ""}${at.getAttribute("role") ? ` role="${at.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`;
+  return dt.describe(at, ["type", "role", "aria-label"]);
 }
 
 // ---------------------------------------------------------------- which rows are driven, the budget, the outcome

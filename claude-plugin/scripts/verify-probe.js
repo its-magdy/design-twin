@@ -18,59 +18,11 @@ import { setTimeout as sleep6 } from "node:timers/promises";
 
 // design-to-code/probe-page.ts
 function collectCandidates(input) {
+  const dt = window.__dt;
   const SKIP = /* @__PURE__ */ new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "TITLE", "META", "LINK"]);
   const norm = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-  const controlText = (e) => {
-    const tag = e.tagName.toLowerCase();
-    if (tag === "textarea") return { text: e.value ?? "" };
-    if (tag === "select") {
-      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
-      const o = e.selectedOptions?.[0];
-      return { text: o ? o.label ?? o.text ?? o.textContent ?? "" : "" };
-    }
-    if (tag !== "input") return null;
-    const type = (e.type || "text").toLowerCase();
-    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
-    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
-    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
-  };
   const pageRect = (r) => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const paths = /* @__PURE__ */ new Map();
-  const childIndex = /* @__PURE__ */ new Map();
-  const indexIn = (parent, el) => {
-    let idx = childIndex.get(parent);
-    if (!idx) {
-      const m = /* @__PURE__ */ new Map();
-      Array.from(parent.children).forEach((c, i) => m.set(c, i + 1));
-      childIndex.set(parent, m);
-      idx = m;
-    }
-    return idx.get(el) ?? 0;
-  };
-  const pathOf = (el) => {
-    const up = [];
-    let cur = el;
-    let base = paths.get(cur);
-    while (base === void 0) {
-      const parent = cur.parentElement;
-      if (cur === document.documentElement || !parent) {
-        base = "html";
-        paths.set(cur, base);
-        break;
-      }
-      up.push(cur);
-      cur = parent;
-      base = paths.get(cur);
-    }
-    for (let i = up.length - 1; i >= 0; i--) {
-      const e = up[i];
-      const parent = e?.parentElement;
-      if (!e || !parent) break;
-      base = `${base} > ${e.tagName.toLowerCase()}:nth-child(${indexIn(parent, e)})`;
-      paths.set(e, base);
-    }
-    return base;
-  };
+  const pathOf = dt.paths();
   const all = document.body ? [document.body, ...Array.from(document.body.querySelectorAll("*"))].filter((e) => !SKIP.has(e.tagName)) : [];
   const orderOf = /* @__PURE__ */ new Map();
   all.forEach((e, i) => orderOf.set(e, i));
@@ -82,7 +34,7 @@ function collectCandidates(input) {
   const cand = (el, withRange) => {
     const r = el.getBoundingClientRect();
     let rangeRect = null;
-    const ctl = controlText(el);
+    const ctl = dt.controlText(el);
     if (withRange && ctl === null) {
       const range = document.createRange();
       range.selectNodeContents(el);
@@ -102,7 +54,7 @@ function collectCandidates(input) {
       rangeRect,
       flags: {
         box,
-        visible: box && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true }),
+        visible: dt.visible(el),
         zeroSize: r.width === 0 || r.height === 0,
         inClosedDialog: el.closest("dialog:not([open])") !== null,
         inert: el.closest("[inert]") !== null,
@@ -110,7 +62,7 @@ function collectCandidates(input) {
         ariaHidden: el.closest('[aria-hidden="true"]') !== null
       },
       taggedAncestors: tagged2,
-      ownText: ctl === null ? norm(Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("")) : "text" in ctl ? norm(ctl.text) : "",
+      ownText: ctl === null ? norm(dt.ownText(el)) : "text" in ctl ? norm(ctl.text) : "",
       order: orderOf.get(el) ?? -1,
       depth: depthOf(el)
     };
@@ -174,33 +126,15 @@ function collectCandidates(input) {
   };
   const walked = /* @__PURE__ */ new Set();
   if (wanted.size && document.body) for (const w of Array.from(document.body.querySelectorAll("br, select, textarea"))) for (let p = w.parentElement; p && !walked.has(p); p = p.parentElement) walked.add(p);
-  const shownOf = (c) => {
-    if (c.tagName !== "SELECT" && c.tagName !== "TEXTAREA") return null;
-    const t = controlText(c);
-    return t !== null && "text" in t ? t.text : null;
-  };
-  const flatText = (e) => {
-    let out = "", k = 0;
-    for (const n of Array.from(e.childNodes)) {
-      if (n.nodeType === 3) out += n.nodeValue || "";
-      else if (n.nodeType === 1) {
-        const c = e.children[k++];
-        if (!c) continue;
-        const shown = shownOf(c);
-        out += c.tagName.toLowerCase() === "br" ? " " : shown !== null ? ` ${shown} ` : walked.has(c) ? flatText(c) : c.textContent || "";
-      }
-    }
-    return out;
-  };
   if (wanted.size) {
     for (const el of all) {
       if (el.tagName === "OPTION" || el.tagName === "OPTGROUP") {
         const sel = el.closest("select");
-        const c = sel ? controlText(sel) : null;
+        const c = sel ? dt.controlText(sel) : null;
         if (c !== null && "text" in c) continue;
       }
-      const ctl = controlText(el);
-      const t = ctl !== null ? "text" in ctl ? norm(ctl.text) : "" : norm(walked.has(el) ? flatText(el) : el.textContent);
+      const ctl = dt.controlText(el);
+      const t = ctl !== null ? "text" in ctl ? norm(ctl.text) : "" : norm(walked.has(el) ? dt.shownText(el, false) : el.textContent);
       if (t) {
         if (wanted.has(t)) push(exact, t, el);
         for (const orig of wantedLower.get(t.toLowerCase()) || []) push(caseless, orig, el);
@@ -226,64 +160,17 @@ function collectCandidates(input) {
   return { viewport: { w: innerWidth, h: innerHeight, scrollX, scrollY }, tagged, frames, text, placeholders, positions };
 }
 function measureElements(input) {
+  const dt = window.__dt;
   const px = (v) => {
     const n = parseFloat(v);
     return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
   };
   const r2 = (n) => Math.round(n * 100) / 100;
   const pageRect = (r) => ({ x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height });
-  const keepsBreaks = (e) => {
-    const s = getComputedStyle(e);
-    const c = s.getPropertyValue("white-space-collapse").trim();
-    if (c) return c === "preserve" || c === "preserve-breaks" || c === "break-spaces";
-    return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(s.getPropertyValue("white-space").trim());
-  };
-  const shownText = (root) => {
-    let out = "";
-    const walk = (e) => {
-      let keep = null;
-      let k = 0;
-      for (const n of Array.from(e.childNodes)) {
-        if (n.nodeType === 3) {
-          const v = n.nodeValue || "";
-          if (!/[\n\r]/.test(v)) {
-            out += v;
-            continue;
-          }
-          keep ??= keepsBreaks(e);
-          out += keep ? v.replace(/\r\n?/g, "\n") : v.replace(/[\n\r]/g, " ");
-        } else if (n.nodeType === 1) {
-          const c = e.children[k++];
-          if (!c) continue;
-          if (c.tagName.toLowerCase() === "br") out += "\n";
-          else if (c.tagName === "SELECT" || c.tagName === "TEXTAREA") {
-            const t = controlText(c);
-            if (t === null || !("text" in t)) walk(c);
-            else out += ` ${t.text} `;
-          } else walk(c);
-        }
-      }
-    };
-    walk(root);
-    return out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim();
-  };
-  const controlText = (e) => {
-    const tag = e.tagName.toLowerCase();
-    if (tag === "textarea") return { text: e.value ?? "" };
-    if (tag === "select") {
-      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
-      const o = e.selectedOptions?.[0];
-      return { text: o ? o.label ?? o.text ?? o.textContent ?? "" : "" };
-    }
-    if (tag !== "input") return null;
-    const type = (e.type || "text").toLowerCase();
-    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
-    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
-    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
-  };
+  const controlText = dt.controlText;
   const specText2 = (el) => {
     const c = controlText(el);
-    if (c === null) return { text: shownText(el) };
+    if (c === null) return { text: dt.shownText(el) };
     return "text" in c ? { text: c.text.replace(/\r\n?/g, "\n").replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim() } : c;
   };
   let ctx = null;
@@ -306,7 +193,7 @@ function measureElements(input) {
     const [r = 0, g = 0, b = 0, a = 255] = [d[0], d[1], d[2], d[3]];
     return a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Math.round(a / 255 * 1e3) / 1e3})`;
   };
-  const ownText = (el) => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
+  const ownText = (el) => dt.ownText(el).trim();
   const elementsWithOwnText = (el) => {
     const out = [];
     const walk = (e) => {
@@ -340,7 +227,7 @@ function measureElements(input) {
     const styles = {};
     const unmeasured = {};
     const res = { nodeId: item.nodeId, found: false, styles, unmeasured };
-    const el = document.querySelector(item.path);
+    const el = dt.find(item.path);
     const put = (k, v, why) => {
       if (v === null || v === void 0) {
         styles[k] = null;
@@ -432,14 +319,14 @@ function measureElements(input) {
       if (Math.abs(oo + ow / 2) < 0.01) return strokeMemo = { width: ow, color: oc, from: "outline", align: "center" };
       return strokeMemo;
     };
-    const frameRoot = input.framePath ? document.querySelector(input.framePath) : null;
+    const frameRoot = input.framePath ? dt.find(input.framePath) : null;
     const paintOf = (e) => {
       const s = getComputedStyle(e), img = s.getPropertyValue("background-image").trim();
       return { color: rgba(s.getPropertyValue("background-color")), image: img !== "" && img !== "none" };
     };
     const painter = (e, via, depth, color) => {
-      const dt = e.getAttribute("data-dt-node");
-      return { backgroundColor: color, via, tag: e.tagName.toLowerCase(), depth, ...dt !== null ? { dt } : {} };
+      const dt2 = e.getAttribute("data-dt-node");
+      return { backgroundColor: color, via, tag: e.tagName.toLowerCase(), depth, ...dt2 !== null ? { dt: dt2 } : {} };
     };
     const paintedBy = () => {
       const near = (a, b) => Math.abs(a - b) <= 1;
@@ -660,9 +547,10 @@ function measureElements(input) {
 }
 function freeHoverPoint(arg) {
   const INTERACTIVE = "a, button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]:not([tabindex='-1'])";
-  const owner = document.querySelector(arg.owner);
+  const dt = window.__dt;
+  const owner = dt.find(arg.owner);
   if (!owner) return null;
-  const avoidEl = document.querySelector(arg.avoid);
+  const avoidEl = dt.find(arg.avoid);
   const o = owner.getBoundingClientRect();
   const a = avoidEl ? avoidEl.getBoundingClientRect() : null;
   const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
@@ -680,19 +568,10 @@ function freeHoverPoint(arg) {
 }
 function focusablePath(path13) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path13);
+  const dt = window.__dt;
+  const el = dt.find(path13);
   const f = el ? el.closest(FOCUSABLE) : null;
-  if (!f) return null;
-  const parts = [];
-  let cur = f;
-  while (cur && cur !== document.documentElement) {
-    const parent = cur.parentElement;
-    if (!parent) break;
-    parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-    cur = parent;
-  }
-  parts.unshift("html");
-  return parts.join(" > ");
+  return f ? dt.path(f) : null;
 }
 function screenTags(a) {
   const want = new Set(a.ids), known = new Set(a.known), alias = new Map(Object.entries(a.alias));
@@ -719,23 +598,20 @@ function screenTags(a) {
     const viaPath = ownBySuffix.get(s);
     return viaPath !== void 0 ? { id: viaPath, by: "path" } : knownSuffix.has(s) ? "" : null;
   };
+  const dt = window.__dt;
   const visible = (el) => {
-    const st = getComputedStyle(el);
-    if (st.getPropertyValue("display") === "contents") {
+    if (getComputedStyle(el).getPropertyValue("display") === "contents") {
       for (const c of Array.from(el.children)) if (visible(c)) return true;
       for (const n of Array.from(el.childNodes)) {
         if (n.nodeType !== 3) continue;
         const range = document.createRange();
         range.selectNodeContents(n);
-        const r2 = range.getBoundingClientRect();
-        if (r2.width > 0 && r2.height > 0) return true;
+        const r = range.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
       }
       return false;
     }
-    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
-    if (st.getPropertyValue("visibility") !== "visible") return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
+    return dt.visible(el, { sized: true });
   };
   const hits = /* @__PURE__ */ new Map(), foreign = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
@@ -773,10 +649,463 @@ function screenTags(a) {
   return { shown, ambiguous, foreign: null };
 }
 function focusInfo(path13) {
-  const el = document.querySelector(path13);
+  const el = window.__dt.find(path13);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
+
+// design-to-code/page-runtime.ts
+function installPageRuntime() {
+  const parent = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const paths = () => {
+    const memo = /* @__PURE__ */ new Map();
+    const childIndex = /* @__PURE__ */ new Map();
+    const indexIn = (owner, list, el) => {
+      let idx = childIndex.get(owner);
+      if (!idx) {
+        const m = /* @__PURE__ */ new Map();
+        Array.from(list).forEach((c, i) => m.set(c, i + 1));
+        childIndex.set(owner, m);
+        idx = m;
+      }
+      return idx.get(el) ?? 0;
+    };
+    return (el) => {
+      const up = [];
+      let cur = el;
+      let base = memo.get(cur);
+      while (base === void 0) {
+        const host = cur.parentElement ? null : cur.getRootNode?.()?.host ?? null;
+        if (cur === document.documentElement || !cur.parentElement && !host) {
+          base = "html";
+          memo.set(cur, base);
+          break;
+        }
+        up.push(cur);
+        cur = cur.parentElement ?? host ?? cur;
+        base = memo.get(cur);
+      }
+      for (let i = up.length - 1; i >= 0; i--) {
+        const e = up[i];
+        if (!e) break;
+        const p = e.parentElement;
+        const root = p ? null : e.getRootNode?.() ?? null;
+        if (p) base = `${base} > ${e.tagName.toLowerCase()}:nth-child(${indexIn(p, p.children, e)})`;
+        else if (root && root.children) base = `${base} ${e.tagName.toLowerCase()}:nth-child(${indexIn(root, root.children, e)})`;
+        else break;
+        memo.set(e, base);
+      }
+      return base;
+    };
+  };
+  const find = (path13) => {
+    const steps = /^html((?: > | )[^\s>]+:nth-child\(\d+\))*$/.test(path13) ? Array.from(path13.slice(4).matchAll(/( > | )([^\s>]+):nth-child\((\d+)\)/g)) : null;
+    if (steps === null) {
+      try {
+        return document.querySelector(path13);
+      } catch {
+        return null;
+      }
+    }
+    let cur = document.documentElement;
+    for (const [, sep, tag, n] of steps) {
+      if (!cur) return null;
+      const list = sep === " > " ? cur.children : cur.shadowRoot?.children;
+      const next = list ? list[Number(n) - 1] : void 0;
+      cur = next && next.tagName.toLowerCase() === tag ? next : null;
+    }
+    return cur;
+  };
+  const controlText = (e) => {
+    const tag = e.tagName.toLowerCase();
+    if (tag === "textarea") return { text: e.value ?? "" };
+    if (tag === "select") {
+      if (e.multiple || (e.size ?? 0) > 1) return { why: "a list-box <select> (multiple, or size > 1) shows every option, not one string" };
+      const o = e.selectedOptions?.[0];
+      return { text: o ? o.label ?? o.text ?? o.textContent ?? "" : "" };
+    }
+    if (tag !== "input") return null;
+    const type = (e.type || "text").toLowerCase();
+    if (/^(text|search|email|url|tel|number)$/.test(type)) return { text: e.value ?? "" };
+    if (/^(button|submit|reset)$/.test(type) && e.value) return { text: e.value };
+    return { why: `an <input type="${type}"> draws its own text \u2014 its value is not the string shown` };
+  };
+  const ownText = (el) => Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("");
+  const keepsBreaks = (e) => {
+    const s = getComputedStyle(e);
+    const c = s.getPropertyValue("white-space-collapse").trim();
+    if (c) return c === "preserve" || c === "preserve-breaks" || c === "break-spaces";
+    return /^(pre|pre-wrap|pre-line|break-spaces)$/.test(s.getPropertyValue("white-space").trim());
+  };
+  const shownText = (root, lines = true) => {
+    let out = "";
+    const walk = (e) => {
+      let keep = null;
+      let k = 0;
+      for (const n of Array.from(e.childNodes)) {
+        if (n.nodeType === 3) {
+          const v = n.nodeValue || "";
+          if (!/[\n\r]/.test(v)) {
+            out += v;
+            continue;
+          }
+          if (lines) keep ??= keepsBreaks(e);
+          out += keep ? v.replace(/\r\n?/g, "\n") : v.replace(/[\n\r]/g, " ");
+        } else if (n.nodeType === 1) {
+          const c = e.children[k++];
+          if (!c) continue;
+          if (c.tagName.toLowerCase() === "br") out += lines ? "\n" : " ";
+          else if (c.tagName === "SELECT" || c.tagName === "TEXTAREA") {
+            const t = controlText(c);
+            if (t === null || !("text" in t)) walk(c);
+            else out += ` ${t.text} `;
+          } else if (!lines && c.querySelectorAll("br, select, textarea").length === 0) out += c.textContent || "";
+          else walk(c);
+        }
+      }
+    };
+    walk(root);
+    return lines ? out.replace(/[ \t\f]*\n[ \t\f]*/g, "\n").replace(/[ \t\f]+/g, " ").trim() : out.replace(/\s+/g, " ").trim();
+  };
+  const visible = (el, o = {}) => {
+    if (el.getClientRects().length === 0) return false;
+    if (o.sized) {
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return false;
+    }
+    const op = !!o.opacity;
+    return el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: op, checkOpacity: op });
+  };
+  const viewport = () => {
+    const de = document.documentElement;
+    return { w: Math.min(de.clientWidth || innerWidth, innerWidth), h: Math.min(de.clientHeight || innerHeight, innerHeight) };
+  };
+  const clickPoint = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    const { w: vw, h: vh } = viewport();
+    for (const q of Array.from(el.getClientRects())) {
+      const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
+      const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
+      if ((x1 - x0) * (y1 - y0) > 0.99) return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, onScreen: true };
+    }
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, onScreen: false };
+  };
+  const active = () => {
+    let a = document.activeElement;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+    return a;
+  };
+  const tagSel = (id) => `[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`;
+  const tagged = (id) => {
+    const els = Array.from(document.querySelectorAll(tagSel(id))).filter((e) => e.closest("dialog:not([open])") === null);
+    return els.length > 1 ? els.filter((e) => e.getClientRects().length > 0) : els;
+  };
+  const BARE = /* @__PURE__ */ new Set(["readonly", "disabled", "hidden", "open", "required"]);
+  const describe = (el, keys = [], name = false) => {
+    if (!el) return "nothing";
+    let s = `<${el.tagName.toLowerCase()}`;
+    for (const k of keys) {
+      const v = el.getAttribute(k);
+      if (v === null) continue;
+      if (BARE.has(k)) s += ` ${k}`;
+      else if (v !== "") s += ` ${k}="${v}"`;
+    }
+    s += ">";
+    if (!name) return s;
+    const label = el.getAttribute("aria-label");
+    const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30);
+    return label ? `${s} "${label}"` : text ? `${s} "${text}"` : s;
+  };
+  const ownContent = (box, ctl) => {
+    const up = parent;
+    const css = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+    const set = (e, prop, pseudo = null) => {
+      const v = css(e, prop, pseudo);
+      return v !== "" && v !== "none";
+    };
+    const chain = (test) => {
+      const memo = /* @__PURE__ */ new Map();
+      return (e) => {
+        const seen = [];
+        let hit = false;
+        for (let p = e; p && p !== box; p = up(p)) {
+          const m = memo.get(p);
+          if (m !== void 0) {
+            hit = m;
+            break;
+          }
+          seen.push(p);
+          if (test(p)) {
+            hit = true;
+            break;
+          }
+        }
+        for (const s of seen) memo.set(s, hit);
+        return hit;
+      };
+    };
+    let work = 0;
+    const OWN_WORK_CAP = 2e4;
+    const tick = () => ++work > OWN_WORK_CAP;
+    const inCtl = chain((p) => p === ctl);
+    const outOfFlow = (e, pseudo = null) => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
+    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
+    const boxed = (e) => {
+      let p = e;
+      while (p && css(p, "display") === "contents") p = up(p);
+      return p;
+    };
+    const shown = (e) => {
+      const b = boxed(e);
+      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
+    };
+    const holdsFixed = (p) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k)) || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change")) || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
+    const de = document.documentElement;
+    const horizontal = !/^(vertical|sideways)/.test(css(de, "writing-mode"));
+    let sx = scrollX, sy = scrollY;
+    for (let p = box; p && p !== de; p = up(p)) {
+      sx += Math.abs(p.scrollLeft || 0);
+      sy += Math.abs(p.scrollTop || 0);
+    }
+    const startX = horizontal && css(de, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
+    const clipped = (e, q) => {
+      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
+      let flow = "in";
+      for (let p = e; p; p = p === box ? null : up(p)) {
+        if (tick()) return null;
+        if (css(p, "display") === "contents") continue;
+        const pr = p.getBoundingClientRect();
+        const pos = css(p, "position");
+        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
+        if (!skip) {
+          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
+          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
+          if (ox !== "visible") {
+            x0 = Math.max(x0, pr.x - cm);
+            x1 = Math.min(x1, pr.right + cm);
+          }
+          if (oy !== "visible") {
+            y0 = Math.max(y0, pr.y - cm);
+            y1 = Math.min(y1, pr.bottom + cm);
+          }
+          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
+        }
+        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
+        if (ins) {
+          const [t = "0", r = t, b = t, l = r] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
+          const len = (s, size) => s.endsWith("%") ? parseFloat(s) / 100 * size : parseFloat(s);
+          const T = len(t, pr.height), R = len(r, pr.width), B = len(b, pr.height), L = len(l, pr.width);
+          if (![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.right - R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.bottom - B);
+          }
+        }
+        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
+        if (rc && /^(absolute|fixed)$/.test(pos)) {
+          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
+          const at = (s, auto) => s === void 0 || s === "auto" ? auto : parseFloat(s);
+          const T = at(v[0], 0), R = at(v[1], pr.width), B = at(v[2], pr.height), L = at(v[3], 0);
+          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.x + R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.y + B);
+          }
+        }
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const area = (e, q) => {
+      const c = clipped(e, q);
+      return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity;
+    };
+    const els = [];
+    const texts = [];
+    const todo = [box];
+    for (let e = todo.pop(); e; e = todo.pop()) {
+      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
+      els.push(e);
+      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+      const sr = e.shadowRoot;
+      let kids = Array.from(e.children);
+      if (sr) {
+        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+        kids = Array.from(sr.children).concat(kids);
+      }
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const k = kids[i];
+        if (k) todo.push(k);
+      }
+    }
+    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
+    const chrome = (e) => {
+      if (e.contains(ctl)) return true;
+      const r = e.getBoundingClientRect();
+      return mx >= r.x && mx <= r.right && my >= r.y && my <= r.bottom;
+    };
+    const clear = (v) => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
+    for (const e of els) {
+      if (inCtl(e) || !shown(e)) continue;
+      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
+      const host = boxed(e) ?? e;
+      for (const ps of ["::before", "::after"]) {
+        const c = css(e, "content", ps);
+        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str ? str[1] ?? "" : null;
+        const fill2 = !clear(css(e, "background-color", ps));
+        const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
+        if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
+      }
+      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker"))) && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
+      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
+      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
+      if (e === box) {
+        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
+        if (set(e, "border-image-source")) return "its own border image";
+        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
+        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
+        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
+        const ws = sides.map((d) => d.w > 0 && !clear(d.c) ? d.w : 0);
+        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
+        const layers = [];
+        let depth = 0, cur = "";
+        for (const ch of `${css(e, "box-shadow")},`) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          if (ch !== "," || depth > 0) {
+            cur += ch;
+            continue;
+          }
+          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
+          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
+          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
+          cur = "";
+        }
+        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
+        const ownBg = css(e, "background-color");
+        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
+        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
+        const paints2 = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
+        if (paints2 && set(e, "mask-image")) return "its own paint under a mask";
+        const cp = css(e, "clip-path");
+        if (paints2 && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
+        continue;
+      }
+      if (css(e, "display") === "contents") continue;
+      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
+      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
+      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
+    }
+    for (const { t, e } of texts) {
+      const text = (t.nodeValue || "").trim();
+      if (!text || inCtl(e) || !shown(e)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(t);
+      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
+    }
+    const br = box.getBoundingClientRect();
+    const anc = /* @__PURE__ */ new Set();
+    for (let p = up(box); p; p = up(p)) anc.add(p);
+    const bg = css(box, "background-color");
+    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
+    for (let p = box; p && opaque; p = up(p)) {
+      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
+      if (op !== "" && parseFloat(op) < 1 || bm !== "" && bm !== "normal") opaque = false;
+    }
+    const meets = (q) => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
+    const over = (f, c, events) => {
+      if (!c) return true;
+      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
+      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
+      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
+      if (events === "none" || !opaque) return true;
+      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
+      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
+      return iF < 0 || iB < 0 || iF < iB;
+    };
+    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
+    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
+    const tipPre = window.__dtTipPre;
+    const tip = (f) => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
+    const gone2 = chain((p) => css(p, "opacity") === "0");
+    const FOREIGN_CAP = 5e5;
+    let walked = 0;
+    const moved = (f) => {
+      const s = getComputedStyle(f);
+      return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => {
+        const v = s.getPropertyValue(k);
+        return v !== "" && v !== "none";
+      });
+    };
+    const ftodo = [{ f: de, near: true }];
+    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
+      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
+      const f = t.f;
+      if (f === box || tip(f)) continue;
+      const isAnc = anc.has(f);
+      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
+      const near = isAnc || fr !== null && meets(fr);
+      const sr = f.shadowRoot;
+      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
+      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
+      if (!fr || !near || pinned(f) || !shown(f) || gone2(f)) continue;
+      const events = css(f, "pointer-events");
+      for (const t2 of [...Array.from(f.childNodes), ...sr ? Array.from(sr.childNodes) : []]) {
+        const text = t2.nodeType === 3 ? (t2.nodeValue || "").trim() : "";
+        if (!text) continue;
+        const range = document.createRange();
+        range.selectNodeContents(t2);
+        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
+      }
+      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
+      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
+      for (const ps of ["::before", "::after"]) {
+        const c = css(f, "content", ps);
+        const pos = css(f, "position", ps);
+        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        let q = fr;
+        if (pos === "absolute") {
+          let cb = f;
+          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up(cb);
+          const cr0 = cb ? cb.getBoundingClientRect() : null;
+          const n = (k) => parseFloat(css(f, k, ps)) || 0;
+          const x = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
+          const y = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
+          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
+          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
+          q = { x, y, width: w, height: h, right: x + w, bottom: y + h };
+        } else if (isAnc) continue;
+        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
+      }
+    }
+    return null;
+  };
+  const dt = {
+    parent,
+    paths,
+    path: (el) => paths()(el),
+    find,
+    controlText,
+    ownText,
+    shownText,
+    visible,
+    viewport,
+    clickPoint,
+    active,
+    tagSel,
+    tagged,
+    describe,
+    ownContent
+  };
+  Object.defineProperty(window, "__dt", { value: dt, configurable: true });
+}
+var PAGE_RUNTIME = `(${installPageRuntime.toString()})();`;
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -2111,18 +2440,7 @@ function readPageOverflow(_arg) {
   const scrollable = scrollWidth > clientWidth + 1 && overflowX !== "hidden" && overflowX !== "clip";
   const offenders = [];
   if (scrollWidth > clientWidth + 1 && body) {
-    const pathOf = (el) => {
-      const parts = [];
-      let cur = el;
-      while (cur && cur !== document.documentElement) {
-        const parent = cur.parentElement;
-        if (!parent) break;
-        parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-        cur = parent;
-      }
-      parts.unshift("html");
-      return parts.join(" > ");
-    };
+    const pathOf = window.__dt.path;
     const createsBlock = (cs) => {
       const v = (k) => cs.getPropertyValue(k);
       if (["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => {
@@ -2170,27 +2488,10 @@ function readPageOverflow(_arg) {
   return { viewport: { w: innerWidth, h: innerHeight }, scrollWidth, clientWidth, overflowX, scrollable, offenders, compatMode: document.compatMode };
 }
 function openerState(arg) {
-  const pathOf = (el2) => {
-    const parts = [];
-    let cur = el2;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const hasBox = (el2) => el2.getClientRects().length > 0;
-  const sees = (el2, opacity) => {
-    if (!hasBox(el2)) return false;
-    const r = el2.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el2.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity });
-  };
-  const sel = `[data-dt-node="${arg.id.replace(/["\\]/g, "\\$&")}"]`;
-  let els = Array.from(document.querySelectorAll(sel)).filter((e) => e.closest("dialog:not([open])") === null);
-  if (els.length > 1) els = els.filter(hasBox);
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const sees = (el2, opacity) => dt.visible(el2, { sized: true, opacity });
+  const els = dt.tagged(arg.id);
   const el = els.length === 1 ? els[0] : void 0;
   if (!el) return { count: els.length, path: null, visible: false, disabled: false, hoverPath: null, hoverDt: null };
   const visible = sees(el, true);
@@ -2200,10 +2501,10 @@ function openerState(arg) {
     let plain = null;
     for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
       if (!sees(p, false)) continue;
-      const dt = p.getAttribute("data-dt-node");
-      if (dt !== null) {
+      const dt2 = p.getAttribute("data-dt-node");
+      if (dt2 !== null) {
         hoverPath = pathOf(p);
-        hoverDt = dt;
+        hoverDt = dt2;
         break;
       }
       if (!plain) plain = p;
@@ -2214,23 +2515,9 @@ function openerState(arg) {
 }
 var DIALOG_CONTRACT = [":modal", "dialog[open]", "[role=dialog]", "[role=alertdialog]", '[aria-modal="true"]', ":popover-open"];
 function armDetector(arg) {
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const seen = (el) => {
-    if (el.getClientRects().length === 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
-  };
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const seen = (el) => dt.visible(el, { sized: true, opacity: true });
   const before = [];
   for (const s of arg.contract) {
     try {
@@ -2238,7 +2525,7 @@ function armDetector(arg) {
     } catch {
     }
   }
-  const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+  const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(dt.tagSel(arg.destId))).filter(seen);
   const roots = Array.from(document.querySelectorAll('dialog[open], [aria-modal="true" i]')).filter((el) => el.getClientRects().length > 0);
   window.__dtDrive = { before, destBefore, destPaths: destBefore.map(pathOf), roots };
   return true;
@@ -2246,23 +2533,9 @@ function armDetector(arg) {
 function pollDetector(arg) {
   const st = window.__dtDrive;
   if (!st) return { lost: true, detectedBy: null, opened: null, dest: null };
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const seen = (el) => {
-    if (el.getClientRects().length === 0) return false;
-    const r2 = el.getBoundingClientRect();
-    return r2.width > 0 && r2.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
-  };
+  const dt = window.__dt;
+  const pathOf = dt.path;
+  const seen = (el) => dt.visible(el, { sized: true, opacity: true });
   let opened = null, detectedBy = null;
   for (const s of arg.contract) {
     let hits = [];
@@ -2280,7 +2553,7 @@ function pollDetector(arg) {
   }
   let dest = null;
   if (arg.destId !== null) {
-    const tags = Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+    const tags = Array.from(document.querySelectorAll(dt.tagSel(arg.destId))).filter(seen);
     const fresh = tags.filter((t) => !st.destBefore.includes(t) && !st.destPaths.includes(pathOf(t)));
     const firstFresh = fresh[0];
     if (opened === null && firstFresh) opened = firstFresh;
@@ -2329,11 +2602,11 @@ function ownMark(_arg) {
   if (!o || !o.box.isConnected || !o.ctl.isConnected) return null;
   const { box, ctl } = o;
   if ((box.getRootNode?.()?.host ?? null) !== null) return { ctl: "its sole control", keep: 0, why: "the opener lies inside a shadow root, where its pixels cannot be compared", scrolled: false };
-  const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const dt = window.__dt;
+  const up = dt.parent;
   const active = document.activeElement;
   if (active && active !== document.body) o.focus = active;
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const { w: vw, h: vh } = dt.viewport();
   const r0 = box.getBoundingClientRect();
   if (r0.x < 0 || r0.y < 0 || r0.right > vw || r0.bottom > vh) {
     const boxes = [];
@@ -2387,8 +2660,7 @@ function ownMark(_arg) {
       keep++;
     }
   }
-  const label = ctl.getAttribute("aria-label");
-  return { ctl: `<${ctl.tagName.toLowerCase()}${ctl.getAttribute("type") ? ` type="${ctl.getAttribute("type") ?? ""}"` : ""}${ctl.getAttribute("role") ? ` role="${ctl.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`, keep, why: null, scrolled: !!o.saved };
+  return { ctl: dt.describe(ctl, ["type", "role", "aria-label"]), keep, why: null, scrolled: !!o.saved };
 }
 function ownShot(arg) {
   const o = window.__dtOwn;
@@ -2570,7 +2842,7 @@ function ownClear(_arg) {
   return true;
 }
 function syntheticClick(path13) {
-  const el = document.querySelector(path13);
+  const el = window.__dt.find(path13);
   if (!el) return false;
   el.click();
   return true;
@@ -2587,21 +2859,9 @@ function submitGuard(el) {
   };
   const own = why(el);
   if (own !== null) return own;
-  const r = el.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return null;
-  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
-  for (const q of Array.from(el.getClientRects())) {
-    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
-    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
-    if ((x1 - x0) * (y1 - y0) > 0.99) {
-      onScreen = true;
-      cx = (x0 + x1) / 2;
-      cy = (y0 + y1) / 2;
-      break;
-    }
-  }
+  const pt = window.__dt.clickPoint(el);
+  if (!pt) return null;
+  const { onScreen, x: cx, y: cy } = pt;
   const at = [];
   const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
   if (hit && hit !== el && el.contains(hit)) at.push(hit);
@@ -2627,292 +2887,12 @@ function clickPointControl(el, arg) {
   const BTN = "button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]";
   const ACT = `${BTN}, [role=checkbox i], [role=switch i], [role=radio i], [role=option i], [role=menuitemcheckbox i], [role=menuitemradio i], input[type=checkbox i], input[type=radio i], input[type=submit i], input[type=button i], input[type=image i], input[type=reset i], input[type=file i]`;
   const self = el.matches(FOC);
-  const ownContent = (box, ctl) => {
-    const up2 = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
-    const css = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
-    const set = (e, prop, pseudo = null) => {
-      const v = css(e, prop, pseudo);
-      return v !== "" && v !== "none";
-    };
-    const chain = (test) => {
-      const memo = /* @__PURE__ */ new Map();
-      return (e) => {
-        const seen = [];
-        let hit = false;
-        for (let p = e; p && p !== box; p = up2(p)) {
-          const m = memo.get(p);
-          if (m !== void 0) {
-            hit = m;
-            break;
-          }
-          seen.push(p);
-          if (test(p)) {
-            hit = true;
-            break;
-          }
-        }
-        for (const s of seen) memo.set(s, hit);
-        return hit;
-      };
-    };
-    let work = 0;
-    const OWN_WORK_CAP = 2e4;
-    const tick = () => ++work > OWN_WORK_CAP;
-    const inCtl = chain((p) => p === ctl);
-    const outOfFlow = (e, pseudo = null) => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
-    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
-    const boxed = (e) => {
-      let p = e;
-      while (p && css(p, "display") === "contents") p = up2(p);
-      return p;
-    };
-    const shown = (e) => {
-      const b = boxed(e);
-      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
-    };
-    const holdsFixed = (p) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k)) || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change")) || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
-    const de2 = document.documentElement;
-    const horizontal = !/^(vertical|sideways)/.test(css(de2, "writing-mode"));
-    let sx = scrollX, sy = scrollY;
-    for (let p = box; p && p !== de2; p = up2(p)) {
-      sx += Math.abs(p.scrollLeft || 0);
-      sy += Math.abs(p.scrollTop || 0);
-    }
-    const startX = horizontal && css(de2, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
-    const clipped = (e, q) => {
-      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
-      let flow = "in";
-      for (let p = e; p; p = p === box ? null : up2(p)) {
-        if (tick()) return null;
-        if (css(p, "display") === "contents") continue;
-        const pr = p.getBoundingClientRect();
-        const pos = css(p, "position");
-        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
-        if (!skip) {
-          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
-          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
-          if (ox !== "visible") {
-            x0 = Math.max(x0, pr.x - cm);
-            x1 = Math.min(x1, pr.right + cm);
-          }
-          if (oy !== "visible") {
-            y0 = Math.max(y0, pr.y - cm);
-            y1 = Math.min(y1, pr.bottom + cm);
-          }
-          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
-        }
-        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
-        if (ins) {
-          const [t = "0", r2 = t, b = t, l = r2] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
-          const len = (s, size) => s.endsWith("%") ? parseFloat(s) / 100 * size : parseFloat(s);
-          const T = len(t, pr.height), R = len(r2, pr.width), B = len(b, pr.height), L = len(l, pr.width);
-          if (![T, R, B, L].some(Number.isNaN)) {
-            x0 = Math.max(x0, pr.x + L);
-            x1 = Math.min(x1, pr.right - R);
-            y0 = Math.max(y0, pr.y + T);
-            y1 = Math.min(y1, pr.bottom - B);
-          }
-        }
-        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
-        if (rc && /^(absolute|fixed)$/.test(pos)) {
-          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
-          const at2 = (s, auto) => s === void 0 || s === "auto" ? auto : parseFloat(s);
-          const T = at2(v[0], 0), R = at2(v[1], pr.width), B = at2(v[2], pr.height), L = at2(v[3], 0);
-          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) {
-            x0 = Math.max(x0, pr.x + L);
-            x1 = Math.min(x1, pr.x + R);
-            y0 = Math.max(y0, pr.y + T);
-            y1 = Math.min(y1, pr.y + B);
-          }
-        }
-      }
-      return { x0, y0, x1, y1 };
-    };
-    const area = (e, q) => {
-      const c = clipped(e, q);
-      return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity;
-    };
-    const els = [];
-    const texts = [];
-    const todo = [box];
-    for (let e = todo.pop(); e; e = todo.pop()) {
-      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
-      els.push(e);
-      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-      const sr = e.shadowRoot;
-      let kids = Array.from(e.children);
-      if (sr) {
-        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-        kids = Array.from(sr.children).concat(kids);
-      }
-      for (let i = kids.length - 1; i >= 0; i--) {
-        const k = kids[i];
-        if (k) todo.push(k);
-      }
-    }
-    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
-    const chrome = (e) => {
-      if (e.contains(ctl)) return true;
-      const r2 = e.getBoundingClientRect();
-      return mx >= r2.x && mx <= r2.right && my >= r2.y && my <= r2.bottom;
-    };
-    const clear = (v) => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
-    for (const e of els) {
-      if (inCtl(e) || !shown(e)) continue;
-      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
-      const host = boxed(e) ?? e;
-      for (const ps of ["::before", "::after"]) {
-        const c = css(e, "content", ps);
-        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str ? str[1] ?? "" : null;
-        const fill2 = !clear(css(e, "background-color", ps));
-        const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
-        if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
-      }
-      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker"))) && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
-      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
-      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
-      if (e === box) {
-        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
-        if (set(e, "border-image-source")) return "its own border image";
-        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
-        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
-        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
-        const ws = sides.map((d) => d.w > 0 && !clear(d.c) ? d.w : 0);
-        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
-        const layers = [];
-        let depth = 0, cur = "";
-        for (const ch of `${css(e, "box-shadow")},`) {
-          if (ch === "(") depth++;
-          else if (ch === ")") depth--;
-          if (ch !== "," || depth > 0) {
-            cur += ch;
-            continue;
-          }
-          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
-          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
-          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
-          cur = "";
-        }
-        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
-        const ownBg = css(e, "background-color");
-        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
-        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
-        const paints2 = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
-        if (paints2 && set(e, "mask-image")) return "its own paint under a mask";
-        const cp = css(e, "clip-path");
-        if (paints2 && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
-        continue;
-      }
-      if (css(e, "display") === "contents") continue;
-      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
-      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
-      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
-    }
-    for (const { t, e } of texts) {
-      const text = (t.nodeValue || "").trim();
-      if (!text || inCtl(e) || !shown(e)) continue;
-      const range = document.createRange();
-      range.selectNodeContents(t);
-      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
-    }
-    const br = box.getBoundingClientRect();
-    const anc = /* @__PURE__ */ new Set();
-    for (let p = up2(box); p; p = up2(p)) anc.add(p);
-    const bg = css(box, "background-color");
-    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
-    for (let p = box; p && opaque; p = up2(p)) {
-      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
-      if (op !== "" && parseFloat(op) < 1 || bm !== "" && bm !== "normal") opaque = false;
-    }
-    const meets = (q) => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
-    const over = (f, c, events) => {
-      if (!c) return true;
-      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
-      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
-      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
-      if (events === "none" || !opaque) return true;
-      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
-      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
-      return iF < 0 || iB < 0 || iF < iB;
-    };
-    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
-    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
-    const tipPre = window.__dtTipPre;
-    const tip = (f) => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
-    const gone2 = chain((p) => css(p, "opacity") === "0");
-    const FOREIGN_CAP = 5e5;
-    let walked = 0;
-    const moved = (f) => {
-      const s = getComputedStyle(f);
-      return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => {
-        const v = s.getPropertyValue(k);
-        return v !== "" && v !== "none";
-      });
-    };
-    const ftodo = [{ f: de2, near: true }];
-    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
-      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
-      const f = t.f;
-      if (f === box || tip(f)) continue;
-      const isAnc = anc.has(f);
-      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
-      const near = isAnc || fr !== null && meets(fr);
-      const sr = f.shadowRoot;
-      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
-      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
-      if (!fr || !near || pinned(f) || !shown(f) || gone2(f)) continue;
-      const events = css(f, "pointer-events");
-      for (const t2 of [...Array.from(f.childNodes), ...sr ? Array.from(sr.childNodes) : []]) {
-        const text = t2.nodeType === 3 ? (t2.nodeValue || "").trim() : "";
-        if (!text) continue;
-        const range = document.createRange();
-        range.selectNodeContents(t2);
-        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
-      }
-      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
-      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
-      for (const ps of ["::before", "::after"]) {
-        const c = css(f, "content", ps);
-        const pos = css(f, "position", ps);
-        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
-        let q = fr;
-        if (pos === "absolute") {
-          let cb = f;
-          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up2(cb);
-          const cr0 = cb ? cb.getBoundingClientRect() : null;
-          const n = (k) => parseFloat(css(f, k, ps)) || 0;
-          const x = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
-          const y = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
-          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
-          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
-          q = { x, y, width: w, height: h, right: x + w, bottom: y + h };
-        } else if (isAnc) continue;
-        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
-      }
-    }
-    return null;
-  };
-  const r = el.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return null;
-  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
-  for (const q of Array.from(el.getClientRects())) {
-    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
-    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
-    if ((x1 - x0) * (y1 - y0) > 0.99) {
-      onScreen = true;
-      cx = (x0 + x1) / 2;
-      cy = (y0 + y1) / 2;
-      break;
-    }
-  }
+  const dt = window.__dt;
+  const pt = dt.clickPoint(el);
+  if (!pt) return null;
+  const { onScreen, x: cx, y: cy } = pt;
   const inner = Array.from(el.querySelectorAll(FOC));
-  const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const up = dt.parent;
   const framed = (e) => /^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME)$/.test(e.tagName.toUpperCase());
   const pick = (e) => e.tagName.toUpperCase() === "LABEL" ? e.control ?? null : e.matches(FOC) || e.matches(ACT) || framed(e) ? e : null;
   const presses = (e) => !!e && (e.matches(ACT) || framed(e));
@@ -2963,15 +2943,14 @@ function clickPointControl(el, arg) {
   }
   if (!presses(at)) return null;
   if (!self && inner.length === 1 && inner[0] === at && at.matches(BTN)) {
-    const own = ownContent(el, at);
+    const own = dt.ownContent(el, at);
     if (own === null) {
       if (mark) window.__dtOwn = { box: el, ctl: at };
       return null;
     }
     if (mark) window.__dtOwnWhy = `its own content: ${own}`;
   }
-  const label = at.getAttribute("aria-label");
-  return `<${at.tagName.toLowerCase()}${at.getAttribute("type") ? ` type="${at.getAttribute("type") ?? ""}"` : ""}${at.getAttribute("role") ? ` role="${at.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`;
+  return dt.describe(at, ["type", "role", "aria-label"]);
 }
 var OVERLAY_ACTIONS = /* @__PURE__ */ new Set(["overlay", "swap"]);
 var CLICK_TRIGGERS = /* @__PURE__ */ new Set(["on_click", "on_press"]);
@@ -3739,32 +3718,30 @@ function sentinelRemove(_arg) {
 }
 function walkStep(arg) {
   const st = window.__dtBeh;
-  let a = document.activeElement;
-  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  const dt = window.__dt;
+  const a = dt.active();
   if (!st) return { end: "body", opener: false, ancestor: null, inside: null, dup: false };
   if (a !== null && a === st.sentinel) return { end: "sentinel", opener: false, ancestor: null, inside: null, dup: false };
   if (a === null || a === document.body || a === document.documentElement) return st.stops.length ? { end: "body", opener: false, ancestor: null, inside: null, dup: false } : { end: null, opener: false, ancestor: null, inside: null, dup: true };
   const o = st.opener;
   const ctrl = st.control && st.control.isConnected ? st.control : null;
-  const descOf = (e) => `<${e.tagName.toLowerCase()}${e.getAttribute("tabindex") !== null ? ` tabindex="${e.getAttribute("tabindex") ?? ""}"` : ""}${e.getAttribute("role") ? ` role="${e.getAttribute("role") ?? ""}"` : ""}${e.getAttribute("aria-label") ? ` aria-label="${e.getAttribute("aria-label") ?? ""}"` : ""}>`;
+  const descOf = (e) => dt.describe(e, ["tabindex", "role", "aria-label"]);
   const opener = !!ctrl && a === ctrl;
   const inside = !opener && !!o && o !== a && o.contains(a) ? descOf(a) : null;
   const ancestor = !opener && !!o && a.contains(o) ? descOf(a) : null;
   if (st.stops.includes(a)) return { end: null, opener, ancestor, inside, dup: true };
   if (arg.record) {
-    const r = a.getBoundingClientRect();
     st.stops.push(a);
-    st.stopVisible.push(r.width > 0 && r.height > 0 && a.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }));
+    st.stopVisible.push(dt.visible(a, { sized: true, opacity: true }));
   }
   return { end: null, opener, ancestor, inside, dup: false };
 }
 function keyTarget(_arg) {
   const st = window.__dtBeh;
   const o = st ? st.opener : null;
-  let a = document.activeElement;
-  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  const a = window.__dt.active();
   if (!a || a === document.body || a === document.documentElement) return { ok: false, desc: "<body>", why: "focus is on <body>" };
-  const desc = `<${a.tagName.toLowerCase()}${a.getAttribute("type") ? ` type="${a.getAttribute("type") ?? ""}"` : ""}${a.hasAttribute("readonly") ? " readonly" : ""}${a.getAttribute("tabindex") !== null ? ` tabindex="${a.getAttribute("tabindex") ?? ""}"` : ""}${a.getAttribute("role") ? ` role="${a.getAttribute("role") ?? ""}"` : ""}>`;
+  const desc = window.__dt.describe(a, ["type", "readonly", "tabindex", "role"]);
   if (!o) return { ok: false, desc, why: "the opener is gone" };
   const ctrl = st && st.control && st.control.isConnected ? st.control : null;
   if (a !== ctrl) return { ok: false, desc, why: o.contains(a) ? "the opener is a container; its focusable child is not pressed" : a.contains(o) ? "an ancestor of the opener" : "not the opener" };
@@ -3780,26 +3757,7 @@ function stopsCount(_arg) {
 function stopsInfo(_arg) {
   const st = window.__dtBeh;
   if (!st) return [];
-  const pathOf = (el) => {
-    const segs = [];
-    let cur = el, joiner = "";
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (parent) {
-        segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})${joiner}`);
-        joiner = " > ";
-        cur = parent;
-        continue;
-      }
-      const root = cur.getRootNode ? cur.getRootNode() : null;
-      const host = root && root.host ? root.host : null;
-      if (!root || !host || !root.children) break;
-      segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(root.children).indexOf(cur) + 1})${joiner}`);
-      joiner = " ";
-      cur = host;
-    }
-    return `html > ${segs.join("")}`;
-  };
+  const pathOf = window.__dt.paths();
   const domName = (el) => {
     const label = (el.getAttribute("aria-label") || "").trim();
     if (label) return label;
@@ -3821,13 +3779,13 @@ function subjectRead(arg) {
   const stops = st ? st.stops : [];
   const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
   const id = arg.id;
-  let els = Array.from(document.querySelectorAll(`[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`)).filter((e) => e.closest("dialog:not([open])") === null);
-  if (els.length > 1) els = els.filter((e) => e.getClientRects().length > 0);
+  const dt = window.__dt;
+  const els = dt.tagged(id);
   const el = els.length === 1 ? els[0] : void 0;
   if (!el) return { id, count: els.length, closedIn: null, hasBox: false, disabled: false, stop: -1, inside: null, visibility: "", tabindex: null, tag: "" };
   let closedIn = null;
   for (let p = el.parentElement; p && p !== document.body && closedIn === null; p = p.parentElement) {
-    const desc = `<${p.tagName.toLowerCase()}${p.id ? ` id="${p.id}"` : ""}>`;
+    const desc = dt.describe(p, ["id"]);
     if (p.tagName.toLowerCase() === "details" && !p.hasAttribute("open") && el.closest("summary") === null) closedIn = `a closed <details>`;
     else if (p.hasAttribute("hidden")) closedIn = `${desc} [hidden]`;
     else if (getComputedStyle(p).getPropertyValue("display") === "none") closedIn = `${desc} (display:none)`;
@@ -3847,7 +3805,7 @@ function subjectRead(arg) {
     hasBox: el.getClientRects().length > 0,
     disabled: el.closest(':disabled, [disabled], [aria-disabled="true" i]') !== null,
     stop,
-    inside: inner ? `<${inner.tagName.toLowerCase()}${inner.getAttribute("aria-label") ? ` aria-label="${inner.getAttribute("aria-label") ?? ""}"` : ""}>` : null,
+    inside: inner ? dt.describe(inner, ["aria-label"]) : null,
     visibility: getComputedStyle(el).getPropertyValue("visibility"),
     tabindex: el.getAttribute("tabindex"),
     tag: el.tagName.toLowerCase()
@@ -3859,15 +3817,12 @@ function focusBefore(arg) {
   const prev = arg.i === 0 ? st.sentinel : st.stops[arg.i - 1];
   if (!prev || !prev.isConnected) return false;
   prev.focus({ preventScroll: false });
-  let a = document.activeElement;
-  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
-  return a === prev;
+  return window.__dt.active() === prev;
 }
 function focusedStop(arg) {
   const st = window.__dtBeh;
   const el = st ? st.stops[arg.i] : void 0;
-  let act = document.activeElement;
-  while (act && act.shadowRoot && act.shadowRoot.activeElement) act = act.shadowRoot.activeElement;
+  const act = window.__dt.active();
   const ok = !!el && act === el;
   const prev = st ? arg.i === 0 ? st.sentinel : st.stops[arg.i - 1] : null;
   const onPrev = !!prev && act === prev;
@@ -3882,7 +3837,7 @@ function focusedStop(arg) {
   return {
     ok,
     onPrev,
-    visible: r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }),
+    visible: window.__dt.visible(el, { sized: true, opacity: true }),
     rect: { x: r.x, y: r.y, w: r.width, h: r.height },
     vw: innerWidth,
     vh: innerHeight,
@@ -3898,21 +3853,11 @@ function blurActive(_arg) {
   return true;
 }
 function unnamedRegions(_arg) {
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
+  const dt = window.__dt;
+  const pathOf = dt.paths();
   const out = [];
   for (const el of Array.from(document.querySelectorAll("[role=region i]"))) {
-    if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    if (!dt.visible(el)) continue;
     const label = (el.getAttribute("aria-label") || "").trim();
     const by = (el.getAttribute("aria-labelledby") || "").trim().split(/\s+/).filter((x) => x !== "").map((x) => document.getElementById(x)).filter((x) => x !== null);
     const byText = by.map((x) => (x.textContent || "").trim()).join(" ").trim();
@@ -3922,18 +3867,8 @@ function unnamedRegions(_arg) {
   return out;
 }
 function subpixelRead(_arg) {
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
+  const dt = window.__dt;
+  const pathOf = dt.paths();
   const out = [];
   const body = document.body;
   if (!body) return out;
@@ -3941,11 +3876,11 @@ function subpixelRead(_arg) {
     if (el.getAttribute("data-dt-sentinel") !== null) continue;
     const tag = el.tagName.toLowerCase();
     const cell = tag === "td" || tag === "th";
-    const ownText = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
+    const ownText = dt.ownText(el).trim();
     if (!cell && ownText === "") continue;
     if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template" || tag === "title") continue;
     if (el.closest("dialog:not([open])") !== null) continue;
-    if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    if (!dt.visible(el)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 1 && r.height > 0) {
       const tagged = el.closest("[data-dt-node]");
@@ -3957,14 +3892,14 @@ function subpixelRead(_arg) {
 function offendersAre2D(arg) {
   if (!arg.paths.length) return false;
   return arg.paths.every((p) => {
-    const el = document.querySelector(p);
+    const el = window.__dt.find(p);
     return !!el && el.closest("table, pre, figure, img, canvas, svg, video, [role=grid], [role=table]") !== null;
   });
 }
 function visibleTags(_arg) {
   const out = [];
   for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
-    if (el.getClientRects().length === 0 || el.closest("dialog:not([open])") !== null || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    if (el.closest("dialog:not([open])") !== null || !window.__dt.visible(el)) continue;
     const v = el.getAttribute("data-dt-node");
     if (v !== null && !out.includes(v)) out.push(v);
   }
@@ -3987,8 +3922,7 @@ function maskCandidates(arg) {
     const cs = getComputedStyle(el);
     const m = cs.getPropertyValue("mask-image"), wm = cs.getPropertyValue("-webkit-mask-image");
     if ((m === "" || m === "none") && (wm === "" || wm === "none")) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true })) continue;
+    if (!window.__dt.visible(el, { sized: true, opacity: true })) continue;
     st.masks.push(el);
     st.maskInline.push({ value: el.style.getPropertyValue("visibility"), priority: el.style.getPropertyPriority("visibility") });
     const tagged = el.closest("[data-dt-node]");
@@ -4023,8 +3957,8 @@ function markOpener(arg) {
   window.__dtBeh = st;
   window.__dtOwn = null;
   const none = { found: false, visible: false, x: 0, y: 0, inViewport: false, hits: false, hover: null, sole: false, why: null };
-  let els = Array.from(document.querySelectorAll(`[data-dt-node="${arg.id.replace(/["\\]/g, "\\$&")}"]`)).filter((e) => e.closest("dialog:not([open])") === null);
-  if (els.length > 1) els = els.filter((e) => e.getClientRects().length > 0);
+  const dt = window.__dt;
+  const els = dt.tagged(arg.id);
   const el = els.length === 1 ? els[0] : void 0;
   if (!el) {
     st.opener = null;
@@ -4032,13 +3966,8 @@ function markOpener(arg) {
     return none;
   }
   st.opener = el;
-  const sees = (e, opacity) => {
-    if (e.getClientRects().length === 0) return false;
-    const r2 = e.getBoundingClientRect();
-    return r2.width > 0 && r2.height > 0 && e.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity, checkOpacity: opacity });
-  };
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const sees = (e, opacity) => dt.visible(e, { sized: true, opacity });
+  const { w: vw, h: vh } = dt.viewport();
   const visible = sees(el, true);
   const r = el.getBoundingClientRect();
   const x = r.x + r.width / 2, y = r.y + r.height / 2;
@@ -4046,275 +3975,6 @@ function markOpener(arg) {
   const hit = inViewport ? document.elementFromPoint(x, y) : null;
   const FOC = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
   const BTN = "button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]";
-  const ownContent = (box, ctl) => {
-    const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
-    const css = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
-    const set = (e, prop, pseudo = null) => {
-      const v = css(e, prop, pseudo);
-      return v !== "" && v !== "none";
-    };
-    const chain = (test) => {
-      const memo = /* @__PURE__ */ new Map();
-      return (e) => {
-        const seen = [];
-        let hit2 = false;
-        for (let p = e; p && p !== box; p = up(p)) {
-          const m = memo.get(p);
-          if (m !== void 0) {
-            hit2 = m;
-            break;
-          }
-          seen.push(p);
-          if (test(p)) {
-            hit2 = true;
-            break;
-          }
-        }
-        for (const s of seen) memo.set(s, hit2);
-        return hit2;
-      };
-    };
-    let work = 0;
-    const OWN_WORK_CAP = 2e4;
-    const tick = () => ++work > OWN_WORK_CAP;
-    const inCtl = chain((p) => p === ctl);
-    const outOfFlow = (e, pseudo = null) => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
-    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
-    const boxed = (e) => {
-      let p = e;
-      while (p && css(p, "display") === "contents") p = up(p);
-      return p;
-    };
-    const shown = (e) => {
-      const b = boxed(e);
-      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
-    };
-    const holdsFixed = (p) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k)) || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change")) || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
-    const de2 = document.documentElement;
-    const horizontal = !/^(vertical|sideways)/.test(css(de2, "writing-mode"));
-    let sx = scrollX, sy = scrollY;
-    for (let p = box; p && p !== de2; p = up(p)) {
-      sx += Math.abs(p.scrollLeft || 0);
-      sy += Math.abs(p.scrollTop || 0);
-    }
-    const startX = horizontal && css(de2, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
-    const clipped = (e, q) => {
-      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
-      let flow = "in";
-      for (let p = e; p; p = p === box ? null : up(p)) {
-        if (tick()) return null;
-        if (css(p, "display") === "contents") continue;
-        const pr = p.getBoundingClientRect();
-        const pos = css(p, "position");
-        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
-        if (!skip) {
-          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
-          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
-          if (ox !== "visible") {
-            x0 = Math.max(x0, pr.x - cm);
-            x1 = Math.min(x1, pr.right + cm);
-          }
-          if (oy !== "visible") {
-            y0 = Math.max(y0, pr.y - cm);
-            y1 = Math.min(y1, pr.bottom + cm);
-          }
-          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
-        }
-        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
-        if (ins) {
-          const [t = "0", r2 = t, b = t, l = r2] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
-          const len = (s, size) => s.endsWith("%") ? parseFloat(s) / 100 * size : parseFloat(s);
-          const T = len(t, pr.height), R = len(r2, pr.width), B = len(b, pr.height), L = len(l, pr.width);
-          if (![T, R, B, L].some(Number.isNaN)) {
-            x0 = Math.max(x0, pr.x + L);
-            x1 = Math.min(x1, pr.right - R);
-            y0 = Math.max(y0, pr.y + T);
-            y1 = Math.min(y1, pr.bottom - B);
-          }
-        }
-        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
-        if (rc && /^(absolute|fixed)$/.test(pos)) {
-          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
-          const at = (s, auto) => s === void 0 || s === "auto" ? auto : parseFloat(s);
-          const T = at(v[0], 0), R = at(v[1], pr.width), B = at(v[2], pr.height), L = at(v[3], 0);
-          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) {
-            x0 = Math.max(x0, pr.x + L);
-            x1 = Math.min(x1, pr.x + R);
-            y0 = Math.max(y0, pr.y + T);
-            y1 = Math.min(y1, pr.y + B);
-          }
-        }
-      }
-      return { x0, y0, x1, y1 };
-    };
-    const area = (e, q) => {
-      const c = clipped(e, q);
-      return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity;
-    };
-    const els2 = [];
-    const texts = [];
-    const todo = [box];
-    for (let e = todo.pop(); e; e = todo.pop()) {
-      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
-      els2.push(e);
-      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-      const sr = e.shadowRoot;
-      let kids = Array.from(e.children);
-      if (sr) {
-        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
-        kids = Array.from(sr.children).concat(kids);
-      }
-      for (let i = kids.length - 1; i >= 0; i--) {
-        const k = kids[i];
-        if (k) todo.push(k);
-      }
-    }
-    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
-    const chrome = (e) => {
-      if (e.contains(ctl)) return true;
-      const r2 = e.getBoundingClientRect();
-      return mx >= r2.x && mx <= r2.right && my >= r2.y && my <= r2.bottom;
-    };
-    const clear = (v) => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
-    for (const e of els2) {
-      if (inCtl(e) || !shown(e)) continue;
-      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
-      const host = boxed(e) ?? e;
-      for (const ps of ["::before", "::after"]) {
-        const c = css(e, "content", ps);
-        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        const s = str ? str[1] ?? "" : null;
-        const fill2 = !clear(css(e, "background-color", ps));
-        const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
-        if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
-      }
-      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker"))) && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
-      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
-      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
-      if (e === box) {
-        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
-        if (set(e, "border-image-source")) return "its own border image";
-        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
-        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
-        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
-        const ws = sides.map((d) => d.w > 0 && !clear(d.c) ? d.w : 0);
-        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
-        const layers = [];
-        let depth = 0, cur = "";
-        for (const ch of `${css(e, "box-shadow")},`) {
-          if (ch === "(") depth++;
-          else if (ch === ")") depth--;
-          if (ch !== "," || depth > 0) {
-            cur += ch;
-            continue;
-          }
-          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
-          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
-          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
-          cur = "";
-        }
-        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
-        const ownBg = css(e, "background-color");
-        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
-        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
-        const paints2 = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
-        if (paints2 && set(e, "mask-image")) return "its own paint under a mask";
-        const cp = css(e, "clip-path");
-        if (paints2 && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
-        continue;
-      }
-      if (css(e, "display") === "contents") continue;
-      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
-      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
-      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
-    }
-    for (const { t, e } of texts) {
-      const text = (t.nodeValue || "").trim();
-      if (!text || inCtl(e) || !shown(e)) continue;
-      const range = document.createRange();
-      range.selectNodeContents(t);
-      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
-    }
-    const br = box.getBoundingClientRect();
-    const anc = /* @__PURE__ */ new Set();
-    for (let p = up(box); p; p = up(p)) anc.add(p);
-    const bg = css(box, "background-color");
-    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
-    for (let p = box; p && opaque; p = up(p)) {
-      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
-      if (op !== "" && parseFloat(op) < 1 || bm !== "" && bm !== "normal") opaque = false;
-    }
-    const meets = (q) => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
-    const over = (f, c, events) => {
-      if (!c) return true;
-      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
-      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
-      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
-      if (events === "none" || !opaque) return true;
-      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
-      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
-      return iF < 0 || iB < 0 || iF < iB;
-    };
-    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
-    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
-    const tipPre = window.__dtTipPre;
-    const tip = (f) => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
-    const gone2 = chain((p) => css(p, "opacity") === "0");
-    const FOREIGN_CAP = 5e5;
-    let walked = 0;
-    const moved = (f) => {
-      const s = getComputedStyle(f);
-      return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => {
-        const v = s.getPropertyValue(k);
-        return v !== "" && v !== "none";
-      });
-    };
-    const ftodo = [{ f: de2, near: true }];
-    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
-      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
-      const f = t.f;
-      if (f === box || tip(f)) continue;
-      const isAnc = anc.has(f);
-      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
-      const near = isAnc || fr !== null && meets(fr);
-      const sr = f.shadowRoot;
-      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
-      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
-      if (!fr || !near || pinned(f) || !shown(f) || gone2(f)) continue;
-      const events = css(f, "pointer-events");
-      for (const t2 of [...Array.from(f.childNodes), ...sr ? Array.from(sr.childNodes) : []]) {
-        const text = t2.nodeType === 3 ? (t2.nodeValue || "").trim() : "";
-        if (!text) continue;
-        const range = document.createRange();
-        range.selectNodeContents(t2);
-        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
-      }
-      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
-      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
-      for (const ps of ["::before", "::after"]) {
-        const c = css(f, "content", ps);
-        const pos = css(f, "position", ps);
-        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
-        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
-        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
-        let q = fr;
-        if (pos === "absolute") {
-          let cb = f;
-          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up(cb);
-          const cr0 = cb ? cb.getBoundingClientRect() : null;
-          const n = (k) => parseFloat(css(f, k, ps)) || 0;
-          const x2 = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
-          const y2 = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
-          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
-          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
-          q = { x: x2, y: y2, width: w, height: h, right: x2 + w, bottom: y2 + h };
-        } else if (isAnc) continue;
-        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
-      }
-    }
-    return null;
-  };
   let control = null, sole = false, why = null;
   if (el.matches(FOC)) control = el;
   else {
@@ -4325,7 +3985,7 @@ function markOpener(arg) {
       const one = inner.length === 1 ? inner[0] : void 0;
       if (one && one.matches(BTN) && !one.matches("input, select, textarea, [contenteditable]")) {
         const b = one.getBoundingClientRect();
-        const own = (inViewport ? !!hit && (hit === one || one.contains(hit)) : x >= b.x && x <= b.right && y >= b.y && y <= b.bottom) ? ownContent(el, one) : void 0;
+        const own = (inViewport ? !!hit && (hit === one || one.contains(hit)) : x >= b.x && x <= b.right && y >= b.y && y <= b.bottom) ? dt.ownContent(el, one) : void 0;
         if (own === null) {
           const seen = (st.ownSeen ?? []).find((p) => p.box === el && p.ctl === one);
           if (seen) {
@@ -4367,13 +4027,12 @@ function focusOpener(arg) {
   const f = st && st.opener && st.control && st.control.isConnected ? st.control : null;
   if (!f) return false;
   f.focus({ preventScroll: arg.preventScroll });
-  let a = document.activeElement;
-  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
-  return a === f;
+  return window.__dt.active() === f;
 }
 function markDialog(arg) {
   const st = window.__dtBeh;
-  const el = document.querySelector(arg.path);
+  const dt = window.__dt;
+  const el = dt.find(arg.path);
   if (!st || !el) return { found: false, modal: false, dialogOpen: false, ariaModal: false, native: false };
   const before = window.__dtDrive ? [...window.__dtDrive.before, ...window.__dtDrive.roots ?? []] : [];
   const own = el.matches("dialog, [role=dialog i], [role=alertdialog i]");
@@ -4385,10 +4044,7 @@ function markDialog(arg) {
   } catch {
   }
   const ariaModal = (root.getAttribute("aria-modal") || "").toLowerCase() === "true";
-  const sized = (e) => {
-    const r = e.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && e.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true });
-  };
+  const sized = (e) => dt.visible(e, { sized: true });
   let box = root;
   if (!sized(root)) {
     box = el !== root && sized(el) ? el : Array.from(root.querySelectorAll("[role=dialog i], [role=alertdialog i], [data-dt-node], [class*=panel i]")).find(sized) ?? null;
@@ -4403,10 +4059,7 @@ function dialogOpenNow(_arg) {
   const root = st ? st.dialog : null;
   if (!root || !root.isConnected) return false;
   const el = st && st.box ? st.box : root;
-  if (!el.isConnected || el.getClientRects().length === 0) return false;
-  const r = el.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return false;
-  if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true })) return false;
+  if (!el.isConnected || !window.__dt.visible(el, { sized: true, opacity: true })) return false;
   if (root.tagName.toLowerCase() === "dialog") {
     let modal = false;
     try {
@@ -4421,17 +4074,12 @@ function focusVsDialog(arg) {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   const a = document.activeElement;
-  const desc = (el) => {
-    if (!el) return "nothing";
-    const dt = el.getAttribute("data-dt-node");
-    const label = el.getAttribute("aria-label");
-    const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30);
-    return `<${el.tagName.toLowerCase()}${dt !== null ? ` data-dt-node="${dt}"` : ""}${el.id ? ` id="${el.id}"` : ""}>${label ? ` "${label}"` : text ? ` "${text}"` : ""}`;
-  };
+  const dt = window.__dt;
+  const desc = (el) => dt.describe(el, ["data-dt-node", "id"], true);
   const body = a === null || a === document.body || a === document.documentElement;
   let inside = !body && !!d && !!a && (d === a || d.contains(a));
   if (!inside && !body && a && arg.destId !== null) {
-    const tagged = a.closest(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`);
+    const tagged = a.closest(dt.tagSel(arg.destId));
     if (tagged) inside = true;
   }
   return { inside, body, desc: desc(body ? null : a), name: a && !body ? a.getAttribute("aria-label") || (a.textContent || "").trim().slice(0, 40) : "" };
@@ -4447,7 +4095,7 @@ function dialogTabbables(_arg) {
     const ti = el.getAttribute("tabindex");
     if (ti !== null && Number(ti) < 0) continue;
     if (el.matches(":disabled")) continue;
-    if (el.getClientRects().length === 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    if (!window.__dt.visible(el)) continue;
     n++;
   }
   return n;
@@ -4456,22 +4104,11 @@ function expanderFind(_arg) {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   if (!st || !d) return { path: null, nativePicker: false, desc: "" };
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
-  const ok = (el) => el.getClientRects().length > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }) && !el.matches(":disabled");
+  const dt = window.__dt;
+  const ok = (el) => dt.visible(el, { opacity: true }) && !el.matches(":disabled");
   const x = Array.from(d.querySelectorAll('[aria-expanded="false" i]')).find(ok);
   st.expander = x ?? null;
-  if (x) return { path: pathOf(x), nativePicker: false, desc: `<${x.tagName.toLowerCase()}${x.getAttribute("role") ? ` role="${x.getAttribute("role") ?? ""}"` : ""}> "${(x.getAttribute("aria-label") || (x.textContent || "").trim()).slice(0, 30)}"` };
+  if (x) return { path: dt.path(x), nativePicker: false, desc: dt.describe(x, ["role"], true) };
   const native = Array.from(d.querySelectorAll("select, input[type=date i], input[type=time i], input[type=datetime-local i], input[type=month i], input[type=week i], input[type=color i]")).some(ok);
   return { path: null, nativePicker: native, desc: "" };
 }
@@ -4484,18 +4121,8 @@ function closeCandidates(_arg) {
   const st = window.__dtBeh;
   const d = st ? st.dialog : null;
   if (!d) return [];
-  const pathOf = (el) => {
-    const parts = [];
-    let cur = el;
-    while (cur && cur !== document.documentElement) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
-      cur = parent;
-    }
-    parts.unshift("html");
-    return parts.join(" > ");
-  };
+  const dt = window.__dt;
+  const pathOf = dt.paths();
   const out = [];
   for (const el of Array.from(d.querySelectorAll("button, [role=button i], a[href]"))) {
     if (out.length >= 50) break;
@@ -4503,7 +4130,7 @@ function closeCandidates(_arg) {
       const href = (el.getAttribute("href") || "").trim();
       if (!(href === "" || href === "#" || /^javascript:/i.test(href))) continue;
     }
-    if (el.getClientRects().length === 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }) || el.matches(":disabled")) continue;
+    if (!dt.visible(el, { opacity: true }) || el.matches(":disabled")) continue;
     const label = el.getAttribute("aria-label");
     const by = (el.getAttribute("aria-labelledby") || "").trim().split(/\s+/).filter((x) => x !== "").map((x) => document.getElementById(x)).filter((x) => x !== null).map((x) => (x.textContent || "").trim()).join(" ").trim();
     const value = el.tagName.toLowerCase() === "input" ? el.getAttribute("value") || "" : "";
@@ -4517,18 +4144,9 @@ function focusReturnRead(_arg) {
   const o = st ? st.opener : null;
   const a = document.activeElement;
   const activeIsBody = a === null || a === document.body || a === document.documentElement;
-  const desc = (el) => {
-    if (!el) return "nothing";
-    const dt = el.getAttribute("data-dt-node");
-    const label = el.getAttribute("aria-label");
-    const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30);
-    return `<${el.tagName.toLowerCase()}${dt !== null ? ` data-dt-node="${dt}"` : ""}${el.id ? ` id="${el.id}"` : ""}>${label ? ` "${label}"` : text ? ` "${text}"` : ""}`;
-  };
-  const vis = (el) => {
-    if (el.getClientRects().length === 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true });
-  };
+  const dt = window.__dt;
+  const desc = (el) => dt.describe(el, ["data-dt-node", "id"], true);
+  const vis = (el) => dt.visible(el, { sized: true });
   let opacity0 = false;
   for (let p = o; p; p = p.parentElement) if (Number(getComputedStyle(p).getPropertyValue("opacity")) === 0) {
     opacity0 = true;
@@ -4552,15 +4170,14 @@ function dialogGeometry(arg) {
   let el = st && st.box ? st.box : d;
   let via = el !== d ? "the dialog's panel (its modal root has no box)" : "the opened element";
   if (d && arg.destId !== null) {
-    const sel = `[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`;
+    const sel = window.__dt.tagSel(arg.destId);
     const inner = d.matches(sel) ? d : Array.from(d.querySelectorAll(sel)).find((e) => e.getClientRects().length > 0) ?? null;
     if (inner) {
       el = inner;
       via = `the destination-tagged element (data-dt-node="${arg.destId}")`;
     }
   }
-  const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const { w: vw, h: vh } = window.__dt.viewport();
   let eff = scrollY;
   for (const e of [document.body, document.documentElement]) {
     if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
@@ -4625,7 +4242,7 @@ function scrimRead(_arg) {
     if (modal) backdrop = getComputedStyle(d, "::backdrop").getPropertyValue("background-color");
   }
   const de = document.documentElement;
-  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const { w: vw, h: vh } = window.__dt.viewport();
   const br = box ? box.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0, right: 0, bottom: 0 };
   const dist = (x, y) => Math.hypot(Math.max(br.x - x, 0, x - br.right), Math.max(br.y - y, 0, y - br.bottom));
   const CONTROL = 'a[href], button, input, select, textarea, summary, label, [role=button i], [role=link i], [role=menuitem i], [role=option i], [role=checkbox i], [role=tab i], [onclick], [tabindex]:not([tabindex^="-"])';
@@ -4661,7 +4278,7 @@ function scrimRead(_arg) {
     if (dist(pt.x, pt.y) <= 0) continue;
     const stack = document.elementsFromPoint(pt.x, pt.y);
     const top = stack[0];
-    if (top && hitDesc === "nothing") hitDesc = `<${top.tagName.toLowerCase()}${top.id ? ` id="${top.id}"` : ""}>`;
+    if (top && hitDesc === "nothing") hitDesc = window.__dt.describe(top, ["id"]);
     let safe = true, found = false;
     for (const e of stack) {
       if (native && e === d) {
@@ -7069,7 +6686,8 @@ function gitState(dir, git = systemGit) {
   const head = git.head(dir);
   return head ? { gitHead: head, gitDirty: git.dirty(dir) } : { gitHead: null, gitDirty: null };
 }
-var INIT_SCRIPT = `(() => {
+var INIT_SCRIPT = `try { ${PAGE_RUNTIME} } catch (e) {}
+(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
   const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
   let sheet = null;

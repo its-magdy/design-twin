@@ -11,6 +11,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Browser, Page } from "playwright";
 import * as PD from "../design-to-code/probe-drive.ts";
+import { PAGE_RUNTIME } from "../design-to-code/page-runtime.ts";
 import { decodePng } from "../bridge/src/png.ts";
 import * as VP from "../design-to-code/verify-probe.ts";
 import { check, report } from "./assert.ts";
@@ -46,6 +47,8 @@ const open = async (html: string, o?: { csp?: boolean; init?: boolean }): Promis
   if (o?.init) await page.addInitScript({ content: typeof VP.INIT_SCRIPT === "string" ? VP.INIT_SCRIPT : "" });
   if (o?.csp) { const k = String(pages.size); pages.set(k, html); await page.goto(`http://127.0.0.1:${port}/?p=${k}`); }
   else await page.setContent(html);
+  // the probe's page runtime (window.__dt): the init script installs it on a navigation, setContent has none
+  await page.evaluate(PAGE_RUNTIME);
   return page;
 };
 const BASE = "<style nonce=\"dtcsp\">body { margin: 0; font: 14px sans-serif; background: #ffffff; } .row { margin: 20px; }"

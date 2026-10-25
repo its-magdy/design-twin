@@ -1,9 +1,9 @@
 // page-dom.ts — the page, as far as the probe's page-side functions use it: the types of the DOM that
-// probe-page.ts, probe-drive.ts, probe-behaviour.ts and probe-visual.ts read inside page.evaluate.
+// page-runtime.ts, probe-page.ts, probe-drive.ts, probe-behaviour.ts and probe-visual.ts read inside page.evaluate.
 //
 // Types only, imported with `import type`: the design-to-code tsconfig has no DOM lib (the rest of this layer runs in Node,
 // where `document` does not exist), and a page-side function is serialised with Function.prototype.toString() and run as
-// TEXT in the page, so it must reference nothing outside its own body. Types erase, so nothing here reaches a bundle; each
+// TEXT in the page, so it must reference nothing outside its own body but the runtime, window.__dt. Types erase, so nothing here reaches a bundle; each
 // module still declares the page globals it uses (`declare const document: PageDocument`, …) itself — a declaration is
 // module-local and erased too.
 //
@@ -166,7 +166,44 @@ export interface BehState {
   masks: PageElement[];
   maskInline: Array<{ value: string; priority: string }>;
 }
+/** checkVisibility as the probe asks it (page-runtime.ts visible): `sized` — a non-zero box too; `opacity` — opacity 0 hides */
+export interface PageVisibleOpts { sized?: boolean; opacity?: boolean }
+/** The probe's page-side runtime (page-runtime.ts), installed as window.__dt in every probe document: the one thing a
+ *  page-side function may reference outside its own body. */
+export interface PageRuntime {
+  /** an element's parent in the flat tree (its slot, its parent element, or its shadow root's host) */
+  parent(n: PageElement): PageElement | null;
+  /** its nth-child path from <html>, through open shadow roots */
+  path(el: PageElement): string;
+  /** a path function that keeps each path for the rest of one synchronous call (many elements of one page) */
+  paths(): (el: PageElement) => string;
+  /** the element a path names (null: gone); any other selector goes to document.querySelector */
+  find(path: string): PageElement | null;
+  /** a form control's shown string, why its value is not the string shown, or null for any other element */
+  controlText(e: PageElement): { text: string } | { why: string } | null;
+  /** its own direct text nodes, joined as written */
+  ownText(el: PageElement): string;
+  /** the text the page shows: `lines` keeps a shown line break as "\n"; without, every run of white space is one space */
+  shownText(el: PageElement, lines?: boolean): string;
+  visible(el: PageElement, o?: PageVisibleOpts): boolean;
+  /** the layout viewport (Playwright's click-point clip) */
+  viewport(): { w: number; h: number };
+  /** Playwright's click point (null: no size) */
+  clickPoint(el: PageElement): { x: number; y: number; onScreen: boolean } | null;
+  /** the deep active element (through open shadow roots) */
+  active(): PageElement | null;
+  /** the attribute selector for a data-dt-node id */
+  tagSel(id: string): string;
+  /** the elements tagged with an id outside a closed <dialog> (several: those with a box) */
+  tagged(id: string): PageElement[];
+  /** `<tag k="v">`, then (name) its aria-label or text — "nothing" for null */
+  describe(el: PageElement | null, keys?: readonly string[], name?: boolean): string;
+  /** what a container shows of its own outside its sole control (null: nothing, as far as the DOM shows) */
+  ownContent(box: PageElement, ctl: PageElement): string | null;
+}
 export interface PageWindow {
+  /** the probe's page-side runtime (page-runtime.ts) */
+  __dt: PageRuntime;
   __dtDrive?: DriveState;
   __dtDriveScroll?: DriveScroll;
   __dtOwn?: OwnPair | null;

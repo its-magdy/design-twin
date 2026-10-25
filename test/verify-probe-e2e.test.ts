@@ -18,7 +18,8 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
-import { collectCandidates, freeHoverPoint, measureElements, type CollectOutput } from "../design-to-code/probe-page.ts";
+import { collectCandidates, focusablePath, freeHoverPoint, measureElements, type CollectOutput } from "../design-to-code/probe-page.ts";
+import { PAGE_RUNTIME } from "../design-to-code/page-runtime.ts";
 import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
@@ -733,6 +734,8 @@ if (fhpBrowser === null) console.log("SKIPPED the in-page freeHoverPoint checks:
 else {
   const pg = await fhpBrowser.newPage({ viewport: { width: 800, height: 600 } });
   await pg.goto(`http://127.0.0.1:${port}/loom-queue-owner-hover.html`);
+  // the probe's page runtime (window.__dt): installed by the probe's init script, which this bare page has not got
+  await pg.evaluate(PAGE_RUNTIME);
   const at = async (owner: string, avoid: string): Promise<{ hit: string; inAvoid: boolean } | null> => {
     const pt = await pg.evaluate(freeHoverPoint, { owner, avoid });
     if (pt === null) return null;
@@ -765,6 +768,7 @@ else {
     `<div data-dt-node="80:11"><select><option label="Shown Gamma">Stored Gamma</option></select></div><div data-dt-node="80:12"><textarea>Old note</textarea></div>` +
     `<div data-dt-node="80:9" style="width:40px;height:20px;outline:2px solid rgb(255, 0, 0);outline-offset:-1px"></div>` +
     `</div></body>`);
+  await pg.evaluate(PAGE_RUNTIME);
   await pg.fill('[data-dt-node="80:2"]', "Typed crate");
   await pg.fill('[data-dt-node="80:4"]', "Line one\nLine  two");
   await pg.selectOption('[data-dt-node="80:5"]', "b");
@@ -801,6 +805,20 @@ else {
     items: [{ nodeId: "80:9", path: '[data-dt-node="80:9"]', isText: false, isPaint: false, isPlaceholder: false, sharesWith: null }] });
   check(`a 2px outline at offset −1px (a centre stroke) → borderWidth 2, its colour, strokeAlign center (got ${JSON.stringify(ring?.styles)})`,
     ring?.styles.borderWidth === 2 && ring.styles.borderColor === "rgb(255, 0, 0)" && ring.styles.strokeFrom === "outline" && ring.styles.strokeAlign === "center");
+  // One element path for every pass (page-runtime.ts): a button inside a web component's open shadow root, named as the drive and
+  // behaviour passes name what they reach (dt.path), is the element the measure pass resolves (measureElements, focusablePath)
+  // and the one Playwright's locator — what the drive clicks and the battery reads — resolves (the host's light child is
+  // slotted content beside it).
+  await pg.setContent(`<!doctype html><body style="margin:0;font:14px sans-serif"><x-card id="card"><span>Light</span></x-card>` +
+    `<script>document.getElementById("card").attachShadow({ mode: "open" }).innerHTML = "<div><span>Title</span><button>Save</button><slot></slot></div>";</script></body>`);
+  await pg.evaluate(PAGE_RUNTIME);
+  const shadowPath: unknown = await pg.evaluate("window.__dt.path(document.getElementById('card').shadowRoot.querySelector('button'))");
+  const sp = typeof shadowPath === "string" ? shadowPath : "";
+  const [shadowM] = await pg.evaluate(measureElements, { frameRect: { x: 0, y: 0, w: 800, h: 600 }, keys: ["text"], items: [{ nodeId: "s", path: sp, isText: true, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+  const located = sp ? await pg.locator(sp).allTextContents() : [];
+  check(`a shadow-DOM button: the path the drive and behaviour passes give it is the one the measure pass and Playwright resolve to it (got ${JSON.stringify([sp, shadowM?.styles.text, located])})`,
+    sp === "html > body:nth-child(2) > x-card:nth-child(1) div:nth-child(1) > button:nth-child(2)" && shadowM?.found === true && shadowM.styles.text === "Save"
+    && JSON.stringify(located) === '["Save"]' && await pg.evaluate(focusablePath, sp) === sp);
   await ctlBrowser.close();
 }
 const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);
@@ -877,6 +895,7 @@ check(`a download → exit 4, 'could not load … started a file download, not a
     try {
       const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
       await page.setContent(html);
+      await page.evaluate(PAGE_RUNTIME);
       const out: CollectOutput = await page.evaluate(collectCandidates, { frames: [{ nodeId: "7:1", w: 1280, h: 800 }], texts, positions: [{ nodeId: "7:2", x: 0, y: 0, w: 1280, h: 800 }] });
       const recs = [...out.tagged, ...Object.values(out.frames).flatMap((f) => f.sized), ...Object.values(out.text).flatMap((t) => [...t.exact, ...t.caseless]),
         ...Object.values(out.placeholders).flat(), ...Object.values(out.positions).flat()].map((c) => ({ order: c.order, path: c.path }));
