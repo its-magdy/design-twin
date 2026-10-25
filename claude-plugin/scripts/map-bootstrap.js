@@ -218,33 +218,40 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+function manifestProblem(doc, givenPath, payloadKey, wantFile) {
+  if (!isManifest(doc, payloadKey)) return null;
+  return `'${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-    );
-    exitCli(2);
-  }
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
 }
 function readJsonFile(file, what, hint) {
   return readDocFile(file, what, anyJson, hint);
 }
 function readDocFile(file, what, guard, hint) {
+  return docOrExit(loadDocFile(file, what, guard, hint));
+}
+function loadDocFile(file, what, guard, hint) {
   const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
+  if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : "") };
+}
+function docOrExit(r) {
+  if ("doc" in r) return r.doc;
+  console.error(`error  ${r.error}`);
   exitCli(2);
 }
 function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
-  const doc = readJsonFile(file, what, hint);
-  assertNotManifest(doc, file, payloadKey, wantFile);
-  if (guard(doc)) return doc;
-  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  exitCli(2);
+  return docOrExit(loadSplitFile(file, what, guard, payloadKey, wantFile, hint));
+}
+function loadSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const r = loadDocFile(file, what, anyJson, hint);
+  if ("error" in r) return r;
+  const manifest = manifestProblem(r.doc, file, payloadKey, wantFile);
+  if (manifest !== null) return { error: manifest };
+  if (guard(r.doc)) return { doc: r.doc };
+  return { error: `${what}: '${file}' is not ${guard.expected || "the expected kind of document"}` };
 }
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
@@ -1163,21 +1170,33 @@ function discoverCatalogs(namedFile, screenFile) {
   add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
   return out;
 }
-function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
-  const out = [{ file: namedFile, catalog: named, role: "named" }];
+function loadCatalogSet(namedFile, named, extraFiles, screenFile) {
+  const sources = [{ file: namedFile, catalog: named, role: "named" }];
+  const skipped = [];
   const seen = /* @__PURE__ */ new Set([path3.resolve(namedFile)]);
   for (const f of extraFiles) {
     if (seen.has(path3.resolve(f))) continue;
     seen.add(path3.resolve(f));
-    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+    const r = loadSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json");
+    if ("error" in r) return r;
+    sources.push({ file: f, role: "extra", catalog: r.doc });
   }
   for (const d of discoverCatalogs(namedFile, screenFile)) {
     if (seen.has(path3.resolve(d.file))) continue;
     seen.add(path3.resolve(d.file));
-    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
-    else if (onSkip) onSkip(d.file);
+    if (d.catalog) sources.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else skipped.push(d.file);
   }
-  return out;
+  return { sources, skipped };
+}
+function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
+  const r = loadCatalogSet(namedFile, named, extraFiles, screenFile);
+  if ("error" in r) {
+    console.error(`error  ${r.error}`);
+    exitCli(2);
+  }
+  if (onSkip) for (const f of r.skipped) onSkip(f);
+  return r.sources;
 }
 function unionCatalog(sources) {
   const first = sources[0];

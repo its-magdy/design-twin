@@ -22,16 +22,20 @@ function isManifest(doc: unknown, payloadKey: string): doc is DesignSystemManife
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
 
+// The manifest refusal as a value: the explanation (no "error  " prefix), or null when `doc` is not the manifest.
+function manifestProblem(doc: unknown, givenPath: string, payloadKey: string, wantFile: string): string | null {
+  if (!isManifest(doc, payloadKey)) return null;
+  return (
+    `'${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.\n` +
+    `       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.\n` +
+    `       Pass the split file instead — e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile}` +
+    ` (relative to the export dir that holds ${givenPath}).`
+  );
+}
+
 function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, wantFile: string): void {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.\n` +
-      `       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.\n` +
-      `       Pass the split file instead — e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile}` +
-      ` (relative to the export dir that holds ${givenPath}).`
-    );
-    exitCli(2);
-  }
+  const problem = manifestProblem(doc, givenPath, payloadKey, wantFile);
+  if (problem !== null) { console.error(`error  ${problem}`); exitCli(2); }
 }
 
 // The second half of the same "never hand back a confusing failure" job: a raw
@@ -49,11 +53,23 @@ function readJsonFile(file: string, what: string, hint?: string): unknown {
 // readJsonFile plus the document's shape: a file that is not the kind of document `guard` describes
 // is the same one-line, exit-2 error as a missing file — never a TypeError three calls later.
 function readDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: string): T {
+  return docOrExit(loadDocFile(file, what, guard, hint));
+}
+
+/** A named input read as a value: the document, or the line(s) a CLI prints after `error  ` before it exits 2. */
+export type DocLoad<T> = { doc: T } | { error: string };
+// readDocFile's decision without the exit — for a caller that must not end the process (a run the MCP server
+// makes in-process) or that reports its own way.
+function loadDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: string): DocLoad<T> {
   const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
+  if ("doc" in r) return r;
   // A read failure ends in a period (and may carry the caller's hint); a parse/shape failure is a phrase.
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `\n       ${hint}` : ""));
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `\n       ${hint}` : "") };
+}
+function docOrExit<T>(r: DocLoad<T>): T {
+  if ("doc" in r) return r.doc;
+  console.error(`error  ${r.error}`);
   exitCli(2);
 }
 
@@ -67,11 +83,15 @@ function readOptionalDoc<T>(file: string, what: string, guard: DocGuard<T>): T |
 // A design-system SPLIT file the user named (a catalog, a token file): refuse the manifest with its own
 // explanation first (the one wrong file people actually pass), then check the payload's shape.
 function readSplitFile<T>(file: string, what: string, guard: DocGuard<T>, payloadKey: string, wantFile: string, hint?: string): T {
-  const doc = readJsonFile(file, what, hint);
-  assertNotManifest(doc, file, payloadKey, wantFile);
-  if (guard(doc)) return doc;
-  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  exitCli(2);
+  return docOrExit(loadSplitFile(file, what, guard, payloadKey, wantFile, hint));
+}
+function loadSplitFile<T>(file: string, what: string, guard: DocGuard<T>, payloadKey: string, wantFile: string, hint?: string): DocLoad<T> {
+  const r = loadDocFile(file, what, anyJson, hint);
+  if ("error" in r) return r;
+  const manifest = manifestProblem(r.doc, file, payloadKey, wantFile);
+  if (manifest !== null) return { error: manifest };
+  if (guard(r.doc)) return { doc: r.doc };
+  return { error: `${what}: '${file}' is not ${guard.expected || "the expected kind of document"}` };
 }
 
 // The one reason design/design-system/ is usually missing, stated once: a --node/single-screen pull
@@ -81,4 +101,4 @@ const NO_DESIGN_SYSTEM_HINT =
   "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
   "       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
-export { assertNotManifest, isManifest, readJsonFile, readDocFile, readOptionalDoc, readSplitFile, NO_DESIGN_SYSTEM_HINT };
+export { assertNotManifest, manifestProblem, isManifest, readJsonFile, readDocFile, loadDocFile, readOptionalDoc, readSplitFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT };

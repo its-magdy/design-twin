@@ -447,13 +447,16 @@ var bareArgs = (argv) => argv[0] === "--" ? argv.slice(1) : argv;
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+function manifestProblem(doc, givenPath, payloadKey, wantFile) {
+  if (!isManifest(doc, payloadKey)) return null;
+  return `'${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-    );
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  const problem = manifestProblem(doc, givenPath, payloadKey, wantFile);
+  if (problem !== null) {
+    console.error(`error  ${problem}`);
     exitCli(2);
   }
 }

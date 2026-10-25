@@ -116,37 +116,20 @@ void (async () => {
     const status = await client.callTool({ name: "figma_status", arguments: {} });
     ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(firstText(status)) as unknown; return true; } catch { return false; } })());
 
-    // design_drift_lint applies the same map gate as the CLI: a structurally invalid map is a tool error
-    // listing the [map-invalid] findings, never linted (and rejected before the export is even read).
-    fs.writeFileSync(path.join(CWD, "bad-map.json"), JSON.stringify({ components: "not-an-object", bogus: 1 }));
-    const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json" } });
-    ok("design_drift_lint rejects an invalid map as a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
-
-    // On the MCP path: the same catalog set as the CLI — components.library.json beside the named
-    // catalog and every pulled library — so an entry for a library component is not orphaned; a broken
-    // components.library.json is skipped, never an exit of the server process.
+    // design_drift_lint is the CLI's own run (design-to-code/drift-lint.ts runDriftLint — test/drift-lint-run.test.ts
+    // checks the run and the CLI/tool parity). Here only the wiring over stdio: a run that is not linted is a tool
+    // error carrying the run's message, a linted one a normal result.
     {
       const ex = path.join(CWD, "ddl");
       fs.mkdirSync(path.join(ex, "design-system"), { recursive: true });
-      fs.mkdirSync(path.join(ex, "libraries", "acme-kit"), { recursive: true });
       fs.writeFileSync(path.join(ex, "design-system.json"), JSON.stringify({ files: { componentsLocal: "design-system/components.local.json" } }));
       fs.writeFileSync(path.join(ex, "design-system", "components.local.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-local", id: "1:1", name: "Row", type: "COMPONENT" }] }));
-      fs.writeFileSync(path.join(ex, "libraries", "index.json"), JSON.stringify({ libraries: [{ dir: "acme-kit", libraryName: "Acme Kit" }] }));
-      fs.writeFileSync(path.join(ex, "libraries", "acme-kit", "components.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-lib", name: "Button", type: "COMPONENT_SET" }] }));
-      fs.writeFileSync(path.join(ex, "design-system", "components.library.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-sample", name: "Chip", type: "COMPONENT", remote: true }] }));
-      const entry = (key: string, name: string) => ({ figma: { key, name }, code: { module: "src/ui/" + name + ".tsx", export: name } });
-      fs.writeFileSync(path.join(CWD, "lib-map.json"), JSON.stringify({ version: 1, components: { "k-local": entry("k-local", "Row"), "k-lib": entry("k-lib", "Button"), "k-sample": entry("k-sample", "Chip") } }));
-      const lint = async () => {
-        const r = await client.callTool({ name: "design_drift_lint", arguments: { map: "lib-map.json", exportDir: "ddl" } });
-        return { isError: r.isError === true, text: firstText(r) };
-      };
-      const both = await lint();
-      ok("design_drift_lint resolves entries against components.library.json and libraries/<dir>/components.json (no orphans)",
-        !both.isError && !/orphaned-entry/.test(both.text) && /"ok":\s*true/.test(both.text) && /acme-kit/.test(both.text) && /components\.library\.json/.test(both.text));
-      fs.writeFileSync(path.join(ex, "design-system", "components.library.json"), "{ not json");
-      const broken = await lint();
-      ok("design_drift_lint skips a broken components.library.json (the entry is orphaned) and the server stays up",
-        !broken.isError && /orphaned-entry/.test(broken.text) && /k-sample/.test(broken.text) && !/k-lib'/.test(broken.text));
+      fs.writeFileSync(path.join(CWD, "lib-map.json"), JSON.stringify({ version: 1, components: { "k-local": { figma: { key: "k-local", name: "Row" }, code: { module: "src/ui/Row.tsx", export: "Row" } } } }));
+      fs.writeFileSync(path.join(CWD, "bad-map.json"), JSON.stringify({ components: "not-an-object", bogus: 1 }));
+      const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json", exportDir: "ddl" } });
+      ok("design_drift_lint: an invalid map is a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
+      const good = await client.callTool({ name: "design_drift_lint", arguments: { map: "lib-map.json", exportDir: "ddl" } });
+      ok("design_drift_lint: a clean map is a normal result with ok:true and the catalogs read", good.isError !== true && /"ok":\s*true/.test(firstText(good)) && /"catalogsRead"/.test(firstText(good)));
     }
 
     // design_drift_lint with NO arguments on a `dtwin init` project: the map defaults to the project
@@ -179,7 +162,7 @@ void (async () => {
         const miss = await cl.callTool({ name: "design_drift_lint", arguments: {} });
         const missText = firstText(miss);
         ok("…and with no map, the error and its scaffold hint name design/codeconnect.local.json",
-          miss.isError === true && /map-bootstrap\.ts <componentsLocal> > design[/\\]codeconnect\.local\.json/.test(missText));
+          miss.isError === true && /map-bootstrap\.ts"? <components\.local\.json> --out \S*design[/\\]codeconnect\.local\.json/.test(missText));
       } finally {
         await cl.close().catch(() => {});
         fs.rmSync(proj, { recursive: true, force: true });
@@ -493,23 +476,18 @@ void (async () => {
         JSON.stringify(bracketed) === '["[WIP] Screens"]' && JSON.stringify(bracketedObj) === '["[\\"unclosed\\""]');
       const { tools: tools2 } = await client.listTools();
       const prop = (tool: string, key: string): Record<string, unknown> => rec(rec(tools2.find((t) => t.name === tool)?.inputSchema.properties)[key]);
-      ok("listTools still advertises page and screens as type:array of strings",
+      ok("listTools still advertises page, screens and catalogs as type:array of strings",
         prop("figma_export_full", "page").type === "array" && rec(prop("figma_export_full", "page").items).type === "string" &&
-        prop("design_drift_lint", "screens").type === "array" && rec(prop("design_drift_lint", "screens").items).type === "string");
+        ["screens", "catalogs"].every((k) => prop("design_drift_lint", k).type === "array" && rec(prop("design_drift_lint", k).items).type === "string"));
 
-      // design_drift_lint `screens` = the CLI's --screen: 2 instances, one mapped → 1/2, 50%.
+      // design_drift_lint `screens` reaches the run as a list, whichever form it arrives in: 2 instances, one mapped → 50%.
       fs.writeFileSync(path.join(CWD, "ddl", "s.json"), JSON.stringify({ nodes: [{ id: "5:1", type: "FRAME", name: "S", children: [
         { id: "5:2", type: "INSTANCE", name: "Row", mainComponent: { key: "k-local", name: "Row" } },
         { id: "5:3", type: "INSTANCE", name: "Other", mainComponent: { key: "k-other", name: "Other" } },
       ] }] }));
-      fs.writeFileSync(path.join(CWD, "ddl", "not-a-screen.json"), JSON.stringify({ hello: 1 }));
       const lintS = async (screens: unknown) => client.callTool({ name: "design_drift_lint", arguments: { map: "lib-map.json", exportDir: "ddl", screens } });
-      const cov = rec(parse(await lintS(["ddl/s.json"])).screenCoverage);
-      ok("design_drift_lint screens:[…] → screenCoverage inMap 1 / distinct 2 / mapPct 50, with the unmapped warning",
-        cov.inMap === 1 && cov.distinct === 2 && cov.mapPct === 50 && Array.isArray(cov.warnings) && cov.warnings.some((w) => rec(w).code === "screen-coverage" && /'Other' \(1x\)/.test(String(rec(w).message))));
-      ok("…the same through a JSON-encoded string", rec(parse(await lintS('["ddl/s.json"]')).screenCoverage).mapPct === 50);
-      const notScreen = await lintS(["ddl/not-a-screen.json"]);
-      ok("a non-screen file is a tool error naming it (the server stays up)", notScreen.isError === true && /not-a-screen\.json is not a screen export/.test(firstText(notScreen)));
+      ok("design_drift_lint screens:[…] and a JSON-encoded string → the same screenCoverage (mapPct 50)",
+        rec(parse(await lintS(["ddl/s.json"])).screenCoverage).mapPct === 50 && rec(parse(await lintS('["ddl/s.json"]')).screenCoverage).mapPct === 50);
 
       // a cancelled tool call cancels the plugin's request (notifications/cancelled →
       // extra.signal → server-core's cancel frame).

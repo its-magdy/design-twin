@@ -796,11 +796,18 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 
 // design-to-code/catalog-input.ts
 function readDocFile(file, what, guard, hint) {
+  return docOrExit(loadDocFile(file, what, guard, hint));
+}
+function loadDocFile(file, what, guard, hint) {
   const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
+  if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : "") };
+}
+function docOrExit(r) {
+  if ("doc" in r) return r.doc;
+  console.error(`error  ${r.error}`);
   exitCli(2);
 }
 function readOptionalDoc(file, what, guard) {
