@@ -37,7 +37,8 @@ import { crossCheckInputOf, readScreenInputs } from "./screen-inputs.ts";
 // and the contrast checks read the backdrop it works out (the same one the audit reads).
 import { paintedOver, walkVisible } from "./visible-tree.ts";
 import { outermostControl, isDisabledLayer } from "./control-kind.ts";
-import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
+import { parseHex, contrastRatio, compositeOver } from "./color.ts";
+import { variableResolver } from "./variable-resolve.ts";
 import type { Rgba } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
@@ -45,7 +46,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
   CatalogComponent, CodeConnectMap, ComponentProposal, ComponentsCatalog, ContrastFailure, TokenPairRow, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  BlockerCode, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
+  BlockerCode, IrNode, MatchResult, MatchRow, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey, getOrInit } from "./map-util.ts";
@@ -1039,65 +1040,12 @@ function labelProposals(rekey: MatchResult, visible: ReturnType<typeof visibleIn
 const MIN_CONTRAST = 4.5;
 
 
-/**
- * A composed colour's ONE RGBA from its two resolved halves; null when either half did not resolve.
- * The opacity is a 0–100 percentage (REST API variables types, VariableComposedColor.opacity:
- * https://developers.figma.com/docs/rest-api/variables-types/), clamped and multiplied into the colour's
- * alpha by color.ts composeAlpha (Help Center 14506821864087 for the clamp; the multiply is an
- * inference — see composeAlpha).
- */
-function composedRgba(color: Rgba | null, opacity: number | null): Rgba | null {
-  if (!color || opacity === null || !Number.isFinite(opacity)) return null;
-  return { ...color, a: composeAlpha(color.a, opacity) };
-}
-
-const aliasName = (val: unknown): string | null =>
-  val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-// A FLOAT token's number, following aliases (the opacity half of a composed colour). `valueOf` is the
-// token's raw value in whatever mode the caller resolves in.
-function resolveNumberWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): number | null {
-  if (depth > 8) return null;
-  const val = valueOf(name);
-  if (typeof val === "number") return Number.isFinite(val) ? val : null;
-  const next = aliasName(val);
-  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
-}
-// A token's colour, following aliases. Depth-limited rather than cycle-tracked: a Figma alias chain is
-// two or three links in practice, and a malformed file must not hang the check.
-function resolveColourWith(valueOf: (name: string) => VariableValue | undefined, name: string, depth: number): Rgba | null {
-  if (depth > 8) return null;
-  const val = valueOf(name);
-  if (typeof val === "string") return parseHex(val);
-  const next = aliasName(val);
-  if (next) return resolveColourWith(valueOf, next, depth + 1);
-  // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
-  // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
-  if (val && typeof val === "object" && "composed" in val) {
-    const { color, opacity } = val.composed;
-    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
-    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
-    return composedRgba(c, o);
-  }
-  return null;
-}
-
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
-  const defs = new Map<string, Variable>(); // token name -> variable record (the screen's own library wins: it is what the screen binds)
-  for (const v of (tokens && tokens.variables) || []) if (v.name) defs.set(v.name, v);
-  for (const v of (variables && variables.variables) || []) if (v.name) defs.set(v.name, v);
-  if (!defs.size) return;
-
-  // A token's raw value in one mode (the single mode of a one-mode variable stands in for any mode).
-  function valueIn(name: string, mode: string): VariableValue | undefined {
-    const v = defs.get(name);
-    if (!v || !v.values) return undefined;
-    const val = v.values[mode];
-    if (val !== undefined) return val;
-    const keys = Object.keys(v.values);
-    const [onlyKey] = keys;
-    return keys.length === 1 && onlyKey !== undefined ? v.values[onlyKey] : undefined; // several modes and none of them is this one — do not guess
-  }
-  const resolve = (name: string, mode: string, depth: number): Rgba | null => resolveColourWith((n) => valueIn(n, mode), name, depth);
+  if (![variables, tokens].some((d) => (d && d.variables || []).length)) return;
+  // variable-resolve.ts, the screen's own library first (it is what the screen binds). fallback "none": a variable
+  // that has several modes and none of them is this one says nothing — do not guess (its only mode stands in for any).
+  const vars = variableResolver([variables, tokens]);
+  const resolve = (name: string, mode: string): Rgba | null => vars.colour(vars.target(name), { mode, fallback: "none" });
 
   // Which modes to check: every mode of every collection that actually defines one of the tokens in
   // play. Names are per-collection, so this is a union of names, not a cross-product.
@@ -1135,8 +1083,8 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   const failures: ContrastFailure[] = [];
   for (const p of pairs.values()) {
     for (const mode of modes) {
-      const fg = resolve(p.fg, mode, 0);
-      const bg = resolve(p.bg, mode, 0);
+      const fg = resolve(p.fg, mode);
+      const bg = resolve(p.bg, mode);
       if (!fg || !bg) continue; // this pair is not defined in this mode — say nothing rather than guess
       // A translucent text colour (alpha < 1, e.g. a composed colour) renders as a MIX with its
       // background, and WCAG 2.2's contrast ratio is defined on what renders
@@ -1306,38 +1254,21 @@ function contrastRendered(screens: CrossCheckScreen[], variables: TokensDoc | nu
   const rows = new Map<string, TokenPairRow>();
   for (const s of screens) {
     const label = s.label || screenExportOf(s.doc)?.screen || "screen";
-    const defs = new Map<string, Variable>(); // the screen's own variables win: they are what it binds
-    for (const doc of [tokens, variables, s.vars || null]) for (const v of (doc && doc.variables) || []) if (v.name) defs.set(v.name, v);
-    if (!defs.size) continue;
-    const colls: VariableCollection[] = [...((s.vars && s.vars.collections) || []), ...((variables && variables.collections) || []), ...((tokens && tokens.collections) || [])];
+    const docs = [s.vars || null, variables, tokens]; // the screen's own variables first: they are what it binds
+    if (!docs.some((d) => (d && d.variables || []).length)) continue;
+    const vars = variableResolver(docs);
     for (const root of screenRoots(s.doc)) {
-      const rm = root.resolvedModes || {};
-      // The mode a variable renders in on this root; undefined = several modes and no way to pick one.
-      const modeOf = (v: Variable): string | undefined => {
-        const keys = Object.keys(v.values || {});
-        const coll = v.collection;
-        const r = coll !== undefined ? rm[coll] : undefined;
-        if (r !== undefined && keys.includes(r)) return r;
-        // The collection's default: by `collectionKey` when both sides carry one (same-named collections),
-        // else by name. resolvedModes above is keyed by name only, so that half cannot tell them apart.
-        const hasDefault = (c: VariableCollection): boolean => c.default !== undefined && keys.includes(c.default);
-        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : undefined;
-        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
-        if (def !== undefined) return def;
-        return keys.length === 1 ? keys[0] : undefined;
-      };
-      const valueOf = (name: string): VariableValue | undefined => {
-        const v = defs.get(name);
-        const m = v ? modeOf(v) : undefined;
-        return v && m !== undefined ? v.values[m] : undefined;
-      };
-      const resolve = (name: string): Rgba | null => resolveColourWith(valueOf, name, 0);
+      // The mode a variable renders in on this root (variable-resolve.ts): the root's resolvedModes, else its
+      // collection's default (by collectionKey when it carries one — resolvedModes is keyed by name only, so it
+      // cannot tell same-named collections apart); fallback "default": never an arbitrary first mode.
+      const req = { byCollection: root.resolvedModes || {}, fallback: "default" as const };
+      const resolve = (name: string): Rgba | null => vars.colour(vars.target(name), req);
       // the mode label a row is keyed by: the modes of the pair's multi-mode variables
       const modeLabel = (...names: string[]): string => {
         const ms: string[] = [];
         for (const nm of names) {
-          const v = defs.get(nm);
-          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : undefined;
+          const v = vars.target(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? vars.modeOf(v, req) : undefined;
           if (m !== undefined && !ms.includes(m)) ms.push(m);
         }
         return ms.join("/") || "single mode";
@@ -1478,7 +1409,7 @@ function toMarkdown(res: CrossCheckReport): string {
   return L.join("\n") + "\n";
 }
 
-export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT };
+export { crossCheck, toMarkdown, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: bun design-to-code/cross-check.ts <screen.json>... [--design-system design/export/design-system]
 //        [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]

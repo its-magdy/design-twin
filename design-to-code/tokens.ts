@@ -48,7 +48,8 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
-import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+import { segs, isSentinel, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+import { variableResolver, defaultModeName, baseValue, type VariableResolver } from "./variable-resolve.ts";
 import { toNative, platformOf } from "./tokens-native.ts";
 import { cssVarName, disambiguated, keyTag, tailwindVarName, type TwKind } from "./token-naming.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
@@ -171,7 +172,8 @@ export interface IdPlan {
   /** the ONE record emitted per identifier, mapped to that identifier (= its `id(v)`) */
   canonical: Map<Variable, string>;
   notes: CollisionNote[];
-  byName: Map<string, Variable[]>;
+  /** the same variables, for alias targets (variable-resolve.ts: the duplicate-name and cycle rules) */
+  vars: VariableResolver;
 }
 
 // idOf(v) -> the identifier an emitter would give v on its own (null = the emitter skips v).
@@ -180,7 +182,7 @@ export interface IdPlan {
 //   When two DIFFERENT names collide (`Space 3` vs `(Space 3)`), exactly one of them usually spells
 //   the identifier as written; that one keeps it and only the folded one is suffixed — order-free,
 //   so re-ordering the input cannot move the plain name. Same-name pairs are always all suffixed.
-// Returns { id(v), canonical: Set(v) — the ONE record emitted per identifier, notes[], byName }.
+// Returns { id(v), canonical: Set(v) — the ONE record emitted per identifier, notes[], vars }.
 function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null, suffix: (id: string, s: string) => string, collections: VariableCollection[] | undefined, output: string, exact?: (v: Variable) => boolean): IdPlan {
   const groups = new Map<string, Variable[]>();
   for (const v of vars) {
@@ -226,36 +228,27 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
     for (const v of list) { const got = assigned.get(identityOf(v)); if (got !== undefined) ids.set(v, got); }
     notes.push({ output, id, differ: true, members: memberIds });
   }
-  const byName = new Map<string, Variable[]>();
-  for (const v of vars) {
-    getOrInit(byName, v.name, () => []).push(v);
-  }
-  return { id: (v) => ids.get(v), canonical, notes, byName };
+  return { id: (v) => ids.get(v), canonical, notes, vars: variableResolver({ variables: vars, collections }) };
 }
 
 // An alias carries its target's NAME only (that is all the export writes), so a name shared by two
-// variables makes the target ambiguous. Equivalent candidates share one identifier and it does not
-// matter; otherwise prefer the referrer's own collection, then the lowest key — deterministic, so a
-// re-ordered input cannot change the output — and SAY so.
-// Returns the target together with its planned identifier (candidates without one are never picked).
+// variables makes the target ambiguous. variable-resolve.ts picks it (the referrer's own collection, then the
+// lowest key — deterministic, so a re-ordered input cannot change the output; never the referrer itself), the
+// same variable --native resolves to. Equivalent candidates share one identifier and it does not matter;
+// otherwise SAY so. Returns the target together with its planned identifier (null when it has none).
 function aliasTargetId(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): { v: Variable; id: string } | null {
-  const cands: Array<{ v: Variable; id: string }> = [];
-  for (const c of plan.byName.get(name) || []) { const id = plan.id(c); if (id != null) cands.push({ v: c, id }); }
-  const firstCand = cands[0];
-  if (firstCand === undefined) return null;
-  if (new Set(cands.map((c) => c.id)).size === 1) return firstCand;
-  const sameColl = cands.filter((c) => referrer && c.v.collection === referrer.collection);
-  const pool = (sameColl.length && new Set(sameColl.map((c) => c.id)).size === 1 ? sameColl : cands)
-    .slice().sort((a, b) => String(a.v.key || "").localeCompare(String(b.v.key || "")));
-  const pick = pool[0] ?? firstCand; // ?? firstCand: pool is sameColl (non-empty) or cands (non-empty), so it never applies
-  if (warn) {
+  const v = plan.vars.target(name, referrer);
+  const id = v ? plan.id(v) : undefined;
+  if (!v || id === undefined) return null;
+  const cands = plan.vars.candidates(name, referrer).filter((c) => plan.id(c) !== undefined);
+  if (warn && new Set(cands.map((c) => plan.id(c))).size > 1) {
     warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' ` +
-      `(${cands.map(({ v: c }) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${pick.id}; confirm in Figma which one it really aliases`);
+      `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${id}; confirm in Figma which one it really aliases`);
   }
-  return pick;
+  return { v, id };
 }
-function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): Variable | null {
-  const t = aliasTargetId(plan, name, referrer, warn);
+function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | undefined): Variable | null {
+  const t = aliasTargetId(plan, name, referrer);
   return t ? t.v : null;
 }
 
@@ -596,15 +589,17 @@ const pctOutOfRange = (n: number): boolean => n < 0 || n > 100;
 // `s` is a number's CSS text ("40", "-5", "12.5"); in range it is kept verbatim.
 const cssPercent = (s: string): string => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
 // Does v's custom property hold a percentage in EVERY mode? An opacity-scoped FLOAT whose values are
-// numbers, or aliases to such a FLOAT (followed through the SAME plan the emitter named them with).
-// A composed colour may only put `var(--x)` in color-mix()'s <percentage> slot when this holds —
-// a `40px` or a bare `0.4` there makes the whole declaration invalid at computed-value time.
-function cssPercentVar(plan: IdPlan, v: Variable | null, opts: UnitOpts | undefined, depth = 0): boolean {
-  if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
-  const vals = Object.values(v.values || {}).filter((x) => x !== undefined);
-  return vals.length > 0 && vals.every((x) => (isAlias(x)
-    ? cssPercentVar(plan, aliasTarget(plan, x.aliasOf, v), opts, depth + 1)
-    : typeof x === "number" || (typeof x === "string" && NUMERIC_TEXT.test(x))));
+// numbers, or aliases to such a FLOAT — every variable its aliases reach, in any mode (a custom property
+// chains in every mode at once), through the SAME targets the emitter named them with; a dangling alias or a
+// cycle is no percentage. A composed colour may only put `var(--x)` in color-mix()'s <percentage> slot when
+// this holds — a `40px` or a bare `0.4` there makes the whole declaration invalid at computed-value time.
+function cssPercentVar(plan: IdPlan, v: Variable | null, opts: UnitOpts | undefined): boolean {
+  if (!v) return false;
+  const { vars, complete } = plan.vars.closure(v);
+  return complete && vars.every((x) => {
+    const vals = Object.values(x.values || {}).filter((val) => val !== undefined);
+    return percentOpacity(x, opts) && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || (typeof val === "string" && NUMERIC_TEXT.test(val)));
+  });
 }
 
 // A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (a 0 length stays
@@ -880,13 +875,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
   const aliasedByFont = new Set<Variable>();
   // The whole alias chain: a kept STRING that itself aliases another STRING keeps that one too.
-  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
-  for (let v = queue.pop(); v !== undefined; v = queue.pop()) {
-    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
-      const t = aliasTarget(plan, n, v);
-      if (t && !aliasedByFont.has(t)) { aliasedByFont.add(t); queue.push(t); }
-    }
-  }
+  for (const v of vars) if (v.type === "STRING" && twKind(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
   const leftOut: string[] = [];
   let utilities = 0;
   for (const v of vars) {
@@ -1284,28 +1273,15 @@ function lookupColor(ds: TokensDoc, query: string): ColorHit[] | null {
   if (q === null) return null;
   const withAlpha = q.length === 9; // alpha is part of the query only when it was typed
   const same = (hex: string): boolean => (withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7));
-  const collections = ds.collections;
-  const byName = new Map<string, Variable[]>();
-  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
-  // Same preference as aliasTargetId: the referrer's own collection, then the lowest key.
-  const target = (name: string, referrer: Variable): Variable | undefined =>
-    (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
-  const resolve = (v: Variable, mode: string, via: string[]): { hex: string; via: string[] } | null => {
-    if (via.length > 20) return null; // alias cycle
-    const raw = v.values[mode] !== undefined ? v.values[mode] : baseValue(v, collections);
-    if (isAlias(raw)) {
-      const t = target(raw.aliasOf, v);
-      return t && t.type === "COLOR" ? resolve(t, mode, [...via, raw.aliasOf]) : null;
-    }
-    const hex = isHexish(raw) ? normHex(raw) : null;
-    return hex === null ? null : { hex, via };
-  };
+  // variable-resolve.ts: the same alias targets, modes and cycle rule as every emitter; a composed colour is its fold.
+  const resolver = variableResolver(ds);
   const hits: ColorHit[] = [];
   for (const v of ds.variables || []) {
     if (v.type !== "COLOR") continue;
     for (const mode of Object.keys(v.values || {})) {
-      const r = resolve(v, mode, []);
-      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+      const r = resolver.resolve(v, { mode });
+      const hex = r.variable && r.variable.type === "COLOR" && isHexish(r.value) ? normHex(r.value) : null;
+      if (hex !== null && same(hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex, via: r.via });
     }
   }
   return hits;

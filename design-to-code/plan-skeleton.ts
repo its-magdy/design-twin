@@ -44,7 +44,7 @@ import { walkWithHidden } from "./visible-tree.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { isAlias, isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import { isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
 import { pagesRootOfScreen, readExportIndex } from "./export-index.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson } from "./read-json.ts";
@@ -52,11 +52,12 @@ import { isCodeConnectMap } from "./map-validate.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
-  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, Plan,
+  AnchorSuggestion, CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonValue, MapStatus, MatchRow, ModeMap, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable,
   MatchInstance, VariableType,
 } from "./types.ts";
-import { parseHex, formatHex, composeAlpha } from "./color.ts";
+import { formatHex } from "./color.ts";
+import { variableResolver, readColour, type ConcreteValue } from "./variable-resolve.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { getOrInit } from "./map-util.ts";
@@ -182,77 +183,30 @@ function kindOf(variable: Variable | null | undefined, fields: string[]): TokenK
 interface Resolved { value: JsonValue | null; mode: string | null | undefined; via?: string }
 
 // A variable's value in the mode this frame renders. The frame's `resolvedModes` names a mode per
-// COLLECTION; an alias hops to another collection, whose own mode is looked up the same way.
+// COLLECTION; an alias hops to another collection, whose own mode is looked up the same way — variable-resolve.ts
+// (sources in precedence order: the screen's own slice before the design system), which also folds a composed
+// colour into ONE hex. The value is written the way normValue spells it; `via` is the first alias followed.
 function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolvedModes: ModeMap): (v: Variable | null | undefined) => Resolved {
-  const byName = new Map<string, Variable>();
-  const collections = new Map<string, NonNullable<TokensDoc["collections"]>[number]>();
-  for (const src of sources) {
-    for (const v of (src && src.variables) || []) if (v && v.name && !byName.has(v.name)) byName.set(v.name, v);
-    for (const c of (src && src.collections) || []) if (c && c.name && !collections.has(c.name)) collections.set(c.name, c);
-  }
-  const modeFor = (v: Variable): string | undefined => {
-    const vals = v.values || {};
-    const keys = Object.keys(vals);
-    // A variable whose collection the export could not name has no frame mode and no collection default.
-    const want: string | undefined = v.collection === undefined ? undefined : resolvedModes[v.collection];
-    if (want !== undefined && want in vals) return want;
-    // case-only differences ("desktop" vs "Desktop") are the same mode
-    if (want !== undefined) { const k = keys.find((x) => x.toLowerCase() === String(want).toLowerCase()); if (k) return k; }
-    const c = v.collection === undefined ? undefined : collections.get(v.collection);
-    if (c && c.default && c.default in vals) return c.default;
-    return keys[0];
+  const vars = variableResolver(sources);
+  return (v) => {
+    if (!v) return { value: null, mode: null };
+    const r = vars.resolve(v, { byCollection: resolvedModes });
+    const out: Resolved = { value: normValue(r.variable ? r.variable.type : undefined, r.value), mode: r.mode };
+    if (r.via[0] !== undefined) out.via = r.via[0];
+    return out;
   };
-  function resolve(v: Variable | null | undefined, depth: number): Resolved {
-    if (!v || depth > 10) return { value: null, mode: null };
-    const mode = modeFor(v);
-    const raw = mode === undefined ? undefined : (v.values || {})[mode]; // no mode: no values to read
-    if (isAlias(raw)) {
-      const target = byName.get(raw.aliasOf);
-      const r = resolve(target, depth + 1);
-      return { value: r.value, mode, via: raw.aliasOf };
-    }
-    // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex as is) and
-    // the opacity half (a number, or an alias -> that FLOAT's resolved number) folded into ONE hex.
-    // Either half unresolvable -> null.
-    if (raw && typeof raw === "object" && "composed" in raw) {
-      const { color, opacity } = raw.composed;
-      const c = typeof color === "string" ? color : resolve(byName.get(color.aliasOf), depth + 1).value;
-      const o = typeof opacity === "number" ? opacity : resolve(byName.get(opacity.aliasOf), depth + 1).value;
-      return { value: composedHex(c, o), mode };
-    }
-    return { value: normValue(v.type, raw), mode };
-  }
-  return (v) => resolve(v, 0);
 }
 
-// A composed colour's one colour, as the "#rrggbb[aa]" normValue writes (opaque -> 6 digits); null when
-// either half did not resolve to a colour / a finite number. The opacity is a 0–100 percentage (REST API
-// variables types, VariableComposedColor.opacity: https://developers.figma.com/docs/rest-api/variables-types/),
-// clamped and multiplied into the colour's alpha by color.ts composeAlpha (Help Center 14506821864087 for
-// the clamp; the multiply is an inference — see composeAlpha).
-function composedHex(color: JsonValue | null, opacity: JsonValue | null): string | null {
-  const c = parseHex(color);
-  if (!c || typeof opacity !== "number" || !Number.isFinite(opacity)) return null;
-  return formatHex({ ...c, a: composeAlpha(c.a, opacity) });
-}
-
-// A producer-mismatch read, kept as-is — a COLOR value spelled as {r,g,b,a} (the producer
-// writes a hex string; variables.ts). Declared as a JSON object so it stays a JsonValue on the way out.
-type LegacyRgba = JsonObject & { r: number; g: number; b: number };
-const isLegacyRgba = (v: object): v is LegacyRgba => "r" in v;
-
-function normValue(type: VariableType | undefined, raw: string | number | boolean | LegacyRgba | null | undefined): JsonValue | null {
+// One spelling per colour (color.ts: "#rrggbb", or "#rrggbbaa" below opaque), so the JSON compare of a
+// screen's value with the design system's says "agrees" for #abc and #AABBCCFF alike — including the
+// producer-mismatch {r,g,b,a} spelling variable-resolve.ts readColour reads; a string that is not a hex colour
+// is kept, trimmed and lowercased.
+function normValue(type: VariableType | undefined, raw: ConcreteValue | undefined): JsonValue | null {
   if (raw === undefined || raw === null) return null;
-  // One spelling per colour (color.ts: "#rrggbb", or "#rrggbbaa" below opaque), so the JSON compare of a
-  // screen's value with the design system's says "agrees" for #abc and #AABBCCFF alike; a string that is
-  // not a hex colour is kept, trimmed and lowercased.
-  if (type === "COLOR" && typeof raw === "string") {
-    const c = parseHex(raw);
-    return c ? formatHex(c) : raw.trim().toLowerCase();
-  }
-  if (type === "COLOR" && typeof raw === "object" && isLegacyRgba(raw)) {
-    const a = raw.a === undefined ? 1 : Number(raw.a);
-    return formatHex({ r: raw.r * 255, g: raw.g * 255, b: raw.b * 255, a: Number.isNaN(a) ? 1 : a });
+  if (type === "COLOR") {
+    const c = readColour(raw);
+    if (c) return formatHex(c);
+    if (typeof raw === "string") return raw.trim().toLowerCase();
   }
   return raw;
 }

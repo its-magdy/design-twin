@@ -854,19 +854,6 @@ function isSentinel(v, raw) {
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
 }
-function defaultModeName(variable, collections) {
-  const c = (collections || []).find((x) => x.name === variable.collection);
-  const modes = variable.values ? Object.keys(variable.values) : [];
-  if (c && c.default && modes.includes(c.default)) return c.default;
-  return modes[0];
-}
-function baseValue(variable, collections, def) {
-  const values = variable.values || {};
-  if (def === void 0) def = defaultModeName(variable, collections);
-  if (def !== void 0 && values[def] !== void 0) return values[def];
-  const firstDefined = Object.keys(values).find((m) => values[m] !== void 0);
-  return firstDefined !== void 0 ? values[firstDefined] : void 0;
-}
 var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
 var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
 function unitlessName(name) {
@@ -889,6 +876,138 @@ function percentOpacity(variable, opts) {
 }
 var COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 var commentText = (s) => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
+
+// design-to-code/variable-resolve.ts
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+var definedModes = (v) => {
+  const vals = v.values || {};
+  return Object.keys(vals).filter((m) => vals[m] !== void 0);
+};
+var sameVariable = (a, b) => a === b || !!a.key && a.key === b.key;
+var sameCollection = (a, b) => a.collectionKey && b.collectionKey ? a.collectionKey === b.collectionKey : a.collection !== void 0 && a.collection === b.collection;
+function defaultAmong(v, modes, collections) {
+  const hasDefault = (c) => c.default !== void 0 && modes.includes(c.default);
+  const byKey = v.collectionKey ? collections.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
+  return (byKey ?? (v.collection === void 0 ? void 0 : collections.find((c) => c.name === v.collection && hasDefault(c))))?.default;
+}
+function defaultModeName(v, collections) {
+  const modes = definedModes(v);
+  return defaultAmong(v, modes, collections || []) ?? modes[0];
+}
+function baseValue(v, collections, def) {
+  const m = def !== void 0 && (v.values || {})[def] !== void 0 ? def : defaultModeName(v, collections);
+  return m === void 0 ? void 0 : (v.values || {})[m];
+}
+var isLegacyRgba = (x) => !!x && typeof x === "object" && "r" in x && "g" in x && "b" in x && typeof x.r === "number" && typeof x.g === "number" && typeof x.b === "number";
+function readColour(raw) {
+  if (typeof raw === "string") return parseHex(raw);
+  if (!isLegacyRgba(raw)) return null;
+  const a = raw.a === void 0 ? 1 : Number(raw.a);
+  return { r: raw.r * 255, g: raw.g * 255, b: raw.b * 255, a: Number.isNaN(a) ? 1 : a };
+}
+var readNumber = (raw) => {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+};
+var isSourceList = (x) => Array.isArray(x);
+var colourOf = (r) => r.fold ?? readColour(r.value);
+function variableResolver(input) {
+  const sources = isSourceList(input) ? input : [input];
+  const byName = /* @__PURE__ */ new Map();
+  const collections = [];
+  let order = 0;
+  for (const [source, src] of sources.entries()) {
+    for (const v of src && src.variables || []) {
+      if (!v || typeof v.name !== "string") continue;
+      const list = byName.get(v.name);
+      const entry = { v, source, order: order++ };
+      if (list) list.push(entry);
+      else byName.set(v.name, [entry]);
+    }
+    for (const c of src && src.collections || []) if (c) collections.push(c);
+  }
+  const entries = (name, referrer) => (byName.get(name) || []).filter((e) => !referrer || !sameVariable(e.v, referrer));
+  function target(name, referrer) {
+    const cands = entries(name, referrer);
+    if (cands.length <= 1) return cands[0]?.v ?? null;
+    const own = (e) => referrer && sameCollection(e.v, referrer) ? 0 : 1;
+    return cands.slice().sort((a, b) => own(a) - own(b) || a.source - b.source || cmpStr(a.v.key || "", b.v.key || "") || a.order - b.order)[0]?.v ?? null;
+  }
+  function modeOf(v, req = {}) {
+    const modes = definedModes(v);
+    const fromFrame = v.collection === void 0 ? void 0 : req.byCollection?.[v.collection];
+    for (const want of [fromFrame, req.mode]) {
+      if (want === void 0) continue;
+      if (modes.includes(want)) return want;
+      const lower = want.toLowerCase();
+      const ci = modes.find((m) => m.toLowerCase() === lower);
+      if (ci !== void 0) return ci;
+    }
+    if (modes.length === 1) return modes[0];
+    const fallback = req.fallback ?? "first";
+    if (fallback === "none") return void 0;
+    const def = defaultAmong(v, modes, collections);
+    if (def !== void 0 || fallback === "default") return def;
+    return modes[0];
+  }
+  function walk(v, req, seen) {
+    const none = (mode2) => ({ value: void 0, variable: null, mode: mode2, via: [] });
+    if (!v || seen.has(v)) return none();
+    const mode = modeOf(v, req);
+    if (mode === void 0) return none();
+    const raw = (v.values || {})[mode];
+    const next = new Set(seen).add(v);
+    if (isAlias(raw)) {
+      const r = walk(target(raw.aliasOf, v), req, next);
+      return { ...r, mode, via: [raw.aliasOf, ...r.via] };
+    }
+    if (isComposed(raw)) {
+      const c = composed(v, raw.composed, req, next);
+      return c ? { value: formatHex(c), variable: v, mode, via: [], fold: c } : none(mode);
+    }
+    if (raw === void 0 || !!raw && typeof raw === "object" && "composed" in raw) return none(mode);
+    return { value: raw, variable: v, mode, via: [] };
+  }
+  function composed(owner, half, req, seen) {
+    const c = isAlias(half.color) ? colourOf(walk(target(half.color.aliasOf, owner), req, seen)) : readColour(half.color);
+    const o = isAlias(half.opacity) ? readNumber(walk(target(half.opacity.aliasOf, owner), req, seen).value) : readNumber(half.opacity);
+    return c && o !== null ? { ...c, a: composeAlpha(c.a, o) } : null;
+  }
+  function closure(v) {
+    const vars = [];
+    let complete = true;
+    const visit = (x, path5) => {
+      if (path5.has(x)) {
+        complete = false;
+        return;
+      }
+      if (!vars.includes(x)) vars.push(x);
+      const next = new Set(path5).add(x);
+      for (const val of Object.values(x.values || {})) {
+        const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
+        for (const n of names) {
+          const t = target(n, x);
+          if (t) visit(t, next);
+          else complete = false;
+        }
+      }
+    };
+    visit(v, /* @__PURE__ */ new Set());
+    return { vars, complete };
+  }
+  return {
+    candidates: (name, referrer) => entries(name, referrer).map((e) => e.v),
+    target,
+    modeOf,
+    resolve: (v, req = {}) => {
+      const { value, variable, mode, via } = walk(v, req, /* @__PURE__ */ new Set());
+      return { value, variable, mode, via };
+    },
+    colour: (v, req = {}) => colourOf(walk(v, req, /* @__PURE__ */ new Set())),
+    number: (v, req = {}) => readNumber(walk(v, req, /* @__PURE__ */ new Set()).value),
+    closure
+  };
+}
 
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
@@ -1001,37 +1120,14 @@ function kindOf(v, opts) {
 }
 var hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
 var isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
-function resolve(byName, collections, v, mode, seen) {
-  const values = v.values || {};
-  let raw = values[mode];
-  if (raw === void 0) raw = baseValue(v, collections, defaultModeName(v, collections));
-  const next = new Set(seen || []).add(v.name);
-  const follow = (a) => {
-    const target = byName.get(a.aliasOf);
-    if (!target || seen && seen.has(target.name)) return void 0;
-    const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName(target, collections);
-    if (tMode === void 0) return void 0;
-    return resolve(byName, collections, target, tMode, next);
-  };
-  if (raw && typeof raw === "object" && "composed" in raw) {
-    const { color, opacity } = raw.composed;
-    const c = typeof color === "string" ? color : isAlias(color) ? follow(color) : void 0;
-    const o = typeof opacity === "number" ? opacity : isAlias(opacity) ? follow(opacity) : void 0;
-    const rgba = parseHex(c);
-    if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return void 0;
-    return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
-  }
-  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : void 0;
-  return follow(raw);
-}
-function opacityNumber(r) {
-  const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
-  return Number.isFinite(n) ? n : null;
+function literal(vars, v, mode) {
+  const r = vars.resolve(v, { mode }).value;
+  return isNativeScalar(r) ? r : void 0;
 }
 function model(designSystem, warnings, opts) {
   const collections = designSystem && designSystem.collections || [];
   const vars = designSystem && designSystem.variables || [];
-  const byName = new Map(vars.map((v) => [v.name, v]));
+  const resolver = variableResolver(designSystem);
   const typeNames = /* @__PURE__ */ new Set();
   const out = [];
   for (const c of collections) {
@@ -1053,16 +1149,16 @@ function model(designSystem, warnings, opts) {
         continue;
       }
       const pct = kind === "number" && percentOpacity(v, opts);
-      const values = {};
+      const values = nullProto();
       let ok = true;
       for (const m of modeNames) {
-        const r = resolve(byName, collections, v, m);
+        const r = literal(resolver, v, m);
         if (r === void 0 || kind === "color" && !normHex(r)) {
           ok = false;
           break;
         }
         if (pct) {
-          const n = opacityNumber(r);
+          const n = resolver.number(v, { mode: m });
           if (n === null) {
             ok = false;
             break;
@@ -1437,31 +1533,20 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     }
     notes.push({ output, id, differ: true, members: memberIds });
   }
-  const byName = /* @__PURE__ */ new Map();
-  for (const v of vars) {
-    getOrInit(byName, v.name, () => []).push(v);
-  }
-  return { id: (v) => ids.get(v), canonical, notes, byName };
+  return { id: (v) => ids.get(v), canonical, notes, vars: variableResolver({ variables: vars, collections }) };
 }
 function aliasTargetId(plan, name, referrer, warn) {
-  const cands = [];
-  for (const c of plan.byName.get(name) || []) {
-    const id = plan.id(c);
-    if (id != null) cands.push({ v: c, id });
+  const v = plan.vars.target(name, referrer);
+  const id = v ? plan.id(v) : void 0;
+  if (!v || id === void 0) return null;
+  const cands = plan.vars.candidates(name, referrer).filter((c) => plan.id(c) !== void 0);
+  if (warn && new Set(cands.map((c) => plan.id(c))).size > 1) {
+    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${id}; confirm in Figma which one it really aliases`);
   }
-  const firstCand = cands[0];
-  if (firstCand === void 0) return null;
-  if (new Set(cands.map((c) => c.id)).size === 1) return firstCand;
-  const sameColl = cands.filter((c) => referrer && c.v.collection === referrer.collection);
-  const pool = (sameColl.length && new Set(sameColl.map((c) => c.id)).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.v.key || "").localeCompare(String(b.v.key || "")));
-  const pick = pool[0] ?? firstCand;
-  if (warn) {
-    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map(({ v: c }) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${pick.id}; confirm in Figma which one it really aliases`);
-  }
-  return pick;
+  return { v, id };
 }
-function aliasTarget(plan, name, referrer, warn) {
-  const t = aliasTargetId(plan, name, referrer, warn);
+function aliasTarget(plan, name, referrer) {
+  const t = aliasTargetId(plan, name, referrer);
   return t ? t.v : null;
 }
 function collisionMessages(notes, opts) {
@@ -1716,10 +1801,13 @@ function numberUnit(variable, opts) {
 }
 var pctOutOfRange = (n) => n < 0 || n > 100;
 var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
-function cssPercentVar(plan, v, opts, depth = 0) {
-  if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
-  const vals = Object.values(v.values || {}).filter((x) => x !== void 0);
-  return vals.length > 0 && vals.every((x) => isAlias(x) ? cssPercentVar(plan, aliasTarget(plan, x.aliasOf, v), opts, depth + 1) : typeof x === "number" || typeof x === "string" && NUMERIC_TEXT.test(x));
+function cssPercentVar(plan, v, opts) {
+  if (!v) return false;
+  const { vars, complete } = plan.vars.closure(v);
+  return complete && vars.every((x) => {
+    const vals = Object.values(x.values || {}).filter((val) => val !== void 0);
+    return percentOpacity(x, opts) && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || typeof val === "string" && NUMERIC_TEXT.test(val));
+  });
 }
 function cssValue(raw, unit, ref, pctRef) {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
@@ -1910,16 +1998,7 @@ function toTailwind(designSystem, opts, notes) {
   const perMode = modeBlocks(scopes);
   warnings.push(...scopes.warnings);
   const aliasedByFont = /* @__PURE__ */ new Set();
-  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
-  for (let v = queue.pop(); v !== void 0; v = queue.pop()) {
-    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
-      const t = aliasTarget(plan, n, v);
-      if (t && !aliasedByFont.has(t)) {
-        aliasedByFont.add(t);
-        queue.push(t);
-      }
-    }
-  }
+  for (const v of vars) if (v.type === "STRING" && twKind(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
   const leftOut = [];
   let utilities = 0;
   for (const v of vars) {
@@ -2169,10 +2248,10 @@ var canonJson = (x) => {
   }
   return JSON.stringify(x) ?? "null";
 };
-var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+var cmpStr2 = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function catalogProvenance(ds) {
-  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr);
-  const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr(a.sort, b.sort) || cmpStr(a.json, b.json)).map((v) => v.json);
+  const collections = (ds.collections || []).map((c) => canonJson(c)).sort(cmpStr2);
+  const variables = (ds.variables || []).map((v) => ({ sort: [v.collection ?? "", v.name, v.key ?? ""].join("\0"), json: canonJson(v) })).sort((a, b) => cmpStr2(a.sort, b.sort) || cmpStr2(a.json, b.json)).map((v) => v.json);
   const sha = sha256Hex(`{"collections":[${collections.join(",")}],"variables":[${variables.join(",")}]}`).slice(0, 12);
   return { count: (ds.variables || []).length, sha };
 }
@@ -2194,26 +2273,14 @@ function lookupColor(ds, query) {
   if (q === null) return null;
   const withAlpha = q.length === 9;
   const same = (hex) => withAlpha ? (hex.length === 7 ? hex + "ff" : hex) === q : hex.slice(0, 7) === q.slice(0, 7);
-  const collections = ds.collections;
-  const byName = /* @__PURE__ */ new Map();
-  for (const v of ds.variables || []) getOrInit(byName, v.name, () => []).push(v);
-  const target = (name, referrer) => (byName.get(name) || []).slice().sort((a, b) => Number(b.collection === referrer.collection) - Number(a.collection === referrer.collection) || cmpStr(a.key ?? "", b.key ?? ""))[0];
-  const resolve2 = (v, mode, via) => {
-    if (via.length > 20) return null;
-    const raw = v.values[mode] !== void 0 ? v.values[mode] : baseValue(v, collections);
-    if (isAlias(raw)) {
-      const t = target(raw.aliasOf, v);
-      return t && t.type === "COLOR" ? resolve2(t, mode, [...via, raw.aliasOf]) : null;
-    }
-    const hex = isHexish(raw) ? normHex(raw) : null;
-    return hex === null ? null : { hex, via };
-  };
+  const resolver = variableResolver(ds);
   const hits = [];
   for (const v of ds.variables || []) {
     if (v.type !== "COLOR") continue;
     for (const mode of Object.keys(v.values || {})) {
-      const r = resolve2(v, mode, []);
-      if (r && same(r.hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex: r.hex, via: r.via });
+      const r = resolver.resolve(v, { mode });
+      const hex = r.variable && r.variable.type === "COLOR" && isHexish(r.value) ? normHex(r.value) : null;
+      if (hex !== null && same(hex)) hits.push({ name: v.name, collection: v.collection ?? "(no collection)", mode, hex, via: r.via });
     }
   }
   return hits;
@@ -2241,7 +2308,7 @@ function mixedRootModes(ds) {
   if (!mixed.size) return null;
   const byDefault = /* @__PURE__ */ new Map();
   for (const c of list) if (mixed.has(c)) getOrInit(byDefault, defOf(c), () => []).push(c);
-  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]));
+  const groups = [...byDefault].sort((x, y) => y[1].length - x[1].length || cmpStr2(x[0], y[0]));
   const named = (cs) => cs.map((c) => `'${c.name}'${assumed(c) ? " (the export names no default mode \u2014 its first mode assumed)" : ""}`).join(", ");
   return `:root mixes modes: ` + groups.map(([mode, cs], i) => `${named(cs)} ${i ? "" : cs.length > 1 ? "default " : "defaults "}to '${mode}'`).join("; ") + ` \u2014 :root takes each collection's DEFAULT mode, so a screen drawn in one of these modes shows the other mode's values for the other collections' tokens. Set each collection's mode on the screen's root element (its export's resolvedModes says which), or have the designer give these collections one default`;
 }
