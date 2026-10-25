@@ -1106,6 +1106,29 @@ function installPageRuntime() {
   Object.defineProperty(window, "__dt", { value: dt, configurable: true });
 }
 var PAGE_RUNTIME = `(${installPageRuntime.toString()})();`;
+var PATH_ENGINE = "dtpath";
+var PATH_ENGINE_SCRIPT = `(() => {
+  const query = (root, path) => {
+    const dt = window.__dt;
+    let el = null;
+    if (dt) el = dt.find(path);
+    else { try { el = document.querySelector(path); } catch (e) { el = null; } }
+    if (!el || root === document || root === document.documentElement) return el;
+    for (let p = el; p; p = p.assignedSlot || p.parentElement || (p.getRootNode && p.getRootNode().host) || null) if (p === root) return el;
+    return null;
+  };
+  return { query, queryAll: (root, path) => { const el = query(root, path); return el ? [el] : []; } };
+})()`;
+var pathEngine = false;
+async function registerPathEngine(selectors) {
+  try {
+    await selectors.register(PATH_ENGINE, { content: PATH_ENGINE_SCRIPT });
+    pathEngine = true;
+  } catch (e) {
+    if (e instanceof Error && /already registered/.test(e.message)) pathEngine = true;
+  }
+}
+var byPath = (page, path13) => page.locator(pathEngine ? `${PATH_ENGINE}=${path13}` : path13);
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -1355,13 +1378,13 @@ function chooseMatch(spec, pool, opts) {
   return { nodeId: id, why: textWhy ?? `no data-dt-node and no text; tag it with data-dt-node="${id}"` };
 }
 function claimOnce(results) {
-  const byPath = /* @__PURE__ */ new Map();
+  const byPath2 = /* @__PURE__ */ new Map();
   const sharers = /* @__PURE__ */ new Map();
   for (const r of results) if (isMatch(r) && r.sharesWith !== void 0) sharers.set(r.path, (sharers.get(r.path) || 0) + 1);
   const exempt = (m) => m.placeholder === true || m.sharesWith !== void 0 && sharers.get(m.path) === 1;
-  for (const r of results) if (isMatch(r) && !exempt(r)) byPath.set(r.path, [...byPath.get(r.path) || [], r]);
+  for (const r of results) if (isMatch(r) && !exempt(r)) byPath2.set(r.path, [...byPath2.get(r.path) || [], r]);
   const owner = /* @__PURE__ */ new Map();
-  for (const [p, ms] of byPath) {
+  for (const [p, ms] of byPath2) {
     if (ms.length < 2) continue;
     owner.set(p, ms.find((m) => m.matchedBy === "tag" && m.cand?.dt === m.nodeId || m.matchedBy === "frame") ?? null);
   }
@@ -1369,7 +1392,7 @@ function claimOnce(results) {
     if (!isMatch(r) || exempt(r) || !owner.has(r.path)) return r;
     const o = owner.get(r.path) ?? null;
     if (o === r) return r;
-    const others = (byPath.get(r.path) || []).filter((m) => m !== r).map((m) => m.nodeId);
+    const others = (byPath2.get(r.path) || []).filter((m) => m !== r).map((m) => m.nodeId);
     return { nodeId: r.nodeId, why: o ? `its element ${r.selector} is data-dt-node="${o.nodeId}"'s; tag this node's own element with data-dt-node="${r.nodeId}"` : `the same element (${r.selector}) was matched for ${others.length + 1} specs (also ${others.join(", ")}); tag it with data-dt-node="${r.nodeId}"` };
   });
 }
@@ -3109,8 +3132,8 @@ async function driveRow({ page, loads }, row, hooks) {
   const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
   if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog \u2014 not driven` };
   if (st.disabled) return { ...base, ok: null, detail: "opener is disabled \u2014 not driven" };
-  if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
-  const submits = await page.locator(st.path).first().evaluate(submitGuard);
+  if (st.visible) await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
+  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
   if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
   await page.evaluate(tipPreMark, null).catch(() => false);
   let revealedBy;
@@ -3118,16 +3141,16 @@ async function driveRow({ page, loads }, row, hooks) {
     if (st.hoverPath !== null) {
       revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
       await page.mouse.move(0, 0);
-      await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+      await byPath(page, st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
       await raf2(page);
       st = await page.evaluate(openerState, { id: row.nodeId });
     }
     if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
   }
   const openerPath = st.path;
-  await page.locator(openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
+  await byPath(page, openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
   await raf2(page);
-  const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
+  const submitsHovered = await byPath(page, openerPath).first().evaluate(submitGuard);
   if (submitsHovered !== null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener would submit a form (${submitsHovered}) \u2014 not driven` };
   const notOwn = (ctl, why) => ({
     ...base,
@@ -3135,7 +3158,7 @@ async function driveRow({ page, loads }, row, hooks) {
     ...revealedBy !== void 0 ? { revealedBy } : {},
     detail: `the opener's click point is another control inside it (${ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${why !== void 0 ? ` (${why})` : ""}`
   });
-  const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
+  const inner = await byPath(page, openerPath).first().evaluate(clickPointControl, { mark: true });
   if (inner !== null) return notOwn(inner, await page.evaluate(ownWhy, null).catch(() => null) ?? void 0);
   const px = await ownPixels(page, { park: revealedBy === void 0 });
   if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
@@ -3144,9 +3167,9 @@ async function driveRow({ page, loads }, row, hooks) {
   const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
   const loadsBefore = loads();
   let activation = "mouse", clickWhy = "";
-  await page.locator(openerPath).first().evaluate(saveScroll);
+  await byPath(page, openerPath).first().evaluate(saveScroll);
   try {
-    await page.locator(openerPath).first().click({ timeout: 2e3 });
+    await byPath(page, openerPath).first().click({ timeout: 2e3 });
   } catch (e) {
     const m = errMsg(e);
     const kind = pwErrorKind(e, page);
@@ -4356,7 +4379,7 @@ async function safeCloseOn(page, closedAfter, act) {
   const cands = await page.evaluate(closeCandidates, null);
   for (const c of cands) {
     if (!safeCloseName(c.name, c.ariaLabel)) continue;
-    const loc = page.locator(c.path).first();
+    const loc = byPath(page, c.path).first();
     if (await loc.evaluate(submitGuard) !== null) continue;
     const before = page.url();
     act();
@@ -4798,7 +4821,7 @@ function a11yUnit(ctx) {
           }
           let snap = "";
           try {
-            snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
+            snap = await byPath(page, s.path).first().ariaSnapshot({ timeout: 2e3 });
           } catch (e) {
             if (endsUnit(e, page)) throw e;
             nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
@@ -5006,12 +5029,12 @@ function keyUnit(ctx, b) {
         if (!st.visible && st.hoverPath !== null) {
           await page.mouse.move(0, 0);
           u.act();
-          await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+          await byPath(page, st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
           await raf2(page);
           st = await page.evaluate(openerState, { id: row.nodeId });
         }
         if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-        const loc = page.locator(st.path).first();
+        const loc = byPath(page, st.path).first();
         if (await loc.evaluate(submitGuard) !== null) return { opened: null, why: "the opener would submit a form" };
         await markOpenerSeen(page, row.nodeId, u.act);
         await page.evaluate(armDetector, { destId, contract });
@@ -5160,7 +5183,7 @@ function keyUnit(ctx, b) {
       if (x.path === null) {
         add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation \u2014 the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" } : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
       } else {
-        const loc = page.locator(x.path).first();
+        const loc = byPath(page, x.path).first();
         if (await loc.evaluate(submitGuard) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
         else {
           u.act();
@@ -6649,6 +6672,7 @@ function rendererUnavailable(reason, hint) {
 }
 var LAUNCH_ARGS = ["--disable-lcd-text"];
 async function launch(r, dir, executablePath) {
+  if (r.mod.selectors) await registerPathEngine(r.mod.selectors);
   try {
     return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...executablePath !== void 0 ? { executablePath } : {} }) };
   } catch (e) {
@@ -7220,13 +7244,13 @@ async function pass(page, log, o) {
             node.note = "focus state not measured: the element is not focusable (nor is any ancestor)";
             continue;
           }
-          await page.locator(focusPath).first().focus({ timeout: 2e3 });
+          await byPath(page, focusPath).first().focus({ timeout: 2e3 });
           await page.keyboard.press("Shift+Tab");
           await page.keyboard.press("Tab");
           let info = await page.evaluate(focusInfo, focusPath);
           node.focusVia = "keyboard";
           if (!info.focused) {
-            await page.locator(focusPath).first().focus({ timeout: 2e3 });
+            await byPath(page, focusPath).first().focus({ timeout: 2e3 });
             info = await page.evaluate(focusInfo, focusPath);
             node.focusVia = "programmatic";
             stateNotes.add("a focus state was measured after a programmatic focus(), which Chromium may not match to :focus-visible");
@@ -7248,7 +7272,7 @@ async function pass(page, log, o) {
         node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => void 0);
-        else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
+        else if (focusPath !== null) await byPath(page, focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
       }
     }
     if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
@@ -7291,7 +7315,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
     const tried = [];
     let covered = null;
     for (const c of [{ id: oh.id, path: oh.path }, ...oh.next]) {
-      const loc = page.locator(c.path).first();
+      const loc = byPath(page, c.path).first();
       await loc.scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
       const position = await page.evaluate(freeHoverPoint, { owner: c.path, avoid: m.path });
       tried.push(c.id);
@@ -7308,7 +7332,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
     const on = `its drawn-hovered container ${tried[0]}${tried.length > 1 ? ` (nor on ${tried.slice(1).join(", ")})` : ""}`;
     note = covered !== null ? `hovered the element itself: no usable free point on ${on} \u2014 ${covered}` : `hovered the element itself: no free point on ${on}`;
   }
-  await page.locator(own).first().hover({ timeout: 2e3 });
+  await byPath(page, own).first().hover({ timeout: 2e3 });
   return { hovered: own, note };
 }
 function hoverTarget(c, byTag) {
