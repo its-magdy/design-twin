@@ -25,6 +25,7 @@ import { startMcp } from "./children.ts";
 import { fakePlugin as dialPlugin, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { fakeClock } from "./fake-clock.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Cmd, Commands, FullExportReply, ScreenReply } from "../bridge/src/commands.ts";
 import type { Sent } from "../bridge/src/route.ts";
@@ -213,16 +214,14 @@ const prevsUnder = (d: string) => walk(d).filter((f) => f.endsWith(".prev")).sor
 const read = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
 
 // ---------------------------------------------------------------- in-process daemon fakes
-function fakeBridge(): { b: DaemonBridge; closes(): number; pending(): number; requests(): number; release(): void } {
+function fakeBridge(): { b: DaemonBridge; closes(): number } {
   let closes = 0;
-  let requests = 0;
-  const waiters: Array<() => void> = [];
   const b: DaemonBridge = {
     port: 0, isConnected: () => true,
-    request: <C extends Cmd>(cmd: C) => { requests++; const sent: Sent<C> = { reply: malformed<Commands[C]["reply"]>({}), client: null }; return cmd === "listPages" ? new Promise<Sent<C>>((r) => { waiters.push(() => r(sent)); }) : Promise.resolve(sent); },
+    request: <C extends Cmd>() => { const sent: Sent<C> = { reply: malformed<Commands[C]["reply"]>({}), client: null }; return Promise.resolve(sent); },
     close: () => { closes++; },
   };
-  return { b, closes: () => closes, pending: () => waiters.length, requests: () => requests, release: () => { for (const w of waiters.splice(0)) w(); } };
+  return { b, closes: () => closes };
 }
 
 /** One block of checks: a throw (an API missing at an older revision, say) fails that block, not the run. */
@@ -240,73 +239,28 @@ async function daemonSection(name: string, fn: () => Promise<void>): Promise<voi
 void (async () => {
   try {
     // ============================================================ in-process: the serve() handle
-    console.log("daemon.serve() handle — activity() and idleOut():");
+    // The idle decision, the in-flight hold, idleOut's check-at-once and a frame after shutdown are the served
+    // session's rules (test/served-session.test.ts, on a fake clock). What is left here is the socket's half: frames
+    // off the real socket are counted, idleOut reaches __status, and the session's idle shutdown releases the socket —
+    // stepped on the daemon's injected fake clock, so no wait depends on load.
+    console.log("daemon.serve() handle — activity() and idleOut() over the socket:");
     await daemonSection("idle shutdown on a quiet socket", async () => {
       const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19793, idleMs: 0, signals: false, crashHandlers: false });
+      const clock = fakeClock();
+      const h = await daemon.serve(f.b, { port: 19793, idleMs: 0, signals: false, crashHandlers: false, clock });
       const before = h.activity().frames;
       const alive = await daemon.probe(h.sock);
-      ok("activity().frames is 0 before anything used the socket, 1 after one probe", before === 0 && alive && h.activity().frames === 1);
-      ok("…inFlight 0 and a recent lastActivity", h.activity().inFlight === 0 && Date.now() - h.activity().lastActivity < 2000);
+      ok("activity().frames is 0 before anything used the socket, 1 after one probe, nothing in flight", before === 0 && alive && h.activity().frames === 1 && h.activity().inFlight === 0);
       const st = await sockReq(h.sock, { cmd: "__status" });
       ok("idleMs 0 → __status idleMs null (disabled)", rec(st?.result).idleMs === null);
       h.idleOut(300);
       const st2 = rec((await sockReq(h.sock, { cmd: "__status" }))?.result);
       ok("idleOut(300) → __status reports idleMs 300", st2.idleMs === 300);
-      const t0 = Date.now();
-      const shut = await until(() => f.closes() > 0, 2000);
-      ok(`idleOut(300) on a quiet socket → shut down, bridge closed, socket file gone (${Date.now() - t0} ms)`,
-        shut && !fs.existsSync(h.sock) && !(await daemon.probe(h.sock, 500)));
+      clock.advance(300);
+      ok("the window passing on a quiet socket → shut down: bridge closed, socket file gone, nothing answers",
+        f.closes() === 1 && !fs.existsSync(h.sock) && !(await daemon.probe(h.sock, 500)));
       h.shutdown();
       ok("shutdown() is idempotent (bridge closed once)", f.closes() === 1);
-    });
-    await daemonSection("idle shutdown held off by an in-flight request", async () => {
-      const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19794, idleMs: 0, signals: false, crashHandlers: false });
-      const c = await openRaw(h.sock, { cmd: "listPages", args: {}, timeoutMs: 20000 });
-      await until(() => f.pending() === 1, 2000);
-      h.idleOut(300);
-      await sleep(1000);
-      ok("a forwarded request in flight holds the idle shutdown off (still live at +1 s)", f.closes() === 0 && h.activity().inFlight === 1 && fs.existsSync(h.sock));
-      const tRel = Date.now();
-      f.release();
-      const shut = await until(() => f.closes() > 0, 2000);
-      ok(`…and it shuts down within 2 s of the request finishing (${Date.now() - tRel} ms)`, shut && !fs.existsSync(h.sock));
-      c.destroy();
-    });
-    await daemonSection("idleOut after the window has passed", async () => {
-      const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19795, idleMs: 0, signals: false, crashHandlers: false });
-      await sleep(700);
-      const t0 = Date.now();
-      h.idleOut(500); // the socket has been quiet 700 ms already: the check at once shuts it, no 500 ms tick
-      const shut = await until(() => f.closes() > 0, 100, 5);
-      ok(`idleOut after the window has already passed → shut down at once, not at the first tick (${Date.now() - t0} ms)`, shut);
-      h.shutdown();
-    });
-    await daemonSection("STOPPED", async () => {
-      // [STOPPED] a frame that lands after shutdown() on a connection opened before it is refused, never
-      // forwarded to the (closed) bridge.
-      const f = fakeBridge();
-      const h = await daemon.serve(f.b, { port: 19796, idleMs: 0, signals: false, crashHandlers: false });
-      const c = net.createConnection(h.sock);
-      c.setEncoding("utf8");
-      c.on("error", () => { /* closed under us */ });
-      let got = "";
-      c.on("data", (d: string) => { got += d; });
-      await new Promise<void>((r) => { c.on("connect", () => r()); });
-      c.write(JSON.stringify({ cmd: "__ping", id: "p1" }) + "\n");
-      await until(() => got.includes("\n"), 2000);
-      h.shutdown();
-      got = "";
-      c.write(JSON.stringify({ cmd: "listPages", args: {}, id: "r2", timeoutMs: 2000 }) + "\n");
-      await until(() => got.includes("\n"), 2000);
-      let r: Record<string, unknown> = {};
-      try { r = rec(JSON.parse(got.split("\n")[0] ?? "") as unknown); } catch { /* no reply */ }
-      await sleep(50);
-      ok(`[STOPPED] a frame after the daemon shut down is refused (ok:false, "has shut down"), not forwarded to the closed bridge (got ${JSON.stringify(r)}, ${f.requests()} forwarded)`,
-        r.ok === false && r.id === "r2" && /has shut down/.test(String(r.error)) && f.requests() === 0);
-      c.destroy();
     });
 
     // ============================================================ the MCP server after its client goes away

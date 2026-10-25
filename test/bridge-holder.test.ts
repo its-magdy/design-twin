@@ -89,7 +89,7 @@ function daemonSide({ live = false, assert = null, serveMs = 0, serveFails = nul
       if (serveFails) throw new Error(serveFails);
       const s: Served = {
         bridge, idleMs: o.idleMs, shutdowns: 0, idleOuts: [],
-        activity: { frames: 0, inFlight: 0, lastActivity: Date.now() },
+        activity: { frames: 0, inFlight: 0, idleForMs: 0 },
         handle: {
           sock: "/tmp/fake-daemon.sock",
           shutdown() { s.shutdowns++; bridge.close(); },
@@ -174,7 +174,7 @@ console.log("\nsession:");
   await h.upstream();
   await settled();
   const s = d.served[0];
-  if (s) s.activity = { frames: 3, inFlight: 1, lastActivity: Date.now() };
+  if (s) s.activity = { frames: 3, inFlight: 1, idleForMs: 0 };
   h.clientLeft("stdin closed");
   await settled();
   check("client left, others used the socket → still serving, idle window switched to the settings' one",
@@ -195,7 +195,7 @@ console.log("\nsession:");
   await h.upstream();
   await settled();
   const s = d.served[0];
-  if (s) s.activity = { frames: 2, inFlight: 0, lastActivity: Date.now() - 2 * SETTINGS.idleMs };
+  if (s) s.activity = { frames: 2, inFlight: 0, idleForMs: 2 * SETTINGS.idleMs };
   h.clientLeft("stdout closed");
   await settled();
   check("client left, others used it but the window has already passed → released at once",
@@ -208,7 +208,7 @@ console.log("\nsession:");
   await h.upstream();
   await settled();
   const s = d.served[0];
-  if (s) s.activity = { frames: 1, inFlight: 0, lastActivity: Date.now() };
+  if (s) s.activity = { frames: 1, inFlight: 0, idleForMs: 0 };
   h.clientLeft("stdin closed");
   check("idle window off → still serving, and the log says it never stops on its own and why",
     s?.idleOuts[0] === 0 && logs.some((l) => l.includes("never shuts down on its own (FIGMA_DAEMON_IDLE_MIN=0)")));
