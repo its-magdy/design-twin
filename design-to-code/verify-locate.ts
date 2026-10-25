@@ -7,8 +7,8 @@ import { nodeIdFromStem } from "../bridge/src/pages-layout.ts"; // the node id i
 import { DESIGN_DIR, EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { isProbeIdentity, isReportBehaviour, isVerifyReport } from "./doc-guards.ts";
 import { isLayerFile, isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
-import { readJsonOrNull } from "./read-json.ts";
-import { readExportIndex, type ExportIndex } from "./export-index.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
+import { readExportIndex, type ExportIndex } from "../bridge/src/export-reader.ts";
 import { canonical } from "./run-cache.ts";
 import { planNode, setNodeOf } from "./node-artefacts.ts";
 import { setBaseOf, setFactsOf, setFile, type SetFacts } from "./verify-sets.ts";
@@ -39,7 +39,7 @@ export interface LocateCache {
 }
 export const locateCache = (): LocateCache => ({ reports: new Map(), indexes: new Map() });
 
-/** The export's index (export-index.ts: every screen row once, the root index's and every page index's), read once per cache. */
+/** The export's index (bridge/src/export-reader.ts: every screen row once, the root index's and every page index's), read once per cache. */
 function exportIndexOf(exportDir: string, cache?: LocateCache): ExportIndex {
   if (!cache) return readExportIndex(exportDir);
   let ix = cache.indexes.get(exportDir);

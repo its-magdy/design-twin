@@ -40,7 +40,7 @@ import crypto from "node:crypto";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { bindMeasured, measuredText } from "./report-freshness.ts";
-import { anyJson, readJson } from "./read-json.ts";
+import { anyJson, readJson } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { scriptCmd, shellArg } from "./cli-args.ts";
 import { RunCacheUnwritable, UNWRITABLE_CODES, canonical, runCacheDir, runCacheOf } from "./run-cache.ts";

@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { nodeIdFromStem } from "../bridge/src/pages-layout.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { readJsonOrNull } from "./read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import { liveStatusFile, readStatusFile, runCommands } from "./verify-status.ts";
 

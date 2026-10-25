@@ -16,7 +16,7 @@ import {
 } from "./fixtures.ts";
 import { bag, isJsonObject } from "../design-to-code/types.ts";
 import { isComponentsCatalog, isTokensDoc } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { CodeConnectMap, ComponentPropDef, ComponentsCatalog, DesignSystemDoc, DriftFinding, TokensDoc } from "../design-to-code/types.ts";
 import type { GetComponentResult } from "../design-to-code/get-component.ts";
 import type { DtcgGroup } from "../design-to-code/tokens.ts";

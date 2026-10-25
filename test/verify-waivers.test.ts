@@ -15,7 +15,7 @@ import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { isPlan, isVerifyExpectation, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { InteractionEvidence, JsonValue, MeasuredNode, MeasuredStyles, Plan, PlanDescope, PlanWaiver, ProbeFrame, VerifyMeasured, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { isJsonObject, isPassingVerdict } from "../design-to-code/types.ts";
 import { screenExport, usingPlan } from "./fixtures.ts";

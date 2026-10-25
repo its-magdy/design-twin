@@ -3,7 +3,7 @@
 
 // design-to-code/audit.ts
 import fs13 from "node:fs";
-import path12 from "node:path";
+import path11 from "node:path";
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -40,51 +40,6 @@ var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
 var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
 var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
-var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
-var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
-function parseCssColor(v) {
-  if (typeof v !== "string") return null;
-  const t = v.trim().toLowerCase();
-  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  if (t.startsWith("#")) return parseHex(t);
-  const leg = RGB_LEGACY.exec(t);
-  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
-  if (rgb) {
-    const ch = (x) => clamp(comp(x, 255), 255);
-    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const ok = OK.exec(t);
-  if (ok) {
-    const L = comp(ok[2], 1);
-    let a, b;
-    if (ok[1] === "oklab") {
-      a = comp(ok[3], 0.4);
-      b = comp(ok[4], 0.4);
-    } else {
-      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
-      a = C * Math.cos(h);
-      b = C * Math.sin(h);
-    }
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
-    const c = {
-      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
-      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
-      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
-      a: alphaOf(ok[5])
-    };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const srgb = SRGB.exec(t);
-  if (srgb) {
-    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
-    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  return null;
-}
 function clampOpacityPct(n) {
   return Math.min(100, Math.max(0, n));
 }
@@ -201,7 +156,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path13, ancestors, under, beneath) {
+  (function go(node, parentHidden, path12, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -215,7 +170,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path13,
+      path: path12,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -230,7 +185,7 @@ function walk(root, fn, prune, opts) {
     if (!kids.length) return;
     const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path13 ? path13 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path12 ? path12 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkWithHidden(root, fn, opts) {
@@ -510,7 +465,7 @@ function findingIds(findings) {
 
 // design-to-code/screen-inputs.ts
 import fs7 from "node:fs";
-import path7 from "node:path";
+import path6 from "node:path";
 
 // bridge/src/project-layout.ts
 import fs from "node:fs";
@@ -618,14 +573,14 @@ var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), C
 // design-to-code/catalog-input.ts
 import fs3 from "node:fs";
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
@@ -860,7 +815,7 @@ function loadSplitFile(file, what, guard, payloadKey, wantFile, hint) {
 
 // design-to-code/design-system-dir.ts
 import fs5 from "node:fs";
-import path4 from "node:path";
+import path3 from "node:path";
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -928,17 +883,6 @@ function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
   return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
@@ -1085,161 +1029,52 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/export-index.ts
+// bridge/src/export-reader.ts
 import fs4 from "node:fs";
-import path3 from "node:path";
-
-// design-to-code/verify-shared.ts
 import path2 from "node:path";
-var TOLERANCE = {
-  fontSize: 0.5,
-  // a browser rounds; a different token does not
-  fontWeight: 0,
-  // 500 vs 600 is a different style, never a rendering artifact
-  lineHeight: 2,
-  // normal/unitless line-heights and font-metric rounding genuinely differ
-  letterSpacing: 0.2,
-  radius: 0.5,
-  padding: 1,
-  gap: 1,
-  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
-  size: 1,
-  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
-  position: 2,
-  opacity: 0.02,
-  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
-  stroke: 0.5,
-  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
-  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
-  // in the field runs. Known miss: heavy italics/overhang can exceed it.
-  textInk: 3
-};
-function normColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  const key = colorKey(s);
-  if (key) return key;
-  const c = parseCssColor(s);
-  if (c === null) return s;
-  if (c.a === 0) return "transparent";
-  return colorKey(formatHex(c)) ?? s;
-}
-var WEIGHTS = {
-  thin: 100,
-  extralight: 200,
-  ultralight: 200,
-  light: 300,
-  normal: 400,
-  regular: 400,
-  book: 400,
-  medium: 500,
-  semibold: 600,
-  demibold: 600,
-  bold: 700,
-  extrabold: 800,
-  ultrabold: 800,
-  black: 900,
-  heavy: 900
-};
-function normWeight(v) {
-  if (v == null) return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim();
-  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
-  const name = s.toLowerCase().replace(/[^a-z]/g, "");
-  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
-  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
-}
-function normFamily(v) {
-  if (v == null) return null;
-  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
-}
+var PAGES = "pages";
+var INDEX = "index.json";
 function resolveInside(base, rel, within = base) {
   const root = path2.resolve(within), file = path2.resolve(base, ...rel.split("/"));
   return file.startsWith(root + path2.sep) ? file : null;
 }
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
-
-// design-to-code/export-index.ts
-var PAGES = "pages";
-var INDEX = "index.json";
+var inside = (root, rel) => typeof rel === "string" && rel && !path2.isAbsolute(rel) ? resolveInside(root, rel) : null;
+var relOf = (root, file) => path2.relative(root, file).split(path2.sep).join("/");
+var problemOf = (root, file, read) => "error" in read && !read.missing ? { file: relOf(root, file), error: read.error } : null;
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isIndexRowLike = (x) => isRecord(x) && typeof x.id === "string" && typeof x.name === "string";
+var isRowList = (x) => Array.isArray(x) && x.every((r) => r === null || isIndexRowLike(r));
+var isPagesRootIndex = /* @__PURE__ */ Object.assign(
+  (x) => isRecord(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isRecord(d) && optStr2(d.dir) && optStr2(d.index)) && (x.layers === void 0 || isRowList(x.layers)) && optStr2(x.exportedAt),
+  { expected: "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})" }
+);
+var isPageIndex = /* @__PURE__ */ Object.assign(
+  (x) => isRecord(x) && isRowList(x.layers),
+  { expected: "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}" }
+);
 function screenSiblingFile(screenFile, kind) {
   return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
 }
-var rootIndexFile = (exportRoot) => path3.join(exportRoot, PAGES, INDEX);
+var rootIndexFile = (exportRoot) => path2.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
 function pagesRootOfScreen(screenFile) {
-  const pages = path3.dirname(path3.dirname(path3.resolve(screenFile)));
-  return path3.basename(pages) === PAGES ? path3.dirname(pages) : null;
+  const pages = path2.dirname(path2.dirname(path2.resolve(screenFile)));
+  return path2.basename(pages) === PAGES ? path2.dirname(pages) : null;
 }
 function exportRootOfScreen(screenFile) {
   const root = pagesRootOfScreen(screenFile);
   return root !== null && hasExportIndex(root) ? root : null;
 }
-var inside = (root, rel) => rel && !path3.isAbsolute(rel) ? resolveInside(root, rel) : null;
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(path3.resolve(f))) files.push(path3.resolve(f));
+    if (f !== null && !files.includes(path2.resolve(f))) files.push(path2.resolve(f));
   };
-  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path3.join(root, PAGES, dir, INDEX) : null;
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path2.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs4.readdirSync(path3.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs4.readdirSync(path2.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -1247,8 +1082,12 @@ function pageIndexFiles(root, pageDirs) {
 }
 function readExportIndex(exportRoot) {
   const root = exportRoot;
-  const read = readJson(rootIndexFile(root), isPagesRootIndex);
+  const rootFile = rootIndexFile(root);
+  const read = readJson(rootFile, isPagesRootIndex);
   const rootDoc = "doc" in read ? read.doc : null;
+  const problems = [];
+  const rootProblem = problemOf(root, rootFile, read);
+  if (rootProblem) problems.push(rootProblem);
   const rows = [];
   const byId = /* @__PURE__ */ new Map();
   const files = /* @__PURE__ */ new Set();
@@ -1306,17 +1145,25 @@ function readExportIndex(exportRoot) {
     rows.splice(rows.length - 1, 1);
     rows.splice(at, 0, row);
   };
-  for (const row of rootDoc?.layers ?? []) take(row, true);
+  for (const row of rootDoc?.layers ?? []) if (row) take(row, true);
   for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
-    for (const row of readJsonOrNull(f, isPageIndex)?.layers ?? []) take(row, false);
+    const page = readJson(f, isPageIndex);
+    const problem = problemOf(root, f, page);
+    if (problem) problems.push(problem);
+    if ("doc" in page) {
+      for (const row of page.doc.layers) if (row) take(row, false);
+    }
   }
+  const rootStamp = rootDoc?.exportedAt || void 0;
   return {
     root,
     indexed: rootDoc !== null,
-    rootProblem: "error" in read && !read.missing ? read.error : null,
+    rootProblem: rootProblem && rootProblem.error,
+    problems,
     rows,
     isExported: (id) => byId.has(id),
-    fileOf: (row) => inside(root, row.file)
+    fileOf: (row) => inside(root, row.file),
+    exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)
   };
 }
 
@@ -1331,13 +1178,13 @@ var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPON
 var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
 var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
 function designSystemFiles(dir) {
-  const local = path4.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path4.join(dir, COMPONENTS));
+  const local = path3.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path3.join(dir, COMPONENTS));
   return {
-    tokens: path4.join(dir, TOKENS3),
-    components: isLibrary ? path4.join(dir, COMPONENTS) : local,
-    componentsLibrary: path4.join(dir, COMPONENTS_LIBRARY2),
-    stylesText: path4.join(dir, STYLES_TEXT),
+    tokens: path3.join(dir, TOKENS3),
+    components: isLibrary ? path3.join(dir, COMPONENTS) : local,
+    componentsLibrary: path3.join(dir, COMPONENTS_LIBRARY2),
+    stylesText: path3.join(dir, STYLES_TEXT),
     componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
     isLibrary
   };
@@ -1356,23 +1203,23 @@ function readDesignSystemDir(dir) {
 function exportRootOf(screenFile, dsDir) {
   const roots = [];
   if (screenFile) {
-    const pages = path4.dirname(path4.dirname(screenFile));
-    if (path4.basename(pages) === "pages") roots.push(path4.dirname(pages));
+    const pages = path3.dirname(path3.dirname(screenFile));
+    if (path3.basename(pages) === "pages") roots.push(path3.dirname(pages));
   }
   if (dsDir) {
-    const parent = path4.dirname(path4.normalize(dsDir));
-    roots.push(path4.basename(parent) === ROOT ? path4.dirname(parent) : parent);
+    const parent = path3.dirname(path3.normalize(dsDir));
+    roots.push(path3.basename(parent) === ROOT ? path3.dirname(parent) : parent);
   }
-  return roots.find((r) => fs5.existsSync(path4.join(r, ROOT, INDEX2))) ?? null;
+  return roots.find((r) => fs5.existsSync(path3.join(r, ROOT, INDEX2))) ?? null;
 }
 function findLibraryExports(screenFile, dsDir) {
   const root = exportRootOf(screenFile, dsDir);
   if (!root) return [];
-  const index = readJsonOrNull(path4.join(root, ROOT, INDEX2), isLibrariesIndex);
+  const index = readJsonOrNull(path3.join(root, ROOT, INDEX2), isLibrariesIndex);
   if (!index) return [];
   return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path4.join(root, ROOT, r.dir).split(path4.sep).join("/");
-    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path4.join(rel, COMPONENTS), isComponentsCatalog) };
+    const rel = path3.join(root, ROOT, r.dir).split(path3.sep).join("/");
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, COMPONENTS), isComponentsCatalog) };
   });
 }
 function readFrameTexts(file) {
@@ -1404,7 +1251,7 @@ function findExportNeighbours(screenFile) {
   const shots = /* @__PURE__ */ new Set();
   let files = [];
   try {
-    files = fs5.readdirSync(path4.join(root, "assets"));
+    files = fs5.readdirSync(path3.join(root, "assets"));
   } catch {
     files = [];
   }
@@ -1417,14 +1264,14 @@ function findExportNeighbours(screenFile) {
 }
 
 // design-to-code/cli-args.ts
-import path5 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path5.join(path5.dirname(SELF), name + path5.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1539,7 +1386,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path13, message) => errors.push({ path: path13, message });
+  const err = (path12, message) => errors.push({ path: path12, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -1648,7 +1495,7 @@ if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/slice-sources.ts
 import fs6 from "node:fs";
-import path6 from "node:path";
+import path5 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -1657,12 +1504,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path6.dirname(docPath) : ".";
+  const base = docPath ? path5.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path6.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path5.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -1674,7 +1521,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path6.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path5.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -1692,9 +1539,9 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path6.resolve(path6.dirname(firstFile), "..", "..");
-    const rootVars = path6.join(exportRoot, MERGED_VARIABLES_FILE);
-    const sibling = path6.join(path6.dirname(firstFile), MERGED_VARIABLES_FILE);
+    const exportRoot = path5.resolve(path5.dirname(firstFile), "..", "..");
+    const rootVars = path5.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path5.join(path5.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs6.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs6.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
@@ -1702,15 +1549,15 @@ function variablesContext(screenFiles, varsFile, opts) {
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy2 = path6.join(path6.resolve(path6.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(legacy2) && path6.resolve(legacy2) !== path6.resolve(variablesPath || "")) staleLegacy = legacy2;
+    const legacy2 = path5.join(path5.resolve(path5.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(legacy2) && path5.resolve(legacy2) !== path5.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
 
 // design-to-code/screen-inputs.ts
 function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path7.resolve(f)));
+  const checked = new Set(files.map((f) => path6.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
     const root = exportRootOfScreen(f);
@@ -1727,7 +1574,7 @@ function exportSiblings(files) {
         if (file === null || seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path7.basename(file, ".json") });
+        if (doc) out.push({ doc, label: path6.basename(file, ".json") });
       }
     }
     return out;
@@ -1736,11 +1583,11 @@ function exportSiblings(files) {
 function designSystemDirOf(firstFile, named) {
   if (named) return { dir: named, given: true };
   const shown = (abs) => {
-    const rel = path7.relative(process.cwd(), abs);
-    return rel && !rel.startsWith("..") && !path7.isAbsolute(rel) ? rel.split(path7.sep).join("/") : abs;
+    const rel = path6.relative(process.cwd(), abs);
+    return rel && !rel.startsWith("..") && !path6.isAbsolute(rel) ? rel.split(path6.sep).join("/") : abs;
   };
   const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
-  const dir = root !== null ? path7.join(root, DESIGN_SYSTEM_DIR) : path7.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  const dir = root !== null ? path6.join(root, DESIGN_SYSTEM_DIR) : path6.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
   return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
 }
 function readScreenInputs(files, flags = {}) {
@@ -1753,7 +1600,7 @@ function readScreenInputs(files, flags = {}) {
   const screens = files.map((f, i) => ({
     file: f,
     doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path7.basename(f, ".json"),
+    label: path6.basename(f, ".json"),
     ...ctx.own[i] ? { vars: ctx.own[i] } : {},
     assets: readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc)
   }));
@@ -1948,15 +1795,15 @@ function variableResolver(input) {
     const vars = [];
     let complete = true;
     const done = /* @__PURE__ */ new Set();
-    const path13 = /* @__PURE__ */ new Set();
+    const path12 = /* @__PURE__ */ new Set();
     const visit2 = (x) => {
-      if (path13.has(x)) {
+      if (path12.has(x)) {
         complete = false;
         return;
       }
       if (done.has(x)) return;
       vars.push(x);
-      path13.add(x);
+      path12.add(x);
       for (const val of Object.values(x.values || {})) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
@@ -1965,7 +1812,7 @@ function variableResolver(input) {
           else complete = false;
         }
       }
-      path13.delete(x);
+      path12.delete(x);
       done.add(x);
     };
     visit2(v);
@@ -2871,20 +2718,20 @@ function isRasterShell(rasters, paths) {
 
 // design-to-code/node-artefacts.ts
 import fs12 from "node:fs";
-import path11 from "node:path";
+import path10 from "node:path";
 
 // design-to-code/verify-sets.ts
 import fs11 from "node:fs";
-import path10 from "node:path";
+import path9 from "node:path";
 
 // design-to-code/verify-status.ts
-import path9 from "node:path";
+import path8 from "node:path";
 import fs10 from "node:fs";
 
 // design-to-code/run-cache.ts
 import fs9 from "node:fs";
 import os from "node:os";
-import path8 from "node:path";
+import path7 from "node:path";
 
 // bridge/src/hash.ts
 import crypto from "node:crypto";
@@ -2925,39 +2772,39 @@ function realpath(p) {
   return fs9.realpathSync(p);
 }
 function canonical(p) {
-  const abs = path8.resolve(p);
+  const abs = path7.resolve(p);
   try {
     return realpath(abs);
   } catch {
-    const parent = path8.dirname(abs);
-    return parent === abs ? abs : path8.join(canonical(parent), path8.basename(abs));
+    const parent = path7.dirname(abs);
+    return parent === abs ? abs : path7.join(canonical(parent), path7.basename(abs));
   }
 }
-var hasPnp = (d) => exists(path8.join(d, ".pnp.cjs")) || exists(path8.join(d, ".pnp.js"));
+var hasPnp = (d) => exists(path7.join(d, ".pnp.cjs")) || exists(path7.join(d, ".pnp.js"));
 function isWorkspaceRoot(d) {
-  if (exists(path8.join(d, "pnpm-workspace.yaml"))) return true;
-  const r = readJson(path8.join(d, "package.json"), anyJson);
+  if (exists(path7.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path7.join(d, "package.json"), anyJson);
   return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
 }
 function installRootOf(dir) {
   let P = null;
-  for (let d = dir; ; d = path8.dirname(d)) {
-    if (exists(path8.join(d, "package.json"))) {
+  for (let d = dir; ; d = path7.dirname(d)) {
+    if (exists(path7.join(d, "package.json"))) {
       P = d;
       break;
     }
-    if (exists(path8.join(d, ".git")) || path8.dirname(d) === d) return null;
+    if (exists(path7.join(d, ".git")) || path7.dirname(d) === d) return null;
   }
-  if (isDir(path8.join(P, "node_modules"))) return P;
+  if (isDir(path7.join(P, "node_modules"))) return P;
   let ws = null;
-  for (let d = P; ; d = path8.dirname(d)) {
+  for (let d = P; ; d = path7.dirname(d)) {
     if (isWorkspaceRoot(d)) {
       ws = d;
       break;
     }
-    if (exists(path8.join(d, ".git")) || path8.dirname(d) === d) break;
+    if (exists(path7.join(d, ".git")) || path7.dirname(d) === d) break;
   }
-  if (ws !== null && isDir(path8.join(ws, "node_modules"))) return ws;
+  if (ws !== null && isDir(path7.join(ws, "node_modules"))) return ws;
   if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
   return P;
 }
@@ -2965,11 +2812,11 @@ function runCacheOf(verifyDir) {
   const v = canonical(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
-    const cache = path8.join(root, ...RUN_CACHE_SEGMENTS);
-    const rel = path8.relative(root, v).split(path8.sep).join("/");
-    return { dir: rel === VERIFY_DIR.split(path8.sep).join("/") ? cache : path8.join(cache, "dirs", shortSha(rel)), root };
+    const cache = path7.join(root, ...RUN_CACHE_SEGMENTS);
+    const rel = path7.relative(root, v).split(path7.sep).join("/");
+    return { dir: rel === VERIFY_DIR.split(path7.sep).join("/") ? cache : path7.join(cache, "dirs", shortSha(rel)), root };
   }
-  return { dir: path8.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+  return { dir: path7.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
 }
 function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
@@ -2980,15 +2827,15 @@ var STATUS_SCHEMA = "designtwin/verify-status@2";
 var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
 var TERMINAL_PHASES = ["done", "failed", "blocked"];
 var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr2(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
+var optStr3 = (x) => x === void 0 || typeof x === "string";
+var isOwnRunStamp = (x) => isJsonObject(x) && typeof x.pid === "number" && typeof x.host === "string" && optStr3(x.ns) && typeof x.startedAt === "string" && typeof x.deadline === "string";
 var isFailureCount = (x) => typeof x === "number" && Number.isInteger(x) && x >= 0;
 var isReplacedRun = (x) => isJsonObject(x) && typeof x.runId === "string" && isPhase(x.phase) && typeof x.at === "string";
 function isVerifyStatusV2(x) {
-  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr3(x.expectationSha256) && optStr3(x.measuredSha256) && optStr3(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string")) && (x.ownRun === void 0 || isOwnRunStamp(x.ownRun)) && (x.probeFailures === void 0 || isFailureCount(x.probeFailures)) && (x.replaced === void 0 || isReplacedRun(x.replaced));
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
-var liveStatusFile = (base) => path9.join(runCacheDir(path9.dirname(base)), setFile(path9.basename(base), "status"));
+var liveStatusFile = (base) => path8.join(runCacheDir(path8.dirname(base)), setFile(path8.basename(base), "status"));
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
   if (!("doc" in r)) return null;
@@ -3001,7 +2848,7 @@ function readStatusFile(file) {
   return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
 }
 function runCommands(base, open) {
-  const vs = scriptCmd("verify-screen"), S = shellArg(path9.basename(base)), id = shellArg(open.runId), dir = shellArg(path9.resolve(path9.dirname(base)));
+  const vs = scriptCmd("verify-screen"), S = shellArg(path8.basename(base)), id = shellArg(open.runId), dir = shellArg(path8.resolve(path8.dirname(base)));
   return { waitIt: `${vs} --wait ${S} --run ${id} --dir ${dir}`, endIt: `${vs} --status ${S} --phase failed --run ${id} --dir ${dir}` };
 }
 function openRunSets(verifyDir) {
@@ -3012,7 +2859,7 @@ function openRunSets(verifyDir) {
     return [];
   }
   return files.filter((e) => e.isFile() && setBaseOf(e.name, "status") !== null).map((e) => setBaseOf(e.name, "status") ?? e.name).filter((name) => {
-    const st = readStatusFile(liveStatusFile(path9.join(verifyDir, name)));
+    const st = readStatusFile(liveStatusFile(path8.join(verifyDir, name)));
     return st !== null && st !== "v1" && !TERMINAL_PHASES.includes(st.phase);
   }).sort();
 }
@@ -3060,7 +2907,7 @@ var SET_FILE = {
 var setFile = (base, kind) => base + SET_FILE[kind];
 var setBaseOf = (file, kind) => file.endsWith(SET_FILE[kind]) ? file.slice(0, -SET_FILE[kind].length) : null;
 var EXPECTED_SUFFIX = SET_FILE.expected;
-var TRAILING_SEP = path10.sep === "\\" ? /[\\/]+$/ : /\/+$/;
+var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var NAMING_KINDS = ["expected", "report", "measured"];
 var namedBy = (f) => {
   for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length);
@@ -3086,8 +2933,8 @@ function verifySets(verifyDir) {
   return allSets(verifyDir).filter((s) => !s.retired).map((s) => s.name);
 }
 function setFacts(verifyDir, name) {
-  const exp = readJsonOrNull(setFile(path10.join(verifyDir, name), "expected"), isJsonObject);
-  const rep = readJsonOrNull(setFile(path10.join(verifyDir, name), "report"), isJsonObject);
+  const exp = readJsonOrNull(setFile(path9.join(verifyDir, name), "expected"), isJsonObject);
+  const rep = readJsonOrNull(setFile(path9.join(verifyDir, name), "report"), isJsonObject);
   return setFactsOf(exp, rep);
 }
 function setFactsOf(exp, rep) {
@@ -3101,15 +2948,15 @@ function stemHolders(verifyDir, stems, open) {
   const onDisk = new Set(verifySets(verifyDir).map((n) => parseSetName(n)?.stem));
   return stems.map((stem) => {
     const set = onDisk.has(stem) ? void 0 : open.find((n) => parseSetName(n)?.stem === stem);
-    const st = set !== void 0 ? readStatusFile(liveStatusFile(path10.join(verifyDir, set))) : null;
+    const st = set !== void 0 ? readStatusFile(liveStatusFile(path9.join(verifyDir, set))) : null;
     if (set === void 0 || st === null || st === "v1") return stem;
-    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path10.join(verifyDir, set), st).endIt})`;
+    return `an open run ${st.runId} under ${set} (no file of it yet; end it: ${runCommands(path9.join(verifyDir, set), st).endIt})`;
   }).join(", ");
 }
 
 // design-to-code/node-artefacts.ts
 function planNode(plan, file) {
-  return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path11.basename(file).replace(/\.json$/i, "")) : null);
+  return plan.nodeId || (file !== void 0 ? nodeIdFromStem(path10.basename(file).replace(/\.json$/i, "")) : null);
 }
 function setIdsOf(name, f) {
   return [...new Set([nodeIdFromSetName(name), f.expectedId, f.reportId].filter((x) => x !== null))].sort();
@@ -3128,13 +2975,13 @@ var isPlanFile = (p) => "plan" in p;
 var article = (kind) => kind === "audit report" ? "an" : "a";
 var several = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} has ${holders.length} ${kind}s (${shown}) \u2014 one node, one ${kind}: keep one`, holders, reason: "several" });
 var already = (kind, nodeId, holders, shown = holders.join(", ")) => ({ ok: false, why: `node ${nodeId} already has ${article(kind)} ${kind} (${shown}) \u2014 one node, one ${kind}`, holders, reason: "held" });
-var slash = (p) => p.split(path11.sep).join("/");
+var slash = (p) => p.split(path10.sep).join("/");
 function nodeArtefacts(root, dirs = {}) {
   const planDir = dirs.planDir ?? PLAN_DIR;
   const verifyDir = dirs.verifyDir ?? VERIFY_DIR;
   const auditDir = dirs.auditDir ?? AUDIT_DIR;
-  const abs = (p) => path11.resolve(root, p);
-  const spell = (dir, name) => path11.isAbsolute(dir) ? path11.join(dir, name) : slash(path11.join(dir, name));
+  const abs = (p) => path10.resolve(root, p);
+  const spell = (dir, name) => path10.isAbsolute(dir) ? path10.join(dir, name) : slash(path10.join(dir, name));
   const verifyAbs = abs(verifyDir);
   const open = () => dirs.openSets ?? openRunSets(verifyAbs);
   function plans() {
@@ -3173,7 +3020,7 @@ function nodeArtefacts(root, dirs = {}) {
       return [];
     }
     return files.map((f) => {
-      const doc = readJsonOrNull(path11.join(abs(auditDir), f), isJsonObject);
+      const doc = readJsonOrNull(path10.join(abs(auditDir), f), isJsonObject);
       const ids = doc && Array.isArray(doc.nodeIds) ? doc.nodeIds.filter((x) => typeof x === "string") : [];
       return { f, stem: f.slice(0, -5), nodeIds: ids.length ? ids : null };
     });
@@ -3184,8 +3031,8 @@ function nodeArtefacts(root, dirs = {}) {
   function auditFor(nodeId, hints = {}) {
     if (!fs12.existsSync(abs(auditDir))) return null;
     if (hints.screenFile) {
-      const own = path11.basename(hints.screenFile, ".json") + ".json";
-      if (fs12.existsSync(path11.join(abs(auditDir), own))) return spell(auditDir, own);
+      const own = path10.basename(hints.screenFile, ".json") + ".json";
+      if (fs12.existsSync(path10.join(abs(auditDir), own))) return spell(auditDir, own);
     }
     if (nodeId) {
       const held = auditsOf(nodeId)[0];
@@ -3235,13 +3082,13 @@ function nodeArtefacts(root, dirs = {}) {
     const s = claimSet(nodeId, { layerName: o.layerName });
     if (!s.ok) return s;
     const name = spell(planDir, s.name + ".json");
-    if (target !== void 0 && path11.basename(target) !== path11.basename(name)) return { ok: false, why: `a new plan of node ${nodeId} is named by its node: ${name}, not ${path11.basename(target)}`, holders: [], reason: "misnamed" };
+    if (target !== void 0 && path10.basename(target) !== path10.basename(name)) return { ok: false, why: `a new plan of node ${nodeId} is named by its node: ${name}, not ${path10.basename(target)}`, holders: [], reason: "misnamed" };
     return { ok: true, name, existing: false, legacy: [] };
   }
   function claimAudit(nodeId, target) {
     const t = abs(target);
-    const own = path11.basename(t, ".json");
-    const held = auditsOf(nodeId).filter((f) => abs(f) !== t && !own.startsWith(path11.basename(f, ".json") + "."));
+    const own = path10.basename(t, ".json");
+    const held = auditsOf(nodeId).filter((f) => abs(f) !== t && !own.startsWith(path10.basename(f, ".json") + "."));
     return held.length ? already("audit report", nodeId, held) : { ok: true, name: target, existing: false, legacy: [] };
   }
   function claim(kind, nodeId, o = {}) {
@@ -3515,8 +3362,8 @@ function walkRoots(ac) {
 function visit(ac, node, w, ctx) {
   const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
   const ancestors = w.ancestors.map((a) => a.node);
-  const path13 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-  const here = { label: ctx.label, path: path13 };
+  const path12 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+  const here = { label: ctx.label, path: path12 };
   const hiddenBranch = w.hidden;
   if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
   if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
@@ -3838,18 +3685,18 @@ function defaultCopyInInstances(ac) {
     const plain = g.plain.filter((m) => !own.includes((m.node.text || "").trim()));
     const first = plain[0];
     if (!own.length || !first) continue;
-    const comp2 = g.inst.mainComponent && g.inst.mainComponent.setName || g.inst.component || g.inst.name;
+    const comp = g.inst.mainComponent && g.inst.mainComponent.setName || g.inst.component || g.inst.name;
     const dflt = textOf(first.node) ?? (first.node.text || "").trim();
     const eg = own[0] ?? "";
     add(
       "info",
       "default-copy-in-instance",
-      `'${comp2}' > '${first.node.name}': ${plain.length} instance(s) show the component's default copy ("${dflt}") while ${g.overridden.length} show their own copy (e.g. "${eg.length > 40 ? eg.slice(0, 39) + "\u2026" : eg}") \u2014 a placeholder left in, or intended? Build the copy as drawn and ask the designer`,
+      `'${comp}' > '${first.node.name}': ${plain.length} instance(s) show the component's default copy ("${dflt}") while ${g.overridden.length} show their own copy (e.g. "${eg.length > 40 ? eg.slice(0, 39) + "\u2026" : eg}") \u2014 a placeholder left in, or intended? Build the copy as drawn and ask the designer`,
       first.node,
       first.here,
       { nodeIds: plain.map((m) => m.node.id), copies: { default: (first.node.text || "").trim(), overridden: own } }
     );
-    copyQuestions.push(`'${comp2}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" \u2014 is "${dflt}" the intended copy, or a placeholder? \u2192 Default: build "${dflt}" as drawn.`);
+    copyQuestions.push(`'${comp}' > '${first.node.name}' (${first.node.id}) still says "${dflt}" (the component's default) where other instances say "${eg}" \u2014 is "${dflt}" the intended copy, or a placeholder? \u2192 Default: build "${dflt}" as drawn.`);
   }
   return copyQuestions;
 }
@@ -3907,7 +3754,7 @@ var valuesOf = (c) => {
   return values;
 };
 var isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
-var sameDir = (a, b) => b !== void 0 && path12.resolve(a) === path12.resolve(b);
+var sameDir = (a, b) => b !== void 0 && path11.resolve(a) === path11.resolve(b);
 function stateLookup(ac) {
   const { opts, docs, catalog } = ac;
   const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
@@ -4405,10 +4252,10 @@ function main(argv) {
   const ds = ctx.designSystem;
   const designSystem = withCatalog(ds, catalog) ?? void 0;
   const neighbours = findExportNeighbours(firstFile);
-  const outBase = out || path12.join(AUDIT_DIR, path12.basename(firstFile, ".json"));
+  const outBase = out || path11.join(AUDIT_DIR, path11.basename(firstFile, ".json"));
   const ownOverrides = outBase + ".overrides.json";
-  const stem = path12.basename(outBase), dot = stem.indexOf(".");
-  const parentOverrides = dot > 0 ? path12.join(path12.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
+  const stem = path11.basename(outBase), dot = stem.indexOf(".");
+  const parentOverrides = dot > 0 ? path11.join(path11.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
   const overridesFile = flags.overrides || (!fs13.existsSync(ownOverrides) && parentOverrides && fs13.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   const res = audit(inputs, {
@@ -4428,7 +4275,7 @@ function main(argv) {
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const c = nodeArtefacts(process.cwd(), { auditDir: path12.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
+    const c = nodeArtefacts(process.cwd(), { auditDir: path11.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
     if (!c.ok && !force) {
       console.error(`error  ${c.why}: refusing to also write ${outBase}.json/.md. Use that existing name, or pass --force to write this one anyway.`);
       return 1;
@@ -4437,7 +4284,7 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs13.mkdirSync(path12.dirname(outBase), { recursive: true });
+    fs13.mkdirSync(path11.dirname(outBase), { recursive: true });
     fs13.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
     fs13.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);

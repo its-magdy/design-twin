@@ -8,19 +8,17 @@
 // identifying fields of the entries in those arrays, and nothing more: a guard is a boundary check, not a
 // schema validator. Maps have their own full validator (map-validate.ts validateMap).
 //
-// Each guard carries an `expected` string: what read-json.ts prints when a file fails it.
+// Each guard carries an `expected` string: what bridge/src/read-json.ts prints when a file fails it (DocGuard).
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import type { JsonObject, PlanVerificationRecord } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 import type {
-  AuditOverridesDoc, VariableAlias, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
+  AuditOverridesDoc, VariableAlias, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, Plan,
   PageOverflow, PlanDescope, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, MeasuredVisual, Rect4, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReferenceImage, VerifyReferenceUnusable, VerifyReport, VisualRegion,
 } from "./types.ts";
 import type { Expectation } from "./verify-shared.ts";
 
-/** A type guard that can say, in words, what it expects (read-json.ts prints it on a mismatch). */
-export type DocGuard<T> = ((x: unknown) => x is T) & { expected?: string };
 
 // ---------------------------------------------------------------- small combinators
 /** `x` is absent, or an array whose every entry passes `each`. */
@@ -122,19 +120,7 @@ export function isProposalList(x: unknown): x is ComponentProposal[] {
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, …}";
 
-// ---------------------------------------------------------------- pages/index.json, pages/<Page>/index.json
-function isIndexRowLike(x: unknown): boolean {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-export function isPagesRootIndex(x: unknown): x is PagesRootIndex {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index))
-    && (x.layers === undefined || (Array.isArray(x.layers) && x.layers.every(isIndexRowLike)));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-export function isPageIndex(x: unknown): x is PageIndex {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+// pages/index.json and pages/<Page>/index.json are guarded by their one reader, bridge/src/export-reader.ts.
 
 // ---------------------------------------------------------------- verify-screen's documents
 /** <Screen>.expected.json — what --expect wrote: a `frame` and the `nodes` specs (each with a nodeId). */

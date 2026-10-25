@@ -31,7 +31,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { InteractionEvidence, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { readStatus, type VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import { BEHAVIOUR_OFF_ENV } from "../design-to-code/verify-probe.ts";

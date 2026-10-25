@@ -8,7 +8,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { lockFileOf } from "../bridge/src/file-lock.ts";
 import { errCode } from "../bridge/src/errmsg.ts";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { anyJson, readJson } from "./read-json.ts";
+import { anyJson, readJson } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 
 /** The run cache's own directory name (under a project's node_modules/.cache/, or the OS temp dir). */

@@ -14,7 +14,7 @@ import * as verifyCompare from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import * as guards from "../design-to-code/doc-guards.ts";
 import { isVerifyMeasured, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { BehaviourCheck, MeasuredBehaviour, MeasuredNode, MeasuredStyles, ProbeIdentity, ReportBehaviour, ScreenDoc, VerifyMeasured, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { malformed, screenExport } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";

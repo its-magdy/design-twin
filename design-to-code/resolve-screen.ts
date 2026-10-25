@@ -50,7 +50,7 @@
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 import path from "node:path";
 import type { IndexRow, ResolveScreenResult, ResolveStageKind, ScreenCandidate } from "./types.ts";
-import { findExportRoot, hasExportIndex, readExportIndex } from "./export-index.ts";
+import { findExportRoot, hasExportIndex, readExportIndex } from "../bridge/src/export-reader.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isNodeId, toNodeId } from "../bridge/src/node-id.ts";
 import { nodeIdFromStem, screenStem } from "../bridge/src/pages-layout.ts";
@@ -59,7 +59,7 @@ import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
 import { runCli } from "./proc.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 
-// The rows resolved against are export-index.ts's (every screen the export indexes); design/plan/*.json is read through
+// The rows resolved against are bridge/src/export-reader.ts's (every screen the export indexes); design/plan/*.json is read through
 // node-artefacts.ts. A file that is absent, unreadable or not that kind of document contributes no rows.
 
 // A Figma node id looks like "1234:5678", or for a layer inside an instance "I20173:137670;72:3148" (what
@@ -160,7 +160,7 @@ function compactKeys(q: string): string[] {
 // Never throws on a query that matches nothing or matches many — that is the expected, handled case.
 function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: string | null }): ResolveScreenResult {
   const options = opts || {};
-  // every screen the export indexes (export-index.ts): the root index's rows and every page index's
+  // every screen the export indexes (bridge/src/export-reader.ts): the root index's rows and every page index's
   const rows = readExportIndex(exportDir).rows;
   const q = String(query || "").trim();
   const qFold = fold(q);

@@ -250,6 +250,20 @@ const viaInline = runSeed(
 ok("[seed-inline-catalog] pre-split inline components array still resolves",
   !!viaInline && !!viaInline.Chip && viaInline.Chip.nodeId === "3:4");
 
+// The current layout: the map is design/components.json, the export (and its manifest) design/export/ — the seeder
+// reads the export the design dir holds, not a design/design-system.json that is no longer there.
+const viaExportDir = runSeed(
+  "export-dir-lookup",
+  { "a.figma.tsx": "// url=https://figma.com/design/x?node-id=5-6\n// source=Tag.tsx\n" },
+  null,
+  {
+    "export/design-system.json": { files: { componentsLocal: "design-system/components.local.json" } },
+    "export/design-system/components.local.json": { components: [{ id: "5:6", name: "Tag" }] },
+  }
+);
+ok("[seed-export-dir] node-id resolved through design/export/'s manifest",
+  !!viaExportDir && !!viaExportDir.Tag && viaExportDir.Tag.nodeId === "5:6");
+
 console.log("\nseed-components — `dtwin seed` (routed by figma-pull.ts before server-core loads):");
 {
   // Driven through the real CLI entry: `dtwin seed` must need no bridge, no token and no plugin, and
@@ -3360,10 +3374,10 @@ void (async () => {
       ],
     }));
     fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageA", "index.json"), JSON.stringify({
-      layers: [{ name: "S1", file: "pages/PageA/S1.json", exportedAt: at }, { name: "S2", file: "pages/PageA/S2.json", exportedAt: at }, { name: "S3", file: "pages/PageA/S3.json", exportedAt: at }],
+      layers: [{ id: "1:1", name: "S1", file: "pages/PageA/S1.json", exportedAt: at }, { id: "1:2", name: "S2", file: "pages/PageA/S2.json", exportedAt: at }, { id: "1:3", name: "S3", file: "pages/PageA/S3.json", exportedAt: at }],
     }));
     fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageB", "index.json"), JSON.stringify({
-      layers: [{ name: "S4", file: "pages/PageB/S4.json", exportedAt: at }, { name: "S5", file: "pages/PageB/S5.json", exportedAt: at }],
+      layers: [{ id: "2:1", name: "S4", file: "pages/PageB/S4.json", exportedAt: at }, { id: "2:2", name: "S5", file: "pages/PageB/S5.json", exportedAt: at }],
     }));
     const checks3 = doctor.checkProject(dsDir3);
     const exp3 = byId(checks3, "export");
@@ -3387,20 +3401,20 @@ void (async () => {
     const c1 = doctor.checkProject(badDir).filter((c) => c.id === "export");
     ok("[doctor] a wrong-shaped pages/index.json is a warn naming the file and the field; the summary line stays first",
       c1.length === 2 && c1[0]?.status === "ok" && /DS File/.test(c1[0]?.detail ?? "")
-      && c1[1]?.status === "warn" && /pages\/index\.json is not the expected shape: .*pageDirs/.test(c1[1]?.detail ?? ""));
+      && c1[1]?.status === "warn" && /pages\/index\.json is not the export's pages\/index\.json: .*`pageDirs`/.test(c1[1]?.detail ?? ""));
     fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: [{ index: "pages/PageA/index.json" }] }));
     fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), "{truncated");
     const c2 = doctor.checkProject(badDir).filter((c) => c.id === "export");
     ok("[doctor] a truncated per-page index is a warn naming THAT file",
       c2.some((c) => c.status === "warn" && /pages\/PageA\/index\.json is not valid JSON/.test(c.detail)));
-    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({ layers: [null, { file: "pages/PageA/S1.json", exportedAt: at }] }));
+    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({ layers: [null, { id: "1:1", name: "S1", file: "pages/PageA/S1.json", exportedAt: at }] }));
     const c3 = doctor.checkProject(badDir).filter((c) => c.id === "export");
     ok("[doctor] a valid index (a null row is skipped) adds no warn and counts the screen",
       c3.length === 1 && /1 screen\(s\)/.test(c3[0]?.detail ?? ""));
     fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: { name: "x" } }));
     const c4 = doctor.checkProject(badDir).filter((c) => c.id === "export");
     ok("[doctor] a non-string design-system `file` is a warn, never printed as [object Object]",
-      c4.some((c) => /design-system\.json is not the expected shape: .*file/.test(c.detail)) && !c4.some((c) => /\[object Object\]/.test(c.detail)));
+      c4.some((c) => /design-system\.json is not a design-system manifest: .*`file`/.test(c.detail)) && !c4.some((c) => /\[object Object\]/.test(c.detail)));
   }
   {
     const mcpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-mcpshape-"));

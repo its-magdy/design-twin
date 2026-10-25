@@ -16,7 +16,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import { isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { liveStatusFile } from "../design-to-code/verify-run.ts";
 import type { ArtifactCheck, BuildIdentity, CodeInputs, InteractionEvidence, JsonObject, MeasuredNode, MeasuredStyles, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { isJsonObject } from "../design-to-code/types.ts";

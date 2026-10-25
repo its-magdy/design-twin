@@ -24,7 +24,7 @@ import { isJsonObject } from "../design-to-code/types.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isVerifyExpectation, isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import type { DocGuard } from "../bridge/src/read-json.ts";
 import { check as ok, report } from "./assert.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { cliRunner } from "./cli-runner.ts";

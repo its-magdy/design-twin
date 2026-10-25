@@ -17,7 +17,7 @@ import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition 
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./visible-tree.ts";
 import { loadDocFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
-import { anyJson } from "./read-json.ts";
+import { anyJson } from "../bridge/src/read-json.ts";
 import { isComponentsCatalog } from "./doc-guards.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";

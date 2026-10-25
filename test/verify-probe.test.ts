@@ -17,7 +17,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import type { BuiltExpectation, ExpectInput } from "../design-to-code/verify-expect.ts";
 import type { FontSpec, MeasuredNode, MeasuredStyles, ProbeIdentity, ScreenExport, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
 import { isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
-import { readJsonOrNull } from "../design-to-code/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { malformed, screenExport } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";

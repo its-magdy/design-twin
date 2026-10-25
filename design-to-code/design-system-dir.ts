@@ -9,9 +9,9 @@ import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import { loadSplitFile, readOptionalDoc } from "./catalog-input.ts";
 import { exitCli } from "./proc.ts";
-import { readJsonOrNull } from "./read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
-import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
+import { exportRootOfScreen, readExportIndex } from "../bridge/src/export-reader.ts";
 import { DESIGN_SYSTEM_FILES, STYLE_KIND_ROWS } from "../bridge/src/design-system-layout.ts";
 import { nodeIdFromSafe, safe } from "../bridge/src/pages-layout.ts";
 import { COMPONENTS as LIBRARY_COMPONENTS, INDEX as LIBRARIES_INDEX, ROOT as LIBRARIES_DIR } from "../bridge/src/library-layout.ts";
@@ -188,7 +188,7 @@ const catalogSetLine = (sources: readonly CatalogSource[]): string =>
 export interface FrameTexts { all: string[]; shallow: string[] }
 /** What the export knows about frames OTHER than the audited one, read off disk. */
 export interface ExportNeighbours {
-  /** every frame the export indexes (export-index.ts: the root index's rows and every page index's — id, name,
+  /** every frame the export indexes (bridge/src/export-reader.ts: the root index's rows and every page index's — id, name,
    *  page/pageId, title, texts); a node is exported when one of these names it */
   layers: IndexRow[];
   /** a row's own texts, read on demand (only when a state is not found) and cached; null if unreadable */

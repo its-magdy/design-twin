@@ -1468,7 +1468,6 @@ function census(nodes, notMeasured) {
 }
 
 // design-to-code/verify-shared.ts
-import path from "node:path";
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -1535,10 +1534,6 @@ function normFamily(v) {
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
-function resolveInside(base, rel, within = base) {
-  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path.sep) ? file : null;
-}
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
   { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
@@ -1668,17 +1663,6 @@ function isProposalList(x) {
   return Array.isArray(x) && x.every(isProposal);
 }
 isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
-function isIndexRowLike(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.name === "string";
-}
-function isPagesRootIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isJsonObject(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
-}
-isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
-function isPageIndex(x) {
-  return isJsonObject(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
-}
-isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
 function isVerifyExpectation(x) {
   return isJsonObject(x) && isJsonObject(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isJsonObject(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
@@ -1828,7 +1812,7 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
@@ -1836,7 +1820,7 @@ var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
 var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 
-// design-to-code/read-json.ts
+// bridge/src/read-json.ts
 var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
@@ -1873,7 +1857,7 @@ function readJsonOrNull(file, guard) {
 }
 
 // design-to-code/cli-args.ts
-import path3 from "node:path";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -1881,7 +1865,7 @@ import { parseArgs } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import fs2 from "node:fs";
 import os from "node:os";
-import path2 from "node:path";
+import path from "node:path";
 
 // bridge/src/stdio.ts
 import { format, inspect } from "node:util";
@@ -2077,11 +2061,11 @@ function syncOnce(cmd, args, o, attempt) {
   };
   let dir = null;
   if (o.capture !== "pipe") try {
-    dir = fs2.mkdtempSync(path2.join(os.tmpdir(), "dt-spawn-"));
+    dir = fs2.mkdtempSync(path.join(os.tmpdir(), "dt-spawn-"));
   } catch {
   }
   if (dir === null) return piped();
-  const outF = path2.join(dir, "out"), errF = path2.join(dir, "err");
+  const outF = path.join(dir, "out"), errF = path.join(dir, "err");
   try {
     let out = null, err = null;
     try {
@@ -2111,7 +2095,7 @@ function runSync(cmd, args, o = {}) {
   const valid = (r2) => o.expect === void 0 ? true : o.expect === "stdout" ? r2.stdout.length > 0 : o.expect instanceof RegExp ? o.expect.test(r2.stdout) || o.expect.test(r2.stderr) : o.expect(r2);
   let r = syncOnce(cmd, args, o, 1);
   if (!valid(r) && r.status === 0 && !r.error) {
-    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path2.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
+    if (!o.quiet) process.stderr.write(`[spawn-helper] ${path.basename(cmd)} ${args.slice(0, 2).join(" ")}: exit 0 but its output failed the check (stdout ${r.stdout.length} B) \u2014 re-running once
 `);
     r = syncOnce(cmd, args, o, 2);
   }
@@ -2125,7 +2109,7 @@ var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
 var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path3.join(path3.dirname(SELF), name + path3.extname(SELF)))}`;
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -4300,29 +4284,29 @@ function scrimRead(_arg) {
     const stack = document.elementsFromPoint(pt.x, pt.y);
     const top = stack[0];
     if (top && hitDesc === "nothing") hitDesc = window.__dt.describe(top, ["id"]);
-    let safe = true, found = false;
+    let safe2 = true, found = false;
     for (const e of stack) {
       if (native && e === d) {
         found = true;
         break;
       }
       if (box && (e === box || box.contains(e))) {
-        safe = false;
+        safe2 = false;
         break;
       }
       if (e.matches(CONTROL) || e.closest(CONTROL) !== null) {
-        safe = false;
+        safe2 = false;
         break;
       }
       if (!covers(e) || !layered(e)) {
-        safe = false;
+        safe2 = false;
         break;
       }
       const bg = getComputedStyle(e).getPropertyValue("background-color");
       const a = alpha(bg);
       if (a === null) {
         unreadable = unreadable ?? bg;
-        safe = false;
+        safe2 = false;
         break;
       }
       if (a > 0.05) {
@@ -4331,7 +4315,7 @@ function scrimRead(_arg) {
         break;
       }
     }
-    if (found && safe) {
+    if (found && safe2) {
       point = pt;
       break;
     }
@@ -5660,21 +5644,59 @@ function renderDiff(build, d) {
   return { w, h, data: out };
 }
 
-// bridge/src/project-layout.ts
+// bridge/src/export-reader.ts
 import path4 from "node:path";
+
+// bridge/src/project-layout.ts
+import path3 from "node:path";
 var DESIGN_DIR = "design";
 var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path4.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path4.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path4.join(DESIGN_DIR, "codeconnect.local.json");
-var PLAN_DIR = path4.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path4.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path4.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path4.join(DESIGN_DIR, ".sync");
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path3.join(DESIGN_DIR, ".sync");
 var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path4.sep).join("/");
+var slashed = (p) => p.split(path3.sep).join("/");
 var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+
+// bridge/src/pages-layout.ts
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+
+// bridge/src/design-system-layout.ts
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// bridge/src/export-reader.ts
+function resolveInside(base, rel, within = base) {
+  const root = path4.resolve(within), file = path4.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path4.sep) ? file : null;
+}
 
 // design-to-code/probe-visual.ts
 var FONTS_CAP_MS = 5e3;
@@ -5872,18 +5894,6 @@ function visualLine(v) {
 // design-to-code/verify-sets.ts
 import fs7 from "node:fs";
 import path9 from "node:path";
-
-// bridge/src/pages-layout.ts
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
 
 // design-to-code/verify-status.ts
 import path8 from "node:path";

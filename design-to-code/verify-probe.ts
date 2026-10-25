@@ -63,7 +63,7 @@ import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPai
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-shared.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
-import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { anyJson, readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
 import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured,
