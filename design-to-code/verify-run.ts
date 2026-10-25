@@ -141,11 +141,11 @@ export class RunEnded extends Error {
 }
 /** The refusal for a write of run `runId` over the status `prev` (readStatus's), or null when that run has not ended
  *  (another run, a v1 file, no status). The one place the "already ended" sentence is built. */
-export function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunEnded | null {
+function endedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunEnded | null {
   return prev && prev !== "v1" && prev.runId === runId && TERMINAL_PHASES.includes(prev.phase) ? new RunEnded(prev.runId, prev.phase, prev.detail) : null;
 }
 /** A write of a run the probe started itself (no --run) while ANOTHER run of the screen is open: a verifier's live run
- *  writes the same files, so the probe measures nothing beside it. Refused by writeStatus itself (`alone`), so a run
+ *  writes the same files, so the probe measures nothing beside it. Refused by writeStatus itself (admitWrite), so a run
  *  that opens after the probe looked is not written over either. Another probe's own run that is still open is named
  *  as one (its pid could not be found gone: another host, or the pid runs) — nobody waits for that. */
 export class RunOpen extends Error {
@@ -171,7 +171,7 @@ function ownRunOpen(open: VerifyStatusV2, o: OwnRunStamp, why?: string): string 
 function abandonedWhy(o: OwnRunStamp): string {
   return processState(o) === "gone" ? "is gone" : `is past the run's deadline ${o.deadline}`;
 }
-/** A later write of a run whose earlier write was recorded (`continues`: a probe's run, --run or its own, after its
+/** A later write of a run whose earlier write was recorded (RunWriter.measuring: a probe's run, --run or its own, after its
  *  `measuring`) while the status names ANOTHER run, in any phase: the run was replaced — a later probe ended it as
  *  abandoned (a stopped or sleeping probe past its deadline) and started its own, or a newer run of the screen started
  *  while a --run probe measured; either may have ended since. Nothing more is written in it, so a late probe never writes
@@ -184,13 +184,13 @@ export class RunReplaced extends Error {
 }
 /** The refusal for a continuing write of run `runId` over the status `prev` (readStatus's), or null while the status still
  *  names that run (or there is none, or only a v1 file). The one place that sentence is built. */
-export function replacedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunReplaced | null {
+function replacedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): RunReplaced | null {
   return prev && prev !== "v1" && prev.runId !== runId ? new RunReplaced(runId, prev) : null;
 }
 /** Another open run over `prev` (readStatus's) that a probe without --run left behind: its own run, whose probe is
  *  provably gone (same machine, the pid no longer exists — file-lock.ts processState) or that is past its deadline
  *  (a reused pid). The next own run ends it. */
-export function abandonedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): VerifyStatusV2 | null {
+function abandonedRun(prev: VerifyStatusV2 | "v1" | null, runId: string): VerifyStatusV2 | null {
   return prev && prev !== "v1" && prev.runId !== runId && !TERMINAL_PHASES.includes(prev.phase) && prev.ownRun && (processState(prev.ownRun) === "gone" || overdue(prev.ownRun)) ? prev : null;
 }
 /** Another v2 run over `prev` (readStatus's) that has not ended — open, abandoned or not. */
@@ -200,14 +200,14 @@ function otherOpenRun(prev: VerifyStatusV2 | "v1" | null, runId: string): Verify
 /** The refusal for a write of run `runId` that must be the screen's only open run, over the status `prev` (readStatus's):
  *  null when no other v2 run is open (none, a v1 file, an ended run, `runId` itself) or the open one is abandoned
  *  (abandonedRun: the write ends it). The one place that sentence is built. */
-export function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunOpen | null {
+function openRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunOpen | null {
   const open = otherOpenRun(prev, runId);
   return open && !abandonedRun(open, runId) ? new RunOpen(base, open) : null;
 }
 /** A `--status` write of run `runId` (named by --run, or the run in progress when it read the status), or a write of the
  *  probe's --run, while the status names ANOTHER run that has not ended: that run's writer goes on in it (a verifier's, an orchestrator's, a probe's own —
  *  one left behind too), and a record of `runId` would replace it in the status and publish over it. Refused by
- *  writeStatus itself (`current`), so a run started after the writer looked is not written over either. Another probe's
+ *  writeStatus itself (admitWrite), so a run started after the writer looked is not written over either. Another probe's
  *  own run is named as one (when and by which pid it started, and when abandonedRun says so, that its probe is gone or
  *  past its deadline) — nobody waits for that: if no probe is running, it is ended. */
 export class RunNotCurrent extends Error {
@@ -226,10 +226,47 @@ export class RunNotCurrent extends Error {
  *  (readStatus's): null when no other v2 run is open (none, a v1 file, an ended run, `runId` itself). openRun's test
  *  without its abandoned-run exemption — only a probe's own run ends an abandoned one. The one place that sentence is
  *  built. */
-export function notCurrentRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunNotCurrent | null {
+function notCurrentRun(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string): RunNotCurrent | null {
   const open = otherOpenRun(prev, runId);
   return open ? new RunNotCurrent(base, runId, open) : null;
 }
+// ---------------------------------------------------------------- run admission
+/** Who writes a record of a run — what the admission rule asks of the status the record goes over. */
+export interface RunWriter {
+  /** "named": a run its writer names (verify-screen --status with --run or the run in progress, the probe's --run) — never
+   *  written over another run that has not ended, an abandoned one included, and over one that has ended it records that run
+   *  as `replaced`; "own": the probe's own run (no --run) — the screen's only open run: refused beside another open run, except
+   *  one another probe abandoned (its pid gone, or past its deadline), which the write ends first; "new": a run its writer has
+   *  just started (verify-screen --status --new-run) — only the ended-run check (a seeding write in a test, too) */
+  run: "named" | "own" | "new";
+  /** the run's `measuring` write was recorded (the probe's run, --run or its own): every later write continues the run — refused
+   *  once the status names another run, in any phase (it was replaced: this writer was late) */
+  measuring?: boolean;
+}
+/** Why a write of a run is refused: the run ended, another run is open (own run: RunOpen; named run: RunNotCurrent), or it was
+ *  replaced. */
+export type RunRefusal = RunEnded | RunOpen | RunNotCurrent | RunReplaced;
+/** What the admission rule says of one write: refused, admitted after ending the run another probe abandoned, or admitted (null). */
+export type Admission = { refused: RunRefusal } | { ends: VerifyStatusV2 } | null;
+/**
+ * The one admission rule for a status write of run `runId` by `writer` over the status `prev` (readStatus's). In order: the
+ * run itself has ended (RunEnded); its own run beside another open run that is not abandoned (RunOpen); a named run while
+ * another run has not ended (RunNotCurrent); a run whose `measuring` was recorded while the status names another run
+ * (RunReplaced — after the open-run checks, so a run that replaced it and is still open is refused as open, with how to wait
+ * for it); else its own run ends an abandoned one first ({ends}). writeStatus applies it under the status lock; a writer that
+ * checks before it starts (verify-screen --status, the probe's start and its re-check after a refused write) applies the same
+ * rule to its own read, without the lock.
+ */
+export function admitWrite(base: string, prev: VerifyStatusV2 | "v1" | null, runId: string, writer: RunWriter): Admission {
+  const refusal = endedRun(prev, runId)
+    ?? (writer.run === "own" ? openRun(base, prev, runId) : null)
+    ?? (writer.run === "named" ? notCurrentRun(base, prev, runId) : null)
+    ?? (writer.measuring ? replacedRun(prev, runId) : null);
+  if (refusal) return { refused: refusal };
+  const left = writer.run === "own" ? abandonedRun(prev, runId) : null;
+  return left ? { ends: left } : null;
+}
+
 /** What a status write does around the record itself, inside its lock (see writeStatus). */
 export interface StatusWriteHooks {
   /** after the ended-run check, before the record: files the record stands for (the probe's measured file and
@@ -238,20 +275,12 @@ export interface StatusWriteHooks {
   before?: () => Pick<StatusWrite, "measuredSha256">;
   /** after the record: what must not land in a run that ended meanwhile (a --publish commit, the durable copy) */
   after?: (doc: VerifyStatusV2) => void;
-  /** the write is of a run that must be the screen's only open one (the probe's own run): refused (RunOpen) while
-   *  another run is open — checked with the ended-run check, before `before`. An abandoned one (abandonedRun) is ended
-   *  `failed` first, under the same lock, and handed to `abandoned`. Only such writes carry the run's ownRun forward (and
-   *  one that ends the run) */
-  alone?: boolean;
+  /** who writes (admitWrite — checked under the lock, before `before`); absent: { run: "new" }. Only an own run's writes carry
+   *  its ownRun forward (and a write that ends the run); a named run's first write over another run that has ended records it
+   *  as `replaced` (replacedNote says so) */
+  writer?: RunWriter;
+  /** an own run's write ended a run another probe abandoned (`failed`, under the same lock) first: that record */
   abandoned?: (ended: VerifyStatusV2) => void;
-  /** the write continues a run whose earlier write was recorded (a probe's run, --run or its own, after its `measuring`): refused
-   *  (RunReplaced) when the status now names another run, in any phase — checked before `before` */
-  continues?: boolean;
-  /** the write is of a run its writer names (verify-screen --status without --new-run, the probe with --run): refused (RunNotCurrent) when the
-   *  status names another run that has not ended, an abandoned one included — checked with the ended-run check, before
-   *  `before`. An ended run or no status takes it (the record of a measured file after the status's run ended) — over
-   *  ANOTHER run that ended, the record names that run as `replaced` (replacedNote says so) */
-  current?: boolean;
 }
 /** How long a status write waits for another one (the probe writes a measured file and its screenshots inside). */
 const STATUS_LOCK = { waitMs: 15_000 };
@@ -260,14 +289,13 @@ const STATUS_LOCK = { waitMs: 15_000 };
  * when it is the same run, else 1. Within one run the shas, the published list, the failed probe attempts and the run
  * it replaced carry forward (a `driving` write after the probe's `measured` still names the measured file the probe
  * wrote; published is the run's union); a write with probeFailed counts one more attempt, and the PROBE_ATTEMPTS-th
- * ends the run `failed`. A hooks.current write over ANOTHER run that has ended records that run as `replaced`.
- * Serialised by `<live status>.lock` (file-lock.ts): read → ended-run (and open-run) check → hooks.before → write → hooks.after
+ * ends the run `failed`. A named run's write over ANOTHER run that has ended records that run as `replaced`.
+ * Serialised by `<live status>.lock` (file-lock.ts): read → admitWrite (hooks.writer) → hooks.before → write → hooks.after
  * happen with no other status write of this screen in between, so two writers never write the same rev and a run
- * that ends is not reopened, published into or given files by a writer that checked it earlier. With hooks.alone, another
- * probe's own run that its probe left open (abandonedRun) is first ended `failed` under the same lock (hooks.abandoned).
+ * that ends is not reopened, published into or given files by a writer that checked it earlier. An own run's write first
+ * ends `failed`, under the same lock, a run another probe abandoned (hooks.abandoned).
  * Throws RunCacheUnwritable when the run cache refuses the lock or the write (sandbox write scope, read-only mount),
- * RunEnded when the same run has already ended, RunReplaced (hooks.continues) when the status names another run,
- * RunOpen (hooks.alone) or RunNotCurrent (hooks.current) when another run is open, LockBusy when another status write holds the lock past 15 s (or
+ * admitWrite's refusal (RunEnded, RunOpen, RunNotCurrent, RunReplaced), LockBusy when another status write holds the lock past 15 s (or
  * LockLost, a LockBusy, when the lock was taken from this write before the hook's files or the record — neither is
  * written then); a hook's own error is thrown as it is.
  */
@@ -276,17 +304,11 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
   const lock = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
   try {
     const prev = readStatus(base);
-    const ended = endedRun(prev, p.runId);
-    if (ended) throw ended;
-    const open = hooks.alone ? openRun(base, prev, p.runId) : null;
-    if (open) throw open;
-    const other = hooks.current ? notCurrentRun(base, prev, p.runId) : null;
-    if (other) throw other;
-    // (after the open-run check: an open run that replaced it is refused as open, with how to wait for it)
-    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
-    if (replaced) throw replaced;
+    const writer: RunWriter = hooks.writer ?? { run: "new" };
+    const admission = admitWrite(base, prev, p.runId, writer);
+    if (admission && "refused" in admission) throw admission.refused;
     const put = (doc: VerifyStatusV2): void => { lock.assertMine(); inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n")); };
-    const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
+    const left = admission?.ends;
     if (left?.ownRun) {
       const o = left.ownRun;
       const endDoc: VerifyStatusV2 = { ...left, rev: left.rev + 1, phase: "failed", at: new Date().toISOString(), by: "verify-probe",
@@ -302,7 +324,7 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
       return v !== undefined ? { [k]: v } : {};
     };
     const published = w.published !== undefined || (same && same.published) ? [...new Set([...(same && same.published) || [], ...(w.published || [])])].sort() : undefined;
-    // a probe's own run stays one only through that probe's own writes (`alone`), or a write that ends it: a writer that
+    // a probe's own run stays one only through that probe's own writes (an own writer), or a write that ends it: a writer that
     // continues the run (an orchestrator's --status without --run, a verifier's probe --run) adopts it — no later probe
     // may take it for abandoned while they work in it
     // the run's failed probe attempts carry forward; one more is counted here, under the lock, so two probes of the
@@ -310,10 +332,10 @@ export function writeStatus(base: string, p: StatusWrite, hooks: StatusWriteHook
     const failures = w.probeFailed !== undefined ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
     const phase: StatusPhase = w.probeFailed !== undefined && failures !== undefined && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
     const detail = w.probeFailed !== undefined && failures !== undefined ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
-    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : undefined);
-    // a run its writer names (`current`) written over ANOTHER run — one that has ended, the checks above refused any
+    const ownRun = w.ownRun ?? (same && (writer.run === "own" || TERMINAL_PHASES.includes(phase)) ? same.ownRun : undefined);
+    // a run its writer names written over ANOTHER run — one that has ended, the checks above refused any
     // other — says so in its record: a late record of an older run never replaces a newer one silently
-    const over: ReplacedRun | undefined = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
+    const over: ReplacedRun | undefined = writer.run === "named" && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc: VerifyStatusV2 = {
       schema: STATUS_SCHEMA, screen: path.basename(base), runId: w.runId, rev: same ? same.rev + 1 : 1, phase, detail, at: new Date().toISOString(), by: w.by,
       ...pick("expectationSha256"), ...pick("measuredSha256"), ...pick("evidenceSha256"),
@@ -504,19 +526,16 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
-  // an ended run stays ended: a later write would replace its phase and detail (a `done` over the verifier's
-  // `blocked` lost the block, and --compare saw a clean run) — the next attempt is a new run. Said here, before the
-  // measured-file checks and the staging copy, so an ended run is not refused for something else; writeStatus
-  // checks again under its lock (a run that ends after this read)
-  const ended = endedRun(prev, runId);
-  if (ended) { console.error(ended.message); return 2; }
-  // a run of its writer's (not --new-run) is written only while no other run is open: a recovery or end-it command run
-  // late, after another run started, would replace that run in the status (and a `done` publish over it). Checked again
-  // under the lock — that also catches a run started between the read above and the write (the inferred id is stale then;
-  // a run that starts AND ends inside that gap is not caught: an ended run takes the record by design)
-  const current = !f["new-run"];
-  const other = current ? notCurrentRun(base, prev, runId) : null;
-  if (other) { console.error(other.message); return 2; }
+  // admitWrite: an ended run stays ended (a later write would replace its phase and detail: a `done` over the verifier's
+  // `blocked` lost the block, and --compare saw a clean run — the next attempt is a new run), and a run of its writer's (not
+  // --new-run) is written only while no other run is open (a recovery or end-it command run late, after another run started,
+  // would replace that run in the status, and a `done` publish over it). Said here, before the measured-file checks and the
+  // staging copy, so the run is not refused for something else; writeStatus checks again under its lock — that also catches
+  // a run that ends, or starts, after this read (the inferred id is stale then; a run that starts AND ends inside that gap is
+  // not caught: an ended run takes the record by design)
+  const writer: RunWriter = { run: f["new-run"] ? "new" : "named" };
+  const admission = admitWrite(base, prev, runId, writer);
+  if (admission && "refused" in admission) { console.error(admission.refused.message); return 2; }
   const S = path.basename(base), dir = path.dirname(base);
   // the run cache must take a write BEFORE anything is checked or published (a `done` that publishes, then cannot
   // record itself, would leave design/verify changed and the run unfinished)
@@ -561,7 +580,7 @@ function statusRun(screen: string | undefined, f: StatusFlags, usage: string): n
     // the publish commit and the durable copy happen inside the status write's lock, after the record: a run that
     // another writer ends meanwhile is ended before this write (refused, nothing published) or after the commit
     doc = writeStatus(base, { runId, phase, by, ...(f.detail !== undefined ? { detail: f.detail } : {}), ...shas, ...(prep ? { published: prep.files } : {}) }, {
-      current,
+      writer,
       after: (d) => { prep?.commit(); if (phase === "done") publishStatus(base, d); },
     });
   } catch (e) { prep?.abort(); throw e; } // refused (the run ended, or another opened, meanwhile; the cache is unwritable; the lock is busy): nothing is published

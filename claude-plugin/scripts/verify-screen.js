@@ -2829,25 +2829,26 @@ function notCurrentRun(base, prev, runId) {
   const open = otherOpenRun(prev, runId);
   return open ? new RunNotCurrent(base, runId, open) : null;
 }
+function admitWrite(base, prev, runId, writer) {
+  const refusal = endedRun(prev, runId) ?? (writer.run === "own" ? openRun(base, prev, runId) : null) ?? (writer.run === "named" ? notCurrentRun(base, prev, runId) : null) ?? (writer.measuring ? replacedRun(prev, runId) : null);
+  if (refusal) return { refused: refusal };
+  const left = writer.run === "own" ? abandonedRun(prev, runId) : null;
+  return left ? { ends: left } : null;
+}
 var STATUS_LOCK = { waitMs: 15e3 };
 function writeStatus(base, p, hooks = {}) {
   const live = liveStatusFile(base), dir = path16.dirname(base);
   const lock = inRunCache(dir, () => acquireFileLock(lockFileOfStatus(base), STATUS_LOCK));
   try {
     const prev = readStatus(base);
-    const ended = endedRun(prev, p.runId);
-    if (ended) throw ended;
-    const open = hooks.alone ? openRun(base, prev, p.runId) : null;
-    if (open) throw open;
-    const other = hooks.current ? notCurrentRun(base, prev, p.runId) : null;
-    if (other) throw other;
-    const replaced = hooks.continues ? replacedRun(prev, p.runId) : null;
-    if (replaced) throw replaced;
+    const writer = hooks.writer ?? { run: "new" };
+    const admission = admitWrite(base, prev, p.runId, writer);
+    if (admission && "refused" in admission) throw admission.refused;
     const put = (doc2) => {
       lock.assertMine();
       inRunCache(dir, () => writeFileAtomic(live, JSON.stringify(doc2, null, 2) + "\n"));
     };
-    const left = hooks.alone ? abandonedRun(prev, p.runId) : null;
+    const left = admission?.ends;
     if (left?.ownRun) {
       const o = left.ownRun;
       const endDoc = {
@@ -2872,8 +2873,8 @@ function writeStatus(base, p, hooks = {}) {
     const failures = w.probeFailed !== void 0 ? (same?.probeFailures ?? 0) + 1 : same?.probeFailures;
     const phase = w.probeFailed !== void 0 && failures !== void 0 && failures >= PROBE_ATTEMPTS ? "failed" : w.phase;
     const detail = w.probeFailed !== void 0 && failures !== void 0 ? `${w.detail ?? ""} (${probeAttemptNote(failures, w.probeFailed)})` : w.detail ?? "";
-    const ownRun = w.ownRun ?? (same && (hooks.alone || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
-    const over = hooks.current && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
+    const ownRun = w.ownRun ?? (same && (writer.run === "own" || TERMINAL_PHASES.includes(phase)) ? same.ownRun : void 0);
+    const over = writer.run === "named" && prev && prev !== "v1" && prev.runId !== p.runId ? { runId: prev.runId, phase: prev.phase, at: prev.at } : same?.replaced;
     const doc = {
       schema: STATUS_SCHEMA,
       screen: path16.basename(base),
@@ -3052,15 +3053,10 @@ function statusRun(screen, f, usage) {
     return 2;
   }
   const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
-  const ended = endedRun(prev, runId);
-  if (ended) {
-    console.error(ended.message);
-    return 2;
-  }
-  const current = !f["new-run"];
-  const other = current ? notCurrentRun(base, prev, runId) : null;
-  if (other) {
-    console.error(other.message);
+  const writer = { run: f["new-run"] ? "new" : "named" };
+  const admission = admitWrite(base, prev, runId, writer);
+  if (admission && "refused" in admission) {
+    console.error(admission.refused.message);
     return 2;
   }
   const S = path16.basename(base), dir = path16.dirname(base);
@@ -3101,7 +3097,7 @@ function statusRun(screen, f, usage) {
   let doc;
   try {
     doc = writeStatus(base, { runId, phase, by, ...f.detail !== void 0 ? { detail: f.detail } : {}, ...shas, ...prep ? { published: prep.files } : {} }, {
-      current,
+      writer,
       after: (d) => {
         prep?.commit();
         if (phase === "done") publishStatus(base, d);

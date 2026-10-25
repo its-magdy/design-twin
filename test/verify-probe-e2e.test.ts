@@ -397,7 +397,7 @@ check("a run ended while the page is measured → exit 2, nothing in --out's dir
 if (rA1.status !== 2 || leftA1.length) console.log(`${rA1.stderr}\n  left: ${leftA1.join(", ")}`);
 
 // --run, and ANOTHER run is queued (--new-run) while the page is measured: a stale verifier's probe never writes over the
-// newer run — its `measured` write is refused (`current`): exit 2, no files, the newer run's status kept
+// newer run — its `measured` write is refused (a named run's admission): exit 2, no files, the newer run's status kept
 const stageA5 = path.join(tmp, "stageA5", SET);
 onPage = () => writeStatus(path.join(vdir, SET), { runId: "run-e2e-16", phase: "queued", by: "orchestrator" });
 const rA5 = await probe(["--expected", path.join(vdir, SET + ".expected.json"), "--url", url(), "--out", outOf(stageA5), "--project", ROOT, "--run", "run-e2e-15"]);
@@ -502,6 +502,50 @@ else {
   check("no --run, replaced by a run that ended while measuring, its `done` write refused (read-only run cache) → exit 2, no files in --out's directory, the replacement's done status kept, no next step",
     rA4.status === 2 && leftA4.length === 0 && stA4?.runId === "run-e2e-14" && stA4.phase === "done" && /was replaced by run run-e2e-14 \(done\) while this probe ran/.test(rA4.stderr) && !/^next /m.test(rA4.stderr));
   if (rA4.status !== 2 || leftA4.length) console.log(`${rA4.stderr}\n  left: ${leftA4.join(", ")}`);
+}
+// no --run, its OWN run ended by someone else (the end-it command a refusal prints: --phase failed --run <its id>) while the
+// page is measured, and its `done` write refused by the run cache (read-only): the refused path asks the same admission as
+// the write (admitWrite) — the run has ended, so no files and exit 2 (it used to skip the ended-run check for its own run)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write after its run ended — ${NO_READONLY_DIRS})`);
+else {
+  const stageA9 = path.join(tmp, "stageA9", SET);
+  const liveA2 = liveStatusFile(baseA2);
+  const cacheA9 = path.dirname(liveA2);
+  let ownId = "";
+  onPage = () => {
+    const st = readStatus(liveA2);
+    ownId = typeof st?.runId === "string" ? st.runId : "";
+    writeStatus(baseA2, { runId: ownId, phase: "failed", by: "agent", detail: "ended by hand" });
+    fs.chmodSync(cacheA9, 0o555);
+  };
+  const rA9 = await probe(["--expected", expected, "--url", url(), "--out", outOf(stageA9), "--project", ROOT]);
+  onPage = null;
+  fs.chmodSync(cacheA9, 0o755);
+  const stA9 = readStatus(liveA2);
+  const leftA9 = fs.existsSync(path.dirname(stageA9)) ? fs.readdirSync(path.dirname(stageA9)) : [];
+  check("no --run, its own run ended while measuring, its `done` write refused (read-only run cache) → exit 2 'already ended at failed', no files in --out's directory, the failed status kept, no next step",
+    ownId !== "" && rA9.status === 2 && leftA9.length === 0 && stA9?.runId === ownId && stA9.phase === "failed"
+    && rA9.stderr.includes(`run ${ownId} already ended at failed (ended by hand)`) && !/^next /m.test(rA9.stderr));
+  if (rA9.status !== 2 || leftA9.length) console.log(`${rA9.stderr}\n  left: ${leftA9.join(", ")}`);
+}
+// no --run, a verifier's run opened (still open) while the page is measured, and its `done` write refused by the run cache
+// (read-only): the refused path asks the write's own admission — an own run's (RunOpen, how to wait for that run), not a
+// named run's (RunNotCurrent)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write beside an open run — ${NO_READONLY_DIRS})`);
+else {
+  const stageA10 = path.join(tmp, "stageA10", SET);
+  const cacheA10 = path.dirname(liveStatusFile(baseA2));
+  onPage = () => { writeStatus(baseA2, { runId: "run-e2e-24", phase: "queued", by: "orchestrator" }); fs.chmodSync(cacheA10, 0o555); };
+  const rA10 = await probe(["--expected", expected, "--url", url(), "--out", outOf(stageA10), "--project", ROOT]);
+  onPage = null;
+  fs.chmodSync(cacheA10, 0o755);
+  const stA10 = readStatus(liveStatusFile(baseA2));
+  const leftA10 = fs.existsSync(path.dirname(stageA10)) ? fs.readdirSync(path.dirname(stageA10)) : [];
+  check("no --run, another run opened while measuring, its `done` write refused (read-only run cache) → exit 2 with the own-run refusal ('run run-e2e-24 of … is open'), no files, the queued status kept, no next step",
+    rA10.status === 2 && leftA10.length === 0 && stA10?.runId === "run-e2e-24" && stA10.phase === "queued"
+    && rA10.stderr.includes(`verify-probe: run run-e2e-24 of ${SET} is open (phase queued, rev 1, by orchestrator, `) && !/is not the current run/.test(rA10.stderr) && !/^next /m.test(rA10.stderr));
+  if (rA10.status !== 2 || leftA10.length) console.log(`${rA10.stderr}\n  left: ${leftA10.join(", ")}`);
+  writeStatus(baseA2, { runId: "run-e2e-24", phase: "failed", by: "orchestrator", detail: "test over" });
 }
 
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
