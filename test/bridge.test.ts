@@ -44,6 +44,8 @@ import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Check, Report } from "../bridge/src/doctor.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
+import type { Clock } from "../bridge/src/clock.ts";
+import { fakeClock } from "./fake-clock.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // A fixed token so verifyClient's comparisons are deterministic. Every bridge here is created with settingsAt(),
@@ -318,9 +320,10 @@ fs.rmSync(tmp, { recursive: true, force: true });
 let nextPort = 8797;
 // The client is a fake plugin that has not said hello (a case sends one, when it needs to) and answers only the
 // commands `on` handles: every other one is never answered.
-async function connectedBridge(on: Handlers = {}) {
+// `clock`: the clock the bridge's pending requests run on (a fake one steps their budgets and stall checks by hand).
+async function connectedBridge(on: Handlers = {}, clock?: Clock) {
   const port = nextPort++;
-  const bridge = core.createBridge(settingsAt(port), { settleMs: 0 });
+  const bridge = core.createBridge(settingsAt(port), { settleMs: 0, ...ifDefined("clock", clock) });
   const client = fakePlugin(port, { token: TOKEN, hello: false, on, unhandled: HANG });
   await client.opened;
   return { bridge, client };
@@ -343,10 +346,15 @@ async function disconnectErr(code: number, reason: string) {
 
 // The suite reports its own failures (report() sets the exit code); nothing awaits the IIFE.
 void (async () => {
-  const { bridge, client } = await connectedBridge();
+  // The budget runs out on a fake clock (the rule: test/pending-requests.test.ts): stepped past it once the command is out.
+  const toClock = fakeClock();
+  const { bridge, client } = await connectedBridge({}, toClock);
 
   let err: Error | undefined;
-  try { await bridge.request("exportFull", {}, { timeoutMs: 1100 }); } catch (e) { err = asErr(e); } // client never answers
+  const timingOut = bridge.request("exportFull", {}, { timeoutMs: 1100 }).catch((e: unknown) => { err = asErr(e); }); // client never answers
+  await until(() => client.commands().length >= 1, 5000);
+  toClock.advance(1100);
+  await timingOut;
   client.close();
   bridge.close();
 
@@ -2515,8 +2523,8 @@ void (async () => {
           // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
           // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
           if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return fakeSent({ instanceId: "fig-a", file: "slow" }, row); }
-          // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
-          await sleep(10); onProgress?.(TICK1); await sleep(1500);
+          // listPages: one tick, then 0.8 s of silence — past the client's 400 ms guard.
+          await sleep(10); onProgress?.(TICK1); await sleep(800);
           return fakeSent({ exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, row);
         },
       };
@@ -2560,7 +2568,8 @@ void (async () => {
       await pcli.request({ cmd: "ping", client: "c2", timeoutMs: 5000, waitForConnection: 4000 }, { guardMs: 5000 });
       ok("[daemon] …for a connId target too (the bridge decides it never waits for a name)", waits.at(-1) === "c2:4000");
 
-      // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
+      // Timeout: each tick re-arms the client's outer guard (a silence budget: clock.ts's deadline rule, stepped in
+      // test/pending-requests.test.ts) — the wiring, here: ticks off the daemon socket reach it.
       let slowTicks = 0;
       const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, { guardMs: 400, onProgress: () => { slowTicks++; } }).then((r) => r.reply.file, (e: unknown) => "rejected: " + asErr(e).message);
       ok("[daemon-progress] ticks keep a request alive past the client's guard (each one re-arms it)", slow === "slow" && slowTicks === 4);
@@ -2568,7 +2577,7 @@ void (async () => {
       const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, { guardMs: 400, onProgress: () => {} }).then(() => "resolved", (e: unknown) => asErr(e).message);
       ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
         /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
-      await sleep(1400); // let the late listPages answer before stopping the daemon
+      await sleep(700); // let the late listPages answer before stopping the daemon
       ok("[daemon-progress] the progress daemon stops", (await daemon.stop(P_PORT)) === true);
 
       // A daemon that sends malformed progress frames (or sends them unasked) must not break the reply:
@@ -3630,92 +3639,6 @@ void (async () => {
       return stale === true;
     })());
 
-  // ---------------------------------------------------------------- request() stall detector
-  console.log("\nserver-core — request() stall detector (a client that never answers):");
-  {
-    // The fake client in this suite (per its own header comment) — connects, gets `hello`d, but never
-    // replies to a command and never sends a progress frame either. This is EXACTLY the shape of a stall:
-    // a bridge that IS connected, sitting silent for the full timeout.
-    const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.hello({ instanceId: "silent-1", file: "Silent File" });
-    await b.awaitClient(null, 1000);
-    const start = Date.now();
-    let err: Error | undefined;
-    try { await b.request("exportNode", { nodeId: "7314:87192" }, { timeoutMs: 60000, stallMs: 300 }); }
-    catch (e) { err = asErr(e); }
-    const elapsed = Date.now() - start;
-    ok("[stall] a client that never answers and never reports progress is aborted by the STALL timeout, not the full one",
-      !!err && elapsed < 5000 && /dtwin serve/.test(err.message) && /7314:87192/.test(err.message));
-    ws1.close();
-    b.close();
-  }
-  {
-    // The inverse: progress frames arriving periodically must keep resetting the stall clock, so a
-    // genuinely slow (but working) export is never mistaken for a stalled one — a stall detector that
-    // fires on ANY export slower than its window would be worse than the bug it fixes.
-    const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.hello({ instanceId: "slow-1", file: "Slow File" });
-    await b.awaitClient(null, 1000);
-    // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
-    // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
-    const ticker = setInterval(() => { try { ws1.progress({ phase: "pages" }); } catch {} }, 100);
-    const req = b.request("exportFull", {}, { timeoutMs: 5000, stallMs: 300 });
-    let rejectedWithStall = false;
-    req.catch((e: unknown) => { if (e instanceof Error && /connected but sent nothing/.test(e.message)) rejectedWithStall = true; });
-    await sleep(900); // 3x the stall window, with progress the whole time
-    clearInterval(ticker);
-    ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
-    // LIVE 2026-09-25: a working export goes quiet for 14–24 s after a big frame and for 116–135 s
-    // before its reply (catalog build + a 120 MB send). Once the plugin has shown ANY life for this
-    // request, going quiet is work, not a stall — only the real per-command timeout bounds it now.
-    // Before this change the line below saw the stall rejection ~800 ms after the ticks stopped.
-    let outcome: string | undefined;
-    req.then(() => { outcome = "resolved"; }, (e: unknown) => { outcome = e instanceof Error ? e.message : String(e); });
-    await sleep(1500); // 5x the stall window (300) of silence after the last tick
-    ok("[stall] once the plugin has shown life, silence is NOT a stall: the request stays pending past the stall window", outcome === undefined && !rejectedWithStall);
-    await sleep(3000); // now the real timeout (5000 ms from send) has passed
-    ok("[stall] …and the real per-command timeout still bounds it, with the timeout text (not the stall text)",
-      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/connected but sent nothing/.test(outcome));
-    ws1.close();
-    b.close();
-  }
-  {
-    // Life shown BEFORE the command was sent does not count: the first test's client `hello`d and
-    // then went silent, and was aborted — this pins that the disarm reads activity since `sentAt`,
-    // not "ever". A second silent request on a connection that answered progress for an EARLIER
-    // request must still stall.
-    const { bridge: b, client: ws1 } = await connectedBridge();
-    ws1.hello({ instanceId: "silent-2", file: "Silent File 2" });
-    await b.awaitClient(null, 1000);
-    ws1.progress({ phase: "pages" }); // life, but before the request below
-    await sleep(50);
-    let err: Error | undefined;
-    const start = Date.now();
-    try { await b.request("exportFull", {}, { timeoutMs: 60000, stallMs: 300 }); }
-    catch (e) { err = asErr(e); }
-    ok("[stall] activity from BEFORE the command was sent does not disarm the check: a request with no life since send still stalls",
-      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
-    ws1.close();
-    b.close();
-  }
-  {
-    // The disarm is a frame COUNT, not a clock. A client that CONNECTED in the same millisecond as the
-    // send — no hello, nothing since — has shown no life since the send and must still stall. The
-    // timestamp compare this replaced (`lastActivity >= sentAt`, with lastActivity set at connect) read
-    // that connect as life and never fired; the [stall] blocks above and the [cancel] stall check below
-    // needed a hello + a sleep before their request for exactly that reason. Here the request goes out
-    // in the same tick the connect resolved in, and the client never sends a frame.
-    const { bridge: b, client: ws1 } = await connectedBridge();
-    let err: Error | undefined;
-    const start = Date.now();
-    try { await b.request("exportFull", {}, { timeoutMs: 60000, stallMs: 300 }); }
-    catch (e) { err = asErr(e); }
-    ok("[stall] a client that connected in the same instant as the send and sent nothing since still stalls (frame count, not clock)",
-      !!err && Date.now() - start < 5000 && /connected but sent nothing/.test(err.message));
-    ws1.close();
-    b.close();
-  }
-
   // ---------------------------------------------------------------- cancel frames
   // Whenever the bridge gives up on a request it already sent — the stall check, the per-command
   // timeout, close(), the caller's AbortSignal, or (through the daemon) the daemon's own client going
@@ -3728,21 +3651,22 @@ void (async () => {
     const cmdFrames = (p: FakePlugin) => p.commands();
     const cancelsFor = (p: FakePlugin, id: string | undefined) => p.cancels.filter((c) => c === id);
 
-    // (a) the stall check. Pre-change server-core.ts (the stall interval, ~line 797-808) deleted the
-    // request and rejected without a word to the plugin — no cancel frame ever reached it.
+    // (a) the stall check (its rules: test/pending-requests.test.ts). A connected, identified plugin that sends
+    // nothing after the send: the request stalls well inside its budget, with the stall text — the plugin IS
+    // connected and busy, naming the node and `dtwin serve`, never a reconnect — and the plugin gets the cancel.
     {
       const { bridge: b, client: ws1 } = await connectedBridge();
-      // Same setup as the [stall] blocks above: identified, then quiet. Sending in the SAME millisecond
-      // as the connect would read the connect itself as "life since send" and disarm the check.
       ws1.hello({ instanceId: "cancel-stall", file: "Cancel File" });
       await b.awaitClient(null, 1000);
-      await sleep(20);
       let err: Error | undefined;
-      try { await b.request("exportNode", { nodeId: "1:2" }, { timeoutMs: 10000, stallMs: 300 }); } catch (e) { err = asErr(e); }
-      await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
+      const t0 = Date.now();
+      try { await b.request("exportNode", { nodeId: "1:2" }, { timeoutMs: 60000, stallMs: 300 }); } catch (e) { err = asErr(e); }
+      const elapsed = Date.now() - t0;
+      await until(() => cancelsFor(ws1, cmdFrames(ws1)[0]?.id).length >= 1, 1000); // the frame was sent BEFORE the rejection
       const sent = cmdFrames(ws1)[0];
-      ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
-        !!err && /connected but sent nothing/.test(err.message) && !!sent && cancelsFor(ws1, sent.id).length === 1);
+      ok("[cancel] stall check fires → the stall text, well inside the budget, and the plugin gets { type: \"cancel\", id } for the request it was sent",
+        !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 1:2\) in 0s/.test(err.message) && /dtwin serve/.test(err.message) &&
+        !/reconnect/i.test(err.message) && elapsed < 30000 && !!sent && cancelsFor(ws1, sent.id).length === 1);
       ws1.close();
       b.close();
     }
@@ -4113,35 +4037,36 @@ void (async () => {
       b.close();
     }
 
-    // the stall fires only after connect + identify, so it says the plugin IS connected and
-    // busy — not that a reconnect is what takes the time. Pre-change: the "missing daemon" text.
+    // (control) a frame from the plugin after the send — here its `queued` for the request — reaches the stall check
+    // as life: the check disarms, and the reply long after the stall window resolves (the rule itself:
+    // test/pending-requests.test.ts). On a fake clock, so only the frames' order matters, never how late they land.
+    // The sync is the tick reaching the listener — the bridge hears a frame before it routes it — and never a second
+    // frame, which would disarm the check itself and mask the one under test.
+    // `synced` (for the budget check below, where any frame may follow) sends a hello after the frames, and once the
+    // bridge shows that hello, every frame before it was handled too.
+    const synced = async (b: Awaited<ReturnType<typeof connectedBridge>>["bridge"], ws: FakePlugin, mark: string): Promise<boolean> => {
+      ws.hello({ instanceId: "sync", file: mark });
+      return until(() => b.listClients()[0]?.file === mark, 5000);
+    };
     {
-      const { bridge: b, client: ws1 } = await connectedBridge();
-      ws1.hello({ instanceId: "stall-g14", file: "Sample App" });
+      const clock = fakeClock();
+      const { bridge: b, client: ws1 } = await connectedBridge({}, clock);
+      ws1.hello({ instanceId: "stall2", file: "Sample App" });
       await b.awaitClient(null, 1000);
-      await sleep(20);
-      let err: Error | undefined;
-      try { await b.request("exportNode", { nodeId: "5:6" }, { timeoutMs: 10000, stallMs: 300 }); } catch (e) { err = asErr(e); }
-      ok("the stall text says the plugin is connected but sent nothing, names the node and `dtwin serve`, and does not blame a reconnect",
-        !!err && /the plugin is connected but sent nothing for 'exportNode' \(node 5:6\) in 0s/.test(err.message) &&
-        /dtwin serve/.test(err.message) && !/reconnect/i.test(err.message));
-      ws1.close();
-      b.close();
-    }
-    // (control) a `start` frame — what the plugin relays at the run's run-begin — is life:
-    // the stall disarms and the reply at 600 ms resolves. Same for a `queued` frame.
-    for (const phase of ["start", "queued"]) {
-      const { bridge: b, client: ws1 } = await connectedBridge();
-      ws1.hello({ instanceId: "stall2-" + phase, file: "Sample App" });
-      await b.awaitClient(null, 1000);
-      await sleep(20);
       const ticks: ProgressTick[] = [];
-      const req = settle(b.request("ping", {}, { timeoutMs: 10000, stallMs: 300, onProgress: (t) => ticks.push(t) }));
-      setTimeout(() => ws1.progress({ phase }), 100);
-      setTimeout(() => ws1.send({ id: ws1.commands()[0]?.id, ok: true, result: pingReply("late") }), 600);
+      let done = false;
+      const req = settle(b.request("ping", {}, { timeoutMs: 10000, stallMs: 300, onProgress: (t) => ticks.push(t) })).finally(() => { done = true; });
+      await until(() => ws1.commands().length >= 1, 5000);
+      clock.advance(100);
+      ws1.progress({ phase: "queued" });
+      const heard = await until(() => ticks.length === 1, 5000);
+      clock.advance(5000);
+      await sleep(20);
+      const survived = !done;
+      ws1.send({ id: ws1.commands()[0]?.id, ok: true, result: pingReply("late") });
       const r = await req;
-      ok(`a \`${phase}\` progress frame at 100 ms disarms the 300 ms stall; the reply at 600 ms resolves, and the tick reaches the listener`,
-        r.err === null && r.v?.reply.file === "late" && ticks.length === 1 && ticks[0]?.phase === phase);
+      ok("a `queued` progress frame off the socket disarms the 300 ms stall: 5 s on, the request is still pending; its reply resolves it, and the tick reached the listener",
+        heard && survived && r.err === null && r.v?.reply.file === "late" && ticks.length === 1 && ticks[0]?.phase === "queued");
       ws1.close();
       b.close();
     }
@@ -4178,49 +4103,31 @@ void (async () => {
 
     // The per-command budget is for the RUN: the request's own `start` frame re-arms it in full, so time spent queued in
     // the plugin behind an earlier run (now the only queue on any path — commands.ts runKind) does not cut the run short.
-    // The wait itself is still bounded by the budget armed at send. No listener needed: the daemon passes none for a
-    // non-progress client, and its requests must keep the same budget.
+    // The rules (a start that re-arms nothing, a run that starts and goes quiet): test/pending-requests.test.ts; this is
+    // the wiring — a `start` frame naming the request, off the socket, reaches its budget. No listener needed: the daemon
+    // passes none for a non-progress client, and its requests must keep the same budget.
     {
-      const { bridge: b, client: ws1 } = await connectedBridge();
+      const clock = fakeClock();
+      const { bridge: b, client: ws1 } = await connectedBridge({}, clock);
       ws1.hello({ instanceId: "l9", file: "Sample App" });
       await b.awaitClient(null, 1000);
-      await sleep(20);
-      // queued at once, `start` at 300 ms of a 400 ms budget, the reply at 600 ms: inside the budget counted from start.
-      const pRun = settle(b.request("ping", {}, { timeoutMs: 400 }));
-      await sleep(20);
+      // queued at once, `start` at 300 ms of a 400 ms budget, the reply 399 ms after that: inside the budget counted from start.
+      let done = false;
+      const pRun = settle(b.request("ping", {}, { timeoutMs: 400 })).finally(() => { done = true; });
+      await until(() => ws1.commands().length >= 1, 5000);
       const idRun = ws1.commands()[0]?.id;
       ws1.progress({ phase: "queued", ...ifDefined("requestId", idRun) });
-      await sleep(280);
+      clock.advance(300);
       ws1.progress({ phase: "start", ...ifDefined("requestId", idRun) });
-      await sleep(300);
+      const heard = await synced(b, ws1, "after-start");
+      clock.advance(399);
+      await sleep(20);
+      const survived = !done;
       ws1.send({ id: idRun, ok: true, result: pingReply("ran") });
       const rRun = await pRun;
       // pre-change: fails — the 400 ms timer armed at send fired mid-run, at 400 ms.
-      ok("a request's own `start` frame re-arms its budget: queued 300 ms of a 400 ms budget, it still answers 300 ms into its run",
-        rRun.err === null && rRun.v?.reply.file === "ran");
-      // …but the budget still bounds a run that starts and then goes quiet, and a wait with no start at all.
-      const t0 = Date.now();
-      const pQuiet = settle(b.request("ping", {}, { timeoutMs: 400 }));
-      await sleep(20);
-      const idQuiet = ws1.commands()[1]?.id;
-      await sleep(180);
-      ws1.progress({ phase: "start", ...ifDefined("requestId", idQuiet) });
-      const rQuiet = await pQuiet;
-      const quietMs = Date.now() - t0;
-      await until(() => ws1.cancels.includes(idQuiet ?? "?"), 1000);
-      ok(`…a run that starts and never answers times out one budget after its start (${quietMs} ms)`,
-        /did not answer 'ping' within 0s/.test(rQuiet.err?.message ?? "") && quietMs >= 560 && ws1.cancels.includes(idQuiet ?? "?"));
-      const t1 = Date.now();
-      const rWait = await settle(b.request("ping", {}, { timeoutMs: 300 }));
-      ok(`…and a request that never starts times out one budget after the send (${Date.now() - t1} ms)`,
-        /did not answer 'ping'/.test(rWait.err?.message ?? "") && Date.now() - t1 < 550);
-      // An id-less `start` (an older plugin, or another request's) re-arms nothing.
-      const t2 = Date.now();
-      const pOld = settle(b.request("ping", {}, { timeoutMs: 300 }));
-      await sleep(150);
-      ws1.progress({ phase: "start" });
-      const rOld = await pOld;
-      ok(`…an id-less start frame does not re-arm it (${Date.now() - t2} ms)`, !!rOld.err && Date.now() - t2 < 420);
+      ok("a request's own `start` frame off the socket re-arms its budget: queued 300 ms of a 400 ms budget, it still answers 399 ms into its run",
+        heard && survived && rRun.err === null && rRun.v?.reply.file === "ran");
       ws1.close();
       b.close();
     }
