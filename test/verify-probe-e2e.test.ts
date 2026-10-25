@@ -528,6 +528,25 @@ else {
     && rA9.stderr.includes(`run ${ownId} already ended at failed (ended by hand)`) && !/^next /m.test(rA9.stderr));
   if (rA9.status !== 2 || leftA9.length) console.log(`${rA9.stderr}\n  left: ${leftA9.join(", ")}`);
 }
+// no --run, a verifier's run opened (still open) while the page is measured, and its `done` write refused by the run cache
+// (read-only): the refused path asks the write's own admission — an own run's (RunOpen, how to wait for that run), not a
+// named run's (RunNotCurrent)
+if (NO_READONLY_DIRS !== null) console.log(`  (skipped: a refused own-run write beside an open run — ${NO_READONLY_DIRS})`);
+else {
+  const stageA10 = path.join(tmp, "stageA10", SET);
+  const cacheA10 = path.dirname(liveStatusFile(baseA2));
+  onPage = () => { writeStatus(baseA2, { runId: "run-e2e-24", phase: "queued", by: "orchestrator" }); fs.chmodSync(cacheA10, 0o555); };
+  const rA10 = await probe(["--expected", expected, "--url", url(), "--out", outOf(stageA10), "--project", ROOT]);
+  onPage = null;
+  fs.chmodSync(cacheA10, 0o755);
+  const stA10 = readStatus(liveStatusFile(baseA2));
+  const leftA10 = fs.existsSync(path.dirname(stageA10)) ? fs.readdirSync(path.dirname(stageA10)) : [];
+  check("no --run, another run opened while measuring, its `done` write refused (read-only run cache) → exit 2 with the own-run refusal ('run run-e2e-24 of … is open'), no files, the queued status kept, no next step",
+    rA10.status === 2 && leftA10.length === 0 && stA10?.runId === "run-e2e-24" && stA10.phase === "queued"
+    && rA10.stderr.includes(`verify-probe: run run-e2e-24 of ${SET} is open (phase queued, rev 1, by orchestrator, `) && !/is not the current run/.test(rA10.stderr) && !/^next /m.test(rA10.stderr));
+  if (rA10.status !== 2 || leftA10.length) console.log(`${rA10.stderr}\n  left: ${leftA10.join(", ")}`);
+  writeStatus(baseA2, { runId: "run-e2e-24", phase: "failed", by: "orchestrator", detail: "test over" });
+}
 
 // a project whose path holds a space, and a run cache refusing every status write of the run (measuring
 // too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line
