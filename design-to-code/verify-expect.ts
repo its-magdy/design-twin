@@ -8,14 +8,14 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import type { WalkContext } from "./visible-tree.ts";
 import { exportContentSha256 } from "./content-hash.ts";
-import { planInteractionsSha256 } from "./plan-waivers.ts";
+import { planInteractionsSha256, planPlaceholderRows, planPlaceholdersSha256 } from "./plan-waivers.ts";
 import { pngInfo } from "../bridge/src/png.ts";
 import { actionForExpect, isPlanExpect } from "./probe-steps.ts";
 import { isJsonObject } from "./types.ts";
 import { isLayerFile, screenExportOf, screenRoots } from "./export-shape.ts";
 import { PAINT_TYPES, idSuffix } from "./probe-match.ts";
 import type {
-  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
+  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, PlanDeviation, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
   VerifyInstance, VerifyInteraction, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyRootFrame, VerifySpec,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -69,7 +69,9 @@ const isPaintNode = (n: IrNode): boolean => PAINT_TYPES.has(n.type) || (typeof n
 
 // A text layer that IS an input's placeholder. Its colour lives on `::placeholder`, which
 // getComputedStyle(el) cannot see, and an empty <input> has no textContent — so comparing it as
-// ordinary text/colour would be two guaranteed high deltas per placeholder.
+// ordinary text/colour would be two guaranteed high deltas per placeholder. Recognised by its layer or token name
+// here; a TEXT no name marks is one only when the plan says so (a deviations[] row with field "placeholder") — never
+// guessed from its words: Figma draws a hint and a typed value alike.
 function isPlaceholder(n: IrNode): boolean {
   if (n.type !== "TEXT") return false;
   const toks = [n.tokens && n.tokens.fills, ...(Array.isArray(n.fills) ? n.fills.map((f) => f && f.tokens && f.tokens.color) : [])];
@@ -213,7 +215,9 @@ const lineBoxWhy = (lh: number, h: number): string =>
  *  `fromId` = its id (the probe hovers the OWNER, not this node — spec.drawnStateFrom). */
 export interface InheritedState { state: DrawnState; why: string; from: string; fromId: string }
 /** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
-export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string }
+export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string;
+  /** the plan declares this node a placeholder (deviations[] field "placeholder") */
+  planPlaceholder?: boolean }
 /**
  * The spec row for one VISIBLE node, plus any design values the method cannot compare
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
@@ -222,7 +226,8 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
   const spec: VerifySpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
-  const x: NodeSpecCtx = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [] };
+  const placeholder = n.type === "TEXT" && (ctx.planPlaceholder === true || isPlaceholder(n));
+  const x: NodeSpecCtx = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...(placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" as const } : {}) };
   expectText(x);
   expectFont(x);
   expectPaint(x);
@@ -244,7 +249,9 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
 /** expectNode()'s state: the node, the spec row being filled, `skip` (a design value the method cannot compare, with
  *  why) and the node's fills (`paints`, [] when it states none). Each expect* step adds its fields in turn — the order of
  *  the steps is the order of the spec's keys. */
-interface NodeSpecCtx { n: IrNode; spec: VerifySpec; skip: (field: string, value: JsonValue, why: string) => number; paints: Paint[] }
+interface NodeSpecCtx { n: IrNode; spec: VerifySpec; skip: (field: string, value: JsonValue, why: string) => number; paints: Paint[];
+  /** an input placeholder (isPlaceholder, or the plan says so) — and "plan" when the plan is why */
+  placeholder: boolean; placeholderFrom?: "plan" }
 /** the copy and how it renders (text, textCase) */
 function expectText({ n, spec, skip }: NodeSpecCtx): void {
   // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
@@ -294,9 +301,10 @@ function expectPaint({ n, spec, paints }: NodeSpecCtx): void {
   if ((Array.isArray(n.effects) && n.effects.length > 0) || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
 }
 /** an input placeholder's copy and colour move to placeholderText / placeholderColor */
-function expectPlaceholder({ n, spec }: NodeSpecCtx): void {
-  if (isPlaceholder(n)) {
+function expectPlaceholder({ spec, placeholder, placeholderFrom }: NodeSpecCtx): void {
+  if (placeholder) {
     spec.placeholder = true;
+    if (placeholderFrom) spec.placeholderFrom = placeholderFrom;
     if (spec.text !== undefined) { spec.placeholderText = spec.text; delete spec.text; }
     if (spec.color !== undefined) { spec.placeholderColor = spec.color; delete spec.color; }
   }
@@ -409,7 +417,7 @@ function expectSize(x: NodeSpecCtx, box: Box): void {
   }
 }
 /** a TEXT's width (its box or its ink, or not comparable with why) and a line box taller than a fixed text box */
-function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
+function expectTextSize({ n, spec, skip, placeholder }: NodeSpecCtx, box: Box): void {
   // a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
   // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
   // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
@@ -423,7 +431,7 @@ function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
   const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
   const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
   const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
-  if (isPlaceholder(n)) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+  if (placeholder) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
   else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
   else if (n.autoResize === "width_and_height") spec.width = box.w;
   else if (shadowed) skip("width", box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
@@ -442,8 +450,8 @@ function expectTextSize({ n, spec, skip }: NodeSpecCtx, box: Box): void {
   }
 }
 /** the frame-relative position (framePosition) */
-function expectPosition({ n, spec }: NodeSpecCtx, frame: ExpectContext["frame"]): void {
-  const pos = isPlaceholder(n) ? null : framePosition(n, frame); // (a placeholder: no Range, see width)
+function expectPosition({ n, spec, placeholder }: NodeSpecCtx, frame: ExpectContext["frame"]): void {
+  const pos = placeholder ? null : framePosition(n, frame); // (a placeholder: no Range, see width)
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== undefined) spec.y = pos.y;
@@ -616,6 +624,7 @@ export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | nul
   const bx = expectBuildCtx(opts);
   for (const input of docs) readInput(bx, input);
   const planInteractions = mergePlanInteractions(bx, opts && opts.plan);
+  const planPlaceholders = planPlaceholdersOf(bx, opts && opts.plan);
   // repeated placeholder copy in sibling rows
   const specById = new Map(bx.nodes.map((s) => [s.nodeId, s]));
   for (const r of bx.roots) markRepeatedText(r, specById);
@@ -623,7 +632,7 @@ export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | nul
   if (bx.index && bx.readSibling) addAliases(bx, specById);
   addOverlays(bx);
   const referenceImage = firstReferenceImage(bx, opts);
-  return expectationOf(bx, docs, planInteractions, referenceImage);
+  return expectationOf(bx, docs, planInteractions, referenceImage, planPlaceholders);
 }
 
 /** the hidden layers the walk skipped: their roots, every id under them, and what they would have added */
@@ -650,7 +659,12 @@ interface ExpectBuild {
   readSibling: ExpectOptions["readSibling"] | undefined;
   /** a sibling export by its index row's file, read from disk once per --expect (the alias and overlay passes share it) */
   sibling: (file: string) => ScreenDoc | null;
+  /** the node ids the plan declares placeholders (planPlaceholderRows), and the type of each one the walk met visible */
+  planPlaceholderIds: Set<string>; planPlaceholderSeen: Map<string, string>;
 }
+/** a plan deviation row's node ids (nodeId and nodeIds), trimmed */
+const rowIds = (d: PlanDeviation): string[] =>
+  [d.nodeId, ...(Array.isArray(d.nodeIds) ? d.nodeIds : [])].filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
 /** buildExpectation()'s empty collections and the readers its options give */
 function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
   const readSibling = opts && opts.readSibling;
@@ -665,6 +679,7 @@ function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
     frames: [], seen: new Set<string>(), screen: undefined, exportedAt: undefined, reference: null,
     idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], referenceOf: new Map(), rootNodesByFile: new Map(), visibleById: new Map(),
     index: opts && opts.index, readSibling, sibling,
+    planPlaceholderIds: new Set(planPlaceholderRows(opts && opts.plan ? opts.plan.plan : null).flatMap(rowIds)), planPlaceholderSeen: new Map(),
   };
 }
 
@@ -744,7 +759,10 @@ function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): v
   if (n.id && bx.seen.has(n.id)) return;
   if (n.id) bx.seen.add(n.id);
   if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "" });
-  const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId) });
+  const planPlaceholder = !!n.id && bx.planPlaceholderIds.has(n.id);
+  if (planPlaceholder) bx.planPlaceholderSeen.set(n.id, n.type);
+  const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId),
+    ...(planPlaceholder ? { planPlaceholder } : {}) });
   spec.ancestorIds = ancestorIds;
   if (n.absolute) spec.absolute = true;
   const par = c.parent;
@@ -842,6 +860,27 @@ function mergePlanInteractions(bx: ExpectBuild, planIn: ExpectOptions["plan"] | 
     merged++;
   });
   return { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
+}
+
+// ---- the plan's placeholder rows (deviations[] field "placeholder") — a TEXT the builder built as a form control's
+// placeholder attribute. Read only from the plan, never guessed: its copy and colour move to placeholderText /
+// placeholderColor (compared, never waived). A row naming no visible TEXT layer of this export is dropped with why.
+function planPlaceholdersOf(bx: ExpectBuild, planIn: ExpectOptions["plan"] | undefined): VerifyExpectation["planPlaceholders"] {
+  const rows = planIn ? planPlaceholderRows(planIn.plan) : [];
+  if (!planIn || !rows.length) return undefined;
+  const hiddenIds = new Set(bx.hidden.ids);
+  const nodeIds: string[] = [], dropped: Array<{ nodeId: string; why: string }> = [];
+  rows.forEach((d, k) => {
+    const ids = rowIds(d);
+    if (!ids.length) dropped.push({ nodeId: `(placeholder row #${k})`, why: "the row names no nodeId — a placeholder is declared per TEXT layer" });
+    for (const id of ids) {
+      const type = bx.planPlaceholderSeen.get(id);
+      if (type === "TEXT") { if (!nodeIds.includes(id)) nodeIds.push(id); }
+      else dropped.push({ nodeId: id, why: type !== undefined ? `a ${type} layer, not TEXT — only a text layer can be a placeholder`
+        : hiddenIds.has(id) ? "the node is a hidden layer — it is not built" : "no visible node of this export has that id" });
+    }
+  });
+  return { plan: planIn.file, sha256: planPlaceholdersSha256(planIn.plan), nodeIds, dropped };
 }
 
 // a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
@@ -1001,7 +1040,7 @@ const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> =>
   ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
 /** the expectation document: what the walk and the passes collected, the counts, and the notes for its reader */
 function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: VerifyExpectation["planInteractions"],
-  referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined): BuiltExpectation {
+  referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined, planPlaceholders?: VerifyExpectation["planPlaceholders"]): BuiltExpectation {
   const { nodes, instances, interactions, notComparable, hidden, frames } = bx;
   const f0: Partial<VerifyFrame> = frames[0] || {};
   return {
@@ -1033,6 +1072,7 @@ function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: V
     notComparable,
     hidden: { roots: hidden.roots, ids: hidden.ids },
     ...ifDefined("planInteractions", planInteractions),
+    ...ifDefined("planPlaceholders", planPlaceholders),
     ...ifDefined("referenceImage", referenceImage),
   };
 }
@@ -1063,7 +1103,7 @@ export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | Ver
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) — the reference cannot be placed");
   const bytes = o.readReference(reference);
-  if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk — re-pull the screen`);
+  if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk (relative to the project root --expect runs from) — re-pull the screen`);
   const png = pngInfo(bytes);
   if (!png) return unusable(p, `the reference ${p} is not a PNG or is damaged — re-pull the screen`);
   if (png.bitDepth !== 8 || (png.colorType !== 2 && png.colorType !== 6) || png.interlace !== 0)

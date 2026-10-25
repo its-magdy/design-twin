@@ -277,6 +277,53 @@ console.log("verify-screen — text:");
     !rep.deltas.some((d) => (d.nodeId === "2:7" || d.nodeId === "2:8") && d.field === "placeholder text"));
 }
 {
+  // A search hint no layer or token name marks (Figma has no placeholder role: a hint and a typed value are both TEXT) is
+  // ordinary text — never guessed from its words. The plan declares it: a deviations[] row with field "placeholder".
+  const hint = textNode("2:9", "Search by crate name", "Search by crate name ", { family: "Poppins", size: 14, color: "#938f99" });
+  const box: NodeInput = { type: "FRAME", id: "2:10", name: "Search item", children: [hint] };
+  const row = { nodeId: "2:9", field: "placeholder", designed: "Search by crate name", built: "<input placeholder>", reason: "the search field's hint" };
+  const plan = { file: "design/plan/Checkout__1_1.json", plan: { deviations: [row] } };
+  const bare = buildExpectation([doc([box])]);
+  const bareSpec = bare.nodes.find((s) => s.nodeId === "2:9");
+  ok("[placeholder-plan] without a plan row an unnamed hint stays ordinary text and colour (no guess from its words), and no planPlaceholders",
+    bareSpec?.text === "Search by crate name " && bareSpec.color === "#938f99ff" && bareSpec.placeholder === undefined && bare.planPlaceholders === undefined);
+  const exp = buildExpectation([doc([box])], { plan });
+  const spec = exp.nodes.find((s) => s.nodeId === "2:9");
+  ok(`[placeholder-plan] a plan row makes it a placeholder: copy and colour move to placeholderText/placeholderColor, placeholderFrom "plan", no text/colour/width/x (got ${JSON.stringify(spec)})`,
+    spec?.placeholder === true && spec.placeholderFrom === "plan" && spec.placeholderText === "Search by crate name " && spec.placeholderColor === "#938f99ff"
+    && spec.text === undefined && spec.color === undefined && spec.width === undefined && spec.x === undefined && spec.fontSize === 14);
+  ok(`[placeholder-plan] the expectation records which plan, the rows' hash and the node ids (got ${JSON.stringify(exp.planPlaceholders)})`,
+    exp.planPlaceholders?.plan === plan.file && JSON.stringify(exp.planPlaceholders.nodeIds) === '["2:9"]' && exp.planPlaceholders.dropped.length === 0
+    && /^[0-9a-f]{64}$/.test(exp.planPlaceholders.sha256));
+  const named = buildExpectation([doc([box, textNode("2:7", "Placeholder", "Find", { family: "Poppins", size: 14 })])], { plan });
+  ok("[placeholder-plan] a layer its name marks stays a placeholder with no placeholderFrom (the plan is not why)",
+    named.nodes.find((s) => s.nodeId === "2:7")?.placeholder === true && named.nodes.find((s) => s.nodeId === "2:7")?.placeholderFrom === undefined);
+  const badPlan = { file: plan.file, plan: { deviations: [{ ...row, nodeId: "2:10" }, { ...row, nodeId: "9:99" }, { field: "placeholder", designed: "x", built: "y", reason: "z" }, { ...row, field: "control" }] } };
+  const bad = buildExpectation([doc([box])], { plan: badPlan });
+  const why = (id: string): string => bad.planPlaceholders?.dropped.find((d) => d.nodeId === id)?.why ?? "";
+  ok(`[placeholder-plan] a row naming a non-TEXT layer, an unknown id or no id is dropped with why; a "control" row is not a placeholder row (got ${JSON.stringify(bad.planPlaceholders)})`,
+    /a FRAME layer, not TEXT/.test(why("2:10")) && /no visible node/.test(why("9:99")) && /names no nodeId/.test(why("(placeholder row #2)"))
+    && bad.planPlaceholders?.nodeIds.length === 0 && bad.planPlaceholders.dropped.length === 3 && bad.nodes.find((s) => s.nodeId === "2:9")?.text === "Search by crate name ");
+  // compared as a placeholder: the hint's copy matches; a lighter ::placeholder colour (built for contrast) stays a delta
+  const rep = compare(exp, measured([{ nodeId: "2:9", styles: { tag: "input", placeholderText: "Search by crate name", placeholderColor: "rgb(185, 180, 192)", fontSize: 14 } }]), { plan });
+  ok("[placeholder-plan] measured on the <input>: the hint's copy matches (no text delta), the different ::placeholder colour is a high delta — never waived",
+    !rep.deltas.some((d) => d.nodeId === "2:9" && /text/.test(d.field)) && rep.deltas.some((d) => d.nodeId === "2:9" && d.field === "placeholder colour" && d.severity === "high"));
+  const wrong = compare(exp, measured([{ nodeId: "2:9", styles: { tag: "input", placeholderText: "Search", placeholderColor: "rgb(147, 143, 153)" } }]), { plan });
+  ok("[placeholder-plan] a different placeholder copy is a high 'placeholder text' delta",
+    wrong.deltas.some((d) => d.nodeId === "2:9" && d.field === "placeholder text" && d.severity === "high"));
+  const reasons = (r: { why: string[] }): string => r.why.join("\n");
+  ok("[placeholder-plan] the same plan at --compare: no plan-placeholder reason", !/placeholder row/.test(reasons(rep)));
+  const changed = compare(exp, measured([{ nodeId: "2:9", styles: { tag: "input", placeholderText: "Search by crate name", placeholderColor: "rgb(147, 143, 153)" } }]),
+    { plan: { file: plan.file, plan: { deviations: [{ ...row, reason: "edited" }] }, choice: "flag" } });
+  ok(`[placeholder-plan] the plan's placeholder rows changed since --expect → incomplete, re-run --expect --plan (got ${changed.verdict}: ${reasons(changed)})`,
+    changed.verdict === "incomplete" && /placeholder rows \(deviations\[\] field "placeholder"\) changed since --expect .*re-run --expect --plan design\/plan\/Checkout__1_1\.json/.test(reasons(changed)));
+  const unread = compare(bare, measured([{ nodeId: "2:9", styles: { text: "Search by crate name" } }]), { plan });
+  ok(`[placeholder-plan] a plan declaring placeholder rows the expectation never read → incomplete (got ${unread.verdict}: ${reasons(unread)})`,
+    unread.verdict === "incomplete" && /declares 1 placeholder row\(s\) .* the expectation never read/.test(reasons(unread)));
+  const noRows = compare(bare, measured([{ nodeId: "2:9", styles: { text: "Search by crate name " } }]), { plan: { file: plan.file, plan: { deviations: [{ ...row, field: "control" }] } } });
+  ok("[placeholder-plan] a plan with no placeholder rows and an expectation that read none: no reason", !/placeholder row/.test(reasons(noRows)));
+}
+{
   // Copy that differs only in HTML-collapsible whitespace (spaces, tabs, line breaks) is the same copy as rendered —
   // a LOW row naming which side has more of it, not a HIGH copy delta. The built-in probe reports spaces collapsed and a
   // line break the page shows (a <br>, a newline under white-space pre-line…) as "\n"; a hand-written probe may report
@@ -1103,6 +1150,32 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const rec = run("--compare", exp, meas);
   okOuter(`[plans] the recorded plan wins at --compare over two plans of the node (a note), and the code hashes come from it (got ${rec.status}, ${codeOf()})`,
     (rec.status === 0 || rec.status === 1) && codeOf() === "scratch/mine.json src/A.tsx" && /note {2}using scratch\/mine\.json \(the plan --expect merged interactions from\); 2 plans in design\/plan\/ describe this frame now/.test(rec.stderr));
+  // a plan with placeholder rows and NO interactions[] (outside design/plan/) binds the same way: its rows removed after
+  // --expect, a --compare without --plan still reads that plan — the run is incomplete, never a pass
+  const row = { nodeId: "2:1", field: "placeholder", designed: "Bins", built: "<input placeholder>", reason: "the field's hint" };
+  put("scratch/ph.json", { nodeId: "1:1", files: ["src/A.tsx"], deviations: [row] });
+  const phExp = buildExpectation(docs, { plan: { file: "scratch/ph.json", plan: { nodeId: "1:1", deviations: [row] } } });
+  put(exp, phExp);
+  put(meas, measured([{ nodeId: "2:1", styles: { fontSize: 20, fontFamily: "Inter", placeholderText: "Bins", tag: "input" } }], { expectationSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, exp))).digest("hex") }));
+  put("scratch/ph.json", { nodeId: "1:1", files: ["src/A.tsx"], deviations: [] });
+  const phRun = run("--compare", exp, meas);
+  const phRep = readFixture(report, isVerifyReport);
+  okOuter(`[plans] a placeholder-only plan whose rows changed since --expect, --compare without --plan → that plan is used (a note), the changed rows a reason, never a pass (got ${phRun.status}, ${phRep.verdict}: ${(phRep.why || []).join(" | ")})`,
+    phExp.planPlaceholders?.plan === "scratch/ph.json" && phExp.planInteractions === undefined
+    && /note {2}using scratch\/ph\.json \(the plan --expect read placeholder rows from\)/.test(phRun.stderr)
+    && phRep.verdict !== "pass" && phRep.verdict !== "pass-with-deviations" && (phRep.why || []).some((w) => /placeholder rows \(deviations\[\] field "placeholder"\) changed since --expect/.test(w)));
+  fs.rmSync(path.join(cwd, "scratch/ph.json"));
+  fs.rmSync(path.join(cwd, "design/plan"), { recursive: true, force: true });
+  fs.rmSync(report);
+  const gone = run("--compare", exp, meas);
+  const goneRep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
+  okOuter(`[plans] …and the plan gone with no other plan to read: 'not checked' as a reason, never a pass (got ${gone.status}, ${goneRep?.verdict}: ${(goneRep?.why || []).join(" | ")})`,
+    goneRep !== null && goneRep.verdict !== "pass" && goneRep.verdict !== "pass-with-deviations" && (goneRep.why || []).some((w) => /read placeholder rows from scratch\/ph\.json, which no longer exists/.test(w)));
+  // an expectation naming two plans (interactions from one, placeholder rows from another) — no --expect writes one: refused
+  put(exp, { ...phExp, planInteractions: { plan: "scratch/other.json", sha256: "0".repeat(64), merged: 0, dropped: [] } });
+  const twoPlans = run("--compare", exp, meas);
+  okOuter(`[plans] an expectation whose interactions and placeholder rows name different plans → exit 2, both named (got ${twoPlans.status}: ${twoPlans.stderr.trim()})`,
+    twoPlans.status === 2 && /names two plans — interactions from scratch\/other\.json, placeholder rows from scratch\/ph\.json/.test(twoPlans.stderr));
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 

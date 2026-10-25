@@ -438,6 +438,12 @@ function planInteractionsSha256(plan) {
   const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
   return sha256Hex(canonical(rows));
 }
+function planPlaceholderRows(plan) {
+  return (Array.isArray(plan?.deviations) ? plan.deviations : []).filter((d) => d && d.field === "placeholder");
+}
+function planPlaceholdersSha256(plan) {
+  return sha256Hex(canonical(planPlaceholderRows(plan)));
+}
 
 // design-to-code/proc.ts
 import { spawn, spawnSync } from "node:child_process";
@@ -2265,6 +2271,10 @@ var PAGES = "pages";
 var INDEX = "index.json";
 var rootIndexFile = (exportRoot) => path13.join(exportRoot, PAGES, INDEX);
 var hasExportIndex = (exportRoot) => fs13.existsSync(rootIndexFile(exportRoot));
+function pagesRootOfScreen(screenFile) {
+  const pages = path13.dirname(path13.dirname(path13.resolve(screenFile)));
+  return path13.basename(pages) === PAGES ? path13.dirname(pages) : null;
+}
 function findExportRoot(dir) {
   const abs = path13.resolve(dir);
   for (let d = path13.dirname(abs); ; d = path13.dirname(d)) {
@@ -3546,7 +3556,8 @@ function expectNode(n, ctx = {}) {
   const spec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable = [];
   const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
-  const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [] };
+  const placeholder = n.type === "TEXT" && (ctx.planPlaceholder === true || isPlaceholder(n));
+  const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" } : {} };
   expectText(x);
   expectFont(x);
   expectPaint(x);
@@ -3595,9 +3606,10 @@ function expectPaint({ n, spec, paints }) {
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
   if (Array.isArray(n.effects) && n.effects.length > 0 || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
 }
-function expectPlaceholder({ n, spec }) {
-  if (isPlaceholder(n)) {
+function expectPlaceholder({ spec, placeholder, placeholderFrom }) {
+  if (placeholder) {
     spec.placeholder = true;
+    if (placeholderFrom) spec.placeholderFrom = placeholderFrom;
     if (spec.text !== void 0) {
       spec.placeholderText = spec.text;
       delete spec.text;
@@ -3697,13 +3709,13 @@ function expectSize(x, box) {
     if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
   }
 }
-function expectTextSize({ n, spec, skip }, box) {
+function expectTextSize({ n, spec, skip, placeholder }, box) {
   const rb = n.renderBox;
   const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
   const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
   const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
   const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
-  if (isPlaceholder(n)) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+  if (placeholder) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
   else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
   else if (n.autoResize === "width_and_height") spec.width = box.w;
   else if (shadowed) skip("width", box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
@@ -3717,8 +3729,8 @@ function expectTextSize({ n, spec, skip }, box) {
     skip(TEXT_BOX_HEIGHT, box.h, lineBoxWhy(lh, box.h));
   }
 }
-function expectPosition({ n, spec }, frame) {
-  const pos = isPlaceholder(n) ? null : framePosition(n, frame);
+function expectPosition({ n, spec, placeholder }, frame) {
+  const pos = placeholder ? null : framePosition(n, frame);
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== void 0) spec.y = pos.y;
@@ -3832,14 +3844,16 @@ function buildExpectation(docs, opts) {
   const bx = expectBuildCtx(opts);
   for (const input of docs) readInput(bx, input);
   const planInteractions = mergePlanInteractions(bx, opts && opts.plan);
+  const planPlaceholders = planPlaceholdersOf(bx, opts && opts.plan);
   const specById = new Map(bx.nodes.map((s) => [s.nodeId, s]));
   for (const r of bx.roots) markRepeatedText(r, specById);
   markUndesigned(bx);
   if (bx.index && bx.readSibling) addAliases(bx, specById);
   addOverlays(bx);
   const referenceImage = firstReferenceImage(bx, opts);
-  return expectationOf(bx, docs, planInteractions, referenceImage);
+  return expectationOf(bx, docs, planInteractions, referenceImage, planPlaceholders);
 }
+var rowIds = (d) => [d.nodeId, ...Array.isArray(d.nodeIds) ? d.nodeIds : []].filter((v) => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
 function expectBuildCtx(opts) {
   const readSibling = opts && opts.readSibling;
   const siblingCache = /* @__PURE__ */ new Map();
@@ -3868,7 +3882,9 @@ function expectBuildCtx(opts) {
     visibleById: /* @__PURE__ */ new Map(),
     index: opts && opts.index,
     readSibling,
-    sibling
+    sibling,
+    planPlaceholderIds: new Set(planPlaceholderRows(opts && opts.plan ? opts.plan.plan : null).flatMap(rowIds)),
+    planPlaceholderSeen: /* @__PURE__ */ new Map()
   };
 }
 function readInput(bx, { doc, label }) {
@@ -3939,7 +3955,15 @@ function visibleNode(bx, w, n, c) {
   if (n.id && bx.seen.has(n.id)) return;
   if (n.id) bx.seen.add(n.id);
   if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "" });
-  const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId) });
+  const planPlaceholder = !!n.id && bx.planPlaceholderIds.has(n.id);
+  if (planPlaceholder) bx.planPlaceholderSeen.set(n.id, n.type);
+  const { spec, notComparable: gaps } = expectNode(n, {
+    path: c.path,
+    frame: w.frame,
+    ...ifDefined("inheritedState", inherited),
+    ...ifDefined("frameId", w.frameId),
+    ...planPlaceholder ? { planPlaceholder } : {}
+  });
   spec.ancestorIds = ancestorIds;
   if (n.absolute) spec.absolute = true;
   const par = c.parent;
@@ -4028,6 +4052,23 @@ function mergePlanInteractions(bx, planIn) {
     merged++;
   });
   return { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
+}
+function planPlaceholdersOf(bx, planIn) {
+  const rows = planIn ? planPlaceholderRows(planIn.plan) : [];
+  if (!planIn || !rows.length) return void 0;
+  const hiddenIds = new Set(bx.hidden.ids);
+  const nodeIds = [], dropped = [];
+  rows.forEach((d, k) => {
+    const ids = rowIds(d);
+    if (!ids.length) dropped.push({ nodeId: `(placeholder row #${k})`, why: "the row names no nodeId \u2014 a placeholder is declared per TEXT layer" });
+    for (const id of ids) {
+      const type = bx.planPlaceholderSeen.get(id);
+      if (type === "TEXT") {
+        if (!nodeIds.includes(id)) nodeIds.push(id);
+      } else dropped.push({ nodeId: id, why: type !== void 0 ? `a ${type} layer, not TEXT \u2014 only a text layer can be a placeholder` : hiddenIds.has(id) ? "the node is a hidden layer \u2014 it is not built" : "no visible node of this export has that id" });
+    }
+  });
+  return { plan: planIn.file, sha256: planPlaceholdersSha256(planIn.plan), nodeIds, dropped };
 }
 function markUndesigned(bx) {
   const { idsByFile, interactionFile } = bx;
@@ -4152,7 +4193,7 @@ function firstReferenceImage(bx, opts) {
   });
 }
 var rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
-function expectationOf(bx, docs, planInteractions, referenceImage) {
+function expectationOf(bx, docs, planInteractions, referenceImage, planPlaceholders) {
   const { nodes, instances, interactions, notComparable, hidden, frames } = bx;
   const f0 = frames[0] || {};
   return {
@@ -4182,6 +4223,7 @@ function expectationOf(bx, docs, planInteractions, referenceImage) {
     notComparable,
     hidden: { roots: hidden.roots, ids: hidden.ids },
     ...ifDefined("planInteractions", planInteractions),
+    ...ifDefined("planPlaceholders", planPlaceholders),
     ...ifDefined("referenceImage", referenceImage)
   };
 }
@@ -4198,7 +4240,7 @@ function referenceImageFor(o) {
   const box = root.box;
   if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) \u2014 the reference cannot be placed");
   const bytes = o.readReference(reference);
-  if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk \u2014 re-pull the screen`);
+  if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk (relative to the project root --expect runs from) \u2014 re-pull the screen`);
   const png = pngInfo(bytes);
   if (!png) return unusable(p, `the reference ${p} is not a PNG or is damaged \u2014 re-pull the screen`);
   if (png.bitDepth !== 8 || png.colorType !== 2 && png.colorType !== 6 || png.interlace !== 0)
@@ -4740,6 +4782,7 @@ function compare(expectation, measured, opts) {
   groupDeltas(cx);
   const { open, high, medium, accepted, highCauses } = openCounts(cx);
   const { planNow, planInteractionsChanged } = planInteractionsCheck(cx);
+  const { planPlaceholdersChanged } = planPlaceholdersCheck(cx, { planNow });
   const { reachInput } = reachInputOf(cx, { planNow });
   const { probeIdentity, buildNow, inputs, staticOnly, artifactCheck, noRender } = evidenceInputs(cx, { st, measuredRun, reachInput });
   const { nodesExpected, reasons, lowConfidence, verdict } = verdictOf(cx, {
@@ -4754,6 +4797,7 @@ function compare(expectation, measured, opts) {
     medium,
     accepted,
     planInteractionsChanged,
+    planPlaceholdersChanged,
     staticOnly,
     noRender
   });
@@ -5232,7 +5276,7 @@ function checkFields(cx, n) {
         strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`;
       }
       if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign)
-        strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
+        strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign === "center" ? "centred on the edge of" : got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
     }
     if (f.key === "borderRadius") {
       const c = radiusCorners(val);
@@ -5412,10 +5456,25 @@ function checkText(cx, n) {
     }
   }
 }
+function viewportOf(measured) {
+  const ok = (w, h) => num(w) && num(h) && w > 0 && h > 0 ? { w, h } : null;
+  const page = measured.page;
+  if (isPageOverflow(page)) {
+    const v = ok(page.viewport.w, page.viewport.h);
+    if (v) return v;
+  }
+  const vp = measured.viewport;
+  if (typeof vp === "string") {
+    const m = /^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)$/.exec(vp.trim());
+    return m ? ok(Number(m[1]), Number(m[2])) : null;
+  }
+  return isJsonObject(vp) ? ok(vp.w ?? vp.width, vp.h ?? vp.height) : null;
+}
 function checkPlacement(cx, n) {
-  const { frameOf, deltas, placementGaps, probeFrames, multiFrame } = cx;
+  const { frameOf, deltas, placementGaps, probeFrames, multiFrame, measured } = cx;
   const { spec, got, zeroAtRest } = n;
   const fr = frameOf(spec);
+  if (fr.nodeId !== void 0 && spec.nodeId === fr.nodeId) return;
   const bx = got;
   if (num(fr.w) && num(fr.h)) {
     const BOX_KEYS = ["x", "y", "width", "height"];
@@ -5453,9 +5512,13 @@ function checkPlacement(cx, n) {
     if (inDesign && out.length && !zeroAtRest) {
       const pf = probeFrames.find((f) => f.nodeId === fr.nodeId) ?? (!multiFrame && probeFrames.length === 1 ? probeFrames[0] : void 0);
       const pageGrew = !!pf && (pf.via === "viewport" || isJsonObject(pf.rect) && num(pf.rect.h) && pf.rect.h > fr.h + tol);
-      const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
+      const belowFoldRule = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
+      const rr = pf && pf.via !== "viewport" && isJsonObject(pf.rect) && num(pf.rect.w) && num(pf.rect.h) && num(pf.rect.x) && num(pf.rect.y) ? { x: pf.rect.x, y: pf.rect.y, w: pf.rect.w, h: pf.rect.h } : null;
+      const vp = viewportOf(measured);
+      const inRendered = rr !== null && vp !== null && (rr.w > fr.w + tol || rr.h > fr.h + tol) && num(bx.x) && bx.x >= -tol && bx.x + w <= rr.w + tol && rr.x + bx.x >= -tol && rr.x + bx.x + w <= vp.w + tol && num(bx.y) && bx.y >= -tol && bx.y + h <= rr.h + tol && rr.y + bx.y >= -tol && rr.y + bx.y + h <= vp.h + tol;
+      const belowFold = belowFoldRule && !inRendered;
       deltas.push({
-        severity: belowFold ? "medium" : "high",
+        severity: belowFold || inRendered ? "medium" : "high",
         nodeId: spec.nodeId,
         name: spec.name,
         ...ifDefined("path", spec.path),
@@ -5464,7 +5527,7 @@ function checkPlacement(cx, n) {
         actual: out.join(", "),
         delta: r2(Math.max(...over)),
         // px past the frame (no `unit`: `actual` is prose, printed as-is)
-        note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge \u2014 reachable by scrolling; accept it (verify-screen --accept) if the longer page is intended" : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling"
+        note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge \u2014 reachable by scrolling; accept it (verify-screen --accept) if the longer page is intended" : inRendered && rr ? `outside the designed ${fr.w}\xD7${fr.h} frame but inside the frame as rendered (${r2(rr.w)}\xD7${r2(rr.h)}): the frame itself renders larger (its width/height delta) \u2014 this node is within the rendered frame and the viewport, not past either edge; fix the frame's size and this goes with it` : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling"
       });
     }
   }
@@ -6052,6 +6115,18 @@ function planInteractionsCheck(cx) {
   if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now \u2014 not checked; pass --compare \u2026 --plan <plan.json> (or re-run --expect \u2026 --plan <plan.json>)` : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now \u2014 not checked`);
   return { planNow, planInteractionsChanged };
 }
+function planPlaceholdersCheck(cx, g) {
+  const { expectation, opts } = cx;
+  const { planNow } = g;
+  const raw = expectation.planPlaceholders;
+  const recorded = isJsonObject(raw) && typeof raw.sha256 === "string" && typeof raw.plan === "string" ? { plan: raw.plan, sha256: raw.sha256 } : void 0;
+  if (!planNow) return { planPlaceholdersChanged: recorded ? `the expectation read placeholder rows from ${recorded.plan}${opts.recordedPlanGone ? `, which ${opts.recordedPlanGone}` : ""}, and no plan describes this frame now \u2014 whether they still hold is not checked; pass --compare \u2026 --plan <plan.json>, or re-run --expect` : null };
+  const rowsNow = planPlaceholderRows(planNow.plan).length;
+  const shaNow = planPlaceholdersSha256(planNow.plan);
+  if (recorded ? recorded.sha256 === shaNow : rowsNow === 0) return { planPlaceholdersChanged: null };
+  const plan = planNow.choice === "flag" || planNow.choice === "recorded" ? ` --plan ${planNow.file}` : "";
+  return { planPlaceholdersChanged: recorded ? `the plan's placeholder rows (deviations[] field "placeholder") changed since --expect (${planNow.file}: sha256 ${recorded.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 re-run --expect${plan}` : `the plan declares ${rowsNow} placeholder row(s) (deviations[] field "placeholder") the expectation never read (${planNow.file}) \u2014 re-run --expect${plan}` };
+}
 function reachInputOf(cx, g) {
   const { measured, inputNotes } = cx;
   const { planNow } = g;
@@ -6115,6 +6190,7 @@ function verdictOf(cx, g) {
     medium,
     accepted,
     planInteractionsChanged,
+    planPlaceholdersChanged,
     staticOnly,
     noRender
   } = g;
@@ -6125,6 +6201,7 @@ function verdictOf(cx, g) {
   const lowConfidence = open.filter((d) => d.cappedFrom !== void 0).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches \u2014 tag these elements`);
   if (planInteractionsChanged) reasons.push(planInteractionsChanged);
+  if (planPlaceholdersChanged) reasons.push(planPlaceholdersChanged);
   if (legacy2) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Layer>__<id>.png and list it in artifacts)");
@@ -7978,6 +8055,9 @@ function main(argv) {
       The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
       ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot
       be graded is dropped with why. Their hash binds the expectation: change them \u2192 re-run --expect.
+      Its deviations[] rows with field "placeholder" ({nodeId, field, designed, built, reason}) mark a TEXT layer built as a
+      form control's placeholder attribute: compared as placeholderText/placeholderColor; their hash binds the same way.
+      Run it from the project root: a screen of another project's design/export is refused (exit 2), naming that project.
       Read them; never retype them. --out is the verify directory (default design/verify; a new one ends in "/"): the set is
       named by the frame's node, <Layer>__<id> \u2014 the name a set of that node there already has (a frame renamed in Figma keeps
       it). Any other --out basename is refused (exit 2): one node, one set. --variant <slug> writes the variant set
@@ -8192,6 +8272,21 @@ function expectMain(files, flags, USAGE) {
     console.error(`error  --variant: ${slugWhy}`);
     return 2;
   }
+  const realOf = (p) => {
+    try {
+      return fs19.realpathSync(p);
+    } catch {
+      return path20.resolve(p);
+    }
+  };
+  const ownExport = realOf(EXPORT_DIR);
+  for (const f of files) {
+    const root = pagesRootOfScreen(f);
+    if (root === null || realOf(root) === ownExport) continue;
+    const project = path20.basename(root) === path20.basename(EXPORT_DIR) && path20.basename(path20.dirname(root)) === path20.dirname(EXPORT_DIR) ? path20.dirname(path20.dirname(root)) : null;
+    console.error(project !== null ? `error  ${f} is a screen of the export in ${project}, not of this working directory (${process.cwd()}) \u2014 run --expect from ${project}: the expectation's reference path, plans and verify sets are relative to the project root` : `error  ${f} sits in the export at ${root}, not in this project's ${EXPORT_DIR.split(path20.sep).join("/")} \u2014 pull the screen into ${EXPORT_DIR.split(path20.sep).join("/")} and run --expect from the project root`);
+    return 2;
+  }
   const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path20.basename(f, ".json") }));
   const ix = readExportIndex(EXPORT_DIR);
   if (ix.rootProblem !== null) console.error(`note  ${rootIndexFile(EXPORT_DIR)} ${ix.rootProblem} \u2014 interaction destinations are checked against the given export(s) only`);
@@ -8235,6 +8330,11 @@ function expectMain(files, flags, USAGE) {
   if (pi) {
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);
     for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
+  }
+  const pp = exp.planPlaceholders;
+  if (pp) {
+    console.error(`${pp.plan}: ${pp.nodeIds.length} TEXT layer(s) compared as input placeholders (deviations[] field "placeholder")${pp.dropped.length ? `, ${pp.dropped.length} row id(s) dropped` : ""} (placeholder rows sha256 ${pp.sha256.slice(0, 12)}\u2026)`);
+    for (const d of pp.dropped) console.error(`warn  plan placeholder ${d.nodeId} dropped: ${d.why}`);
   }
   const nodeId = exp.frame.nodeId;
   if (!nodeId) {
@@ -8390,13 +8490,19 @@ function compareMain(files, flags, USAGE) {
     const all = chosen.all;
     planHit = chosen.hit;
     if (chosen.note !== void 0) console.error(`note  ${chosen.note}`);
-    const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : void 0;
+    const recOf = (v) => isJsonObject(v) && typeof v.plan === "string" ? v.plan : void 0;
+    const recInteractions = recOf(expectation.planInteractions), recPlaceholders = recOf(expectation.planPlaceholders);
+    if (recInteractions !== void 0 && recPlaceholders !== void 0 && !samePlanFile(recInteractions, recPlaceholders)) {
+      console.error(`error  the expectation names two plans \u2014 interactions from ${recInteractions}, placeholder rows from ${recPlaceholders} \u2014 one --expect reads one plan: re-run --expect`);
+      return 2;
+    }
+    const recPi = recInteractions ?? recPlaceholders;
     if (recPi !== void 0 && !(planHit && samePlanFile(planHit.file, recPi))) {
       const r = readJson(recPi, isPlan);
       if (!("doc" in r)) recordedPlanGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
       else if (!flagged) {
         const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})` : "; no plan in design/plan/ describes this frame";
-        compareNotes.push(`using ${recPi} (the plan --expect merged interactions from)${foundNow} \u2014 its interactions[], waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
+        compareNotes.push(`using ${recPi} (the plan --expect ${recOf(expectation.planInteractions) !== void 0 ? "merged interactions from" : "read placeholder rows from"})${foundNow} \u2014 its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
         console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
         planHit = { file: recPi, plan: r.doc, choice: "recorded" };
       }

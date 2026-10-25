@@ -281,8 +281,8 @@ console.log("verify docs (match confidence + per-node-type rules):");
     && /`text-ordinal` or `tag-alias` is at most medium, by `position` or any value you invent at most\s+low/.test(verifier));
   check("the verifier's textBox row: for EVERY TEXT node, and a TEXT node's x/width come from textBox only",
     /\| `textBox` \| for every TEXT node:/.test(verifier) && /x and width are compared from `textBox` only/.test(verifier) && !/\| `textBox` \| for a TEXT node:/.test(verifier));
-  check("the verifier: a ring (box-shadow 0 0 0 Npx, five shadows, by content not position) or an inside outline is borderWidth/borderColor with strokeFrom + strokeAlign",
-    /`box-shadow: 0 0 0 Npx`/.test(verifier) && /five shadows/.test(verifier) && /never by\s+its position/.test(verifier) && /`outline-offset: -Npx`/.test(verifier) && /`strokeFrom` \(`box-shadow` \| `outline`\)/.test(verifier) && /`strokeAlign`\s+\(`inside` \| `outside`\)/.test(verifier));
+  check("the verifier: a ring (box-shadow 0 0 0 Npx, five shadows, by content not position) or an inside / centre outline is borderWidth/borderColor with strokeFrom + strokeAlign",
+    /`box-shadow: 0 0 0 Npx`/.test(verifier) && /five shadows/.test(verifier) && /never by\s+its position/.test(verifier) && /`outline-offset: -Npx`/.test(verifier) && /`strokeFrom` \(`box-shadow` \| `outline`\)/.test(verifier) && /`strokeAlign`\s+\(`inside` \|\s+`outside` \|\s+`center`\)/.test(verifier) && /`-N\/2px`: a centre stroke/.test(verifier));
   check("the verify skill: text-ordinal/tag-alias at most medium, position and non-canonical at most low, cappedFrom, a tag removes the cap",
     /`text-ordinal` or `tag-alias` is at most medium; by `position` or any other value a hand-written probe invents \(`structural`, …\), at most low/.test(verifySkill) && /`cappedFrom`/.test(verifySkill) && /removes the cap/.test(verifySkill));
   check("the verify skill documents cappedBy (\"match\" | \"size\") beside cappedFrom",

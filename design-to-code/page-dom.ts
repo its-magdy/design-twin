@@ -54,6 +54,19 @@ export interface PageElement extends PageNode {
   parentElement: PageElement | null;
   /** an input's placeholder */
   placeholder?: string;
+  /** an <input>/<textarea>/<select>'s current value (HTMLInputElement.value — not its child text) */
+  value?: string;
+  /** an <input>'s type (lower case; "text" when absent or unknown) */
+  type?: string;
+  /** a <select>'s multiple / size: either makes it a list box showing every option */
+  multiple?: boolean;
+  size?: number;
+  /** a <select>'s selected <option>s */
+  selectedOptions?: ArrayLike<PageElement>;
+  /** an <option>'s text (HTMLOptionElement.text: its text, whitespace collapsed) */
+  text?: string;
+  /** an <option>'s label (HTMLOptionElement.label: its label attribute, else its text) — what a collapsed <select> shows */
+  label?: string;
   /** a <label>'s control (HTMLLabelElement.control) */
   control?: PageElement | null;
   form?: unknown;

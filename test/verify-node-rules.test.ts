@@ -103,6 +103,12 @@ console.log("B — stroke tolerance with CSS snapping, rings, opacity:");
   safe("a ring on the other side than the design's stroke: noted on the delta, not a delta of its own", () =>
     /ring inside the box; the design's stroke is outside/.test(deltaOn(r2, "3:5", /border-width/)?.note ?? "") && r2.deltas.filter((d) => d.nodeId === "3:5").length === 1);
   safe("…and no delta at all when the ring's width matches (only the side differs)", () => !r.deltas.some((d) => d.nodeId === "3:5"));
+  // a CENTRE stroke built as the profiles say (outline, offset −w/2 — read by the probe as strokeAlign "center")
+  const ec = expect1([btn("3:6", 2, "center"), btn("3:7", 2, "inside")]);
+  const rc = compare(ec, measured([box("3:6", { borderWidth: 2, strokeFrom: "outline", strokeAlign: "center" }), box("3:7", { borderWidth: 1, strokeFrom: "outline", strokeAlign: "center" })]));
+  safe("a centre stroke drawn as a centred outline of the same width: no delta", () => !rc.deltas.some((d) => d.nodeId === "3:6"));
+  safe("a centred outline for an inside stroke, of another width: the delta's note says 'centred on the edge of the box'",
+    () => /outline ring centred on the edge of the box; the design's stroke is inside/.test(deltaOn(rc, "3:7", /border-width/)?.note ?? ""));
   const snapped = compare(e, measured([box("3:2", { borderWidth: 0 })]));
   safe("design 1.5 lost entirely: delta expected 1 (what CSS draws), with a note naming the 1.5", () => { const d = deltaOn(snapped, "3:2", /border-width/); return d?.expected === 1 && d.actual === 0 && /1\.5px stroke draws as a 1px/.test(d.note ?? ""); });
 

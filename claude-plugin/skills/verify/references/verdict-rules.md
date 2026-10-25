@@ -140,7 +140,7 @@ whatever the computed style says: radius on such an id is not measured — repor
 id, or tag the cells.
 
 **Strokes may be rings.** A stroke built as a ring (`box-shadow: 0 0 0 Npx`, Tailwind `ring` / `inset-ring`) or an
-outline at offset 0 / −width is read as the border (`strokeFrom` says which, `strokeAlign` which side). A real border
+outline at offset 0 / −width / −width/2 (a centre stroke) is read as the border (`strokeFrom` says which, `strokeAlign` which side). A real border
 width is compared against the design width as CSS draws it (Chromium floors a border to whole pixels, minimum 1px),
 a ring's against the designed width; tolerance 0.5px either way, so a 1px design built with no stroke is a delta.
 

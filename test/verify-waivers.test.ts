@@ -289,6 +289,33 @@ console.log("page-root bottom overflow is 'below the fold' (medium) only when it
   safe("right-edge overflow → high", () => delta(right, "2:2", "placement")?.severity === "high");
   const sameH = run(measure(down, { frame: { ...VIEWPORT, via: "tag", selector: "main", rect: { x: 0, y: 0, w: 1280, h: 800 } } }));
   safe("rendered frame as tall as the design (via tag) → high", () => delta(sameH, "2:2", "placement")?.severity === "high");
+  // nominal-frame drift is not invisible overflow: a dialog rendered 4px larger than designed (a CSS border on top of its
+  // padding) is its width/height delta — the root is never "outside itself", and a node at its grown edge is not off screen
+  const grown: ProbeFrame = { nodeId: "1:1", selector: '[data-dt-node="1:1"]', via: "tag", rect: { x: 78, y: 48, w: 1284, h: 804 } };
+  const wide = { frame: grown, viewport: "1440x900" };
+  const rootGrew = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 } }, { frame: grown }));
+  safe(`the frame root rendered 1284×804 for a 1280×800 design → its width/height deltas, no placement delta on the root (got ${JSON.stringify(rootGrew.deltas.filter((d) => d.nodeId === "1:1").map((d) => [d.field, d.severity]))})`,
+    () => delta(rootGrew, "1:1", "placement") === undefined && delta(rootGrew, "1:1", "width")?.actual === 1284 && delta(rootGrew, "1:1", "height")?.actual === 804);
+  const atEdge = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:22": { x: 1083 } }, wide));
+  const edge = delta(atEdge, "2:22", "placement");
+  safe(`a node past the designed width but inside the grown rendered frame and the viewport → placement medium, 'inside the frame as rendered', no 'cannot see' (got ${JSON.stringify(edge)})`,
+    () => edge?.severity === "medium" && /outside the designed 1280×800 frame but inside the frame as rendered \(1284×804\)/.test(edge.note || "") && !/cannot see/.test(edge.note || ""));
+  const past = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:22": { x: 1100 } }, wide));
+  safe("…past the rendered frame's edge too → high, as before", () => delta(past, "2:22", "placement")?.severity === "high" && /cannot see/.test(delta(past, "2:22", "placement")?.note || ""));
+  const notGrown = run(measure({ "2:22": { x: 1083 } }, { frame: { ...grown, rect: { x: 438, y: 120, w: 1280, h: 800 } } }));
+  safe("…and the same node when the rendered frame is the designed size → high (it IS past the frame's edge)", () => delta(notGrown, "2:22", "placement")?.severity === "high");
+  // the grown frame sits near the window's right edge: the node fits the frame but not the viewport — off screen, high
+  const offScreen = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:22": { x: 1083 } }, { frame: { ...grown, rect: { ...grown.rect, x: 300 } }, viewport: "1440x900" }));
+  safe("…a grown frame placed so the node is past the viewport's edge (300 + 1283 > 1440) → high", () => delta(offScreen, "2:22", "placement")?.severity === "high");
+  // the bottom edge: a grown dialog's node on screen is frame drift too, never "below the fold — reachable by scrolling"
+  const bottom = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:2": { y: 723 } }, wide));
+  const bd = delta(bottom, "2:2", "placement");
+  safe(`a node past the designed bottom but on screen inside the grown frame → medium frame drift, not 'below the fold' (got ${JSON.stringify(bd?.note)})`,
+    () => bd?.severity === "medium" && /inside the frame as rendered/.test(bd.note || "") && !/below the fold/.test(bd.note || ""));
+  const objVp = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:22": { x: 1083 } }, { frame: grown, viewport: { w: 1440, h: 900 } }));
+  safe("…a viewport given as an object {w, h} reads as the same '1440x900' (medium frame drift)", () => delta(objVp, "2:22", "placement")?.severity === "medium");
+  const noVp = run(measure({ "1:1": { x: 0, y: 0, width: 1284, height: 804 }, "2:22": { x: 1083 } }, { frame: grown, viewport: "unknown" }));
+  safe("…no readable viewport → no downgrade (high)", () => delta(noVp, "2:22", "placement")?.severity === "high");
   // a fixed (sticky) child: the frame's LAST numberOfFixedChildren children
   const fixedExp = buildExpectation([{ doc: screenExport([{ ...SCREEN, fixedChildren: 1 }], { screen: "Orders", sourceFile: "Sample Kit" }), label: "Orders" }]);
   safe("a frame's fixed child (and its subtree) is marked fixed; the others are not", () =>

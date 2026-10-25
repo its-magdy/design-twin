@@ -36,7 +36,7 @@ The web column of this table is what the probe reads; use it as the reference fo
 | `gap` / `gapVisual` | CSS `gap`; **and** `gapVisual`, the rendered distance between consecutive children, wherever CSS gap is not what spaces them (a `<table>` uses `border-spacing`) |
 | `width` `height` `x` `y` | `el.getBoundingClientRect()`, with `x`/`y` **minus the frame element's rect** (frame-relative — see `coordinates`) |
 | `textBox` | for every TEXT node: `{x, w}` of a `Range` over its characters, frame-relative — a TEXT node's x and width are compared from `textBox` only (the element's box is not the text's: a padded `<th>`, `<button>` or `<label>`, a fixed-width block); without it they are not measured |
-| `text` | the element's `textContent` — **even when it has child elements** (a `<th>` with a sort caret still has text; skipping it hid every such string) |
+| `text` | the element's `textContent` — **even when it has child elements** (a `<th>` with a sort caret still has text; skipping it hid every such string). A form control shows its **value**, not its children: `el.value` for an `<input>` (text-like types and a button's label) or a `<textarea>` (its child text is only the default, stale once typed in), the selected option's text for a `<select>` (its `textContent` is every option's) — never its placeholder; a password, date or list-box control is not measured as a string (null + why) |
 | `fill` | for an SVG/vector node: `getComputedStyle(<path/rect/circle>).fill` — an SVG's colour is never `background-color` |
 | `placeholderText` / `placeholderColor` | for a placeholder spec (`placeholder: true`): `el.placeholder`, and `getComputedStyle(el, '::placeholder').color` or the stylesheet rule — `textContent` of an empty input is `""` |
 | `tag` | `el.tagName.toLowerCase()` — lets the comparison route table rows, containers and leaves correctly |
@@ -60,8 +60,9 @@ Check these before you call anything wrong:
 - **A TEXT node's id on its `<th>`**: the cell's box includes padding; report `textBox`.
 - **A stroke drawn as a ring or an outline**: Tailwind `ring` / `inset-ring` is a `box-shadow: 0 0 0 Npx` (v4 always
   computes five shadows, the unused ones transparent — find the ring by its content, never by its position in the
-  list), and `outline` with `outline-offset: -Npx` is an inside stroke. Report it as `borderWidth` / `borderColor`
-  with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign` (`inside` | `outside`), as the probe does —
+  list), and `outline` with `outline-offset: -Npx` is an inside stroke (`-N/2px`: a centre stroke, straddling the edge).
+  Report it as `borderWidth` / `borderColor` with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign` (`inside` |
+  `outside` | `center`), as the probe does —
   `border-width: 0` alone is not a missing stroke.
 
 ## The measured file on a native stack

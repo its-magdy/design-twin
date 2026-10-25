@@ -60,7 +60,7 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
-import { readExportIndex, rootIndexFile } from "./export-index.ts";
+import { pagesRootOfScreen, readExportIndex, rootIndexFile } from "./export-index.ts";
 import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
 import type { ChosenPlan } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
@@ -195,6 +195,9 @@ export function main(argv: string[]): number | Promise<number> {
     "      The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]\n" +
     "      ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot\n" +
     "      be graded is dropped with why. Their hash binds the expectation: change them → re-run --expect.\n" +
+    "      Its deviations[] rows with field \"placeholder\" ({nodeId, field, designed, built, reason}) mark a TEXT layer built as a\n" +
+    "      form control's placeholder attribute: compared as placeholderText/placeholderColor; their hash binds the same way.\n" +
+    "      Run it from the project root: a screen of another project's design/export is refused (exit 2), naming that project.\n" +
     "      Read them; never retype them. --out is the verify directory (default design/verify; a new one ends in \"/\"): the set is\n" +
     "      named by the frame's node, <Layer>__<id> — the name a set of that node there already has (a frame renamed in Figma keeps\n" +
     "      it). Any other --out basename is refused (exit 2): one node, one set. --variant <slug> writes the variant set\n" +
@@ -341,6 +344,21 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
   const slugWhy = variant === undefined ? null : variantProblem(variant);
   if (slugWhy !== null) { console.error(`error  --variant: ${slugWhy}`); return 2; }
+  // The export a screen file belongs to is the pages/ tree it sits in — the expectation reads that export's index, sibling
+  // screens, reference PNG and design-system.json from design/export (relative to the working directory, the project
+  // root: the reference path it records, the plans and the verify sets are all project-relative). A screen in ANOTHER
+  // export is refused, naming its project — read from here, its reference would be "missing" and its aliases silently gone.
+  const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const ownExport = realOf(EXPORT_DIR);
+  for (const f of files) {
+    const root = pagesRootOfScreen(f);
+    if (root === null || realOf(root) === ownExport) continue;
+    const project = path.basename(root) === path.basename(EXPORT_DIR) && path.basename(path.dirname(root)) === path.dirname(EXPORT_DIR) ? path.dirname(path.dirname(root)) : null;
+    console.error(project !== null
+      ? `error  ${f} is a screen of the export in ${project}, not of this working directory (${process.cwd()}) — run --expect from ${project}: the expectation's reference path, plans and verify sets are relative to the project root`
+      : `error  ${f} sits in the export at ${root}, not in this project's ${EXPORT_DIR.split(path.sep).join("/")} — pull the screen into ${EXPORT_DIR.split(path.sep).join("/")} and run --expect from the project root`);
+    return 2;
+  }
   const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
   // the export's own index (relative to the project root) tells which destinations were exported: every screen it
   // indexes (export-index.ts) — a page walk replaces the root index, so a destination an earlier walk exported is in
@@ -381,6 +399,12 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   if (pi) {
     console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}…)`);
     for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
+  }
+  const pp = exp.planPlaceholders;
+  if (pp) {
+    console.error(`${pp.plan}: ${pp.nodeIds.length} TEXT layer(s) compared as input placeholders (deviations[] field "placeholder")${pp.dropped.length ? `, ${pp.dropped.length} row id(s) dropped` : ""} ` +
+      `(placeholder rows sha256 ${pp.sha256.slice(0, 12)}…)`);
+    for (const d of pp.dropped) console.error(`warn  plan placeholder ${d.nodeId} dropped: ${d.why}`);
   }
   // the set's name is its node's: <Layer>__<id> — the stem a set of the node in the verify dir already has, or a run of it
   // open in the run cache (fixed: a frame renamed in Figma keeps it), else the indexed layer name's (the frame's own without an index). Never the input file's
@@ -545,16 +569,23 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     const all = chosen.all;
     planHit = chosen.hit;
     if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
-    // the plan --expect merged interactions from (planInteractions.plan) wins over another found now —
-    // --expect may have been given --plan, or design/plan/ changed since; without --plan, check the rows it merged
-    const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : undefined;
+    // the plan --expect read (planInteractions.plan — the interactions it merged —, else planPlaceholders.plan — the
+    // placeholder rows it read; one --expect reads one plan) wins over another found now — --expect may have been given
+    // --plan, or design/plan/ changed since; without --plan, check the rows it read
+    const recOf = (v: unknown): string | undefined => (isJsonObject(v) && typeof v.plan === "string" ? v.plan : undefined);
+    const recInteractions = recOf(expectation.planInteractions), recPlaceholders = recOf(expectation.planPlaceholders);
+    if (recInteractions !== undefined && recPlaceholders !== undefined && !samePlanFile(recInteractions, recPlaceholders)) {
+      console.error(`error  the expectation names two plans — interactions from ${recInteractions}, placeholder rows from ${recPlaceholders} — one --expect reads one plan: re-run --expect`);
+      return 2;
+    }
+    const recPi = recInteractions ?? recPlaceholders;
     if (recPi !== undefined && !(planHit && samePlanFile(planHit.file, recPi))) {
       const r = readJson(recPi, isPlan);
       if (!("doc" in r)) recordedPlanGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
       else if (!flagged) {
         const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})`
           : "; no plan in design/plan/ describes this frame";
-        compareNotes.push(`using ${recPi} (the plan --expect merged interactions from)${foundNow} — its interactions[], waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
+        compareNotes.push(`using ${recPi} (the plan --expect ${recOf(expectation.planInteractions) !== undefined ? "merged interactions from" : "read placeholder rows from"})${foundNow} — its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
         console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
         planHit = { file: recPi, plan: r.doc, choice: "recorded" };
       }
