@@ -2,8 +2,8 @@
 
 
 // design-to-code/audit.ts
-import fs13 from "node:fs";
-import path11 from "node:path";
+import fs14 from "node:fs";
+import path12 from "node:path";
 
 // bridge/src/hex-color.ts
 function formatHex(c) {
@@ -156,7 +156,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path12, ancestors, under, beneath) {
+  (function go(node, parentHidden, path13, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -170,7 +170,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path12,
+      path: path13,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -185,7 +185,7 @@ function walk(root, fn, prune, opts) {
     if (!kids.length) return;
     const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path12 ? path12 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path13 ? path13 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkWithHidden(root, fn, opts) {
@@ -809,15 +809,15 @@ function variableResolver(input) {
     const vars = [];
     let complete = true;
     const done = /* @__PURE__ */ new Set();
-    const path12 = /* @__PURE__ */ new Set();
+    const path13 = /* @__PURE__ */ new Set();
     const visit2 = (x) => {
-      if (path12.has(x)) {
+      if (path13.has(x)) {
         complete = false;
         return;
       }
       if (done.has(x)) return;
       vars.push(x);
-      path12.add(x);
+      path13.add(x);
       for (const val of Object.values(x.values || {})) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
@@ -826,7 +826,7 @@ function variableResolver(input) {
           else complete = false;
         }
       }
-      path12.delete(x);
+      path13.delete(x);
       done.add(x);
     };
     visit2(v);
@@ -2334,7 +2334,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path12, message) => errors.push({ path: path12, message });
+  const err = (path13, message) => errors.push({ path: path13, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -3111,6 +3111,17 @@ function nodeArtefacts(root, dirs = {}) {
   };
 }
 
+// design-to-code/audit-gate.ts
+import fs13 from "node:fs";
+import path11 from "node:path";
+var OVERRIDES = ".overrides.json";
+function overridesFileOf(outBase, exists2 = fs13.existsSync) {
+  const own = outBase + OVERRIDES;
+  const stem = path11.basename(outBase), dot = stem.indexOf(".");
+  const parent = dot > 0 ? path11.join(path11.dirname(outBase), stem.slice(0, dot) + OVERRIDES) : null;
+  return !exists2(own) && parent !== null && exists2(parent) ? parent : own;
+}
+
 // bridge/src/instance-overrides.ts
 var OVERRIDE_CAP = 100;
 
@@ -3356,8 +3367,8 @@ function walkRoots(ac) {
 function visit(ac, node, w, ctx) {
   const { platform, grid, add, tally, annotations, stateHits, validationHits, cappedInstances, charOverridden, hiddenIds, nodesById, usedComponents, pickers, navigations, instanceTexts } = ac;
   const ancestors = w.ancestors.map((a) => a.node);
-  const path12 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-  const here = { label: ctx.label, path: path12 };
+  const path13 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+  const here = { label: ctx.label, path: path13 };
   const hiddenBranch = w.hidden;
   if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
   if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
@@ -3748,7 +3759,7 @@ var valuesOf = (c) => {
   return values;
 };
 var isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
-var sameDir = (a, b) => b !== void 0 && path11.resolve(a) === path11.resolve(b);
+var sameDir = (a, b) => b !== void 0 && path12.resolve(a) === path12.resolve(b);
 function stateLookup(ac) {
   const { opts, docs, catalog } = ac;
   const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
@@ -4158,10 +4169,10 @@ function toMarkdown(res) {
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs14 = res.findings.filter((f) => f.severity === sev);
-    if (!fs14.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs14.length})`, "");
-    for (const f of fs14) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
+    const fs15 = res.findings.filter((f) => f.severity === sev);
+    if (!fs15.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs15.length})`, "");
+    for (const f of fs15) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.path ? ` (${pathTail(f.path)})` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -4236,11 +4247,8 @@ function main(argv) {
   const ds = ctx.designSystem;
   const designSystem = withCatalog(ds, catalog) ?? void 0;
   const neighbours = findExportNeighbours(firstFile);
-  const outBase = out || path11.join(AUDIT_DIR, path11.basename(firstFile, ".json"));
-  const ownOverrides = outBase + ".overrides.json";
-  const stem = path11.basename(outBase), dot = stem.indexOf(".");
-  const parentOverrides = dot > 0 ? path11.join(path11.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs13.existsSync(ownOverrides) && parentOverrides && fs13.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const outBase = out || path12.join(AUDIT_DIR, path12.basename(firstFile, ".json"));
+  const overridesFile = flags.overrides || overridesFileOf(outBase);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   const res = audit(inputs, {
     map: ctx.map,
@@ -4259,7 +4267,7 @@ function main(argv) {
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const c = nodeArtefacts(process.cwd(), { auditDir: path11.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
+    const c = nodeArtefacts(process.cwd(), { auditDir: path12.dirname(outBase) || "." }).claim("audit report", res.nodeIds[0] ?? "", { target: outBase + ".json" });
     if (!c.ok && !force) {
       console.error(`error  ${c.why}: refusing to also write ${outBase}.json/.md. Use that existing name, or pass --force to write this one anyway.`);
       return 1;
@@ -4268,9 +4276,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs13.mkdirSync(path11.dirname(outBase), { recursive: true });
-    fs13.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs13.writeFileSync(outBase + ".md", md);
+    fs14.mkdirSync(path12.dirname(outBase), { recursive: true });
+    fs14.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs14.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);

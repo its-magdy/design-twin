@@ -2,7 +2,7 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs12 from "node:fs";
+import fs13 from "node:fs";
 import path12 from "node:path";
 
 // design-to-code/types.ts
@@ -415,6 +415,7 @@ function nameVerdict(row) {
 }
 
 // design-to-code/audit-gate.ts
+import fs8 from "node:fs";
 import path8 from "node:path";
 
 // design-to-code/finding-id.ts
@@ -1614,26 +1615,48 @@ function nodeArtefacts(root, dirs = {}) {
 }
 
 // design-to-code/audit-gate.ts
-function blockerIds(auditDoc) {
-  const findings = reportFindings(auditDoc);
-  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
-  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
-}
+var crossCheckFileOf = (auditFile) => auditFile.replace(/\.json$/, ".cross.json");
 function reportFindings(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
   const str = (v) => typeof v === "string" && v ? v : void 0;
   return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
-function auditGateStatus(cwd, nodeId, screenFile, screenName) {
-  const rel = nodeArtefacts(cwd).auditFor(nodeId, { screenFile, screenName });
-  if (!rel) return { auditFile: null, blockers: [], legacyBlockers: [] };
+function blockerIds(auditDoc) {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+function screenAudit(cwd, screen) {
+  let rel;
+  try {
+    rel = nodeArtefacts(cwd).auditFor(screen.nodeId, { screenFile: screen.screenFile, screenName: screen.screenName });
+  } catch {
+    return { status: "none" };
+  }
+  if (!rel) return { status: "none" };
   const r = readJson(path8.join(cwd, rel), isAuditReport);
-  if (!("doc" in r)) return { auditFile: rel, blockers: [], legacyBlockers: [], unreadable: true, error: r.error };
-  return { auditFile: rel, blockers: blockerIds(r.doc), legacyBlockers: legacyBlockerIds(reportFindings(r.doc)) };
+  if (!("doc" in r)) return { status: "unreadable", auditFile: rel, error: r.error };
+  const cross = crossCheckFileOf(rel);
+  return {
+    status: "read",
+    auditFile: rel,
+    blockers: blockerIds(r.doc),
+    legacyBlockers: legacyBlockerIds(reportFindings(r.doc)),
+    crossCheckFile: cross !== rel && fs8.existsSync(path8.join(cwd, cross)) ? cross : null
+  };
+}
+function gatePrefill(audit) {
+  if (audit.status !== "read" || !audit.blockers.length) return null;
+  return { auditFile: audit.auditFile, crossCheckFile: audit.crossCheckFile, verdict: "blocked", blockers: [...audit.blockers], overridden: [], reason: null, decidedBy: null, decidedAt: null };
+}
+function mergeGate(prev, fresh) {
+  if (!prev || typeof prev !== "object") return fresh;
+  if (!fresh) return prev;
+  return { ...prev, auditFile: fresh.auditFile, crossCheckFile: fresh.crossCheckFile, blockers: fresh.blockers };
 }
 
 // bridge/src/export-reader.ts
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import path9 from "node:path";
 
 // bridge/src/design-system-layout.ts
@@ -1690,7 +1713,7 @@ function pageIndexFiles(root, pageDirs) {
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs8.readdirSync(path9.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs9.readdirSync(path9.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -1714,7 +1737,7 @@ function readExportIndex(exportRoot) {
     if (t === void 0) {
       const f = inside(root, row.file);
       try {
-        t = f === null ? -1 : fs8.statSync(f).mtimeMs;
+        t = f === null ? -1 : fs9.statSync(f).mtimeMs;
       } catch {
         t = -1;
       }
@@ -2052,11 +2075,11 @@ function variableResolver(input) {
 }
 
 // bridge/src/json-file.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 
 // bridge/src/atomic-write.ts
 import crypto3 from "node:crypto";
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import path10 from "node:path";
 var tmpSuffix = () => `.tmp-${process.pid}-${crypto3.randomBytes(4).toString("hex")}`;
 var RENAME_RETRY_MS = 2e3;
@@ -2066,14 +2089,14 @@ function renameOver(from, to) {
   const t0 = Date.now();
   for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
     try {
-      fs9.renameSync(from, to);
+      fs10.renameSync(from, to);
       return;
     } catch (e) {
       const code = errCode(e);
       if (process.platform !== "win32" || code === void 0 || !RENAME_TRANSIENT.has(code) || Date.now() - t0 >= RENAME_RETRY_MS) throw e;
       let dir = false;
       try {
-        dir = fs9.statSync(to).isDirectory();
+        dir = fs10.statSync(to).isDirectory();
       } catch {
       }
       if (dir) throw e;
@@ -2084,36 +2107,36 @@ function renameOver(from, to) {
 function syncDir(dir) {
   if (process.platform === "win32") return;
   try {
-    const fd = fs9.openSync(dir, "r");
+    const fd = fs10.openSync(dir, "r");
     try {
-      fs9.fsyncSync(fd);
+      fs10.fsyncSync(fd);
     } finally {
-      fs9.closeSync(fd);
+      fs10.closeSync(fd);
     }
   } catch {
   }
 }
 function writeFileAtomic(file, data, opts = {}) {
   const dir = path10.dirname(path10.resolve(file));
-  fs9.mkdirSync(dir, { recursive: true });
+  fs10.mkdirSync(dir, { recursive: true });
   const tmp = file + tmpSuffix();
   try {
     if (opts.sync) {
-      const fd = fs9.openSync(tmp, "wx", opts.mode);
+      const fd = fs10.openSync(tmp, "wx", opts.mode);
       try {
-        fs9.writeFileSync(fd, data);
-        fs9.fsyncSync(fd);
+        fs10.writeFileSync(fd, data);
+        fs10.fsyncSync(fd);
       } finally {
-        fs9.closeSync(fd);
+        fs10.closeSync(fd);
       }
     } else {
-      fs9.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
+      fs10.writeFileSync(tmp, data, { flag: "wx", ...opts.mode === void 0 ? {} : { mode: opts.mode } });
     }
-    if (opts.mode !== void 0) fs9.chmodSync(tmp, opts.mode);
+    if (opts.mode !== void 0) fs10.chmodSync(tmp, opts.mode);
     renameOver(tmp, file);
   } catch (e) {
     try {
-      fs9.rmSync(tmp, { force: true });
+      fs10.rmSync(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -2133,7 +2156,7 @@ function formatJsonLike(value, raw) {
 var UPDATE_TRIES = 3;
 var readIfThere = (file) => {
   try {
-    return fs10.readFileSync(file, "utf8");
+    return fs11.readFileSync(file, "utf8");
   } catch (e) {
     if (errCode(e) === "ENOENT") return null;
     throw e;
@@ -2175,7 +2198,7 @@ function parsePlanText(raw, file) {
 }
 
 // design-to-code/design-system-dir.ts
-import fs11 from "node:fs";
+import fs12 from "node:fs";
 import path11 from "node:path";
 
 // bridge/src/library-layout.ts
@@ -2189,7 +2212,7 @@ var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: 
 var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
 function designSystemFiles(dir) {
   const local = path11.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs11.existsSync(local) && fs11.existsSync(path11.join(dir, COMPONENTS));
+  const isLibrary = !fs12.existsSync(local) && fs12.existsSync(path11.join(dir, COMPONENTS));
   return {
     tokens: path11.join(dir, TOKENS3),
     components: isLibrary ? path11.join(dir, COMPONENTS) : local,
@@ -2484,17 +2507,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const title = indexRow && indexRow.title;
   const rel = screenFile ? path12.relative(cwd || process.cwd(), path12.resolve(screenFile)).split(path12.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
-  let auditGate = null;
-  try {
-    const base = cwd || process.cwd();
-    const g = auditGateStatus(base, nodeId, screenFile, screenName);
-    if (g.auditFile && g.blockers.length) {
-      const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs12.existsSync(path12.join(base, cross)) ? cross : null;
-      auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
-    }
-  } catch {
-  }
+  const auditGate = gatePrefill(screenAudit(cwd || process.cwd(), { nodeId, screenFile, screenName }));
   return {
     schema: "designtwin/plan@2",
     screen: screenFile ? path12.basename(screenFile).replace(/\.json$/, "") : null,
@@ -2525,11 +2538,6 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
 }
 var FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged", "seededFrom"];
 var FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName", "seededFrom"];
-function mergeAuditGate(prev, fresh) {
-  if (!prev || typeof prev !== "object") return fresh;
-  if (!fresh) return prev;
-  return { ...prev, auditFile: fresh.auditFile, crossCheckFile: fresh.crossCheckFile, blockers: fresh.blockers };
-}
 function merge(fresh, prev) {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out = Object.assign({}, prev, {
@@ -2542,7 +2550,7 @@ function merge(fresh, prev) {
     file: fresh.file,
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
-    auditGate: mergeAuditGate(prev.auditGate, fresh.auditGate),
+    auditGate: mergeGate(prev.auditGate, fresh.auditGate),
     counts: fresh.counts
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
@@ -2648,7 +2656,7 @@ function main(argv) {
   const varsRead = readJson(varsFile, isTokensDoc);
   if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
   const doc = screen.doc, vars = varsRead.doc;
-  const hasDs = dsDir && fs12.existsSync(dsDir) && fs12.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs13.existsSync(dsDir) && fs13.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
@@ -2684,7 +2692,7 @@ function main(argv) {
   const indexRow = findIndexRow(screenFile, nodeId);
   const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow });
   const c = fresh.counts;
-  if (out && !fs12.existsSync(out)) {
+  if (out && !fs13.existsSync(out)) {
     const why = newPlanProblem(out, nodeId, indexRow?.name ?? exp?.screen ?? root?.name ?? "");
     if (why) {
       console.error(`plan-skeleton: ${why} \u2014 nothing written`);
@@ -2712,7 +2720,7 @@ function main(argv) {
       });
       if (!changed) {
         const now = /* @__PURE__ */ new Date();
-        fs12.utimesSync(out, now, now);
+        fs13.utimesSync(out, now, now);
       }
     } catch (e) {
       console.error(`plan-skeleton: ${out}: ${errMsg(e)} \u2014 not written`);

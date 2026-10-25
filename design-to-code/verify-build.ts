@@ -50,7 +50,7 @@ import { errMsg } from "../bridge/src/errmsg.ts";
 import { visibility } from "./visible-tree.ts";
 import { screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
-import { auditGateStatus } from "./audit-gate.ts";
+import { judgeGate, screenAudit } from "./audit-gate.ts";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
 import { colorKey } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
@@ -725,46 +725,29 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...(tagCoverage ? { tagCoverage } : {}) };
 }
 
-// Only a WARNING (this file blocks on a raw colour, an unanchored node and — web — no tags at all). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
-// plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
-// be indistinguishable, on disk, from one that never read it.
-// (audit-gate.ts is a static import, which cannot fail at this point.)
+// Only a WARNING (this file blocks on a raw colour, an unanchored node and — web — no tags at all): the plan's auditGate
+// against the screen's audit, as audit-gate.ts judges it — this renders the verdict. Without it a build reading a Blocked
+// audit and proceeding would be indistinguishable, on disk, from one that never read it.
 function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined, planFile?: string): string[] {
-  const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
-  const screenName = plan.screenName || (exp && exp.layerName) || null;
-  let g: ReturnType<typeof auditGateStatus>;
-  try { g = auditGateStatus(cwd, planNode(plan, planFile), screenFile, screenName); } catch { return []; }
-  // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
-  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run the audit script for this screen`];
-  if (!g.auditFile || !g.blockers.length) return [];
-  const gate = plan.auditGate;
-  if (!gate) {
-    return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record ` +
+  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path.resolve(cwd, plan.file) : null, screenName: plan.screenName || (exp && exp.layerName) || null };
+  const v = judgeGate(screenAudit(cwd, screen), plan.auditGate);
+  if (v.status === "clear") return [];
+  // an audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers"
+  if (v.status === "unchecked") return [`${v.auditFile} ${v.error} — the audit gate was NOT checked; re-run the audit script for this screen`];
+  if (v.status === "ungated") {
+    return [`${v.auditFile} is Blocked (${v.blockers.length} blocker(s): ${v.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record ` +
       `{auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
-  const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
-  // A blocker is covered by its id (`code` / `code@nodeId`, + `~n`) — which is also the bare code a
-  // person writes for a node-less finding — or by its older positional id (`code#i`), so an older plan's
-  // decision still stands. The warning lists the new ids.
   const out: string[] = [];
-  const uncovered = g.blockers.filter((id, i) => !overridden.has(id) && !overridden.has(g.legacyBlockers[i] ?? id));
-  if (uncovered.length) out.push(`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`);
-  else if (!gate.reason) out.push(`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`);
-  // The positional id is still accepted, but it is not stable — it is the blocker's
-  // position among ALL blockers, so fixing an earlier one shifts it onto a different blocker and the old
-  // entry silently covers that one. ONE non-blocking warning maps every entry that covers a blocker only
-  // through its positional id to the stable id, and names a positional entry that matches no current blocker.
-  const legacySet = new Set(g.legacyBlockers);
-  const viaLegacy: string[] = [];
-  g.blockers.forEach((id, i) => {
-    const old = g.legacyBlockers[i];
-    if (old !== undefined && !overridden.has(id) && overridden.has(old)) viaLegacy.push(`${old} → ${id}`);
-  });
-  const staleLegacy = [...overridden].filter((e): e is string => typeof e === "string" && /^[^@#~]+#\d+$/.test(e) && !legacySet.has(e));
-  if (viaLegacy.length || staleLegacy.length) {
-    const parts = [...viaLegacy, ...(staleLegacy.length ? [`no current blocker: ${staleLegacy.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
-    out.push(`${g.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently ` +
-      `cover a different blocker. ${viaLegacy.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — " +
+  if (v.status === "uncovered") out.push(`${v.auditFile} has ${v.uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${v.uncovered.join(", ")} — either resolve them or add them with a reason`);
+  else if (v.status === "unreasoned") out.push(`this plan's auditGate overrides ${v.overridden} blocker(s) but gives no \`reason\` — say why it is safe to build past ${v.auditFile}`);
+  // ONE non-blocking warning maps every entry that covers a blocker only through its positional id to the stable id, and
+  // names a positional entry that matches no current blocker
+  const { via, stale } = v.legacy;
+  if (via.length || stale.length) {
+    const parts = [...via.map((x) => `${x.old} → ${x.id}`), ...(stale.length ? [`no current blocker: ${stale.map((e) => `${e} (drop it)`).join(", ")}`] : [])];
+    out.push(`${v.auditFile}: this plan's auditGate.overridden still names blockers by the old positional id — a position shifts when an earlier blocker is fixed or a new one appears, so an old id can silently ` +
+      `cover a different blocker. ${via.length ? "Replace each with its stable id and check it is the blocker you meant" : "None of them covers a current blocker — " +
         "if one was meant for a blocker listed as not overridden, write that blocker's stable id instead"}: ${parts.join("; ")}`);
   }
   return out;

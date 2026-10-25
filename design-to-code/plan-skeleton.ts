@@ -42,7 +42,7 @@ import path from "node:path";
 import { matchByNameAndSignature, nameVerdict, parseVariant } from "./component-match.ts";
 import { visibility, walkNodes as walkRoots } from "./visible-tree.ts";
 import type { NodeVisitor, Visibility } from "./visible-tree.ts";
-import { auditGateStatus } from "./audit-gate.ts";
+import { gatePrefill, mergeGate, screenAudit } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
@@ -416,24 +416,10 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const title = indexRow && indexRow.title;
   const rel = screenFile ? path.relative(cwd || process.cwd(), path.resolve(screenFile)).split(path.sep).join("/") : null;
   const screenName = String(title || (exp && exp.screen) || (root && root.name) || "").trim() || null;
-  // Pre-fill a first-class auditGate from an existing audit with blockers, so the model
-  // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
-  // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
-  // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
-  // Blockers are the audit's finding ids (`code` / `code@nodeId`), and crossCheckFile points at the
-  // cross-check report beside it (`<audit stem>.cross.json`, where cross-file findings carry the same ids).
-  let auditGate: Required<PlanAuditGate> | null = null;
-  try {
-    const base = cwd || process.cwd();
-    const g = auditGateStatus(base, nodeId, screenFile, screenName);
-    if (g.auditFile && g.blockers.length) {
-      const cross = g.auditFile.replace(/\.json$/, ".cross.json");
-      const crossCheckFile = cross !== g.auditFile && fs.existsSync(path.join(base, cross)) ? cross : null;
-      auditGate = { auditFile: g.auditFile, crossCheckFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
-    }
-  } catch { /* the auditGate pre-fill is best-effort: plan-skeleton must never fail on reading an audit */ }
-  // (audit-gate.ts is a static import, which cannot fail at this point. The try/catch is around the CALL:
-  // a malformed audit file must not fail the skeleton.)
+  // Pre-fill a first-class auditGate from an existing audit with blockers (audit-gate.ts gatePrefill), so the model (or a
+  // person) has somewhere to record "acknowledged and overridden, here is why" instead of the build silently proceeding
+  // past a Blocked verdict; a re-run never clears what was already decided (merge(), audit-gate.ts mergeGate).
+  const auditGate = gatePrefill(screenAudit(cwd || process.cwd(), { nodeId, screenFile, screenName }));
   return {
     schema: "designtwin/plan@2",
     screen: screenFile ? path.basename(screenFile).replace(/\.json$/, "") : null,
@@ -469,15 +455,6 @@ export interface MergeResult { plan: Plan; dropped: { tokens: number; components
 const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged", "seededFrom"] as const;
 const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName", "seededFrom"] as const;
 
-// The skeleton owns what it READ — auditFile, crossCheckFile, blockers (the audit's current ids) — and a
-// person owns the decision: overridden / reason / decidedBy / decidedAt / verdict are never touched. (Keeping
-// the whole old gate would freeze its blockers at the ids of the first run.) With no fresh gate (no audit
-// file now, or no blockers left in it) the old one stays as it was: a decision is never cleared.
-function mergeAuditGate(prev: PlanAuditGate | null | undefined, fresh: Required<PlanAuditGate> | null): PlanAuditGate | null {
-  if (!prev || typeof prev !== "object") return fresh;
-  if (!fresh) return prev;
-  return { ...prev, auditFile: fresh.auditFile, crossCheckFile: fresh.crossCheckFile, blockers: fresh.blockers };
-}
 function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
   const out: Plan = Object.assign({}, prev, {
@@ -489,7 +466,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     file: fresh.file,
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
-    auditGate: mergeAuditGate(prev.auditGate, fresh.auditGate),
+    auditGate: mergeGate(prev.auditGate, fresh.auditGate),
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };

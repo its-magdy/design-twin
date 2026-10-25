@@ -68,6 +68,7 @@ import { runCli } from "./proc.ts";
 import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule
 import { AUDIT_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
+import { overridesFileOf } from "./audit-gate.ts";
 import { OVERRIDE_CAP } from "../bridge/src/instance-overrides.ts";
 import { safe } from "../bridge/src/pages-layout.ts";
 
@@ -1470,11 +1471,8 @@ export function main(argv: string[]): number {
   // The user's severity decisions for this report pair, beside it (or --overrides). Present but
   // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.
   const outBase = out || path.join(AUDIT_DIR, path.basename(firstFile, ".json"));
-  // A sidecar run (`--out design/audit/<report>.library`) reads its own overrides file, else its report's.
-  const ownOverrides = outBase + ".overrides.json";
-  const stem = path.basename(outBase), dot = stem.indexOf(".");
-  const parentOverrides = dot > 0 ? path.join(path.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
-  const overridesFile = flags.overrides || (!fs.existsSync(ownOverrides) && parentOverrides && fs.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  // A sidecar run (`--out design/audit/<report>.library`) reads its own overrides file, else its report's (audit-gate.ts).
+  const overridesFile = flags.overrides || overridesFileOf(outBase);
   const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   // The map and the export's other screens label the embedded crossFile's proposals alreadyMapped/sharedWith, as a
   // cross-check run does. Labels only — a broken map that was only found is a warning (in the notes), never a failed audit.
