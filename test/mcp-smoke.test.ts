@@ -162,7 +162,7 @@ void (async () => {
         const miss = await cl.callTool({ name: "design_drift_lint", arguments: {} });
         const missText = firstText(miss);
         ok("…and with no map, the error and its scaffold hint name design/codeconnect.local.json",
-          miss.isError === true && /map-bootstrap\.ts"? <components\.local\.json> --out \S*design[/\\]codeconnect\.local\.json/.test(missText));
+          miss.isError === true && /map-bootstrap\.ts["']? <components\.local\.json> --out ["']?\S*design[/\\]codeconnect\.local\.json/.test(missText));
       } finally {
         await cl.close().catch(() => {});
         fs.rmSync(proj, { recursive: true, force: true });
