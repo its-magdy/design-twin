@@ -1,13 +1,13 @@
-// tokens-core.ts — the variable readers every token emitter shares: names, default modes, the
-// fully-rounded sentinel and the FLOAT unit decision.
+// tokens-core.ts — the variable readers every token emitter shares: names, the fully-rounded sentinel and the
+// FLOAT unit decision (a variable's default mode and value are variable-resolve.ts's, with every other mode rule).
 //
 // tokens.ts (DTCG / CSS / Resolver / Tailwind) and tokens-native.ts (SwiftUI / Compose / Flutter /
-// React Native) must agree on all of these — a token's segments, which mode is its default, whether a
+// React Native) must agree on all of these — a token's segments, whether a
 // FLOAT is a length, a unitless number or a percentage — so both import them from here. They live in
 // their own module because tokens.ts imports tokens-native.ts (for toNative): tokens-native.ts importing
 // them back from tokens.ts would be a cycle, which makes the bundler wrap tokens.ts as an inner module
 // whose `import.meta.main` CLI guard then never fires.
-import type { Variable, VariableCollection, VariableValue } from "./types.ts";
+import type { Variable } from "./types.ts";
 import { isAlias } from "./doc-guards.ts";
 
 /** The px-vs-unitless override every emitter honours (unitDecision): the names a caller declared unitless. */
@@ -51,24 +51,6 @@ function isSentinel(v: Variable | null | undefined, raw: unknown): boolean {
   if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
-}
-
-// `modes[0]` — "any present mode"; a variable with no values at all has none, so undefined (as the JS
-// always returned), and every caller tolerates that.
-function defaultModeName(variable: Variable, collections: VariableCollection[] | undefined): string | undefined {
-  const c = (collections || []).find((x) => x.name === variable.collection);
-  const modes = variable.values ? Object.keys(variable.values) : [];
-  if (c && c.default && modes.includes(c.default)) return c.default;
-  return modes[0]; // fall back to any present mode rather than emit undefined
-}
-// The value that should populate $value / :root — never undefined (falls back to any present mode).
-// `def` may be passed in when the caller already computed the default mode (avoids recomputing it).
-function baseValue(variable: Variable, collections: VariableCollection[] | undefined, def?: string): VariableValue | undefined {
-  const values = variable.values || {};
-  if (def === undefined) def = defaultModeName(variable, collections);
-  if (def !== undefined && values[def] !== undefined) return values[def];
-  const firstDefined = Object.keys(values).find((m) => values[m] !== undefined);
-  return firstDefined !== undefined ? values[firstDefined] : undefined;
 }
 
 // FLOAT unit: Figma FLOAT variables are overwhelmingly dimensions -> `px`; OPACITY/FONT_WEIGHT scopes
@@ -146,4 +128,4 @@ function percentOpacity(variable: Variable, opts?: UnitOpts): boolean {
 const COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 const commentText = (s: unknown): string => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
 
-export { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText };
+export { segs, isSentinel, unitDecision, percentOpacity, commentText };

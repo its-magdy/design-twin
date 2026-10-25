@@ -18,9 +18,9 @@
 //   react-native  plain typed objects keyed by mode (RN has no token API; useColorScheme picks the key)
 // A collection with ONE mode has nothing to switch, so it becomes plain constants instead.
 //
-// Aliases are RESOLVED per mode (a native constant cannot reference "whatever the theme says"), into
-// the alias target's same-named mode when it has one, else its default mode. An alias that leaves the
-// file (a library variable that was not exported) is skipped with a warning, never guessed.
+// Aliases are RESOLVED per mode (a native constant cannot reference "whatever the theme says") by
+// variable-resolve.ts — the same target, mode and cycle rules tokens.css names its var() references by. An
+// alias that leaves the file (a library variable that was not exported) is skipped with a warning, never guessed.
 //
 // Opacity. Figma's opacity numbers are PERCENTAGES, 0–100 (REST API variables types,
 // https://developers.figma.com/docs/rest-api/variables-types/: VariableComposedColor.opacity is "An
@@ -35,15 +35,16 @@
 //   react-native  number   — the `opacity` style prop, 0…1 (reactnative.dev/docs/view-style-props#opacity)
 // A name-heuristic or opts.unitless FLOAT carries no evidence of Figma's scale and stays verbatim, as it
 // does in tokens.css. A COMPOSED colour is folded into one colour literal: the colour half's alpha ×
-// clamp(opacity)/100 (color.ts composeAlpha — the multiply is an inference, see there), each half
-// resolved through the same alias resolution as a plain colour.
-import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
-import { NUMERIC_TEXT, isAlias } from "./doc-guards.ts";
-import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./color.ts";
+// clamp(opacity)/100 (variable-resolve.ts folds it with color.ts composeAlpha — the multiply is an inference,
+// see there), each half resolved through the same alias resolution as a plain colour.
+import type { TokensDoc, Variable } from "./types.ts";
+import { normHex, clampOpacityPct } from "./color.ts";
 
-// Names, default modes, aliases and units must agree with the DTCG/CSS output, so they come from the
-// same readers tokens.ts uses (tokens-core.ts).
-import { segs, isSentinel, defaultModeName, baseValue, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+// Names, aliases and units must agree with the DTCG/CSS output, so they come from the same readers
+// tokens.ts uses (tokens-core.ts, variable-resolve.ts).
+import { segs, isSentinel, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+import { variableResolver, type VariableResolver } from "./variable-resolve.ts";
+import { nullProto } from "../bridge/src/json-util.ts";
 import { disambiguated, keyTag, nativeIdentifier } from "./token-naming.ts";
 
 /** What toNative takes beside the design system. */
@@ -104,45 +105,17 @@ function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
 // including a malformed one.
 const hasComposedKey = (x: unknown): boolean => !!x && typeof x === "object" && "composed" in x;
 const isNativeScalar =(x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
-function resolve(byName: Map<string, Variable>, collections: VariableCollection[], v: Variable, mode: string, seen?: Set<string>): string | number | boolean | undefined {
-  const values = v.values || {};
-  let raw: VariableValue | undefined = values[mode];
-  if (raw === undefined) raw = baseValue(v, collections, defaultModeName(v, collections));
-  const next = new Set(seen || []).add(v.name);
-  // One alias hop: into the target's same-named mode when it has one, else its default mode.
-  const follow = (a: VariableAlias): string | number | boolean | undefined => {
-    const target = byName.get(a.aliasOf);
-    if (!target || (seen && seen.has(target.name))) return undefined;
-    const tMode = target.values && target.values[mode] !== undefined ? mode : defaultModeName(target, collections);
-    // no mode at all: the target has no values, so resolving it yields undefined, as it always did
-    if (tMode === undefined) return undefined;
-    return resolve(byName, collections, target, tMode, next);
-  };
-  // A composed colour (doc-types ComposedColor) folds into ONE hex: each half a literal or an alias
-  // resolved like any other, the opacity a 0–100 percentage applied by color.ts composeAlpha (see the
-  // header). Either half unresolved -> undefined, and model() reports the token as skipped.
-  if (raw && typeof raw === "object" && "composed" in raw) {
-    const { color, opacity } = raw.composed;
-    const c = typeof color === "string" ? color : isAlias(color) ? follow(color) : undefined;
-    const o = typeof opacity === "number" ? opacity : isAlias(opacity) ? follow(opacity) : undefined;
-    const rgba = parseHex(c);
-    if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return undefined;
-    return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
-  }
-  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : undefined; // a motion OBJECT (EASING/TIMING) has no native literal
-  return follow(raw);
+// v's literal in mode m (variable-resolve.ts: aliases followed, a composed colour folded into one hex); undefined when
+// it does not resolve, or resolves to a motion OBJECT (EASING/TIMING), which has no native literal.
+function literal(vars: VariableResolver, v: Variable, mode: string): string | number | boolean | undefined {
+  const r = vars.resolve(v, { mode }).value;
+  return isNativeScalar(r) ? r : undefined;
 }
-// An opacity FLOAT's resolved number (a number, or a string-number FLOAT); null when it is neither.
-function opacityNumber(r: string | number | boolean): number | null {
-  const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
-  return Number.isFinite(n) ? n : null;
-}
-
 // → [{ name, type, modes:[{name,id}], default, fields:[{id, kind, source, values:{modeName: concrete}}] }]
 function model(designSystem: TokensDoc | null | undefined, warnings: string[], opts?: NativeOpts): NativeCollection[] {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
-  const byName = new Map(vars.map((v): [string, Variable] => [v.name, v]));
+  const resolver = variableResolver(designSystem);
   const typeNames = new Set<string>();
   const out: NativeCollection[] = [];
   for (const c of collections) {
@@ -162,13 +135,15 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
       // An opacity FLOAT is written as a 0–1 fraction (see the header); every other value verbatim.
       const pct = kind === "number" && percentOpacity(v, opts);
-      const values: Record<string, Concrete> = {};
+      // Null-prototype: keyed by MODE NAMES, free-form designer strings — `values["__proto__"] = r` on a plain object
+      // sets nothing, and the emitter would then read Object.prototype back as that mode's value.
+      const values: Record<string, Concrete> = nullProto();
       let ok = true;
       for (const m of modeNames) {
-        const r = resolve(byName, collections, v, m);
+        const r = literal(resolver, v, m);
         if (r === undefined || (kind === "color" && !normHex(r))) { ok = false; break; }
         if (pct) {
-          const n = opacityNumber(r);
+          const n = resolver.number(v, { mode: m }); // a number, or a string-number FLOAT; null when neither
           if (n === null) { ok = false; break; }
           const clamped = clampOpacityPct(n);
           if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0–100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);

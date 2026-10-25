@@ -818,6 +818,16 @@ function optArrayOf(x, each) {
 var optObj = (x) => x === void 0 || isJsonObject(x);
 var optStr = (x) => x === void 0 || typeof x === "string";
 var anyObject = (x) => isJsonObject(x);
+var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+var isComposed = (v) => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function isVariable(x) {
   return isJsonObject(x) && typeof x.name === "string" && typeof x.type === "string" && isJsonObject(x.values) && optStr(x.collection);
 }
@@ -1747,6 +1757,135 @@ function isDisabledLayer(layer) {
   return false;
 }
 
+// design-to-code/variable-resolve.ts
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+var definedModes = (v) => {
+  const vals = v.values || {};
+  return Object.keys(vals).filter((m) => vals[m] !== void 0);
+};
+var sameVariable = (a, b) => a === b || !!a.key && a.key === b.key;
+var sameCollection = (a, b) => a.collectionKey && b.collectionKey ? a.collectionKey === b.collectionKey : a.collection !== void 0 && a.collection === b.collection;
+function defaultAmong(v, modes, collections) {
+  const hasDefault = (c) => c.default !== void 0 && modes.includes(c.default);
+  const byKey = v.collectionKey ? collections.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
+  return (byKey ?? (v.collection === void 0 ? void 0 : collections.find((c) => c.name === v.collection && hasDefault(c))))?.default;
+}
+var isLegacyRgba = (x) => !!x && typeof x === "object" && "r" in x && "g" in x && "b" in x && typeof x.r === "number" && typeof x.g === "number" && typeof x.b === "number";
+function readColour(raw) {
+  if (typeof raw === "string") return parseHex(raw);
+  if (!isLegacyRgba(raw)) return null;
+  const a = raw.a === void 0 ? 1 : Number(raw.a);
+  return { r: raw.r * 255, g: raw.g * 255, b: raw.b * 255, a: Number.isNaN(a) ? 1 : a };
+}
+var readNumber = (raw) => {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+};
+var isSourceList = (x) => Array.isArray(x);
+var colourOf = (r) => r.fold ?? readColour(r.value);
+function variableResolver(input) {
+  const sources = isSourceList(input) ? input : [input];
+  const byName = /* @__PURE__ */ new Map();
+  const collections = [];
+  let order = 0;
+  for (const [source, src] of sources.entries()) {
+    for (const v of src && src.variables || []) {
+      if (!v || typeof v.name !== "string") continue;
+      const list = byName.get(v.name);
+      const entry = { v, source, order: order++ };
+      if (list) list.push(entry);
+      else byName.set(v.name, [entry]);
+    }
+    for (const c of src && src.collections || []) if (c) collections.push(c);
+  }
+  const entries = (name, referrer) => (byName.get(name) || []).filter((e) => !referrer || !sameVariable(e.v, referrer));
+  function target(name, referrer) {
+    const cands = entries(name, referrer);
+    if (cands.length <= 1) return cands[0]?.v ?? null;
+    const own = (e) => referrer && sameCollection(e.v, referrer) ? 0 : 1;
+    return cands.slice().sort((a, b) => own(a) - own(b) || a.source - b.source || cmpStr(a.v.key || "", b.v.key || "") || a.order - b.order)[0]?.v ?? null;
+  }
+  function modeOf(v, req = {}) {
+    const modes = definedModes(v);
+    const fromFrame = v.collection === void 0 ? void 0 : req.byCollection?.[v.collection];
+    for (const want of [fromFrame, req.mode]) {
+      if (want === void 0) continue;
+      if (modes.includes(want)) return want;
+      const lower = want.toLowerCase();
+      const ci = modes.find((m) => m.toLowerCase() === lower);
+      if (ci !== void 0) return ci;
+    }
+    if (modes.length === 1) return modes[0];
+    const fallback = req.fallback ?? "first";
+    if (fallback === "none") return void 0;
+    const def = defaultAmong(v, modes, collections);
+    if (def !== void 0 || fallback === "default") return def;
+    return modes[0];
+  }
+  function walk2(v, req, seen) {
+    const none = (mode2) => ({ value: void 0, variable: null, mode: mode2, via: [] });
+    if (!v || seen.has(v)) return none();
+    const mode = modeOf(v, req);
+    if (mode === void 0) return none();
+    const raw = (v.values || {})[mode];
+    const next = new Set(seen).add(v);
+    if (isAlias(raw)) {
+      const r = walk2(target(raw.aliasOf, v), req, next);
+      return { ...r, mode, via: [raw.aliasOf, ...r.via] };
+    }
+    if (isComposed(raw)) {
+      const c = composed(v, raw.composed, req, next);
+      return c ? { value: formatHex(c), variable: v, mode, via: [], fold: c } : none(mode);
+    }
+    if (raw === void 0 || !!raw && typeof raw === "object" && "composed" in raw) return none(mode);
+    return { value: raw, variable: v, mode, via: [] };
+  }
+  function composed(owner, half, req, seen) {
+    const c = isAlias(half.color) ? colourOf(walk2(target(half.color.aliasOf, owner), req, seen)) : readColour(half.color);
+    const o = isAlias(half.opacity) ? readNumber(walk2(target(half.opacity.aliasOf, owner), req, seen).value) : readNumber(half.opacity);
+    return c && o !== null ? { ...c, a: composeAlpha(c.a, o) } : null;
+  }
+  function closure(v) {
+    const vars = [];
+    let complete = true;
+    const done = /* @__PURE__ */ new Set();
+    const path9 = /* @__PURE__ */ new Set();
+    const visit = (x) => {
+      if (path9.has(x)) {
+        complete = false;
+        return;
+      }
+      if (done.has(x)) return;
+      vars.push(x);
+      path9.add(x);
+      for (const val of Object.values(x.values || {})) {
+        const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
+        for (const n of names) {
+          const t = target(n, x);
+          if (t) visit(t);
+          else complete = false;
+        }
+      }
+      path9.delete(x);
+      done.add(x);
+    };
+    visit(v);
+    return { vars, complete };
+  }
+  return {
+    candidates: (name, referrer) => entries(name, referrer).map((e) => e.v),
+    target,
+    modeOf,
+    resolve: (v, req = {}) => {
+      const { value, variable, mode, via } = walk2(v, req, /* @__PURE__ */ new Set());
+      return { value, variable, mode, via };
+    },
+    colour: (v, req = {}) => colourOf(walk2(v, req, /* @__PURE__ */ new Set())),
+    number: (v, req = {}) => readNumber(walk2(v, req, /* @__PURE__ */ new Set()).value),
+    closure
+  };
+}
+
 // design-to-code/cross-check.ts
 import { parseArgs as parseArgs2 } from "node:util";
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
@@ -2406,47 +2545,10 @@ function labelProposals(rekey, visible, map, siblings) {
   return out.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || (b.p.sharedWith || 0) - (a.p.sharedWith || 0) || a.i - b.i).map((x) => x.p);
 }
 var MIN_CONTRAST = 4.5;
-function composedRgba(color, opacity) {
-  if (!color || opacity === null || !Number.isFinite(opacity)) return null;
-  return { ...color, a: composeAlpha(color.a, opacity) };
-}
-var aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
-function resolveNumberWith(valueOf, name, depth) {
-  if (depth > 8) return null;
-  const val = valueOf(name);
-  if (typeof val === "number") return Number.isFinite(val) ? val : null;
-  const next = aliasName(val);
-  return next ? resolveNumberWith(valueOf, next, depth + 1) : null;
-}
-function resolveColourWith(valueOf, name, depth) {
-  if (depth > 8) return null;
-  const val = valueOf(name);
-  if (typeof val === "string") return parseHex(val);
-  const next = aliasName(val);
-  if (next) return resolveColourWith(valueOf, next, depth + 1);
-  if (val && typeof val === "object" && "composed" in val) {
-    const { color, opacity } = val.composed;
-    const c = typeof color === "string" ? parseHex(color) : resolveColourWith(valueOf, color.aliasOf, depth + 1);
-    const o = typeof opacity === "number" ? opacity : resolveNumberWith(valueOf, opacity.aliasOf, depth + 1);
-    return composedRgba(c, o);
-  }
-  return null;
-}
 function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
-  const defs = /* @__PURE__ */ new Map();
-  for (const v of tokens && tokens.variables || []) if (v.name) defs.set(v.name, v);
-  for (const v of variables && variables.variables || []) if (v.name) defs.set(v.name, v);
-  if (!defs.size) return;
-  function valueIn(name, mode) {
-    const v = defs.get(name);
-    if (!v || !v.values) return void 0;
-    const val = v.values[mode];
-    if (val !== void 0) return val;
-    const keys = Object.keys(v.values);
-    const [onlyKey] = keys;
-    return keys.length === 1 && onlyKey !== void 0 ? v.values[onlyKey] : void 0;
-  }
-  const resolve = (name, mode, depth) => resolveColourWith((n) => valueIn(n, mode), name, depth);
+  if (![variables, tokens].some((d) => (d && d.variables || []).length)) return;
+  const vars = variableResolver([variables, tokens]);
+  const resolve = (name, mode) => vars.colour(vars.target(name), { mode, fallback: "none" });
   const modes = /* @__PURE__ */ new Set();
   const allColls = (tokens && tokens.collections || []).concat(variables && variables.collections || []);
   for (const c of allColls) {
@@ -2475,8 +2577,8 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const failures = [];
   for (const p of pairs.values()) {
     for (const mode of modes) {
-      const fg = resolve(p.fg, mode, 0);
-      const bg = resolve(p.bg, mode, 0);
+      const fg = resolve(p.fg, mode);
+      const bg = resolve(p.bg, mode);
       if (!fg || !bg) continue;
       const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
       if (r >= MIN_CONTRAST) continue;
@@ -2595,34 +2697,17 @@ function contrastRendered(screens, variables, tokens, push) {
   const rows = /* @__PURE__ */ new Map();
   for (const s of screens) {
     const label = s.label || screenExportOf(s.doc)?.screen || "screen";
-    const defs = /* @__PURE__ */ new Map();
-    for (const doc of [tokens, variables, s.vars || null]) for (const v of doc && doc.variables || []) if (v.name) defs.set(v.name, v);
-    if (!defs.size) continue;
-    const colls = [...s.vars && s.vars.collections || [], ...variables && variables.collections || [], ...tokens && tokens.collections || []];
+    const docs = [s.vars || null, variables, tokens];
+    if (!docs.some((d) => (d && d.variables || []).length)) continue;
+    const vars = variableResolver(docs);
     for (const root of screenRoots(s.doc)) {
-      const rm = root.resolvedModes || {};
-      const modeOf = (v) => {
-        const keys = Object.keys(v.values || {});
-        const coll = v.collection;
-        const r = coll !== void 0 ? rm[coll] : void 0;
-        if (r !== void 0 && keys.includes(r)) return r;
-        const hasDefault = (c) => c.default !== void 0 && keys.includes(c.default);
-        const byKey = v.collectionKey ? colls.find((c) => c.key === v.collectionKey && hasDefault(c)) : void 0;
-        const def = (byKey ?? colls.find((c) => c.name === coll && hasDefault(c)))?.default;
-        if (def !== void 0) return def;
-        return keys.length === 1 ? keys[0] : void 0;
-      };
-      const valueOf = (name) => {
-        const v = defs.get(name);
-        const m = v ? modeOf(v) : void 0;
-        return v && m !== void 0 ? v.values[m] : void 0;
-      };
-      const resolve = (name) => resolveColourWith(valueOf, name, 0);
+      const req = { byCollection: root.resolvedModes || {}, fallback: "default" };
+      const resolve = (name) => vars.colour(vars.target(name), req);
       const modeLabel = (...names) => {
         const ms = [];
         for (const nm of names) {
-          const v = defs.get(nm);
-          const m = v && Object.keys(v.values || {}).length > 1 ? modeOf(v) : void 0;
+          const v = vars.target(nm);
+          const m = v && Object.keys(v.values || {}).length > 1 ? vars.modeOf(v, req) : void 0;
           if (m !== void 0 && !ms.includes(m)) ms.push(m);
         }
         return ms.join("/") || "single mode";
@@ -2799,7 +2884,6 @@ export {
   ABSURD_NUMBER,
   SEVERITY_ORDER,
   WRONG_CATALOG_PCT,
-  composedRgba,
   crossCheck,
   main,
   toMarkdown

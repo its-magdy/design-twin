@@ -61,28 +61,23 @@ check("hidden[] lists the roots of the hidden subtrees, and they account for all
   plan.hidden.length > 0 && plan.hidden.every((h) => hid.has(h.id)) && plan.hidden.reduce((a, h) => a + h.nodes, 0) === 129);
 check("stderr states the counts", /45 bound token\(s\) \(33 on visible nodes\), 51 visible instance\(s\), 254 visible node anchor slot\(s\), 129 hidden node\(s\) excluded/.test(r.stderr));
 
-console.log("tokens[] — a composed colour (colour + separate 0–100 opacity) resolves to ONE colour:");
+console.log("tokens[] — a composed colour (colour + separate 0–100 opacity) is written as ONE colour:");
 {
-  // alpha = colour alpha × opacity/100 (an inference — Figma documents the 0–100 range, not the combination
-  // with a colour's own alpha), the opacity clamped to 0–100 as Figma clamps it.
+  // The fold itself (alpha × opacity/100, the clamp, an unresolved half) is test/variable-resolve.test.ts's; here,
+  // only how the row writes it.
   const composedVars = tokens({
     collections: [{ name: "C", modes: ["M"], default: "M" }],
     variables: [
       { name: "Red", collection: "C", type: "COLOR", values: { M: "#ff0000" } },
-      { name: "Op", collection: "C", type: "FLOAT", scopes: ["COLOR_OPACITY"], values: { M: 60 } },
       { name: "A", collection: "C", type: "COLOR", values: { M: { composed: { color: { aliasOf: "Red" }, opacity: 60 } } } },
-      { name: "B", collection: "C", type: "COLOR", values: { M: { composed: { color: "#ff000080", opacity: { aliasOf: "Op" } } } } },
-      { name: "D", collection: "C", type: "COLOR", values: { M: { composed: { color: { aliasOf: "Red" }, opacity: 120 } } } },
       { name: "E", collection: "C", type: "COLOR", values: { M: { composed: { color: { aliasOf: "Red" }, opacity: { aliasOf: "Gone" } } } } },
     ],
   });
-  const doc = { screen: "S", nodes: ["A", "B", "D", "E"].map((n, i) => node({ id: `1:${i}`, type: "RECTANGLE", name: n, tokens: { fills: n } })) };
+  const doc = { screen: "S", nodes: ["A", "E"].map((n, i) => node({ id: `1:${i}`, type: "RECTANGLE", name: n, tokens: { fills: n } })) };
   const rows = buildTokens(doc, composedVars, null, { C: "M" });
   const val = (n: string) => rows.find((t) => t.figmaName === n)?.value;
-  check("colour alias + opacity 60: #ff0000 at alpha 0.6 (0x99)", val("A") === "#ff000099");
-  check("#ff000080 (alpha ~0.5) + opacity alias -> 60: alpha ~0.3 (0x4d), multiplied", val("B") === "#ff00004d");
-  check("opacity 120 clamps to 100: the colour, opaque", val("D") === "#ff0000");
-  check("an opacity alias that does not resolve stays null", val("E") === null);
+  check("one #rrggbbaa value: #ff0000 at opacity 60 is #ff000099", val("A") === "#ff000099");
+  check("a composed colour that does not resolve is null", val("E") === null);
 }
 
 console.log("tokens[] — a COLOR value is written in color.ts's one spelling, so equal colours compare equal:");
