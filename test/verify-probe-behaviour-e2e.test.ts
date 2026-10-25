@@ -173,7 +173,7 @@ const EXP = out("Crates__80_1") + ".expected.json", QUIET = out("Crates__80_1.qu
 const q = limit(3);
 // correct builds the probe must not misjudge or touch
 const E1 = "enter-submit,row-enter,headless-ui,closed-menu,anim-in,scroll-lock";
-const E2 = "cycle-date,cycle-shadow,cycle-iframe,names,cancel-link,fab,div-modal,trap-cap,fv-reveal,waapi-spin,lab-scrim,role-link-close";
+const E2 = "cycle-date,cycle-shadow,cycle-iframe,names,shadow-toolbar,cancel-link,fab,div-modal,trap-cap,fv-reveal,waapi-spin,lab-scrim,role-link-close";
 const E3 = "card-delete,enter-confirm,keydown-open,doc-enter";
 const E4 = "hui-wrap,tag-inner,cell-opener";
 const E5 = "cdk-overlay,toast-portal";
@@ -327,6 +327,10 @@ check("a date input, a shadow-DOM pager and an iframe before the openers do not 
   rows(mE2).some((c) => c.id === "keyboard.reachable" && c.status === "pass" && /^8 of 8/.test(c.detail)) && !rows(mE2).some((c) => c.id === "keyboard.reachable" && /Tab walk/.test(c.detail))
   && ["80:15", "80:16", "80:17"].every((id) => statusOf(mE2, "keyboard.activation", id) === "pass"));
 check("a11y.name: the titled iframe, the <summary> and the unnamed role=group pass (no a11y.name fail or warn)", statusOf(mE2, "a11y.name") === "pass" && !rows(mE2).some((c) => c.id === "a11y.name" && c.status !== "pass"));
+// (the probe's own path engine is registered by the built CLI: through Playwright's css engine the toolbar's shadow stop
+// would be read off the unnamed slotted button and fail a11y.name)
+check("a11y.name: a toolbar's shadow button beside an unnamed slotted button at the same nth-child step is read as itself (the CLI's path engine) — no a11y.name fail on an x-toolbar path",
+  !rows(mE2).some((c) => c.id === "a11y.name" && c.status === "fail" && /x-toolbar/.test(c.target ?? "")));
 check("click-outside 80:16 (no scrim, no native backdrop) → not-run 'no backdrop to click'", statusOf(mE2, "dialog.click-outside", "80:16") === "not-run" && /no backdrop to click/.test(row(mE2, "dialog.click-outside", "80:16")?.detail ?? ""));
 check("a Close that is a router link is never a safe close: focus-return 80:18 close not-run (no button), never a fail after following it",
   statusOf(mE2, "dialog.focus-return", "80:18", "close") === "not-run" && /no visible Cancel .* button/.test(row(mE2, "dialog.focus-return", "80:18", "close")?.detail ?? "")
