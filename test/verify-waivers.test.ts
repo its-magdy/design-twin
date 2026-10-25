@@ -13,12 +13,12 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
-import { isPassingVerdict, waiversHash } from "../design-to-code/plan-waivers.ts";
+import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { isPlan, isVerifyExpectation, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import type { InteractionEvidence, JsonValue, MeasuredNode, MeasuredStyles, Plan, PlanDescope, PlanWaiver, ProbeFrame, VerifyMeasured, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
-import { isJsonObject } from "../design-to-code/types.ts";
-import { screenExport } from "./fixtures.ts";
+import { isJsonObject, isPassingVerdict } from "../design-to-code/types.ts";
+import { screenExport, usingPlan } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 
@@ -102,7 +102,7 @@ console.log("a waiver accepts one delta, bound to export + designed + built:");
   const m = measure({ "2:1": { fontSize: 16 } });
   const open = run(m);
   safe("without a waiver: font-size 14 → 16 is high, verdict fail", () => open.verdict === "fail" && delta(open, "2:1", "font-size")?.severity === "high");
-  const r = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] });
+  const r = run(m, { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] }) });
   const d = delta(r, "2:1", "font-size");
   safe("with a matching waiver: verdict pass-with-deviations", () => r.verdict === "pass-with-deviations" && r.why.length === 0);
   safe("…the delta stays listed, marked accepted {reason, decidedBy, decidedAt}", () => !!d && !!d.accepted && d.accepted.decidedBy === "Sam Doe" && /dense table/.test(d.accepted.reason));
@@ -111,43 +111,43 @@ console.log("a waiver accepts one delta, bound to export + designed + built:");
   safe("…headline says PASS-WITH-DEVIATIONS and '1 accepted'", () => /^PASS-WITH-DEVIATIONS — /.test(r.headline) && /1 accepted/.test(r.headline));
   safe("…report.md marks the row accepted", () => /accepted — the wider type/.test(reportToMarkdown(r)));
 
-  const moved = run(measure({ "2:1": { fontSize: 18 } }), { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] });
+  const moved = run(measure({ "2:1": { fontSize: 18 } }), { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] }) });
   safe("built value moved (16 → 18): reopened 'built value moved: was 16, now 18', delta open, verdict fail", () =>
     moved.verdict === "fail" && !delta(moved, "2:1", "font-size")?.accepted && moved.waivers.reopened.some((w) => w.nodeId === "2:1" && /built value moved: was 16, now 18/.test(w.why)));
-  const within = run(measure({ "2:1": { fontSize: 16.4 } }), { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] });
+  const within = run(measure({ "2:1": { fontSize: 16.4 } }), { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] }) });
   safe("built value within the field's tolerance (16 → 16.4, tol 0.5): still accepted", () => within.verdict === "pass-with-deviations");
-  const reexported = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16, exportContentSha256: "f".repeat(64) })] });
+  const reexported = run(m, { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16, exportContentSha256: "f".repeat(64) })] }) });
   safe("export content hash differs (every re-export): reopened 'design re-exported', verdict fail", () =>
     reexported.verdict === "fail" && reexported.waivers.reopened.some((w) => /design re-exported/.test(w.why)));
-  const redesigned = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 12, built: 16 })] });
+  const redesigned = run(m, { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 12, built: 16 })] }) });
   safe("designed value differs: reopened 'designed value changed: was 12, now 14'", () => redesigned.waivers.reopened.some((w) => /designed value changed: was 12, now 14/.test(w.why)) && redesigned.verdict === "fail");
-  const unusedR = run(measure(), { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] });
+  const unusedR = run(measure(), { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] }) });
   safe("a waiver that matches no delta (fixed): listed under waivers.unused, verdict plain pass", () =>
     unusedR.verdict === "pass" && unusedR.waivers.unused.some((w) => w.nodeId === "2:1" && w.field === "font-size"));
-  const bad = run(m, { waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16, reason: "" })] });
+  const bad = run(m, { plan: usingPlan({ waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16, reason: "" })] }) });
   safe("a waiver with no reason is ignored (noted), not applied", () => bad.verdict === "fail" && (bad.probe.inputNotes || []).some((n) => /waivers\[0\]/.test(n)));
 }
 {
   // never waivable: an absent component, a failed interaction
-  const absent = run(measure(), { components: [{ setName: "Order Row", present: false }], waivers: [waiver({ nodeId: "I2:71;5:1", field: "presence", designed: true, built: false })] });
+  const absent = run(measure(), { components: [{ setName: "Order Row", present: false }], plan: usingPlan({ waivers: [waiver({ nodeId: "I2:71;5:1", field: "presence", designed: true, built: false })] }) });
   safe("a waiver on an ABSENT component is ignored (unused, says why); verdict fail", () =>
     absent.verdict === "fail" && absent.waivers.applied === 0 && absent.waivers.unused.some((w) => w.nodeId === "I2:71;5:1" && /never waivable/.test(w.why || "")));
   const failedM = measure({}, { interactions: [works("2:4"), { nodeId: "2:5", trigger: "on_click", ok: false, selector: '[data-dt-node="2:5"]', selectorCount: 1, detail: "nothing happened" }] });
-  const failed = run(failedM, { waivers: [waiver({ nodeId: "2:5", field: "interaction", designed: "navigate", built: "nothing" })] });
+  const failed = run(failedM, { plan: usingPlan({ waivers: [waiver({ nodeId: "2:5", field: "interaction", designed: "navigate", built: "nothing" })] }) });
   safe("a waiver on a FAILED interaction is ignored; it stays fail", () =>
     failed.verdict === "fail" && ia(failed, "2:5")?.result === "fail" && failed.waivers.unused.some((w) => w.nodeId === "2:5" && /failed interaction/.test(w.why || "")));
 
   // descopes
   const descope = (d: Partial<PlanDescope> = {}): PlanDescope => ({ nodeId: "2:5", trigger: "on_click", exportContentSha256: SHA, reason: "details page ships next release", decidedBy: "Sam Doe", decidedAt: "2026-09-30T02:00:00Z", ...d });
-  const ds = run(failedM, { descopes: [descope()] });
+  const ds = run(failedM, { plan: usingPlan({ descopes: [descope()] }) });
   safe("a descoped interaction is removed before grading → result 'descoped', verdict pass-with-deviations", () =>
     ia(ds, "2:5")?.result === "descoped" && ds.verdict === "pass-with-deviations" && ds.coverage.interactionsDescoped === 1 && ds.coverage.interactionsFailed === 0);
   safe("…headline counts it ('1 descoped')", () => /1 descoped/.test(ds.headline));
-  const dsWorks = run(measure(), { descopes: [descope()] });
+  const dsWorks = run(measure(), { plan: usingPlan({ descopes: [descope()] }) });
   safe("descoped but the probe drove it fine → still descoped, note 'descoped but works'", () => ia(dsWorks, "2:5")?.result === "descoped" && /descoped but works/.test(ia(dsWorks, "2:5")?.note || ""));
-  const dsStale = run(failedM, { descopes: [descope({ exportContentSha256: "0".repeat(64) })] });
+  const dsStale = run(failedM, { plan: usingPlan({ descopes: [descope({ exportContentSha256: "0".repeat(64) })] }) });
   safe("a descope from an older export is not applied (reopened) → fail", () => dsStale.verdict === "fail" && dsStale.waivers.reopened.some((w) => w.nodeId === "2:5"));
-  const dsDest = run(failedM, { descopes: [descope({ destinationId: "7:7" })] });
+  const dsDest = run(failedM, { plan: usingPlan({ descopes: [descope({ destinationId: "7:7" })] }) });
   safe("a descope naming another destination does not match", () => ia(dsDest, "2:5")?.result === "fail");
 }
 
@@ -323,9 +323,9 @@ console.log("page-root bottom overflow is 'below the fold' (medium) only when it
 
   // a waiver on a placement delta honours tolerance through its numbers
   const pw = waiver({ nodeId: "2:2", field: "placement", designed: "inside the frame", built: String(p?.actual) });
-  const slight = run(measure({ ...down, "2:2": { y: 1301 } }, { frame: VIEWPORT }), { waivers: [pw] });
+  const slight = run(measure({ ...down, "2:2": { y: 1301 } }, { frame: VIEWPORT }), { plan: usingPlan({ waivers: [pw] }) });
   safe("placement waiver: the footer 1px lower is still accepted (position tolerance 2)", () => !!delta(slight, "2:2", "placement")?.accepted);
-  const far = run(measure({ ...down, "2:2": { y: 1340 } }, { frame: VIEWPORT }), { waivers: [pw] });
+  const far = run(measure({ ...down, "2:2": { y: 1340 } }, { frame: VIEWPORT }), { plan: usingPlan({ waivers: [pw] }) });
   safe("…40px lower reopens it (built value moved)", () => !delta(far, "2:2", "placement")?.accepted && far.waivers.reopened.some((w) => /built value moved/.test(w.why)));
 }
 
@@ -351,22 +351,22 @@ console.log("a plan anchor folds a layout-only wrapper into a measured ancestor:
   const plain = run(m);
   const nm = plain.notMeasured.find((n) => n.nodeId === "2:3");
   safe("without an anchor: the padding-only wrapper is not measured, with the 'foldable' hint", () => !!nm && /foldable \(no paint — anchor it foldedInto its parent 2:8/.test(nm.why));
-  const r = run(m, { anchors: { "2:3": { foldedInto: "2:8" } } });
+  const r = run(m, { plan: usingPlan({ anchors: { "2:3": { foldedInto: "2:8" } } }) });
   safe("foldedInto its measured ancestor: listed in folded[], out of notMeasured and the denominator", () =>
     r.folded.some((f) => f.nodeId === "2:3" && f.into === "2:8") && !r.notMeasured.some((n) => n.nodeId === "2:3") && r.coverage.nodesExpected === plain.coverage.nodesExpected - 1 && r.coverage.nodesFolded === 1);
   safe("…and the screen passes", () => r.verdict === "pass");
-  const paint = run(measure({ "2:2": null, "2:21": null, "2:22": null, "2:23": null }), { anchors: { "2:21": { foldedInto: "2:2" } } });
+  const paint = run(measure({ "2:2": null, "2:21": null, "2:22": null, "2:23": null }), { plan: usingPlan({ anchors: { "2:21": { foldedInto: "2:2" } } }) });
   safe("refused: a wrapper that paints (background) stays notMeasured with the reason", () => paint.notMeasured.some((n) => n.nodeId === "2:21" && /foldedInto 2:2 refused: it states backgroundColor/.test(n.why)) && paint.folded.length === 0);
-  const notAnc = run(m, { anchors: { "2:3": { foldedInto: "2:4" } } });
+  const notAnc = run(m, { plan: usingPlan({ anchors: { "2:3": { foldedInto: "2:4" } } }) });
   safe("refused: the target is not an ancestor", () => notAnc.notMeasured.some((n) => n.nodeId === "2:3" && /2:4 is not an ancestor/.test(n.why)));
-  const unmeasured = run(measure({ "2:3": null, "2:8": null }), { anchors: { "2:3": { foldedInto: "2:8" } } });
+  const unmeasured = run(measure({ "2:3": null, "2:8": null }), { plan: usingPlan({ anchors: { "2:3": { foldedInto: "2:8" } } }) });
   // a wrapper whose only paint is a shadow (not compared by this method) is still drawn — never folded
   const shadowed = buildExpectation([{ doc: screenExport([{ type: "FRAME", id: "1:1", name: "Orders", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [
     { type: "FRAME", id: "4:1", name: "Card", fills: [{ type: "solid", color: "#ffffff" }], children: [
       { type: "FRAME", id: "4:2", name: "Lift", effects: [{ type: "drop_shadow", color: "#00000033", offset: { x: 0, y: 2 }, radius: 4 }], layout: { display: "flex", flexDirection: "column", padding: [8, 8, 8, 8] }, children: [
         { type: "TEXT", id: "4:3", name: "Label", text: "Total", font: { family: "Inter", size: 14, color: "#111111" } }] }] }] }], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders" }), label: "Orders" }]);
   safe("expectNode marks a node with a visible effect `decorated`", () => shadowed.nodes.find((n) => n.nodeId === "4:2")?.decorated === true);
-  const sh = compare(shadowed, { nodes: [{ nodeId: "4:1", styles: { backgroundColor: "rgb(255, 255, 255)" } }, { nodeId: "4:3", styles: { text: "Total", fontSize: 14, fontFamily: "Inter", color: "rgb(17, 17, 17)" } }] }, { anchors: { "4:2": { foldedInto: "4:1" } } });
+  const sh = compare(shadowed, { nodes: [{ nodeId: "4:1", styles: { backgroundColor: "rgb(255, 255, 255)" } }, { nodeId: "4:3", styles: { text: "Total", fontSize: 14, fontFamily: "Inter", color: "rgb(17, 17, 17)" } }] }, { plan: usingPlan({ anchors: { "4:2": { foldedInto: "4:1" } } }) });
   safe("refused: a shadow-only wrapper cannot be folded (it states decorated)", () => sh.notMeasured.some((n) => n.nodeId === "4:2" && /refused: it states decorated/.test(n.why)) && sh.folded.length === 0);
   safe("refused: the ancestor was not measured", () => unmeasured.notMeasured.some((n) => n.nodeId === "2:3" && /2:8 was not measured/.test(n.why)));
 }
@@ -405,17 +405,9 @@ console.log("repeated placeholder copy in sibling rows:");
   safe("a non-repeated text mismatch stays high", () => delta(t, "2:1", "text")?.severity === "high");
 }
 
-// ---------------------------------------------------------------- waiversHash
-console.log("waiversHash — what a report records:");
+// ---------------------------------------------------------------- the plan's waiver lists
 {
-  const p1: Plan = { screen: "Orders", waivers: [waiver({ nodeId: "2:1", field: "font-size", designed: 14, built: 16 })] };
-  safe("absent and [] hash alike; key order does not matter; a change does", () => {
-    const flipped: Plan = { screen: "Orders", waivers: (p1.waivers || []).map((w) => ({ decidedAt: w.decidedAt, decidedBy: w.decidedBy, reason: w.reason, exportContentSha256: w.exportContentSha256, built: w.built, designed: w.designed, field: w.field, nodeId: w.nodeId })) };
-    return waiversHash({}) === waiversHash({ waivers: [], descopes: [] }) && waiversHash(p1) === waiversHash(flipped) && waiversHash(p1) !== waiversHash({});
-  });
   safe("parsePlan refuses a non-array waivers", () => !isPlan({ waivers: {} }) && isPlan({ waivers: [] }) && !isPlan({ descopes: "x" }));
-  const rec = run(measure(), { waiversInput: { plan: "design/plan/Orders.json", sha256: waiversHash(p1) } });
-  safe("compare records inputs.waivers {plan, sha256}", () => rec.inputs?.waivers?.sha256 === waiversHash(p1) && rec.inputs.waivers.plan === "design/plan/Orders.json");
 }
 
 // ---------------------------------------------------------------- CLI: --expect index, --compare with the plan, --accept round trip

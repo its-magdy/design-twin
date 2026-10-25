@@ -760,10 +760,10 @@ export interface VerifyExpectation {
   /** the reference PNG's geometry over the first frame (absent: an older expectation, or no reference) */
   referenceImage?: VerifyReferenceImage | VerifyReferenceUnusable;
 }
-/** expectation.planInteractions: which plan, the hash of its interactions[] (plan-waivers.ts planInteractionsSha256),
+/** expectation.planInteractions: which plan, the hash of its interactions[] (plan-binding.ts),
  *  how many rows were merged and the ones dropped with why. */
 export interface PlanInteractionsInput { plan: string; sha256: string; merged: number; dropped: Array<{ nodeId: string; why: string }> }
-/** expectation.planPlaceholders: which plan, the hash of its placeholder rows (plan-waivers.ts planPlaceholdersSha256), the
+/** expectation.planPlaceholders: which plan, the hash of its placeholder rows (plan-binding.ts), the
  *  TEXT nodes compared as placeholders because of them, and the rows dropped with why. */
 export interface PlanPlaceholdersInput { plan: string; sha256: string; nodeIds: string[]; dropped: Array<{ nodeId: string; why: string }> }
 
@@ -1104,6 +1104,12 @@ export interface ArtifactCheck { path?: string; exists: boolean; image: boolean;
 /** report.inputs.code: which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
 export type VerifyVerdict = "pass" | "pass-with-deviations" | "fail" | "incomplete";
+/** The verdicts a screen passes with. `pass-with-deviations`: nothing open, ≥1 accepted delta or descoped interaction. */
+export const PASSING_VERDICTS = ["pass", "pass-with-deviations"] as const satisfies readonly VerifyVerdict[];
+export type PassingVerdict = (typeof PASSING_VERDICTS)[number];
+export function isPassingVerdict(v: unknown): v is PassingVerdict {
+  return typeof v === "string" && (PASSING_VERDICTS as readonly string[]).includes(v);
+}
 /** report.waivers: how the plan's waivers fared against this round's deltas. */
 export interface VerifyWaiverResult {
   /** waivers that matched a delta (the delta carries `accepted`) */

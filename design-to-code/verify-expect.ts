@@ -8,14 +8,13 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { walkWithHidden } from "./visible-tree.ts";
 import type { WalkContext } from "./visible-tree.ts";
 import { exportContentSha256 } from "./content-hash.ts";
-import { planInteractionsSha256, planPlaceholderRows, planPlaceholdersSha256 } from "./plan-waivers.ts";
+import { planAtExpect } from "./plan-binding.ts";
+import type { ExpectNodes, PlanAtExpect } from "./plan-binding.ts";
 import { pngInfo } from "../bridge/src/png.ts";
-import { actionForExpect, isPlanExpect } from "./probe-steps.ts";
-import { isJsonObject } from "./types.ts";
 import { isLayerFile, screenExportOf, screenRoots } from "./export-shape.ts";
 import { PAINT_TYPES, idSuffix } from "./probe-match.ts";
 import type {
-  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, PlanDeviation, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
+  Action, Box, DrawnState, IndexRow, IrNode, JsonValue, LayoutSpec, NotComparable, Paint, Plan, Reaction, ScreenDoc, ScreenExport, SolidPaint, VerifyExpectation,
   VerifyInstance, VerifyInteraction, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyRootFrame, VerifySpec,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -623,8 +622,7 @@ function markRepeatedText(root: IrNode, specById: Map<string, VerifySpec>): void
 export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): BuiltExpectation {
   const bx = expectBuildCtx(opts);
   for (const input of docs) readInput(bx, input);
-  const planInteractions = mergePlanInteractions(bx, opts && opts.plan);
-  const planPlaceholders = planPlaceholdersOf(bx, opts && opts.plan);
+  const plan = planRows(bx);
   // repeated placeholder copy in sibling rows
   const specById = new Map(bx.nodes.map((s) => [s.nodeId, s]));
   for (const r of bx.roots) markRepeatedText(r, specById);
@@ -632,7 +630,7 @@ export function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | nul
   if (bx.index && bx.readSibling) addAliases(bx, specById);
   addOverlays(bx);
   const referenceImage = firstReferenceImage(bx, opts);
-  return expectationOf(bx, docs, planInteractions, referenceImage, planPlaceholders);
+  return expectationOf(bx, docs, plan, referenceImage);
 }
 
 /** the hidden layers the walk skipped: their roots, every id under them, and what they would have added */
@@ -654,17 +652,14 @@ interface ExpectBuild {
   // each root's reference pointer, wherever its document keeps it (rootReference)
   referenceOf: Map<IrNode, string>;
   rootNodesByFile: Map<string, IrNode[]>; // each Figma file's input roots
-  visibleById: Map<string, { name: string; file: string }>; // a plan row's node — its name and file
+  visibleById: Map<string, { name: string; file: string; type: string }>; // a plan row's node — its name, file and type
   index: ExpectOptions["index"] | undefined;
   readSibling: ExpectOptions["readSibling"] | undefined;
   /** a sibling export by its index row's file, read from disk once per --expect (the alias and overlay passes share it) */
   sibling: (file: string) => ScreenDoc | null;
-  /** the node ids the plan declares placeholders (planPlaceholderRows), and the type of each one the walk met visible */
-  planPlaceholderIds: Set<string>; planPlaceholderSeen: Map<string, string>;
+  /** the plan for this screen, as --expect consumes it (plan-binding.ts) */
+  plan: PlanAtExpect;
 }
-/** a plan deviation row's node ids (nodeId and nodeIds), trimmed */
-const rowIds = (d: PlanDeviation): string[] =>
-  [d.nodeId, ...(Array.isArray(d.nodeIds) ? d.nodeIds : [])].filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
 /** buildExpectation()'s empty collections and the readers its options give */
 function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
   const readSibling = opts && opts.readSibling;
@@ -679,7 +674,7 @@ function expectBuildCtx(opts: ExpectOptions | null | undefined): ExpectBuild {
     frames: [], seen: new Set<string>(), screen: undefined, exportedAt: undefined, reference: null,
     idsByFile: new Map(), rootsByFile: new Map(), interactionFile: new Map(), roots: [], referenceOf: new Map(), rootNodesByFile: new Map(), visibleById: new Map(),
     index: opts && opts.index, readSibling, sibling,
-    planPlaceholderIds: new Set(planPlaceholderRows(opts && opts.plan ? opts.plan.plan : null).flatMap(rowIds)), planPlaceholderSeen: new Map(),
+    plan: planAtExpect(opts && opts.plan),
   };
 }
 
@@ -758,9 +753,8 @@ function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): v
   chainOf.set(n, c.parent ? [...(n.id ? [n.id] : []), ...ancestorIds] : []);
   if (n.id && bx.seen.has(n.id)) return;
   if (n.id) bx.seen.add(n.id);
-  if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "" });
-  const planPlaceholder = !!n.id && bx.planPlaceholderIds.has(n.id);
-  if (planPlaceholder) bx.planPlaceholderSeen.set(n.id, n.type);
+  if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "", type: n.type });
+  const planPlaceholder = !!n.id && bx.plan.isPlaceholder(n.id);
   const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId),
     ...(planPlaceholder ? { planPlaceholder } : {}) });
   spec.ancestorIds = ancestorIds;
@@ -821,66 +815,14 @@ function addReactions(bx: ExpectBuild, n: IrNode, sourceFile: string | undefined
   }
 }
 
-// ---- plan.interactions[] — interactions the export cannot carry (a control with no prototype
-// reaction). Merged only when the row can be graded like an export row: a visible node of this export, a known
-// `expect` (→ the action OUTCOMES_FOR_ACTION grades), a dialog naming the frame it opens, and no export row with
-// the same nodeId + trigger (the export wins). Every other row is dropped with why. exportContentSha256 does not
-// change (waivers bind the export, not the plan); only the rows' own hash binds (planInteractions.sha256).
-function mergePlanInteractions(bx: ExpectBuild, planIn: ExpectOptions["plan"] | undefined): VerifyExpectation["planInteractions"] {
-  if (!(planIn && Array.isArray(planIn.plan.interactions))) return undefined;
-  const { interactions, interactionFile, visibleById } = bx;
-  const dropped: Array<{ nodeId: string; why: string }> = [];
-  const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
+// ---- the plan's rows the expectation consumes (plan-binding.ts): its interactions[] merged beside the export's (source
+// "plan"), and the record of them and of its placeholder rows — each row that cannot be used dropped with why
+function planRows(bx: ExpectBuild): Pick<VerifyExpectation, "planInteractions" | "planPlaceholders"> {
   const hiddenIds = new Set(bx.hidden.ids);
-  let merged = 0;
-  planIn.plan.interactions.forEach((raw, k) => {
-    const at = `interactions[${k}]`;
-    const o = isJsonObject(raw) ? raw : null;
-    const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
-    const drop = (why: string): void => { dropped.push({ nodeId: id ?? `(${at})`, why }); };
-    if (!o) return drop(`${at} is not an object`);
-    if (id === null) return drop(`${at} has no nodeId — a plan interaction is keyed by its node like an export reaction`);
-    if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, …)");
-    if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
-    if (o.destinationId !== undefined && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
-    if (o.expect === "dialog" && o.destinationId === undefined) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
-    const node = visibleById.get(id);
-    if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer — it is not built or driven" : "no visible node of this export has that id");
-    const trigger = o.trigger.trim().toLowerCase();
-    // the probe opens a dialog by clicking its opener — a dialog row on any other trigger (hover, key, drag…)
-    // could never be driven, so it would sit not-probed forever
-    if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
-    if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for ` +
-      `this node and trigger (${trigger})`);
-    keys.add(`${id}|${trigger}`);
-    const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : undefined;
-    const row: VerifyInteraction = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
-    interactions.push(row);
-    interactionFile.set(row, node.file);
-    merged++;
-  });
-  return { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
-}
-
-// ---- the plan's placeholder rows (deviations[] field "placeholder") — a TEXT the builder built as a form control's
-// placeholder attribute. Read only from the plan, never guessed: its copy and colour move to placeholderText /
-// placeholderColor (compared, never waived). A row naming no visible TEXT layer of this export is dropped with why.
-function planPlaceholdersOf(bx: ExpectBuild, planIn: ExpectOptions["plan"] | undefined): VerifyExpectation["planPlaceholders"] {
-  const rows = planIn ? planPlaceholderRows(planIn.plan) : [];
-  if (!planIn || !rows.length) return undefined;
-  const hiddenIds = new Set(bx.hidden.ids);
-  const nodeIds: string[] = [], dropped: Array<{ nodeId: string; why: string }> = [];
-  rows.forEach((d, k) => {
-    const ids = rowIds(d);
-    if (!ids.length) dropped.push({ nodeId: `(placeholder row #${k})`, why: "the row names no nodeId — a placeholder is declared per TEXT layer" });
-    for (const id of ids) {
-      const type = bx.planPlaceholderSeen.get(id);
-      if (type === "TEXT") { if (!nodeIds.includes(id)) nodeIds.push(id); }
-      else dropped.push({ nodeId: id, why: type !== undefined ? `a ${type} layer, not TEXT — only a text layer can be a placeholder`
-        : hiddenIds.has(id) ? "the node is a hidden layer — it is not built" : "no visible node of this export has that id" });
-    }
-  });
-  return { plan: planIn.file, sha256: planPlaceholdersSha256(planIn.plan), nodeIds, dropped };
+  const nodes: ExpectNodes = { visible: (id) => bx.visibleById.get(id), hidden: (id) => hiddenIds.has(id) };
+  const merged = bx.plan.mergeInteractions(bx.interactions, nodes);
+  for (const { row, file } of merged ? merged.added : []) { bx.interactions.push(row); bx.interactionFile.set(row, file); }
+  return { ...ifDefined("planInteractions", merged && merged.record), ...ifDefined("planPlaceholders", bx.plan.placeholders(nodes)) };
 }
 
 // a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
@@ -1039,8 +981,8 @@ function firstReferenceImage(bx: ExpectBuild, opts: ExpectOptions | null | undef
 const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> =>
   ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
 /** the expectation document: what the walk and the passes collected, the counts, and the notes for its reader */
-function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: VerifyExpectation["planInteractions"],
-  referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined, planPlaceholders?: VerifyExpectation["planPlaceholders"]): BuiltExpectation {
+function expectationOf(bx: ExpectBuild, docs: ExpectInput[], plan: Pick<VerifyExpectation, "planInteractions" | "planPlaceholders">,
+  referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined): BuiltExpectation {
   const { nodes, instances, interactions, notComparable, hidden, frames } = bx;
   const f0: Partial<VerifyFrame> = frames[0] || {};
   return {
@@ -1071,8 +1013,7 @@ function expectationOf(bx: ExpectBuild, docs: ExpectInput[], planInteractions: V
     interactions,
     notComparable,
     hidden: { roots: hidden.roots, ids: hidden.ids },
-    ...ifDefined("planInteractions", planInteractions),
-    ...ifDefined("planPlaceholders", planPlaceholders),
+    ...plan,
     ...ifDefined("referenceImage", referenceImage),
   };
 }

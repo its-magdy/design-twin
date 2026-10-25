@@ -10,7 +10,7 @@ import { TOLERANCE } from "../design-to-code/verify-shared.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
 import type { IndexRow, JsonValue, MeasuredNode, MeasuredStyles, PlanWaiver, ScreenDoc, VerifyDelta, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";
 import { readableMeasured } from "../design-to-code/doc-guards.ts";
-import { screenExport } from "./fixtures.ts";
+import { screenExport, usingPlan } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 
@@ -235,7 +235,7 @@ console.log("F — the match's size and how it was found cap severity:");
 
   // a waiver on match (size): the owner accepts the element
   const w: PlanWaiver = { nodeId: "8:1", field: "match (size)", designed: [380, 36], built: [1160, 1248], exportContentSha256: e.exportContentSha256, reason: "the field IS the full-width filter bar here", decidedBy: "Sam Doe", decidedAt: "2026-10-01T02:00:00Z" };
-  const waived = compare(e, measured([wrapper("tag")]), { waivers: [w] });
+  const waived = compare(e, measured([wrapper("tag")]), { plan: usingPlan({ waivers: [w] }) });
   // (accepting the element lifts the size cap — a tag match has no other cap, so the wrong background is a real high again)
   safe("a waiver on 'match (size)' applies: the row is accepted and the size cap is lifted (tag match, no match cap: background high → fail)", () =>
     !!deltaOn(waived, "8:1", /match/)?.accepted && deltaOn(waived, "8:1", /background/)?.severity === "high" && waived.verdict === "fail");
@@ -327,7 +327,7 @@ console.log("G — shared shell: aliases at --expect, coverage split, foreign ta
   safe("the untagged Chevron set inside the shell is listed apart (untaggedInstanceSetsInShell), not under untaggedInstanceSets", () =>
     r.untaggedInstanceSetsInShell?.some((s) => s.setName === "Chevron") === true && !r.untaggedInstanceSets.some((s) => s.setName === "Chevron"));
   safe("…and the .md has its own section", () => /## Instance sets with no evidence, inside the shared shell \(/.test(reportToMarkdown(r)));
-  const anchored = compare(e, measured([tagged("10:10", { backgroundColor: "rgb(18, 19, 25)", width: 240, height: 800 }, "tag")]), { anchors: { "10:10": { shared: true } } });
+  const anchored = compare(e, measured([tagged("10:10", { backgroundColor: "rgb(18, 19, 25)", width: 240, height: 800 }, "tag")]), { plan: usingPlan({ anchors: { "10:10": { shared: true } } }) });
   safe("plan anchors[<instance>].shared: true marks the shell even when every match is by its own tag", () => anchored.coverage.sharedShell?.instances[0]?.nodeId === "10:10");
   const plain = compare(e, measured([tagged("10:10", { backgroundColor: "rgb(18, 19, 25)", width: 240, height: 800 }, "tag")]));
   safe("no other-screen match and no anchor: no sharedShell", () => plain.coverage.sharedShell === undefined && !/shared shell/.test(plain.headline));
@@ -362,7 +362,7 @@ console.log("overfull padding sides, per-side strokes, dropped specs, mutation g
   safe("…a tag match fails", () => byTag.verdict === "fail");
   safe("the headline counts the capped deltas", () => /\(\+1 capped on low-confidence matches\)/.test(structural.headline));
   const w: PlanWaiver = { nodeId: "9:1", field: "match (size)", designed: [300, 120], built: [640, 120], exportContentSha256: e.exportContentSha256, reason: "the card is full-width here", decidedBy: "Sam Doe", decidedAt: "2026-10-01T02:00:00Z" };
-  const waived = compare(e, measured([frameNode, red("tag", 640)]), { waivers: [w] });
+  const waived = compare(e, measured([frameNode, red("tag", 640)]), { plan: usingPlan({ waivers: [w] }) });
   safe("a waiver on match (size) lifts the size cap (tag match, no match cap): the red background is high again → fail", () =>
     waived.verdict === "fail" && deltaOn(waived, "9:1", /background/)?.severity === "high" && deltaOn(waived, "9:1", /background/)?.cappedFrom === undefined && !!deltaOn(waived, "9:1", /match/)?.accepted);
 
@@ -430,7 +430,7 @@ console.log("overfull padding sides, per-side strokes, dropped specs, mutation g
   // a text-width waiver, and an expectation without textInk
   const eT = expect1([{ type: "TEXT", id: "2:1", name: "Date", text: "Date", font: TXT, autoResize: "height", box: { w: 121, h: 20 }, renderBox: { x: 116.62, y: 74, w: 32.14, h: 11 } }]);
   const oldW: PlanWaiver = { nodeId: "2:1", field: "width", designed: 121, built: 33.9, exportContentSha256: eT.exportContentSha256, reason: "box", decidedBy: "Sam Doe", decidedAt: "2026-09-30T00:00:00Z" };
-  const rc = compare(eT, measured([node("2:1", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "Date", textBox: { x: 16, w: 20 }, opacity: 1 })]), { waivers: [oldW] });
+  const rc = compare(eT, measured([node("2:1", { fontFamily: "Inter", fontSize: 14, color: "rgb(51, 51, 51)", text: "Date", textBox: { x: 16, w: 20 }, opacity: 1 })]), { plan: usingPlan({ waivers: [oldW] }) });
   safe("a 'width' waiver on a TEXT compared by ink: unused 'compared as width (text ink)'", () => rc.waivers.unused.some((u) => u.nodeId === "2:1" && /compared as 'width \(text ink\)'/.test(u.why ?? "")));
   const { textInk: _ink, ...oldTol } = eT.tolerance ?? {};
   const rd = compare({ ...eT, tolerance: oldTol }, measured([]));
@@ -470,9 +470,9 @@ console.log("overfull alignment per axis, wrap, space-*, the size-waiver cap, ne
   const big = (mb: string): MeasuredNode => node("12:6", { backgroundColor: "rgb(255, 0, 0)", width: 640, height: 120, opacity: 1, tag: "div" }, mb);
   const noWaiver = compare(eC, measured([big("position")]));
   safe("[refined] a position match + size suspect: the background records cappedBy [size, match]", () => JSON.stringify(deltaOn(noWaiver, "12:6", /background/)?.cappedBy) === '["size","match"]');
-  const tagW = compare(eC, measured([big("tag")]), { waivers: [wv] });
+  const tagW = compare(eC, measured([big("tag")]), { plan: usingPlan({ waivers: [wv] }) });
   safe("[refined] tag match + size suspect + waiver: background back to high → fail", () => deltaOn(tagW, "12:6", /background/)?.severity === "high" && tagW.verdict === "fail");
-  const posW = compare(eC, measured([big("position")]), { waivers: [wv] });
+  const posW = compare(eC, measured([big("position")]), { plan: usingPlan({ waivers: [wv] }) });
   safe("[refined] position match + size suspect + waiver: background stays low (capped by match) → incomplete via the waiver", () => {
     const d = deltaOn(posW, "12:6", /background/);
     return d?.severity === "low" && d.cappedFrom === "high" && JSON.stringify(d.cappedBy) === '["match"]' && posW.verdict === "incomplete" && posW.why.some((x) => /low-confidence matches/.test(x));
@@ -561,7 +561,7 @@ console.log("a wrapping list's main-axis padding shows, its cross axis holds the
   const big = (mb: string): MeasuredNode => node("21:1", { backgroundColor: "rgb(255, 0, 0)", width: 640, height: 120, opacity: 1, tag: "div" }, mb);
   for (const mb of ["tag-alias", "text-ordinal"]) {
     const noW = compare(eC, measured([big(mb)]));
-    const r = compare(eC, measured([big(mb)]), { waivers: [wv] });
+    const r = compare(eC, measured([big(mb)]), { plan: usingPlan({ waivers: [wv] }) });
     safe(`${mb} + size suspect: background low, cappedBy [size, match]`, () => { const d = deltaOn(noW, "21:1", /background/); return d?.severity === "low" && JSON.stringify(d.cappedBy) === '["size","match"]'; });
     safe(`${mb} + size suspect + waiver on match (size): background high → MEDIUM, cappedFrom high, cappedBy [match], verdict incomplete`, () => {
       const d = deltaOn(r, "21:1", /background/);

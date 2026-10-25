@@ -15,7 +15,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
-import { planInteractionsSha256 } from "../design-to-code/plan-waivers.ts";
+import { planInteractionsSha256 } from "../design-to-code/plan-binding.ts";
 import { actionForExpect, parseSteps, stepsSha256 } from "../design-to-code/probe-steps.ts";
 import { isVerifyExpectation, isVerifyReport, readableMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
@@ -23,7 +23,7 @@ import type { VerifyStatusV2 } from "../design-to-code/verify-run.ts";
 import type {
   InteractionEvidence, MeasuredNode, MeasuredStyles, PageOverflow, Plan, PlanWaiver, ProbeIdentity, ProbeStep, ScreenDoc, VerifyMeasured, VerifyReport, VerifyReportV2, VerifySpec,
 } from "../design-to-code/types.ts";
-import { screenExport } from "./fixtures.ts";
+import { screenExport, usingPlan } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 
@@ -194,13 +194,13 @@ console.log("a plan whose interactions changed since --expect:");
   const plan = PLAN([REMOVE_ROW]);
   const e = buildExpectation([screen()], { ...OPTS, plan: { file: "design/plan/Pantry__1_1.json", plan } });
   const rows = [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")];
-  const same = compare(e, measured(rows, {}, e), { plan: { file: "design/plan/Pantry__1_1.json", plan } });
+  const same = compare(e, measured(rows, {}, e), { plan: { now: { file: "design/plan/Pantry__1_1.json", plan } } });
   safe("unchanged plan interactions → no reason, pass", () => same.verdict === "pass" && !same.why.some((w) => /interactions\[\] changed/.test(w)));
   const changed = PLAN([{ ...REMOVE_ROW, destinationId: "3:2" }]);
-  const r = compare(e, measured(rows, {}, e), { plan: { file: "design/plan/Pantry__1_1.json", plan: changed } });
+  const r = compare(e, measured(rows, {}, e), { plan: { now: { file: "design/plan/Pantry__1_1.json", plan: changed } } });
   safe("changed → incomplete 'the plan's interactions[] changed since --expect … re-run --expect' (not an integrity reason)", () =>
     r.verdict === "incomplete" && r.why.some((w) => /the plan's interactions\[\] changed since --expect .*re-run --expect/.test(w)) && r.integrity.length === 0);
-  const declares = compare(exp, measured([pass("2:2", "dialog-opened"), ...OTHERS]), { plan: { file: "design/plan/Pantry__1_1.json", plan } });
+  const declares = compare(exp, measured([pass("2:2", "dialog-opened"), ...OTHERS]), { plan: { now: { file: "design/plan/Pantry__1_1.json", plan } } });
   safe("the plan now declares interactions the expectation never merged → incomplete", () => declares.verdict === "incomplete" && declares.why.some((w) => /the expectation merged none/.test(w)));
 }
 
@@ -283,13 +283,13 @@ const over = compare(exp, measured(ALL, { page: page() }), bound());
 {
   const w = (p: Partial<PlanWaiver> = {}): PlanWaiver => ({ nodeId: "1:1", field: "overflowX", designed: 1280, built: 1562, exportContentSha256: exp.exportContentSha256,
     reason: "the jar table scrolls on purpose", decidedBy: "Sam Doe", decidedAt: "2026-10-01T02:00:00Z", ...p });
-  const accepted = compare(exp, measured(ALL, { page: page() }), bound({ waivers: [w()] }));
+  const accepted = compare(exp, measured(ALL, { page: page() }), bound({ plan: usingPlan({ waivers: [w()] }) }));
   safe("a waiver (frame id + overflowX + 1280/1562 + export hash) → pass-with-deviations", () => accepted.verdict === "pass-with-deviations" && accepted.waivers.applied === 1);
-  const wider = compare(exp, measured(ALL, { page: page({ scrollWidth: 1700 }) }), bound({ waivers: [w()] }));
+  const wider = compare(exp, measured(ALL, { page: page({ scrollWidth: 1700 }) }), bound({ plan: usingPlan({ waivers: [w()] }) }));
   safe("…the page grows to 1700 → reopened (built value moved), fail", () => wider.verdict === "fail" && wider.waivers.reopened.some((x) => x.field === "overflowX" && /built value moved/.test(x.why)));
-  const within = compare(exp, measured(ALL, { page: page({ scrollWidth: 1563.5 }) }), bound({ waivers: [w()] }));
+  const within = compare(exp, measured(ALL, { page: page({ scrollWidth: 1563.5 }) }), bound({ plan: usingPlan({ waivers: [w()] }) }));
   safe("…within the position tolerance (2px) → still accepted", () => within.verdict === "pass-with-deviations");
-  const reexp = compare(exp, measured(ALL, { page: page() }), bound({ waivers: [w({ exportContentSha256: "c".repeat(64) })] }));
+  const reexp = compare(exp, measured(ALL, { page: page() }), bound({ plan: usingPlan({ waivers: [w({ exportContentSha256: "c".repeat(64) })] }) }));
   safe("…a re-export (export hash) reopens it", () => reexp.verdict === "fail" && reexp.waivers.reopened.some((x) => /design re-exported/.test(x.why)));
 }
 {
@@ -334,11 +334,11 @@ console.log("the steps vocabulary and the reach record:");
   const steps: ProbeStep[] = [{ click: "#shelves" }, { waitFor: "[data-dt-node=\"1:1\"]" }];
   const reach = { steps, sha256: stepsSha256(steps), source: "--steps design/plan/Pantry__1_1.json", url: "http://localhost:5173/" };
   const plan = PLAN(null, { navigate: steps });
-  const r = compare(exp, measured(ALL, { reach }), bound({ plan: { file: "design/plan/Pantry__1_1.json", plan } }));
+  const r = compare(exp, measured(ALL, { reach }), bound({ plan: { now: { file: "design/plan/Pantry__1_1.json", plan } } }));
   safe("report.inputs.reach {sha256, steps 2, source, matchesPlan true} when the plan's navigate is the same steps", () =>
     r.inputs?.reach?.matchesPlan === true && r.inputs.reach.steps === 2 && r.inputs.reach.sha256 === reach.sha256 && r.inputs.reach.source === reach.source);
   safe("…report.md: 'Reached by 2 step(s) (sha …)'", () => /Reached by 2 step\(s\) \(sha [0-9a-f]{12}…/.test(reportToMarkdown(r)));
-  const other = compare(exp, measured(ALL, { reach }), bound({ plan: { file: "x", plan: PLAN(null, { navigate: [{ click: "#elsewhere" }] }) } }));
+  const other = compare(exp, measured(ALL, { reach }), bound({ plan: { now: { file: "x", plan: PLAN(null, { navigate: [{ click: "#elsewhere" }] }) } } }));
   safe("another plan navigate → matchesPlan false + a note, the verdict untouched", () =>
     other.inputs?.reach?.matchesPlan === false && other.verdict === r.verdict && (other.probe.inputNotes || []).some((n) => /not the plan's navigate/.test(n)));
   const noPlan = compare(exp, measured(ALL, { reach }), bound());
@@ -387,14 +387,6 @@ console.log("one plan rule, guards, steps, page notes:");
       !!rep2 && (rep2.why || []).some((w) => /changed since --expect \(design\/plan\/Pantry__1_1\.json: .*re-run --expect$/.test(w)));
   }
   fs.rmSync(cwd, { recursive: true, force: true });
-  const plan = PLAN([REMOVE_ROW]);
-  const ee = buildExpectation([screen()], { ...OPTS, plan: { file: "design/plan/Pantry__1_1.json", plan } });
-  const changed = PLAN([{ ...REMOVE_ROW, destinationId: "3:2" }]);
-  const rr = [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")];
-  const only = compare(ee, measured(rr, {}, ee), { plan: { file: "design/plan/Pantry__1_1.json", plan: changed, choice: "only" } });
-  const flagged = compare(ee, measured(rr, {}, ee), { plan: { file: "design/plan/Pantry__1_1.json", plan: changed, choice: "flag" } });
-  safe("in-process: the frame's only plan → 're-run --expect' (no --plan); chosen by --plan → '… --expect --plan <file>'", () =>
-    only.why.some((w) => /re-run --expect$/.test(w)) && flagged.why.some((w) => /re-run --expect --plan design\/plan\/Pantry__1_1\.json$/.test(w)));
 }
 {
   // probeBound needs NO integrity reason — runId + sha matching is not enough
@@ -449,97 +441,11 @@ console.log("one plan rule, guards, steps, page notes:");
   // The plan says how to reach the screen but the probe was not told
   const steps: ProbeStep[] = [{ click: "#shelves" }, { waitFor: "[data-dt-node=\"1:1\"]" }];
   const plan = PLAN(null, { navigate: steps });
-  const forgot = compare(exp, measured(ALL), bound({ plan: { file: "design/plan/Pantry__1_1.json", plan } }));
+  const forgot = compare(exp, measured(ALL), bound({ plan: { now: { file: "design/plan/Pantry__1_1.json", plan } } }));
   const note = (r: VerifyReportV2): boolean => (r.probe.inputNotes || []).some((n) => /the plan declares navigate steps but the probe ran without --steps/.test(n));
   safe("plan.navigate but no measured.reach → note 'the plan declares navigate steps but the probe ran without --steps'", () => note(forgot) && forgot.verdict === "pass");
-  const told = compare(exp, measured(ALL, { reach: { steps, sha256: stepsSha256(steps), source: "--steps design/plan/Pantry__1_1.json", url: "http://localhost:5173/" } }), bound({ plan: { file: "design/plan/Pantry__1_1.json", plan } }));
-  safe("…with measured.reach, or a plan without navigate → no such note", () => !note(told) && !note(compare(exp, measured(ALL), bound({ plan: { file: "x", plan: PLAN(null) } }))));
-}
-
-{
-  // --expect was given --plan <a plan outside design/plan/>; --compare without --plan must check the rows
-  // --expect merged (the recorded plan file), not the plan design/plan/ yields now — and never advise re-running
-  // --expect with only the plan found now when the recorded one is gone.
-  console.log("--compare and the plan file --expect recorded:");
-  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-drive-mb-"));
-  const put = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), typeof v === "string" ? v : JSON.stringify(v, null, 2)); return rel; };
-  const shot = put("design/export/pages/Main/Pantry__1_1.json", screen().doc);
-  for (const [f, d] of Object.entries(SIBLINGS)) put(`design/export/${f}`, d);
-  put("design/export/pages/index.json", { pageDirs: [{ dir: "Main", index: "pages/Main/index.json" }], layers: LAYERS });
-  put("src/pantry.tsx", "export const Pantry = 1;\n");
-  put("design/plan/Pantry__1_1.json", PLAN([REMOVE_ROW], { files: ["src/pantry.tsx"] }));
-  const MINE = "scratch/my-pantry-plan.json";
-  const mineRows = [{ ...REMOVE_ROW, destinationId: "3:2" }];
-  put(MINE, PLAN(mineRows, { waivers: [] }));
-  const cli = (...a: string[]) => runSync(process.execPath, [CLI, ...a], { cwd });
-  const expRel = "design/verify/Pantry__1_1.expected.json";
-  const ex = cli("--expect", shot, "--plan", MINE);
-  const e = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
-  const shaOf = (rel: string): string => crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, rel))).digest("hex");
-  const measRel = e ? put("design/verify/Pantry__1_1.measured.json", { measuredAt: "2026-10-01T01:00:00Z", renderer: "playwright-chromium", viewport: "1280x800", expectationSha256: shaOf(expRel), nodes: (e.nodes ?? []).map(echo), interactions: [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")] }) : "";
-  const run = (...a: string[]): { rep: VerifyReport | null; stderr: string; status: number | null } => {
-    const c = cli("--compare", expRel, measRel, ...a);
-    return { rep: readJsonOrNull(path.join(cwd, "design/verify/Pantry__1_1.report.json"), isVerifyReport), stderr: c.stderr, status: c.status };
-  };
-  const why = (r: VerifyReport | null): string[] => (r?.why || []).filter((w) => /interactions\[\]/.test(w));
-  const notes = (r: VerifyReport | null): string[] => (r?.probe && typeof r.probe === "object" && "inputNotes" in r.probe && Array.isArray(r.probe.inputNotes) ? r.probe.inputNotes.filter((n): n is string => typeof n === "string") : []);
-  safe("setup: --expect --plan <outside design/plan/> records that plan", () => ex.status === 0 && e?.planInteractions?.plan === MINE);
-  const r1 = run();
-  safe("--compare without --plan checks the recorded plan: no interactions[] reason (design/plan/Pantry__1_1.json is not blamed)", () => !!r1.rep && why(r1.rep).length === 0);
-  safe("…and says so (inputNote + stderr 'using <recorded> (the plan --expect merged interactions from) instead of …'); its waivers bind", () =>
-    notes(r1.rep).some((n) => n.startsWith(`using ${MINE} (the plan --expect merged interactions from) instead of design/plan/Pantry__1_1.json`)) && /note {2}using scratch\/my-pantry-plan\.json/.test(r1.stderr)
-    && r1.rep?.inputs?.waivers?.plan === MINE);
-  put(MINE, PLAN([{ ...REMOVE_ROW, destinationId: "3:1" }], { waivers: [] }));
-  const r2 = run();
-  safe("the recorded plan's rows edited → 'changed since --expect (<recorded> …) — re-run --expect --plan <recorded>'", () =>
-    why(r2.rep).length === 1 && why(r2.rep).every((w) => w.startsWith(`the plan's interactions[] changed since --expect (${MINE}:`) && w.endsWith(`re-run --expect --plan ${MINE}`)));
-  put(MINE, PLAN(mineRows, { waivers: [] }));
-  const r3 = run("--plan", "design/plan/Pantry__1_1.json");
-  safe("--plan <another> at --compare (recorded still there) → names both: 're-run --expect --plan <flag>, or drop --plan … <recorded>'", () =>
-    why(r3.rep).length === 1 && why(r3.rep).every((w) => w.includes(`--expect merged ${MINE}'s`) && w.endsWith(`re-run --expect --plan design/plan/Pantry__1_1.json, or drop --plan at --compare to check against ${MINE}`)));
-  fs.renameSync(path.join(cwd, MINE), path.join(cwd, "scratch/moved-plan.json"));
-  const r4 = run();
-  safe("the recorded plan gone → names both plans; advises --compare … --plan <its path now> or --expect … --plan <intended>", () =>
-    why(r4.rep).length === 1 && why(r4.rep).every((w) => w.includes(`came from ${MINE}, which no longer exists; the plan found now, design/plan/Pantry__1_1.json, declares others`)
-      && w.includes("re-run --compare … --plan <its path now>") && w.includes("re-run --expect … --plan <the plan you intend>")));
-  const r5 = run("--plan", "scratch/moved-plan.json");
-  safe("…--plan <its new path> with the same rows → no reason; a note that the recorded file is gone and this one matches", () =>
-    !!r5.rep && why(r5.rep).length === 0 && notes(r5.rep).some((n) => n.includes(`${MINE}, which no longer exists; scratch/moved-plan.json (used now) declares the same interactions[]`)));
-  const r6 = run("--plan", "design/plan/Pantry__1_1.json");
-  safe("--plan <another> with the recorded plan gone → no 'drop --plan' advice (nothing to fall back to)", () =>
-    why(r6.rep).length === 1 && why(r6.rep).every((w) => w.includes(`${MINE}'s, which no longer exists`) && w.endsWith("re-run --expect --plan design/plan/Pantry__1_1.json")));
-  put("design/plan/Pantry_v2.json", PLAN([REMOVE_ROW], { screen: "Pantry", files: ["src/pantry.tsx"] }));
-  const repBefore = fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8");
-  const r7 = run();
-  safe(`[plans] recorded plan gone + two plans of the node (none chosen) → exit 2 naming both, no report written (got ${r7.status})`, () =>
-    r7.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Pantry__1_1\.json, design\/plan\/Pantry_v2\.json\) — one node, one plan: keep one, or pass --plan/m.test(r7.stderr)
-    && fs.readFileSync(path.join(cwd, "design/verify/Pantry__1_1.report.json"), "utf8") === repBefore);
-  fs.renameSync(path.join(cwd, "scratch/moved-plan.json"), path.join(cwd, MINE));
-  const r8 = run();
-  safe("recorded plan back + several plans with files[] → the recorded one is used, no reason", () =>
-    !!r8.rep && why(r8.rep).length === 0 && notes(r8.rep).some((n) => n.startsWith(`using ${MINE} (the plan --expect merged interactions from); 2 plans in design/plan/ describe this frame now`)));
-  fs.rmSync(path.join(cwd, "design/plan/Pantry_v2.json"));
-  // guards: the plan --expect found itself is still the one found now → no 'using' note, the plain advice
-  fs.rmSync(path.join(cwd, "design/verify"), { recursive: true, force: true });
-  const ex2 = cli("--expect", shot);
-  const e2 = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
-  if (e2) put("design/verify/Pantry__1_1.measured.json", { measuredAt: "2026-10-01T01:00:00Z", renderer: "playwright-chromium", viewport: "1280x800", expectationSha256: shaOf(expRel), nodes: (e2.nodes ?? []).map(echo), interactions: [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")] });
-  const r9 = run();
-  safe("guard: the frame's only plan at both steps → no 'using <recorded>' note, no reason", () =>
-    ex2.status === 0 && e2?.planInteractions?.plan === "design/plan/Pantry__1_1.json" && !!r9.rep && why(r9.rep).length === 0 && !notes(r9.rep).some((n) => /plan --expect merged/.test(n)));
-  put("design/plan/Pantry__1_1.json", PLAN([{ ...REMOVE_ROW, destinationId: "3:1" }], { files: ["src/pantry.tsx"] }));
-  const r10 = run();
-  safe("guard: …its rows edited → 're-run --expect' (no --plan: it is the only plan)", () => why(r10.rep).length === 1 && why(r10.rep).every((w) => /changed since --expect \(design\/plan\/Pantry__1_1\.json: .*re-run --expect$/.test(w)));
-  // the same plan file spelled another way at --expect (./…) is the same plan: no 'using <recorded>' note, the usual advice
-  fs.rmSync(path.join(cwd, "design/verify"), { recursive: true, force: true });
-  cli("--expect", shot, "--plan", "./design/plan/Pantry__1_1.json");
-  const e3 = readJsonOrNull(path.join(cwd, expRel), isVerifyExpectation);
-  if (e3) put("design/verify/Pantry__1_1.measured.json", { measuredAt: "2026-10-01T01:00:00Z", renderer: "playwright-chromium", viewport: "1280x800", expectationSha256: shaOf(expRel), nodes: (e3.nodes ?? []).map(echo), interactions: [pass("2:2", "dialog-opened"), ...OTHERS, pass("2:5", "dialog-opened")] });
-  const r11 = run();
-  safe("guard: --expect --plan ./design/plan/<the frame's plan> → the same plan at --compare (no 'using' note, no reason)", () =>
-    e3?.planInteractions?.plan === "./design/plan/Pantry__1_1.json" && !!r11.rep && why(r11.rep).length === 0 && !notes(r11.rep).some((n) => /plan --expect merged/.test(n)));
-  fs.rmSync(cwd, { recursive: true, force: true });
+  const told = compare(exp, measured(ALL, { reach: { steps, sha256: stepsSha256(steps), source: "--steps design/plan/Pantry__1_1.json", url: "http://localhost:5173/" } }), bound({ plan: { now: { file: "design/plan/Pantry__1_1.json", plan } } }));
+  safe("…with measured.reach, or a plan without navigate → no such note", () => !note(told) && !note(compare(exp, measured(ALL), bound({ plan: { now: { file: "x", plan: PLAN(null) } } }))));
 }
 
 report();

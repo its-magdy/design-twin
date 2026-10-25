@@ -38,21 +38,21 @@ import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { planCodeSkippedNote } from "./content-hash.ts";
 import { reportFreshness } from "./report-freshness.ts";
-import type { ReportFreshness } from "./report-freshness.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
 import {
   isInteractionEvidenceList, isMeasuredComponentList, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
   readableMeasured,
 } from "./doc-guards.ts";
-import { isPassingVerdict } from "./plan-waivers.ts";
+import { choosePlan, resolvePlan } from "./plan-binding.ts";
+import type { PlanResolution } from "./plan-binding.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
-import { isJsonObject } from "./types.ts";
+import { isJsonObject, isPassingVerdict } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import type { ArtifactCheck, CodeInputs, InteractionEvidence, JsonValue, MeasuredComponent, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -61,8 +61,7 @@ import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
 import { pagesRootOfScreen, readExportIndex, rootIndexFile } from "./export-index.ts";
-import { TEXT_BOX_HEIGHT, fmt, resolveInside, samePlanFile, scaleText } from "./verify-shared.ts";
-import type { ChosenPlan } from "./verify-shared.ts";
+import { TEXT_BOX_HEIGHT, fmt, resolveInside, scaleText } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
 import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
@@ -141,21 +140,9 @@ function plansForNode(nodeId: string | undefined): { hits: Array<{ file: string;
 /** What the "no plan describes this frame" note adds about the plans that name no node. */
 const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node — add "nodeId")` : "";
 
-/** ONE plan-selection rule for --expect and --compare (they must pick the same plan, or the plan's interactions[] hash can
- *  never agree and the run stays incomplete): --plan (the other plans of the node named in `note`); else the one plan
- *  in design/plan/ of the frame's node (plansForNode); several are a data error (`error`: keep one, or pass --plan — a
- *  multi-frame plan); none is no plan. */
-function choosePlan(flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined):
-  { hit?: ChosenPlan; all: Array<{ file: string; plan: Plan }>; idless: string[]; note?: string; error?: string } {
-  const { hits: all, idless, several } = plansForNode(frameId);
-  if (flagged) {
-    const others = all.filter((h) => !samePlanFile(h.file, flagged.file));
-    return { hit: { ...flagged, choice: "flag" }, all, idless, ...(others.length ? { note: `using ${flagged.file} (--plan); design/plan/ also describes node ${frameId ?? "?"} in ${others.map((h) => h.file).join(", ")}` } : {}) };
-  }
-  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all, idless };
-  if (several !== null) return { all, idless, error: `${several}, or pass --plan <plan.json> (a multi-frame plan)` };
-  return { all, idless };
-}
+/** The plan for a frame, by plan-binding.ts's one rule for --expect and --compare, over design/plan/ (plansForNode). */
+const planFor = (flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined): ReturnType<typeof choosePlan> =>
+  choosePlan(flagged, plansForNode(frameId), frameId);
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
@@ -380,7 +367,7 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
   // the plan is merged INTO the expectation, so it is chosen by the node buildExpectation records as frame.nodeId (its
   // frames[0]: the first root of the first export that has one)
   const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== undefined);
-  const chosen = choosePlan(flagged, firstRoot && firstRoot.id);
+  const chosen = planFor(flagged, firstRoot && firstRoot.id);
   // several plans of the node: which one's interactions bind the expectation is not ours to guess (--compare would face the same)
   if (chosen.error !== undefined) { console.error(`error  ${chosen.error}`); return 2; }
   if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
@@ -552,9 +539,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
   let code: CodeInputs | undefined;
   // the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
-  let planHit: ChosenPlan | undefined;
-  let recordedPlanGone: string | undefined;
-  let stamped: ReturnType<ReportFreshness["stamp"]> | undefined;
+  let planUsed: PlanResolution = { now: null };
   const compareNotes: string[] = [];
   let flagged: { file: string; plan: Plan } | undefined;
   if (planFlag !== undefined) {
@@ -564,43 +549,25 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    // the same rule --expect used (choosePlan) — never a second way of picking the plan
-    const chosen = choosePlan(flagged, frameId);
-    const all = chosen.all;
-    planHit = chosen.hit;
+    // the same rule --expect used (choosePlan) — never a second way of picking the plan — then the plan --expect read wins
+    // over another found now (plan-binding.ts resolvePlan): several plans of the node and none to go by is a data error,
+    // BEFORE anything is compared or written
+    const chosen = planFor(flagged, frameId);
     if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
-    // the plan --expect read (planInteractions.plan — the interactions it merged —, else planPlaceholders.plan — the
-    // placeholder rows it read; one --expect reads one plan) wins over another found now — --expect may have been given
-    // --plan, or design/plan/ changed since; without --plan, check the rows it read
-    const recOf = (v: unknown): string | undefined => (isJsonObject(v) && typeof v.plan === "string" ? v.plan : undefined);
-    const recInteractions = recOf(expectation.planInteractions), recPlaceholders = recOf(expectation.planPlaceholders);
-    if (recInteractions !== undefined && recPlaceholders !== undefined && !samePlanFile(recInteractions, recPlaceholders)) {
-      console.error(`error  the expectation names two plans — interactions from ${recInteractions}, placeholder rows from ${recPlaceholders} — one --expect reads one plan: re-run --expect`);
-      return 2;
-    }
-    const recPi = recInteractions ?? recPlaceholders;
-    if (recPi !== undefined && !(planHit && samePlanFile(planHit.file, recPi))) {
-      const r = readJson(recPi, isPlan);
-      if (!("doc" in r)) recordedPlanGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
-      else if (!flagged) {
-        const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})`
-          : "; no plan in design/plan/ describes this frame";
-        compareNotes.push(`using ${recPi} (the plan --expect ${recOf(expectation.planInteractions) !== undefined ? "merged interactions from" : "read placeholder rows from"})${foundNow} — its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
-        console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
-        planHit = { file: recPi, plan: r.doc, choice: "recorded" };
-      }
-    }
-    // several plans of the node and no plan to go by (--plan, or the one --expect merged): a data error, BEFORE anything
-    // is compared or written — waivers, descopes and the code hashes would come from a guess
-    if (!planHit && chosen.error !== undefined) { console.error(`error  ${chosen.error}`); return 2; }
+    const resolved = resolvePlan(expectation, chosen, !!flagged, (file) => readJson(file, isPlan));
+    if ("error" in resolved) { console.error(`error  ${resolved.error}`); return 2; }
+    const { note: using, ...resolution } = resolved;
+    if (using !== undefined) { compareNotes.push(using); console.error(`note  ${using}`); }
+    planUsed = resolution;
+    const planHit = planUsed.now;
     // --record-plan writes into the plan this compare uses — none is a usage error BEFORE anything is compared or written
     if (recordPlanFlag && !planHit) {
       console.error(`--record-plan: no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} (run from the project root) — pass --plan <plan.json>`);
       return 2;
     }
     // what this compare was computed against (report-freshness.ts stamp): the chosen plan's files[] and every module its
-    // anchors/components map (a shared shell), git HEAD, and the plan's waivers/descopes
-    stamped = planHit ? reportFreshness(process.cwd()).stamp(planHit) : undefined;
+    // anchors/components map (a shared shell) and git HEAD (the waivers/descopes hash is the plan binding's, in compare)
+    const stamped = planHit ? reportFreshness(process.cwd()).stamp(planHit) : undefined;
     if (planHit && stamped?.code) {
       code = stamped.code;
       // what the code hashes leave out, beside them in the report's input notes
@@ -611,10 +578,6 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
         : `note  no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code`);
     }
   }
-  const planInputs = planHit ? {
-    ...ifDefined("waivers", planHit.plan.waivers), ...ifDefined("descopes", planHit.plan.descopes), ...ifDefined("anchors", planHit.plan.anchors),
-    ...(stamped ? { waiversInput: stamped.waivers } : {}),
-  } : {};
   // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
   // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit
   // one is only noted (it is about to be replaced anyway).
@@ -642,9 +605,9 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   }
   const inputNotes = [...readable.notes, ...compareNotes, ...artifactNotes];
   const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}),
-    ...(visualDiff ? { visualDiff } : {}), ...(inputNotes.length ? { inputNotes } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone),
+    ...(visualDiff ? { visualDiff } : {}), ...(inputNotes.length ? { inputNotes } : {}),
     ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile),
-    measuredSha256: measuredSha, artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+    measuredSha256: measuredSha, artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), plan: planUsed });
   const md = reportToMarkdown(rep);
   write(false, compareBase, rep, md);
   console.error(rep.headline);
@@ -659,6 +622,7 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     `fixed? drop them`);
   // the report just written → plan.verification.recorded, the tool-owned block (plan-record.ts). A failure leaves
   // the report in place and says so (exit 1): the plan then still holds the previous record.
+  const planHit = planUsed.now;
   if (recordPlanFlag && planHit) {
     // relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
     // still inside the project

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256 } from "../design-to-code/content-hash.ts";
-import { waiversHash } from "../design-to-code/plan-waivers.ts";
+import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { bindMeasured, codeChanged, measuredText, recordedReport, reportFreshness, reportInputs, stampEvidence, staleText } from "../design-to-code/report-freshness.ts";
 import type { Git, StaleReason } from "../design-to-code/report-freshness.ts";
 import type { Plan } from "../design-to-code/types.ts";
@@ -40,7 +40,6 @@ console.log("stamp — what --compare records about the code and the plan's waiv
   check("[stamp] code: the plan, each code file's 16-hex content hash (files[], then mapped modules) and git HEAD",
     s.code !== undefined && s.code.plan === "design/plan/A__1_1.json" && same(Object.keys(s.code.files), ["src/A.tsx", "src/Shell.tsx"])
     && s.code.files["src/A.tsx"] === sha256Hex("export const A = 1;\n").slice(0, 16) && s.code.gitHead === HEAD_A);
-  check("[stamp] waivers: the plan and the hash of its waivers[]/descopes[]", s.waivers.plan === "design/plan/A__1_1.json" && s.waivers.sha256 === waiversHash(plan));
   check("[stamp] not a git work tree: gitHead null", reportFreshness(p.root, { git: fakeGit(null) }).stamp({ file: "x.json", plan }).code?.gitHead === null);
   check("[stamp] a plan with no files[]: no code is recorded", reportFreshness(p.root, { git: fakeGit(HEAD_A) }).stamp({ file: "x.json", plan: { anchors: {} } }).code === undefined);
   p.done();
@@ -70,7 +69,7 @@ console.log("judge — a report is fresh, or stale with reasons (by content, nev
   const fr = reportFreshness(p.root, { git: fakeGit(HEAD_A) });
   const stamped = fr.stamp({ file: "design/plan/Plots__1_1.json", plan });
   const rep = (inputs: Record<string, unknown>): { inputs: Record<string, unknown> } => ({ inputs });
-  const good = rep({ exportContentSha256: exportSha, expectationSha256: sha256Hex(expText), code: stamped.code, waivers: stamped.waivers });
+  const good = rep({ exportContentSha256: exportSha, expectationSha256: sha256Hex(expText), code: stamped.code, waivers: { plan: "design/plan/Plots__1_1.json", sha256: waiversHash(plan) } });
   const REL = "design/verify/Plots__1_1.report.json";
   const judge = (r: { inputs: Record<string, unknown> }, o: { plan?: Plan; exportDoc?: unknown } = {}): StaleReason[] =>
     fr.judge(REL, reportInputs(r), { plan: o.plan ?? plan, exportDoc: o.exportDoc === undefined ? exportDoc : o.exportDoc });

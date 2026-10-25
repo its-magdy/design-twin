@@ -12,6 +12,10 @@ var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code 
 
 // design-to-code/types.ts
 var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -243,6 +247,14 @@ function ifDefined(key, v) {
   const o = {};
   if (v !== void 0) o[key] = v;
   return o;
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
 }
 
 // design-to-code/map-util.ts
@@ -1592,13 +1604,13 @@ function realpath(p) {
   }
   return fs6.realpathSync(p);
 }
-function canonical(p) {
+function canonical2(p) {
   const abs = path7.resolve(p);
   try {
     return realpath(abs);
   } catch {
     const parent = path7.dirname(abs);
-    return parent === abs ? abs : path7.join(canonical(parent), path7.basename(abs));
+    return parent === abs ? abs : path7.join(canonical2(parent), path7.basename(abs));
   }
 }
 var hasPnp = (d) => exists(path7.join(d, ".pnp.cjs")) || exists(path7.join(d, ".pnp.js"));
@@ -1630,7 +1642,7 @@ function installRootOf(dir) {
   return P;
 }
 function runCacheOf(verifyDir) {
-  const v = canonical(verifyDir);
+  const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
     const cache = path7.join(root, ...RUN_CACHE_SEGMENTS);
@@ -1643,7 +1655,7 @@ function runCacheDir(verifyDir) {
   return runCacheOf(verifyDir).dir;
 }
 function planLockOf(planFile) {
-  const abs = canonical(planFile);
+  const abs = canonical2(planFile);
   const root = installRootOf(path7.dirname(abs));
   if (root === null) return { lockFile: lockFileOf(planFile), cache: null };
   const rel = path7.relative(root, abs).split(path7.sep).join("/");
@@ -2222,23 +2234,11 @@ function hookHashOf(hook, plan) {
   return h === legacyPlanHash(plan) ? "legacy" : null;
 }
 
-// design-to-code/plan-waivers.ts
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical2(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical2).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical2(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
+// design-to-code/plan-binding.ts
 function waiversHash(plan) {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical2({ descopes, waivers }));
+  return sha256Hex(canonical({ descopes, waivers }));
 }
 
 // design-to-code/report-freshness.ts
@@ -2335,10 +2335,7 @@ function reportFreshness(root, o = {}) {
   }
   return {
     stamp(p) {
-      return {
-        ...p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {},
-        waivers: { plan: p.file, sha256: waiversHash(p.plan) }
-      };
+      return p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {};
     },
     judge(rel, inputs, now) {
       const out = [];
@@ -2440,7 +2437,7 @@ function recordedV1Edits(rec, cwd) {
   if (!report || typeof rec.report !== "string") return [];
   const said = recordFacts(report, rec.report);
   const edited = [];
-  for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] === void 0 !== (said[k] === void 0) || canonical2(rec[k]) !== canonical2(said[k])) edited.push(k);
+  for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
   const counts = rec.counts;
   if (!isJsonObject(counts)) edited.push("counts");
   else for (const k of COUNT_KEYS) if (counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
@@ -2477,7 +2474,7 @@ function recordedEditFacts(plan, cwd) {
     const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
     if (report) {
       const said = recordFacts(report, rec.report);
-      for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical2(rec[k]) !== canonical2(said[k])) edited.push(k);
+      for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
@@ -3149,7 +3146,7 @@ function exportIndexOf(exportDir, cache) {
   return ix;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
-var sameFile = (a, b) => path16.resolve(a) === path16.resolve(b) || canonical(a) === canonical(b);
+var sameFile = (a, b) => path16.resolve(a) === path16.resolve(b) || canonical2(a) === canonical2(b);
 function sourceOf(doc) {
   const exp = screenExportOf(doc);
   const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;

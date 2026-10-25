@@ -4,7 +4,7 @@
 // A library with no CLI: importing it never loads verify-screen.ts.
 import path from "node:path";
 import { colorKey, formatHex, parseCssColor } from "./color.ts";
-import type { Plan, VerifyExpectation } from "./types.ts";
+import type { VerifyExpectation } from "./types.ts";
 
 // ---------------------------------------------------------------- tolerances
 //
@@ -227,11 +227,3 @@ export const pctText = (n: number): string => (n > 0 && n < 0.05 ? "<0.1" : (Mat
 // a value as a report prints it (a list as a/b/c)
 export const fmt = (v: unknown): string => (Array.isArray(v) ? v.join("/") : String(v));
 
-/** How a plan was chosen for a frame: "flag" = --plan, "only" = the one plan of the frame's node, "recorded" = --compare's:
- *  the plan file the expectation merged interactions from (planInteractions.plan), when another plan (or none, or
- *  several) is found now. */
-type PlanChoice = "flag" | "only" | "recorded";
-export interface ChosenPlan { file: string; plan: Plan; choice?: PlanChoice }
-
-/** Two spellings of one plan file (`./design/plan/x.json`, an absolute path) are the same plan. */
-export function samePlanFile(a: string, b: string): boolean { return path.resolve(a) === path.resolve(b); }

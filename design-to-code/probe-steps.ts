@@ -8,7 +8,7 @@
 // click (a link, a tab, a sidebar button), waitFor (a selector to be visible), goto (a same-origin path). No fill,
 // press or hover: a typed value or a key press may submit a form, and a replay would submit it again.
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { canonical } from "./plan-waivers.ts";
+import { canonical } from "../bridge/src/json-util.ts";
 import { isJsonObject } from "./types.ts";
 import type { PlanInteractionExpect, ProbeStep } from "./types.ts";
 

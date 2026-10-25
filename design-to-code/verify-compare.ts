@@ -8,8 +8,9 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import {
   isBuildIdentity, isMeasuredBehaviour, isMeasuredVisual, isVisualRegion, isPageOverflow, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach,
 } from "./doc-guards.ts";
-import { planInteractionsSha256, planPlaceholderRows, planPlaceholdersSha256 } from "./plan-waivers.ts";
-import { parseSteps, stepsSha256 } from "./probe-steps.ts";
+import { planAtCompare } from "./plan-binding.ts";
+import type { PlanBinding, PlanResolution } from "./plan-binding.ts";
+import { stepsSha256 } from "./probe-steps.ts";
 import { MEASURED_PHASES, TERMINAL_PHASES } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
 import { shellArg } from "./cli-args.ts";
@@ -20,16 +21,16 @@ import { CANONICAL_MATCHED_BY, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   ArtifactCheck, BehaviourCheck, BehaviourStatus, BuildIdentity, ProbeIdentity, BehaviourSummary, CodeInputs, DeltaSeverity, InteractionEvidence, JsonValue, MeasuredComponent,
-  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, ReportBehaviour,
+  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, PlanAnchor, PlanDescope, ProbeFrame, ReportBehaviour,
   ReportVisual, VerifyDelta, VerifyCoverageV2, VerifyInteraction, VerifyInteractionResult, VerifyMeasured, VerifyAgainst, VerifyReport, VerifyReportV2,
   VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import {
-  EXPECTATION_SCHEMA, FIELDS, PAD_SIDES, REPORT_SCHEMA, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fmt, fourSides, normColor, num, pctText, r2, samePlanFile,
+  EXPECTATION_SCHEMA, FIELDS, PAD_SIDES, REPORT_SCHEMA, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fmt, fourSides, normColor, num, pctText, r2,
 } from "./verify-shared.ts";
-import type { ChosenPlan, Expectation, Field } from "./verify-shared.ts";
+import type { Expectation, Field } from "./verify-shared.ts";
 
 // ---------------------------------------------------------------- the comparison
 //
@@ -318,27 +319,17 @@ export interface CompareOptions {
   visualMalformed?: boolean;
   /** where measured.visual.diff is now (the CLI resolves it beside the measured file when the recorded path is gone) */
   visualDiff?: { path: string; exists: boolean } | null;
-  /** the plan's waivers[] — a matching delta is accepted (still listed, out of the counts) */
-  waivers?: PlanWaiver[] | null;
-  /** the plan's descopes[] — a matching interaction is removed from the graded set */
-  descopes?: PlanDescope[] | null;
-  /** the plan's anchors{} — `foldedInto` takes a layout-only wrapper out of the denominator */
-  anchors?: Record<string, PlanAnchor> | null;
-  /** recorded as report.inputs.waivers: the plan file and waiversHash() of it */
-  waiversInput?: { plan: string; sha256: string } | null;
   /** the set's run status (the CLI reads its one status base, beside the expectation) — an unfinished run, or one naming
    *  another measured file, makes the verdict incomplete. A v1 (hand-written) status is never trusted, never judged. null = looked
    *  for and none found: a measured file naming its runId is then unrecorded; undefined = not looked for. `screen` = the
    *  set's name the CLI keyed the status by (basename of its base) — the name the advice's --status commands use: a
    *  migrated set's status still says its old name in `status.screen` */
   status?: { file: string; status: VerifyStatusV2 | "v1"; screen?: string } | null;
-  /** the plan for this frame as found NOW: its interactions[] hash against the expectation's planInteractions;
-   *  its navigate[] against the probe's measured.reach (report.inputs.reach.matchesPlan). `choice` = how the CLI
-   *  picked it (choosePlan) — the re-run advice names --plan when the plan was not the frame's only one */
-  plan?: ChosenPlan | null;
-  /** the plan file the expectation merged interactions from (planInteractions.plan) could not be used at
-   *  --compare — why ("no longer exists" / "is not a readable plan now: …"); the re-run advice then names both plans */
-  recordedPlanGone?: string | null;
+  /** the plan for this frame as --compare uses it (plan-binding.ts resolvePlan; absent = none): its waivers[] (a matching
+   *  delta is accepted, still listed), descopes[] (a matching interaction leaves the graded set), anchors{} (`foldedInto`
+   *  takes a layout-only wrapper out of the denominator) and navigate[] (against measured.reach); the sections that bound
+   *  the expectation checked against its record (planAtCompare) — a drifted one makes the run incomplete */
+  plan?: PlanResolution | null;
   /** the --interactions evidence file's `inferred` value, unchecked — compare keeps the well-formed
    *  {nodeId?, state, built, why?} rows (listed under Inferred, not designed) and notes the rest */
   inferred?: unknown;
@@ -571,7 +562,7 @@ interface CompareCtx extends MeasuredIndex {
   paintedVia: Array<{ nodeId: string; how: string }>; lineBoxWhyOf: Map<string, string>;
   gap: (spec: VerifySpec, field: string, why: string, absent?: boolean) => number;
   push: (spec: VerifySpec, field: string, severity: DeltaSeverity, bad: Bad, extra?: Partial<VerifyDelta>) => number;
-  anchors: Record<string, PlanAnchor>; folded: VerifyReportV2["folded"]; probeFrames: ProbeFrame[]; multiFrame: boolean; frameMeasured: (id: string) => boolean;
+  plan: PlanBinding; anchors: Record<string, PlanAnchor>; folded: VerifyReportV2["folded"]; probeFrames: ProbeFrame[]; multiFrame: boolean; frameMeasured: (id: string) => boolean;
   builtTexts: Map<string, string[]>; inputNotes: string[]; reopened: VerifyReportV2["waivers"]["reopened"]; unused: VerifyReportV2["waivers"]["unused"];
 }
 /** One measured spec as the checks read it: the measurement and how it was found, the styles compared (a drawn state's
@@ -631,9 +622,6 @@ interface Graded {
   medium: number;
   accepted: number;
   highCauses: number;
-  planNow: ChosenPlan | null;
-  planInteractionsChanged: string | null;
-  planPlaceholdersChanged: string | null;
   reachInput: NonNullable<VerifyReportV2["inputs"]>["reach"];
   probeIdentity: ProbeIdentity | undefined;
   buildNow: BuildIdentity | undefined;
@@ -681,13 +669,12 @@ export function compare(expectation: Expectation, measured: VerifyMeasured | nul
   liftSizeCaps(cx);
   groupDeltas(cx);
   const { open, high, medium, accepted, highCauses } = openCounts(cx);
-  const { planNow, planInteractionsChanged } = planInteractionsCheck(cx);
-  const { planPlaceholdersChanged } = planPlaceholdersCheck(cx, { planNow });
-  const { reachInput } = reachInputOf(cx, { planNow });
+  cx.inputNotes.push(...cx.plan.notes);
+  const { reachInput } = reachInputOf(cx);
   const { probeIdentity, buildNow, inputs, staticOnly, artifactCheck, noRender } = evidenceInputs(cx, { st, measuredRun, reachInput });
   const { nodesExpected, reasons, lowConfidence, verdict } = verdictOf(cx, {
     fieldsNeverMeasured, componentsAbsent, integrity, interactionsFailed, interactionsNotProbed, interactionsDescoped, open, high, medium,
-    accepted, planInteractionsChanged, planPlaceholdersChanged, staticOnly, noRender,
+    accepted, staticOnly, noRender,
   });
   const { coverage } = coverageOf(cx, {
     pageOverflow, fieldsNeverMeasured, bySet, untaggedInstanceSets, setsViaSharedPath, sharedShell, probeBound, interactions, interactionsFailed,
@@ -699,7 +686,7 @@ export function compare(expectation: Expectation, measured: VerifyMeasured | nul
     interactionsUndesigned, interactionsDescoped, unmatchedInteractionEvidence, inferredHead, inferredUndesigned, high, medium, accepted,
     highCauses, nodesExpected, lowConfidence, verdict, coverage, against,
   });
-  const { visual } = visualOf(cx, { rootF, planNow });
+  const { visual } = visualOf(cx, { rootF });
   return reportOf(cx, {
     measuredIdsNotInExpectation, foreignTags, untaggedInstanceSetsInShell, untaggedOnScreen, componentsAbsent, integrity,
     interactionEvidenceOnHidden, interactions, interactionsFailed, interactionsNotProbed, interactionsUndesigned, interactionsDescoped,
@@ -787,8 +774,10 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
     expected: bad.want, actual: bad.got, delta: bad.delta,
   }, extra));
 
-  // plan anchors that fold a layout-only wrapper into a measured ancestor
-  const anchors = opts.anchors && isJsonObject(opts.anchors) ? opts.anchors : {};
+  // the plan's binding (its rows, and whether the ones the expectation read still hold); its anchors fold a layout-only
+  // wrapper into a measured ancestor
+  const plan = planAtCompare(expectation, opts.plan);
+  const anchors = plan.anchors;
   const folded: VerifyReportV2["folded"] = [];
   const probeFrames: ProbeFrame[] = [...(Array.isArray(measured.frames) ? measured.frames : []), ...(measured.frame ? [measured.frame] : [])];
   const multiFrame = (expectation.frames || []).length > 1;
@@ -808,7 +797,7 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
   return {
     expectation, measured, opts, hiddenSet, legacy, specs, frameOf, byId, duplicateNodeIds, unknownKeys, keysSeen, expectedIds, viaSharedPath, probeWhy, deltas, notMeasured, fieldsNotMeasured, unverifiable, census,
       tally, fieldsChecked, nodesMeasured, nodesMatchedByComponentPath, fieldsReportedNull, matchedByCensus, typographyOn, matchKind, matchCapOf, absentGaps, placementGaps, undrawnStates, paintedVia, lineBoxWhyOf, gap,
-      push, anchors, folded, probeFrames, multiFrame, frameMeasured, builtTexts, inputNotes, reopened, unused,
+      push, plan, anchors, folded, probeFrames, multiFrame, frameMeasured, builtTexts, inputNotes, reopened, unused,
   };
 }
 
@@ -1596,7 +1585,7 @@ function gradeInteractions(
   "exportSha" | "interactions" | "interactionsFailed" | "interactionsNotProbed" | "interactionsPassed" | "interactionsUndesigned" |
   "interactionsDescoped"
 > {
-  const { expectation, measured, opts, hiddenSet, inputNotes, reopened, unused } = cx;
+  const { expectation, measured, plan, hiddenSet, inputNotes, reopened, unused } = cx;
   const { pageNotes, measuredRows, probeBound, probeRows, exercised } = g;
   // the owner's descopes — bound to the export like a waiver; a re-export reopens them.
   const exportSha = expectation.exportContentSha256;
@@ -1606,7 +1595,7 @@ function gradeInteractions(
   if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === undefined)
     inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) — re-run --expect");
   const descopeRows: PlanDescope[] = [];
-  (Array.isArray(opts.descopes) ? opts.descopes : []).forEach((d, i) => { if (isPlanDescope(d)) descopeRows.push(d); else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`); });
+  plan.descopes.forEach((d, i) => { if (isPlanDescope(d)) descopeRows.push(d); else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`); });
   const descopeUsed = new Set<PlanDescope>();
   const descopeFor = (i: VerifyInteraction): PlanDescope | undefined => {
     const hits = descopeRows.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === undefined || d.destinationId === i.destinationId));
@@ -1773,7 +1762,7 @@ function paintedByNote(cx: CompareCtx): void {
 }
 /** the plan's waivers — each accepts one delta while its design and values hold, else is reopened or unused */
 function applyWaivers(cx: CompareCtx, g: Pick<Graded, "componentsAbsent" | "exportSha" | "interactionsFailed">): Pick<Graded, "applied"> {
-  const { opts, specs, deltas, notMeasured, fieldsNotMeasured, inputNotes, reopened, unused } = cx;
+  const { plan, specs, deltas, notMeasured, fieldsNotMeasured, inputNotes, reopened, unused } = cx;
   const { componentsAbsent, exportSha, interactionsFailed } = g;
   // ---- the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
   // accepted against (whole-export hash), the designed value is the same and the built value has not moved
@@ -1784,7 +1773,7 @@ function applyWaivers(cx: CompareCtx, g: Pick<Graded, "componentsAbsent" | "expo
   for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable — descope it (plan.descopes, owner-only) if it is deliberately inert");
   for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT — a missing component is never waivable`);
   let applied = 0;
-  (Array.isArray(opts.waivers) ? opts.waivers : []).forEach((w, i) => {
+  plan.waivers.forEach((w, i) => {
     if (!isPlanWaiver(w)) { inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`); return; }
     const cands = deltas.filter((d) => d.nodeId === w.nodeId && d.field === w.field && !d.accepted);
     if (!cands.length) {
@@ -1865,74 +1854,24 @@ function openCounts(cx: CompareCtx): Pick<Graded, "open" | "high" | "medium" | "
   const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
   return { open, high, medium, accepted, highCauses };
 }
-/** the plan's interactions[] against the hash the expectation recorded */
-function planInteractionsCheck(cx: CompareCtx): Pick<Graded, "planNow" | "planInteractionsChanged"> {
-  const { expectation, opts, inputNotes } = cx;
-  // the plan's interactions[] bind the expectation by their hash — a plan that changed them since --expect
-  // (or declares some the expectation never merged) makes the run incomplete (not an integrity failure: --accept works)
-  const planNow = opts.plan || null;
-  const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : undefined;
-  const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
-  // name --plan when the plan was not simply the frame's only one (picked by --plan, or as the expectation's recorded
-  // plan), or the expectation merged another plan's rows — a plain re-run of --expect could
-  // otherwise pick a different plan
-  const otherPlan = recordedPi !== undefined && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
-  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
-  const gone = opts.recordedPlanGone || null;
-  const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
-  const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null
-    : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) — re-run --expect${rerunPlanArg}`
-    // the rows --expect merged came from ANOTHER plan file — name both, never advise only the one used now
-    : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}…; --expect merged ` +
-      `${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}…) — re-run --expect ` +
-      `--plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}`
-    : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ` +
-      `${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — if that plan moved, re-run --compare … --plan <its path now>; otherwise re-run --expect … --plan <the plan you intend> ` +
-      `(--plan ${planNow.file} to adopt this one)`
-    : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — re-run --expect${rerunPlanArg}`;
-  if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged)
-    inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
-  if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now — not checked; ` +
-    `pass --compare … --plan <plan.json> (or re-run --expect … --plan <plan.json>)`
-    : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now — not checked`);
-  return { planNow, planInteractionsChanged };
-}
-/** the plan's placeholder rows (deviations[] field "placeholder") against the hash the expectation recorded: they decide
- *  which TEXT is compared as a placeholder, so a plan that changed them since --expect makes the run incomplete */
-function planPlaceholdersCheck(cx: CompareCtx, g: Pick<Graded, "planNow">): Pick<Graded, "planPlaceholdersChanged"> {
-  const { expectation, opts } = cx;
-  const { planNow } = g;
-  const raw: unknown = expectation.planPlaceholders;
-  const recorded = isJsonObject(raw) && typeof raw.sha256 === "string" && typeof raw.plan === "string" ? { plan: raw.plan, sha256: raw.sha256 } : undefined;
-  // the rows decided what this run compares: with no plan to check them against, the run is not a pass (unlike a note)
-  if (!planNow) return { planPlaceholdersChanged: recorded ? `the expectation read placeholder rows from ${recorded.plan}${opts.recordedPlanGone ? `, which ${opts.recordedPlanGone}` : ""}, and no plan describes this frame now — whether they still hold is not checked; pass --compare … --plan <plan.json>, or re-run --expect` : null };
-  const rowsNow = planPlaceholderRows(planNow.plan).length;
-  const shaNow = planPlaceholdersSha256(planNow.plan);
-  if (recorded ? recorded.sha256 === shaNow : rowsNow === 0) return { planPlaceholdersChanged: null };
-  const plan = planNow.choice === "flag" || planNow.choice === "recorded" ? ` --plan ${planNow.file}` : "";
-  return { planPlaceholdersChanged: recorded
-    ? `the plan's placeholder rows (deviations[] field "placeholder") changed since --expect (${planNow.file}: sha256 ${recorded.sha256.slice(0, 12)}… at --expect, ${shaNow.slice(0, 12)}… now) — re-run --expect${plan}`
-    : `the plan declares ${rowsNow} placeholder row(s) (deviations[] field "placeholder") the expectation never read (${planNow.file}) — re-run --expect${plan}` };
-}
 /** the steps the probe replayed to reach the screen, against the plan's navigate[] (never the verdict) */
-function reachInputOf(cx: CompareCtx, g: Pick<Graded, "planNow">): Pick<Graded, "reachInput"> {
-  const { measured, inputNotes } = cx;
-  const { planNow } = g;
+function reachInputOf(cx: CompareCtx): Pick<Graded, "reachInput"> {
+  const { measured, inputNotes, plan } = cx;
   // the steps the probe replayed to reach the screen, against the plan's navigate[] — informational, never the verdict
   const reachRaw: unknown = measured.reach;
   const reach = isProbeReach(reachRaw) ? reachRaw : undefined;
   if (reachRaw !== undefined && !reach && !inputNotes.some((n) => n.startsWith("measured.reach "))) inputNotes.push("measured.reach is not the probe's steps block; ignored");
   let reachInput: NonNullable<VerifyReportV2["inputs"]>["reach"];
   if (reach) {
-    const nav = planNow && planNow.plan.navigate !== undefined ? parseSteps({ navigate: planNow.plan.navigate }) : null;
+    const nav = plan.navigate && plan.navigate.parsed;
     const planSha = nav && "steps" in nav ? stepsSha256(nav.steps) : null;
     const matchesPlan = nav === null ? null : planSha !== null && planSha === reach.sha256;
     reachInput = { sha256: reach.sha256, steps: reach.steps.length, source: reach.source, matchesPlan };
     if (matchesPlan === false) inputNotes.push(nav && "error" in nav ? `the plan's navigate ${nav.error} — the probe's steps (sha ${reach.sha256.slice(0, 12)}…) were not checked against it`
       : `the probe's steps (sha ${reach.sha256.slice(0, 12)}…, ${reach.source}) are not the plan's navigate (sha ${(planSha ?? "").slice(0, 12)}…) — measured another way than the plan says`);
-  } else if (reachRaw === undefined && planNow && Array.isArray(planNow.plan.navigate) && planNow.plan.navigate.length > 0) {
+  } else if (reachRaw === undefined && plan.file !== null && plan.navigate && plan.navigate.declared) {
     // the plan says how to reach the screen, the probe was never told — it measured the landing page
-    inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${planNow.file}) — it measured whatever the URL shows first; re-run the probe with --steps ${planNow.file}`);
+    inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${plan.file}) — it measured whatever the URL shows first; re-run the probe with --steps ${plan.file}`);
   }
   return { reachInput };
 }
@@ -1941,7 +1880,7 @@ function evidenceInputs(
   cx: CompareCtx,
   g: Pick<Graded, "st" | "measuredRun" | "reachInput">,
 ): Pick<Graded, "probeIdentity" | "buildNow" | "inputs" | "staticOnly" | "artifactCheck" | "noRender"> {
-  const { expectation, measured, opts, inputNotes } = cx;
+  const { expectation, measured, opts, inputNotes, plan } = cx;
   const { st, measuredRun, reachInput } = g;
   // ---- what the evidence is tied to
   // (an in-process caller can hand over any object: a probe that is not an identity reads as unknown, with a note)
@@ -1964,7 +1903,7 @@ function evidenceInputs(
     // Which probe produced these numbers: a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
-    ...ifDefined("waivers", opts.waiversInput || undefined),
+    ...ifDefined("waivers", plan.waiversInput),
     // the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
     build: buildNow ?? "unknown",
     ...ifDefined("runId", runId),
@@ -1980,13 +1919,13 @@ function verdictOf(
   cx: CompareCtx,
   g: Pick<Graded,
     "fieldsNeverMeasured" | "componentsAbsent" | "integrity" | "interactionsFailed" | "interactionsNotProbed" | "interactionsDescoped" | "open" |
-    "high" | "medium" | "accepted" | "planInteractionsChanged" | "planPlaceholdersChanged" | "staticOnly" | "noRender"
+    "high" | "medium" | "accepted" | "staticOnly" | "noRender"
   >,
 ): Pick<Graded, "nodesExpected" | "reasons" | "lowConfidence" | "verdict"> {
-  const { expectation, measured, legacy, specs, notMeasured, fieldsNotMeasured, fieldsReportedNull, folded } = cx;
+  const { expectation, measured, legacy, specs, notMeasured, fieldsNotMeasured, fieldsReportedNull, folded, plan } = cx;
   const {
     fieldsNeverMeasured, componentsAbsent, integrity, interactionsFailed, interactionsNotProbed, interactionsDescoped, open, high, medium,
-    accepted, planInteractionsChanged, planPlaceholdersChanged, staticOnly, noRender,
+    accepted, staticOnly, noRender,
   } = g;
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
   // (a spec a plan anchor folded into a measured ancestor is out of the denominator)
@@ -1999,8 +1938,8 @@ function verdictOf(
   // blocks a plain pass (and a pass-with-deviations): incomplete, never fail on its own
   const lowConfidence = open.filter((d) => d.cappedFrom !== undefined).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches — tag these elements`);
-  if (planInteractionsChanged) reasons.push(planInteractionsChanged);
-  if (planPlaceholdersChanged) reasons.push(planPlaceholdersChanged);
+  // a section of the plan that bound the expectation drifted since --expect (plan-binding.ts)
+  reasons.push(...plan.reasons);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Layer>__<id>.png and list it in artifacts)");
@@ -2147,25 +2086,20 @@ function headlineOf(
   return { headline };
 }
 /** report.visual, with the plan's "reference" deviations marked illustrative */
-function visualOf(cx: CompareCtx, g: Pick<Graded, "rootF" | "planNow">): Pick<Graded, "visual"> {
-  const { measured, opts, inputNotes } = cx;
-  const { rootF, planNow } = g;
+function visualOf(cx: CompareCtx, g: Pick<Graded, "rootF">): Pick<Graded, "visual"> {
+  const { measured, opts, inputNotes, plan } = cx;
+  const { rootF } = g;
   // ---- the plan's deviations with field "reference" — the reference PNG is illustrative for those nodes
   // (the designer drew a stand-in there). Shown on the VISUAL line and in the input notes; it never waives or changes a
   // delta (only an owner's waiver does).
   const visual = visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) });
-  const devs: unknown[] = planNow && Array.isArray(planNow.plan.deviations) ? planNow.plan.deviations : [];
   const illustrative: NonNullable<ReportVisual["illustrative"]> = [];
-  for (const d of devs) {
-    if (!isJsonObject(d) || d.field !== "reference") continue;
-    const ids = [...(typeof d.nodeId === "string" && d.nodeId ? [d.nodeId] : []), ...(Array.isArray(d.nodeIds) ? d.nodeIds.filter((x): x is string => typeof x === "string" && x !== "") : [])];
-    const reason = typeof d.reason === "string" && d.reason ? d.reason : typeof d.what === "string" ? d.what : "";
-    for (const id of ids.length ? ids : typeof rootF.nodeId === "string" ? [rootF.nodeId] : []) illustrative.push({ nodeId: id, reason });
-  }
-  if (illustrative.length && planNow) {
+  for (const { nodeIds, reason } of plan.reference)
+    for (const id of nodeIds.length ? nodeIds : typeof rootF.nodeId === "string" ? [rootF.nodeId] : []) illustrative.push({ nodeId: id, reason });
+  if (illustrative.length && plan.file !== null) {
     visual.illustrative = illustrative;
     visual.headline += ` (the plan marks the reference illustrative for ${illustrative.length} node(s))`;
-    inputNotes.push(`${planNow.file} marks the reference PNG illustrative (deviations field "reference") for ${illustrative.map((r) => r.nodeId).join(", ")} — ` +
+    inputNotes.push(`${plan.file} marks the reference PNG illustrative (deviations field "reference") for ${illustrative.map((r) => r.nodeId).join(", ")} — ` +
       `the visual diff there shows a stand-in; no delta is waived or changed`);
   }
   return { visual };

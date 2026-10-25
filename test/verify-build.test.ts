@@ -12,7 +12,7 @@ import { blockerIds } from "../design-to-code/audit.ts";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
-import { waiversHash } from "../design-to-code/plan-waivers.ts";
+import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import { checkPlan, isStale, validatePlanHeader, anchorCoverage, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import type { CheckPlanResult } from "../design-to-code/verify-build.ts";
