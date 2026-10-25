@@ -45,7 +45,7 @@ export interface VerifyStatusV2 {
   /** the probe's failed attempts (exit 3/4) in this run (--run): the PROBE_ATTEMPTS-th ends the run `failed` */
   probeFailures?: number;
   /** the run this run's record replaced in the live status: ANOTHER run that had ended, written over by a write that
-   *  names this run (`current`: verify-screen --status without --new-run, the probe's --run) — a late record of an older
+   *  names this run (a named run: verify-screen --status without --new-run, the probe's --run) — a late record of an older
    *  run after a newer one ended. Set by the run's first write and carried forward within the run, like the shas. */
   replaced?: ReplacedRun;
 }
