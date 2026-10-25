@@ -19,6 +19,9 @@ import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
+import { systemClock } from "./clock.ts";
+import type { Clock } from "./clock.ts";
+import { createPendingRequests } from "./pending-requests.ts";
 import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
@@ -268,11 +271,6 @@ interface ClientEntry<S extends RegistrySocket = BridgeSocket> {
   fileKey: string | null;
   page: string | null;
   pluginVersion: string | null;
-  /** Parsed frames received from this client so far — hello, progress, replies, anything the plugin
-   *  sent that parsed. request()'s stall check captures it at send time and disarms on the first
-   *  frame AFTER that: a count, not a clock, so a connect (or a frame) in the same millisecond as
-   *  the send can neither pass for life since the send nor be missed. */
-  frames: number;
   /** heartbeat: cleared before each ping, set again by the pong (the ws README's "How to detect and
    *  close broken connections?" recipe). Still false at the next tick = the peer is gone, and it is terminated. */
   isAlive: boolean;
@@ -303,18 +301,6 @@ export interface ConnectionInfo {
   clients: ClientRow[];
   takeovers: number;
   lastTakeoverAt: number | null;
-}
-
-interface PendingRequest {
-  connId: string;
-  /** which command was sent — what the reply is checked against, and what the check's error names */
-  cmd: Cmd;
-  resolve: (v: unknown) => void;
-  reject: (e: Error) => void;
-  /** the caller's progress listener, fed every progress tick this request's connection sends */
-  onProgress?: (tick: ProgressTick) => void;
-  /** the plugin began this request's run (its own `start` frame): the per-command budget starts over */
-  started: () => void;
 }
 
 /** What a request resolved with, plus WHICH connected file answered it (the client resolveClient picked). */
@@ -402,7 +388,7 @@ function createRegistry<S extends RegistrySocket = BridgeSocket>(opts: RegistryO
     const connId = "c" + ++connSeq;
     const now = performance.now();
     if (!live().length) liveSince = now;
-    const entry: ClientEntry<S> = { ws, connId, connectedAt: Date.now(), connectedMono: now, instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
+    const entry: ClientEntry<S> = { ws, connId, connectedAt: Date.now(), connectedMono: now, instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, isAlive: true };
     clients.set(connId, entry);
     changed();
     return entry;
@@ -648,6 +634,8 @@ interface BridgeOptions {
   heartbeatMs?: number;
   /** the registry's settle window (timeouts.ts SETTLE_MS); the test suite passes 0 where it is not under test */
   settleMs?: number;
+  /** the clock the pending requests' budgets and stall checks run on (clock.ts; systemClock when absent) */
+  clock?: Clock;
 }
 
 function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
@@ -716,7 +704,10 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   // misroutes silently on a typo or a duplicate.
   const registry = createRegistry(ifDefined("settleMs", opts.settleMs));
   const clients = registry.clients;
-  const pending = new Map<string, PendingRequest>(); // requestId -> { resolve, reject, connId }
+  // Every command sent and not yet settled, and the rules for how each settles (pending-requests.ts): the handlers
+  // below feed it what each socket says, request() opens an entry as it sends, and a request given up on is cancelled
+  // on its own socket.
+  const pending = createPendingRequests<ClientEntry, ProgressTick>({ clock: opts.clock ?? systemClock, sendCancel: cancelOnWire });
   // Request ids are `r<nonce>-<seq>`, the nonce minted once per bridge. A bare per-process counter
   // restarted at r1 in every bridge, so a plugin still finishing a run for a bridge that has since
   // gone (a one-shot CLI that stalled out and exited) posted ITS r1 to whatever socket was current —
@@ -764,35 +755,24 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     }
     const msg = parsePluginFrame(parsed);
     if (!msg) return;
-    // ANY message from this client is a sign of life — counted unconditionally, before the
-    // type-specific handling below, so request()'s stall detector (see below) can tell "the plugin
+    // ANY message from this client is a sign of life — heard unconditionally, before the
+    // type-specific handling below, so a request's stall check (pending-requests.ts) can tell "the plugin
     // is genuinely walking a big file and periodically reporting progress" from "nothing has been
     // heard from this socket since the command was sent", which a plain reply-or-timeout wait
     // cannot: a real pull measured a 300s/908s silent wait, on a bridge that WAS connected, for
     // work that took 7.5-8.8s once a daemon kept the connection warm.
-    entry.frames++;
+    pending.heard(connId);
     // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
     // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
     // socket too). Is never a reply (a `requestId` on it only routes it, below) and needs no reply; it exists
-    // to keep `frames` moving during a long walk — and to feed the progress listener of any
+    // to show life during a long walk — and to feed the progress listener of any
     // request in flight on THIS connection (the MCP server forwards them as notifications/progress).
     // A frame that names its request (`requestId`: the plugin's `start` / `queued` for one run) goes to
     // that request only — a request executing must not hear that another one is queued. An id-less frame
     // (page ticks, an older plugin) keeps the fan-out; an id this connection has no pending request for
     // feeds nothing (it already counted as life above).
-    if (msg.type === "progress") {
-      const only = msg.requestId;
-      // A request's OWN `start` (named by id — an id-less one could be anyone's) re-arms its budget: see dispatch.
-      if (only !== null && msg.tick.phase === "start") {
-        const p = pending.get(only);
-        if (p && p.connId === connId) p.started();
-      }
-      for (const [id, p] of pending) {
-        if (p.connId !== connId || !p.onProgress || (only !== null && id !== only)) continue;
-        try { p.onProgress(msg.tick); } catch { /* a listener's failure is its own; the request goes on */ }
-      }
-      return;
-    }
+    // A request's OWN `start` (named by id — an id-less one could be anyone's) re-arms its budget (pending-requests.ts BUDGET).
+    if (msg.type === "progress") return pending.progress(connId, msg.requestId, msg.tick, msg.tick.phase === "start");
     // Unsolicited identity announcement, sent by the plugin UI on connect AND on every reconnect.
     // Re-announcing is the whole point: identity is DERIVED from the environment each time rather
     // than issued by us and replayed, so a plugin that Figma tore down and re-ran comes back
@@ -806,21 +786,8 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
         ` [plugin v${entry.pluginVersion || "unknown"}]` + (stalenessNote ? ` — ${stalenessNote}` : ""));
       return;
     }
-    const p = pending.get(msg.id);
-    if (!p) return;
-    // Settled only by the connection it was SENT to. A reply carrying this id on another socket is
-    // not an answer to it (with per-bridge ids it can only be a coincidence or a confused peer), and
-    // letting it through would resolve one file's request with another file's work.
-    if (p.connId !== connId) return;
-    pending.delete(msg.id);
-    if (!msg.ok) return p.reject(new Error(String(msg.error || "plugin error")));
-    // The ONE place a reply enters this process, so the ONE place its shape is checked against the
-    // contract (commands.ts). A plugin that answers `listPages` with something that has no `pages`
-    // — an older bundle, a half-migrated command — fails HERE, named, instead of as a TypeError in
-    // whichever reader touches the missing field first.
-    const bad = replyShapeError(p.cmd, msg.result);
-    if (bad) return p.reject(new Error(`plugin replied with an unexpected shape for ${p.cmd}: ${bad}`));
-    p.resolve(msg.result);
+    // Settled only by the connection it was SENT to (pending-requests.ts REPLY); its shape is checked in dispatch.
+    pending.reply(connId, msg.id, msg.ok ? { ok: true, result: msg.result } : { ok: false, error: new Error(String(msg.error || "plugin error")) });
   }
 
   // The close code and reason are the whole diagnosis of a mid-export disconnect: Bun.serve reports no
@@ -853,11 +820,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     // the socket that just died. Rejecting the whole map (as a single-client bridge could, when the
     // whole map could only ever belong to one socket) would abort a long export running happily
     // in ANOTHER file because an unrelated one closed its plugin window.
-    for (const [id, p] of pending) {
-      if (p.connId !== connId) continue;
-      pending.delete(id);
-      p.reject(new Error(why));
-    }
+    pending.lost(connId, () => new Error(why));
   }
 
   // Heartbeat, as in the ws README's "How to detect and close broken connections?": "Sometimes, the
@@ -1004,17 +967,14 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     return connectionFor(info, connId);
   }
 
-  // `target` is optional and LAST so every existing three-argument call site keeps working unchanged:
-  // with one file connected it resolves to that file, which is the single-file behaviour.
-  // `stallMs` (opt-in — undefined leaves today's behaviour untouched for every existing caller,
-  // including the daemon and MCP paths) is a SEPARATE, SHORTER wait for any sign of life from this
-  // specific client, checked independently of the real per-command timeout: a real pull measured
+  // `stallMs` (opt-in — undefined leaves the behaviour untouched for every other caller, including the
+  // daemon and MCP paths) is a SEPARATE, SHORTER wait for any sign of life from this specific client,
+  // checked independently of the real per-command timeout (pending-requests.ts STALL): a real pull measured
   // a 300s/908s silent wait — on a connected, identified bridge — for work that takes
   // 7.5-8.8s once a daemon keeps the plugin warm. A stalled one-shot connection (the shape of both
   // measurements: no `dtwin serve` running) shows NO activity at all on the socket — not even a
   // progress frame — for the whole wait, where a genuinely large/slow export shows life through the
-  // progress relay (see the `ws.on("message")` handler above). The check is armed only until that
-  // first sign of life: a working export can go quiet for minutes (see the loop below). Only
+  // progress relay (the message handler above). Only
   // figma-pull.ts's own one-shot bridge (no daemon) opts into this, and only for export-class
   // commands — a cheap `whoami`/`list` finishing in under a second never needs it, and the daemon path
   // deliberately does NOT pass it: a persistent connection is exactly the case that is
@@ -1024,7 +984,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   // start yet: a `queued` frame when its run waits behind another, a `start` frame when the run begins
   // (figma-plugin state.ts / ui.html). So silence here means a plugin too busy to dispatch the frame
   // at all (a long synchronous stretch of an earlier run) — or an older plugin with neither frame.
-  const STALL_POLL_MS = 500;
+  //
   // CANCEL. Whenever this side gives up on a request it has already sent —
   // the per-command timeout, the stall check, close(), or the caller's `signal` — the plugin is told,
   // or it keeps walking the export for nobody and queues every later command behind it. The frame is
@@ -1074,112 +1034,69 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     });
   }
 
-  // request() after its wait: resolve the target now, send, and settle on the reply.
+  // What a stalled request says. Only reachable after connect + identify (the clock starts at send), so the plugin IS
+  // connected: say that, and name what keeps a connected plugin silent. Built only when the stall fires — `args` is
+  // what the caller sent, and the daemon forwards a frame's absent args as absent.
+  function stalled<C extends Cmd>(cmd: C, args: Commands[C]["args"], stallMs: number): Error {
+    const nodeId = "nodeId" in args && typeof args.nodeId === "string" ? args.nodeId : "";
+    const node = nodeId ? ` (node ${nodeId})` : "";
+    return new Error(
+      `the plugin is connected but sent nothing for '${cmd}'${node} in ${Math.round(stallMs / 1000)}s — it is busy (an earlier export ` +
+      `still running in that file, possibly one this command's predecessor abandoned, or a long cold first read of a large page). ` +
+      `Retry; a warm plugin (\`dtwin serve\` in another terminal) answers in seconds; if it keeps happening, check the plugin window.`
+    );
+  }
+
+  // request() after its wait: resolve the target now, open its entry, send, and settle on the reply.
   function dispatch<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number, target: string | null | undefined, stallMs: number | undefined, onProgress: ((tick: ProgressTick) => void) | undefined, signal: AbortSignal | undefined): Promise<RequestOutcome<C>> {
-    return new Promise<RequestOutcome<C>>((resolve, reject) => {
-      let client: ClientEntry;
-      try {
-        client = resolveClient(target);
-      } catch (e) {
-        return reject(e);
-      }
-      const id = "r" + nonce + "-" + ++seq;
-      // Removed on settle (every path below goes through `unlisten`), so a long-lived signal shared by
-      // many requests never accumulates listeners.
-      let onAbort: (() => void) | null = null;
-      const unlisten = () => { if (signal && onAbort) signal.removeEventListener("abort", onAbort); onAbort = null; };
-      // The per-command budget is for the RUN. It is armed at send, which bounds a wait in the plugin's queue behind
-      // an earlier run in that file (figma-plugin state.ts scheduleRun — the one queue on every path, so the wait
-      // is not otherwise bounded here), and re-armed in full when the plugin says this request's run has begun (its
-      // own `start` frame, `started` below): a run that began late is not cut short by the time it spent waiting.
-      const onTimeout = () => {
-        if (pending.has(id)) {
-          pending.delete(id);
-          if (stallTimer) clearInterval(stallTimer);
-          unlisten();
-          cancelOnWire(client, id);
-          // We only get here AFTER isConnected() passed and the command was sent, so the socket is
-          // up and the file IS open — never blame those. The real causes are a slow export (big
-          // file / --all-pages) or a plugin-side throw, which surfaces in the plugin window, not here.
-          reject(new Error(
-            `the Figma plugin connected but did not answer '${cmd}' within ${Math.round(timeoutMs / 1000)}s. ` +
-            `A large file (especially --all-pages) can legitimately take longer — from the dtwin CLI, ` +
-            `retry with --timeout <seconds>; from MCP, export one page at a time (page:[id]) rather than the whole file. ` +
-            `If it never finishes, check the plugin window for a red error.`
-          ));
-        }
-      };
-      let timer = setTimeout(onTimeout, timeoutMs);
-      let stallTimer: ReturnType<typeof setInterval> | null = null;
-      if (typeof stallMs === "number" && stallMs > 0) {
-        const sentAt = Date.now();
-        const framesAtSend = client.frames;
-        stallTimer = setInterval(() => {
-          if (!pending.has(id)) return; // settled already — the interval's own clear below is racing it
-          // LIVE (2026-09-25): a real one-page export goes legitimately quiet for longer than any
-          // sensible window — measured 14–24 s at the end of one large top-level frame (the tree is
-          // counted and measured before the next tick) and 116–135 s between the last page tick and
-          // the reply (catalog build, then a 120 MB reply serialised and sent) — so "quiet for stallMs
-          // at ANY point" aborted a working export and left the plugin walking for nobody. The stall
-          // this exists to catch is a connection that never shows life for the
-          // request at all; so the check disarms itself on the FIRST frame after the send — by COUNT
-          // (`frames`), not by clock: a timestamp compare read a client that connected in the same
-          // millisecond as the send as life since the send — and the real per-command timeout bounds
-          // everything after that (as it always did on the daemon path, which never opts in).
-          if (client.frames > framesAtSend) { if (stallTimer) clearInterval(stallTimer); stallTimer = null; return; }
-          if (Date.now() - sentAt < stallMs) return;
-          pending.delete(id);
-          if (stallTimer) clearInterval(stallTimer);
-          clearTimeout(timer);
-          unlisten();
-          cancelOnWire(client, id);
-          const nodeId = "nodeId" in args && typeof args.nodeId === "string" ? args.nodeId : "";
-          const node = nodeId ? ` (node ${nodeId})` : "";
-          // Only reachable after connect + identify (the clock starts at send), so the plugin IS
-          // connected: say that, and name what keeps a connected plugin silent.
-          reject(new Error(
-            `the plugin is connected but sent nothing for '${cmd}'${node} in ${Math.round(stallMs / 1000)}s — it is busy (an earlier export ` +
-            `still running in that file, possibly one this command's predecessor abandoned, or a long cold first read of a large page). ` +
-            `Retry; a warm plugin (\`dtwin serve\` in another terminal) answers in seconds; if it keeps happening, check the plugin window.`
-          ));
-        }, STALL_POLL_MS);
-      }
-      // Clear the timer once the request settles, so a resolved/rejected request doesn't
-      // leave a live 2-minute timer (and its closure) armed until it harmlessly fires.
-      // connId is recorded so the close handler can fail exactly this client's in-flight work and
-      // leave every other file's alone.
-      // `resolve` takes the reply as `unknown`: the message handler has already checked it against
-      // this command's shape (replyShapeError) before it gets here, which is what makes the typed
-      // promise honest. The one assertion below is that hand-off, not a guess about the plugin.
-      const settle = (v: unknown) => resolve({ reply: v as Commands[C]["reply"], client: describe(client) });
-      pending.set(id, {
-        connId: client.connId,
-        cmd,
-        ...ifDefined("onProgress", onProgress),
-        started: () => { clearTimeout(timer); timer = setTimeout(onTimeout, timeoutMs); },
-        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); settle(v); },
-        reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); reject(e); },
-      });
-      if (signal) {
-        const sig = signal;
-        onAbort = () => {
-          const p = pending.get(id);
-          if (!p) return; // settled already
-          pending.delete(id);
-          cancelOnWire(client, id);
-          p.reject(abortReason(sig, "request aborted by the caller"));
-        };
-        sig.addEventListener("abort", onAbort, { once: true });
-      }
-      if (!sendFrame(client.ws, { id, cmd, args })) {
-        // Dropped (see sendFrame): nothing will ever answer it, so fail it now rather than at its timeout.
-        const p = pending.get(id);
-        pending.delete(id);
-        p?.reject(new Error(
-          `could not send '${cmd}' to the Figma plugin (${client.connId}): its socket is closing, or its send buffer is past ` +
+    let client: ClientEntry;
+    try {
+      client = resolveClient(target);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    const conn = client;
+    const id = "r" + nonce + "-" + ++seq;
+    // The budget and the stall check are pending-requests.ts's (BUDGET, STALL); what each says when it runs out is here.
+    const settled = pending.open({
+      id, conn, signal, onProgress,
+      budgetMs: timeoutMs,
+      // We only get here AFTER isConnected() passed and the command was sent, so the socket is
+      // up and the file IS open — never blame those. The real causes are a slow export (big
+      // file / --all-pages) or a plugin-side throw, which surfaces in the plugin window, not here.
+      timedOut: () => new Error(
+        `the Figma plugin connected but did not answer '${cmd}' within ${Math.round(timeoutMs / 1000)}s. ` +
+        `A large file (especially --all-pages) can legitimately take longer — from the dtwin CLI, ` +
+        `retry with --timeout <seconds>; from MCP, export one page at a time (page:[id]) rather than the whole file. ` +
+        `If it never finishes, check the plugin window for a red error.`
+      ),
+      stall: typeof stallMs === "number" && stallMs > 0 ? {
+        ms: stallMs,
+        error: () => stalled(cmd, args, stallMs),
+      } : undefined,
+    });
+    // Not pending right after open only when its signal was already aborted (open refused it): then nothing is sent.
+    // A send that throws (args that do not serialise) rejects the request as the throw, as it always did.
+    if (pending.has(id)) {
+      let dropped = false;
+      try { dropped = !sendFrame(conn.ws, { id, cmd, args }); } catch (e) { pending.fail(id, e instanceof Error ? e : new Error(errMsg(e))); }
+      // Dropped (see sendFrame): nothing will ever answer it, so fail it now rather than at its timeout.
+      if (dropped) {
+        pending.fail(id, new Error(
+          `could not send '${cmd}' to the Figma plugin (${conn.connId}): its socket is closing, or its send buffer is past ` +
           `the ${maxPayloadMb} MB limit (FIGMA_BRIDGE_MAX_PAYLOAD_MB). Retry once the plugin has reconnected.`
         ));
       }
+    }
+    return settled.then((result) => {
+      // The ONE place a reply enters this process, so the ONE place its shape is checked against the
+      // contract (commands.ts). A plugin that answers `listPages` with something that has no `pages`
+      // — an older bundle, a half-migrated command — fails HERE, named, instead of as a TypeError in
+      // whichever reader touches the missing field first. Checked, the typed reply is a promise the
+      // runtime kept: the one assertion below is that hand-off, not a guess about the plugin.
+      const bad = replyShapeError(cmd, result);
+      if (bad) throw new Error(`plugin replied with an unexpected shape for ${cmd}: ${bad}`);
+      return { reply: result as Commands[C]["reply"], client: describe(conn) };
     });
   }
 
@@ -1193,12 +1110,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     // Cancel frames FIRST, while the sockets are still open: every request still pending here is work
     // the plugin would otherwise finish for nobody (see cancelOnWire). The socket close below is a
     // cancel on the plugin side too; the explicit frame names the exact request and costs nothing.
-    for (const [id, p] of pending) {
-      const c = clients.get(p.connId);
-      if (c) cancelOnWire(c, id);
-    }
-    for (const p of pending.values()) p.reject(new Error("bridge closed"));
-    pending.clear();
+    pending.close(() => new Error("bridge closed"));
     // Close EVERY client, not just one — otherwise a second connected
     // file would hold the event loop open and the process would never exit on its own, which is the
     // whole reason this function exists.

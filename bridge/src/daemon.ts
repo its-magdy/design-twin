@@ -31,6 +31,7 @@ import type { IpcAuth } from "./daemon-auth.ts";
 import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
+import { deadline, systemClock } from "./clock.ts";
 import { bridgePortOrExit } from "./ports.ts";
 import { daemonTokenOf, humanMs, idleMsFromEnv, tokenSetting } from "./settings.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
@@ -906,10 +907,9 @@ export function probeAs(sock: string, auth: IpcAuth | null, timeoutMs = 1500): P
 //
 // Timeout: `timeoutMs` is the outer guard for a daemon that stopped answering entirely (the daemon's
 // own per-command budget, msg.timeoutMs, still bounds the whole command on the bridge side). Every
-// progress frame RE-ARMS it: a tick is proof the daemon and the plugin are both alive, which is how
-// the CLI's own bridge path treats activity (figma-pull.ts STALL_MS over server-core's
-// `lastActivity`). So with progress flowing the guard is a silence budget; without progress it is the
-// same total budget it always was.
+// progress frame RE-ARMS it: a tick is proof the daemon and the plugin are both alive. So with progress
+// flowing the guard is a silence budget; without progress it is the same total budget it always was. It is
+// clock.ts's deadline — the rule the bridge's own budgets run on (pending-requests.ts), stepped by the suites.
 //
 // `signal` (optional): aborted → the socket is DESTROYED and the promise rejects at once, with the
 // signal's reason when it is an Error of the caller's own, else "request aborted by the caller" — the
@@ -932,13 +932,10 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
     const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; unlisten(); stopHs(); try { c.end(); } catch { /* already gone */ } fn(v); } };
     // The daemon's own per-command budget still applies; this is the outer guard for a daemon that
     // stopped answering entirely. Generous by design — an --all-pages export legitimately runs long.
-    let t: ReturnType<typeof setTimeout> | null = null;
-    const disarm = () => { if (t) clearTimeout(t); t = null; };
-    const arm = () => {
-      disarm();
-      if (timeoutMs) t = setTimeout(() => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s")), timeoutMs);
-    };
-    arm();
+    // The deadline rule (clock.ts) the bridge's own budgets run on: armed now, re-armed by every tick.
+    const guard = timeoutMs ? deadline(systemClock, timeoutMs, () => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s"))) : null;
+    const disarm = (): void => { guard?.cancel(); };
+    const arm = (): void => { guard?.rearm(); };
     c.on("error", (e) => { disarm(); done(reject, e); });
     c.on("close", () => { disarm(); done(reject, new Error("daemon closed the connection before replying")); });
     const onFrames = framer((line) => {

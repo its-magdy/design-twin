@@ -183,6 +183,10 @@ bun test/bridge.test.ts        # expect: all checks pass, exit 0 — determinist
 # do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
 # CI/ephemeral escape-hatch token) defeats the "no token there" setup and the
 # `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
+bun test/pending-requests.test.ts # expect: all checks pass, exit 0 — every command sent and not yet settled (pending-requests.ts)
+                                 # on a fake clock (test/fake-clock.ts): the budget and its re-arm by the request's own start,
+                                 # the stall check, abort, replies only from the target connection, a lost connection, close;
+                                 # and clock.ts's deadline rule and adapters — no port, no sleep
 bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
                                  # a Figma client every front-end uses (awaitClient: named target, connId, no target,
                                  # leave/abort/close, listeners and timers released), on plain objects — binds no port
