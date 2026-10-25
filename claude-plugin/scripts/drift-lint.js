@@ -430,33 +430,26 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+function manifestProblem(doc, givenPath, payloadKey, wantFile) {
+  if (!isManifest(doc, payloadKey)) return null;
+  return `'${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-    );
-    exitCli(2);
-  }
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
 }
-function readJsonFile(file, what, hint) {
-  return readDocFile(file, what, anyJson, hint);
-}
-function readDocFile(file, what, guard, hint) {
+function loadDocFile(file, what, guard, hint) {
   const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
+  if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
-  exitCli(2);
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : "") };
 }
-function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
-  const doc = readJsonFile(file, what, hint);
-  assertNotManifest(doc, file, payloadKey, wantFile);
-  if (guard(doc)) return doc;
-  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  exitCli(2);
+function loadSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const r = loadDocFile(file, what, anyJson, hint);
+  if ("error" in r) return r;
+  const manifest = manifestProblem(r.doc, file, payloadKey, wantFile);
+  if (manifest !== null) return { error: manifest };
+  if (guard(r.doc)) return { doc: r.doc };
+  return { error: `${what}: '${file}' is not ${guard.expected || "the expected kind of document"}` };
 }
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
@@ -693,6 +686,7 @@ import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function joinNegativeValues(argv, options) {
   const out = [];
@@ -1327,21 +1321,24 @@ function discoverCatalogs(namedFile, screenFile) {
   add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
   return out;
 }
-function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
-  const out = [{ file: namedFile, catalog: named, role: "named" }];
+function loadCatalogSet(namedFile, named, extraFiles, screenFile) {
+  const sources = [{ file: namedFile, catalog: named, role: "named" }];
+  const skipped = [];
   const seen = /* @__PURE__ */ new Set([path3.resolve(namedFile)]);
   for (const f of extraFiles) {
     if (seen.has(path3.resolve(f))) continue;
     seen.add(path3.resolve(f));
-    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+    const r = loadSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json");
+    if ("error" in r) return r;
+    sources.push({ file: f, role: "extra", catalog: r.doc });
   }
   for (const d of discoverCatalogs(namedFile, screenFile)) {
     if (seen.has(path3.resolve(d.file))) continue;
     seen.add(path3.resolve(d.file));
-    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
-    else if (onSkip) onSkip(d.file);
+    if (d.catalog) sources.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else skipped.push(d.file);
   }
-  return out;
+  return { sources, skipped };
 }
 function unionCatalog(sources) {
   const first = sources[0];
@@ -1360,9 +1357,6 @@ var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + source
 
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0] ?? "";
-function discoverExtraCatalogs(namedFile, screenFile) {
-  return discoverCatalogs(namedFile, screenFile).flatMap((d) => d.catalog ? [{ file: d.file, catalog: d.catalog }] : []);
-}
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
@@ -1555,13 +1549,10 @@ function screenCoverage(map, catalog, screenDocs) {
   };
 }
 function screenCoverageReport(input) {
-  const { map, catalogFile, catalog, screens, extraCatalogs } = input;
-  const named = catalog || { components: [] };
-  const union = input.union || unionCatalog([{ file: catalogFile, catalog: named, role: "named" }, ...extraCatalogs.map((x) => ({ file: x.file, catalog: x.catalog, role: "extra" }))]);
+  const { map, catalogFile, catalog: named, screens, extraCatalogs, union } = input;
   const cov = screenCoverage(map, union, screens.map((r) => r.doc));
   const warnings = [];
-  const catalogsRead = [catalogFile, ...extraCatalogs.map((x) => x.file)];
-  if (!cov.distinct) return { coverage: cov, warnings, catalogsRead };
+  if (!cov.distinct) return { coverage: cov, warnings };
   const none = [];
   const others = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
   const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...screens.map((r) => visibleInstances(r.doc, r.file))), named, others) : null;
@@ -1590,7 +1581,47 @@ function screenCoverageReport(input) {
       message: `${cov.unmapped.length} component(s) on this screen have no map entry: ` + cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", \u2026" : "")
     });
   }
-  return { coverage: cov, warnings, catalogsRead };
+  return { coverage: cov, warnings };
+}
+function runDriftLint(input) {
+  const { mapFile, catalogFile } = input;
+  const named = loadSplitFile(
+    catalogFile,
+    "component catalog",
+    isComponentsCatalog,
+    "components",
+    "design-system/components.local.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
+  );
+  if ("error" in named) return { status: "unusable", message: named.error };
+  const mapRaw = loadDocFile(mapFile, "component map", anyJson, `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out ${shellArg(mapFile)}\`.`);
+  if ("error" in mapRaw) return { status: "unusable", message: mapRaw.error };
+  const valid = validateMap(mapRaw.doc);
+  if (!valid.ok || !isCodeConnectMap(mapRaw.doc)) {
+    const lines = valid.errors.map((e) => `ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`);
+    return { status: "map-invalid", errors: valid.errors, message: lines.join("\n") + `
+
+${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 fix it, or check it with \`${scriptCmd("map-validate")} ${shellArg(mapFile)}\`.` };
+  }
+  const map = mapRaw.doc;
+  const screens = [];
+  for (const file of input.screenFiles || []) {
+    const r = loadDocFile(file, "screen export", isScreenDoc);
+    if ("error" in r) return { status: "unusable", message: r.error };
+    screens.push({ file, doc: r.doc });
+  }
+  const set = loadCatalogSet(catalogFile, named.doc, input.extraCatalogFiles || [], screens[0]?.file);
+  if ("error" in set) return { status: "unusable", message: set.error };
+  const extraCatalogs = set.sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
+  const res = driftLint(map, named.doc, { ...ifDefined("maxAgeMs", input.maxAgeMs), ...ifDefined("now", input.now), extraCatalogs });
+  const skipped = set.skipped.map((file) => ({
+    code: "catalog-unreadable",
+    file,
+    message: `${file} is not a readable component catalog \u2014 skipped (map entries that live only there will show as orphaned).`
+  }));
+  const warnings = [...skipped, ...res.warnings];
+  const coverage = screens.length ? screenCoverageReport({ map, catalogFile, catalog: named.doc, screens, extraCatalogs, union: unionCatalog(set.sources) }) : null;
+  return { status: "linted", ...res, warnings, summary: { ...res.summary, warningCount: warnings.length }, catalogs: set.sources, coverage };
 }
 async function main(argv) {
   const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]`;
@@ -1614,51 +1645,29 @@ async function main(argv) {
       return 2;
     }
   }
-  const maxAgeMs = maxAgeHours ? maxAgeHours * 36e5 : void 0;
-  const screenFiles = flags.screen || [];
   const [mapFile, catalogFile] = positionals;
   if (!mapFile || !catalogFile) {
     console.error(USAGE);
     return 2;
   }
-  const catalog = readSplitFile(
-    catalogFile,
-    "component catalog",
-    isComponentsCatalog,
-    "components",
-    "design-system/components.local.json",
-    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
-  );
-  const mapRaw = readJsonFile(mapFile, "component map", `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out codeconnect.local.json\`.`);
-  const valid = validateMap(mapRaw);
-  if (!valid.ok) {
-    valid.errors.forEach((e) => console.error(`ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`));
-    console.error(`
-${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 fix it, or check it with \`${scriptCmd("map-validate")} ${mapFile}\`.`);
+  const run = runDriftLint({ mapFile, catalogFile, extraCatalogFiles: flags.catalog || [], screenFiles: flags.screen || [], ...ifDefined("maxAgeMs", maxAgeHours ? maxAgeHours * 36e5 : void 0) });
+  if (run.status === "unusable") {
+    console.error(`error  ${run.message}`);
+    return 2;
+  }
+  if (run.status === "map-invalid") {
+    console.error(run.message);
     return 1;
   }
-  if (!isCodeConnectMap(mapRaw)) return 1;
-  const map = mapRaw;
-  const sources = readCatalogSet(
-    catalogFile,
-    catalog,
-    flags.catalog || [],
-    screenFiles[0],
-    (f) => console.error(`warn   [catalog-unreadable] ${f} is not a readable component catalog \u2014 skipped (map entries that live only there will show as orphaned).`)
-  );
-  console.error(catalogSetLine(sources));
-  const extraCatalogs = sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
-  const union = unionCatalog(sources);
-  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs), extraCatalogs });
-  res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
-  res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
-  const s = res.summary;
+  console.error(catalogSetLine(run.catalogs));
+  run.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
+  run.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
+  const s = run.summary;
   console.error(`
 ${s.mapped}/${s.catalogComponents} components mapped${s.mappedElsewhere ? ` (+${s.mappedElsewhere} map entr${s.mappedElsewhere === 1 ? "y" : "ies"} resolved in the other catalog(s))` : ""} \xB7 ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
-  if (screenFiles.length) {
-    const screens = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
-    const { coverage: cov, warnings } = screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs, union });
+  if (run.coverage) {
+    const { coverage: cov, warnings } = run.coverage;
     if (!cov.distinct) {
       console.error(`
 SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 nothing to reuse either way.`);
@@ -1675,25 +1684,23 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
   }
   const fileKey = process.env.FIGMA_FILE_KEY;
   const token = process.env.FIGMA_TOKEN;
+  const exportedAt = run.catalogs[0]?.catalog.exportedAt;
   if (fileKey && token) {
     try {
-      const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
-      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
+      const live = await checkLiveFreshness(fileKey, token, exportedAt);
+      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${exportedAt}) \u2014 it is confirmed stale, not just old.`);
     } catch (e) {
       console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
   }
-  return res.errors.length ? 1 : 0;
+  return run.errors.length ? 1 : 0;
 }
 if (import.meta.main) runCli(main, { name: "drift-lint" });
 export {
   DEFAULT_MAX_AGE_MS,
   checkFreshness,
   checkLiveFreshness,
-  discoverExtraCatalogs,
   driftLint,
-  isScreenDoc,
-  screenCoverage,
-  screenCoverageReport,
-  validateMap
+  runDriftLint,
+  screenCoverage
 };

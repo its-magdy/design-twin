@@ -147,7 +147,7 @@ import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findExportDir, findMapFile } from "./project-layout.ts";
 import type { Stamped } from "./write-out.ts";
-import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./doc-types.ts";
+import type { CatalogComponent, ComponentDetailFile } from "./doc-types.ts";
 
 // stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
 // protocol stream.
@@ -858,24 +858,18 @@ server.registerTool(
 // than as `typeof import("../../design-to-code/x.ts")`: even a type-only reference pulls that file and
 // its imports into the bridge program, and the published package (src/ alone) would then name files it
 // does not ship (see doc-types.ts). So bridge/src has no dependency of any kind on the layer — only the
-// dynamic import below, which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult,
-// design-to-code/drift-lint.ts driftLint() and the validateMap() it re-exports from map-validate.ts;
-// keep them in step (test/mcp-smoke.test.ts checks the real modules still satisfy these at compile time).
+// dynamic import below, which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult and
+// design-to-code/drift-lint.ts runDriftLint(); keep them in step (test/mcp-smoke.test.ts checks the real modules still satisfy these at compile time).
 export interface GetComponentModule {
   getComponent(catalogFile: string, handle: string):
     | { found: false }
     | { found: true; component: CatalogComponent; detail: ComponentDetailFile | null; detailPath?: string };
 }
+/** design-to-code/drift-lint.ts runDriftLint(): the one run the CLI prints and design_drift_lint returns. */
 export interface DriftLintModule {
-  validateMap(map: unknown): { ok: boolean; errors: Array<{ path: string; message: string }> };
-  driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number; extraCatalogs?: ReadonlyArray<{ file: string; catalog: ComponentsCatalog }> }):
-    { errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown };
-  discoverExtraCatalogs(namedFile: string, screenFile?: string): Array<{ file: string; catalog: ComponentsCatalog }>;
-  /** The CLI's --screen guard (export-shape.ts isScreenDoc), with the text naming what it expects. */
-  isScreenDoc: ((x: unknown) => boolean) & { expected: string };
-  /** The CLI's --screen block as a value: `map` validated, each `doc` passed isScreenDoc. */
-  screenCoverageReport(input: { map: unknown; catalogFile: string; catalog: ComponentsCatalog | null; screens: ReadonlyArray<{ file: string; doc: unknown }>; extraCatalogs: ReadonlyArray<{ file: string; catalog: ComponentsCatalog }> }):
-    { coverage: unknown; warnings: Array<{ code: string; message: string }>; catalogsRead: string[] };
+  runDriftLint(input: { mapFile: string; catalogFile: string; extraCatalogFiles?: readonly string[]; screenFiles?: readonly string[]; maxAgeMs?: number }):
+    | { status: "unusable" | "map-invalid"; message: string }
+    | { status: "linted"; errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown; catalogs: ReadonlyArray<{ file: string }>; coverage: { coverage: object; warnings: unknown[] } | null };
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   // The layer sits beside bridge/ in a repo checkout and nowhere in the npm package. Whether it is there
@@ -898,10 +892,6 @@ const getComponent = async (catalogFile: string, handle: string) =>
     catalogFile,
     handle
   );
-/** A parsed components.local.json: an object whose `components`, if present, is an array (mirrors drift-lint.ts). */
-function isCatalogLike(x: unknown): x is ComponentsCatalog {
-  return typeof x === "object" && x !== null && !Array.isArray(x) && ((x as { components?: unknown }).components === undefined || Array.isArray((x as { components?: unknown }).components));
-}
 const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint");
 
 // The one field of design-system.json this server reads. Loose: the rest of the manifest is not checked.
@@ -986,62 +976,36 @@ server.registerTool(
     inputSchema: {
       map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: design/codeconnect.local.json (or a root codeconnect.local.json an older project still has)."),
       maxAgeHours: z.number().optional().describe("Warn if the export snapshot is older than this many hours. Omit for the built-in default."),
+      catalogs: tolerantStringArray().optional().describe("More component catalog file(s) the map may point into, relative to the server's start directory — the CLI's --catalog (e.g. a library's components.json kept outside the export). components.library.json and every pulled library are read without it."),
       screens: tolerantStringArray().optional().describe("Screen export JSON file(s) (e.g. design/export/pages/<Page>/<Screen>__<id>.json), relative to the server's start directory — the CLI's --screen. Adds `screenCoverage`: how many of the component sets placed on THOSE screens your map covers (by key), with the same warnings the CLI prints. The number that matters before building a screen."),
       ...exportDirShape,
     },
     annotations: READ_ONLY,
   },
   guarded(async (a) => {
+    // Every path is held inside the server's start directory; reading, checking and linting them is the CLI's
+    // own run (design-to-code/drift-lint.ts runDriftLint), so the two cannot disagree on what a file means.
     // The project layout's map (design/codeconnect.local.json), or the root copy an older project still has.
-    const mapRel = a.map || findMapFile(process.cwd()).rel;
-    const mapPath = assertInsideCwd(mapRel, "map");
-    // The map and the catalog are untyped JSON from disk. The map goes through validateMap below before
-    // driftLint sees it; the catalog is handed over as the shape driftLint reads.
-    let map: unknown;
-    try {
-      map = JSON.parse(fs.readFileSync(mapPath, "utf8")) as unknown;
-    } catch (e) {
-      throw new Error(
-        `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +
-          `\`bun design-to-code/map-bootstrap.ts <componentsLocal> > ${mapRel}\`.`
-      );
-    }
-    const layer = await driftLintLayer();
-    // Same gate as the CLI (design-to-code/drift-lint.ts): a structurally invalid map is rejected with
-    // its validation errors, never linted — driftLint on a malformed map reports nonsense or throws.
-    const valid = layer.validateMap(map);
-    if (!valid.ok) {
-      return errorResult(
-        valid.errors.map((e) => `ERROR  [map-invalid] ${mapPath}: ${e.path || "(root)"}: ${e.message}`).join("\n") +
-          `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`bun design-to-code/map-validate.ts ${mapPath}\`.`
-      );
-    }
+    const mapFile = assertInsideCwd(a.map || findMapFile(process.cwd()).rel, "map");
     const catalogFile = componentsLocalPath(a.exportDir);
-    const catalogRaw = JSON.parse(fs.readFileSync(catalogFile, "utf8")) as unknown;
-    // Same as the CLI (design-to-code/drift-lint.ts): a non-catalog is linted as "no catalog".
-    const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
-    // Same catalog set as the CLI: components.library.json beside it and every pulled library, so a
-    // map entry for a library component is not "orphaned". Discovery never exits (this is the server process).
-    // `screens` are read like the CLI's --screen — each held inside the server's directory, parsed, and
-    // checked by the CLI's own guard. A non-screen file is a tool error naming it, never a process exit.
-    const screens = (a.screens || []).map((f) => {
-      const file = assertInsideCwd(f, "screens");
-      let doc: unknown;
-      try { doc = JSON.parse(fs.readFileSync(file, "utf8")) as unknown; } catch (e) { throw new Error(`Could not read the screen export at ${file}: ${errMsg(e)}.`); }
-      if (!layer.isScreenDoc(doc)) throw new Error(`${file} is not a screen export — expected ${layer.isScreenDoc.expected}.`);
-      return { file, doc };
+    const run = (await driftLintLayer()).runDriftLint({
+      mapFile,
+      catalogFile,
+      extraCatalogFiles: (a.catalogs || []).map((f) => assertInsideCwd(f, "catalogs")),
+      screenFiles: (a.screens || []).map((f) => assertInsideCwd(f, "screens")),
+      ...(a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : {}),
     });
-    // The first screen also decides which pulled libraries count (the CLI passes its first --screen too).
-    const extraCatalogs = layer.discoverExtraCatalogs(catalogFile, screens[0] ? screens[0].file : undefined);
-    const res = layer.driftLint(map, catalog, { ...(a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : {}), extraCatalogs });
-    const cov = screens.length ? layer.screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs }) : null;
+    if (run.status !== "linted") return errorResult(run.message);
     // Drift is a FINDING, not a tool failure — return it as a normal result so the agent reads the
     // errors instead of an isError blob it may discard. `ok` is the thing to branch on.
     return textResult({
-      ok: res.errors.length === 0,
-      catalogsRead: [catalogFile, ...extraCatalogs.map((x) => x.file)],
-      ...res,
-      ...(cov ? { screenCoverage: { ...(typeof cov.coverage === "object" && cov.coverage ? cov.coverage : {}), warnings: cov.warnings } } : {}),
+      ok: run.errors.length === 0,
+      catalogsRead: run.catalogs.map((c) => c.file),
+      errors: run.errors,
+      warnings: run.warnings,
+      freshness: run.freshness,
+      summary: run.summary,
+      ...(run.coverage ? { screenCoverage: { ...run.coverage.coverage, warnings: run.coverage.warnings } } : {}),
     });
   })
 );

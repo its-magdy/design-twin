@@ -822,36 +822,40 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 function isManifest(doc, payloadKey) {
   return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+function manifestProblem(doc, givenPath, payloadKey, wantFile) {
+  if (!isManifest(doc, payloadKey)) return null;
+  return `'${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-    );
-    exitCli(2);
-  }
-}
-function readJsonFile(file, what, hint) {
-  return readDocFile(file, what, anyJson, hint);
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
 }
 function readDocFile(file, what, guard, hint) {
+  return docOrExit(loadDocFile(file, what, guard, hint));
+}
+function loadDocFile(file, what, guard, hint) {
   const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
+  if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : "") };
+}
+function docOrExit(r) {
+  if ("doc" in r) return r.doc;
+  console.error(`error  ${r.error}`);
   exitCli(2);
 }
 function readOptionalDoc(file, what, guard) {
   return fs3.existsSync(file) ? readDocFile(file, what, guard) : null;
 }
 function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
-  const doc = readJsonFile(file, what, hint);
-  assertNotManifest(doc, file, payloadKey, wantFile);
-  if (guard(doc)) return doc;
-  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  exitCli(2);
+  return docOrExit(loadSplitFile(file, what, guard, payloadKey, wantFile, hint));
+}
+function loadSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const r = loadDocFile(file, what, anyJson, hint);
+  if ("error" in r) return r;
+  const manifest = manifestProblem(r.doc, file, payloadKey, wantFile);
+  if (manifest !== null) return { error: manifest };
+  if (guard(r.doc)) return { doc: r.doc };
+  return { error: `${what}: '${file}' is not ${guard.expected || "the expected kind of document"}` };
 }
 
 // design-to-code/design-system-dir.ts

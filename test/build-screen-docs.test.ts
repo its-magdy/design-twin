@@ -617,7 +617,7 @@ console.log("build-screen docs:");
     const m = t.match(/resolve-screen\.js" <exportDir> "<[a-z-]+>"[^`]*/g) ?? [];
     return m.length > 0 && m.every((x) => /design\/plan/.test(x));
   }));
-  check("MCP surface: 48,000-char inline cap, sourceFile, .prev, lastScreenExport/lastWrite, design_drift_lint `screens`", /48,000/.test(docs) && /sourceFile/.test(docs) && /\.json\.prev/.test(docs) && /lastScreenExport/.test(docs) && /lastWrite/.test(docs) && /design_drift_lint. takes `screens/.test(docs));
+  check("MCP surface: 48,000-char inline cap, sourceFile, .prev, lastScreenExport/lastWrite, design_drift_lint `screens`/`catalogs`", /48,000/.test(docs) && /sourceFile/.test(docs) && /\.json\.prev/.test(docs) && /lastScreenExport/.test(docs) && /lastWrite/.test(docs) && /design_drift_lint. runs the CLI.s own lint run: `screens: string\[\]`/.test(docs) && /`catalogs: string\[\]`/.test(docs));
   check("visual-verifier: <Layer>__<id> is the verify set --expect named after the frame's node (a variant's too), never a nickname",
     /`<Layer>__<id>` below is always the set `--expect` named after the frame's node — the expectation's basename without `\.expected\.json`, a variant's `<Layer>__<id>\.<slug>` included — never a nickname/.test(verifier));
   // a bare code is the id of a NODE-LESS finding only (it does not cover `missing-font@1:5`).

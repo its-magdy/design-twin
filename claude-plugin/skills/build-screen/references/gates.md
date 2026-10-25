@@ -33,7 +33,7 @@ mapped · 0 error(s)` on a map covering 0% of the screen about to be built, beca
 itself. With `--screen` it prints SCREEN COVERAGE; 0% (and `catalog-rekeyed`) is a warning with a confirm question,
 exit 0, like the audit's. drift-lint (and MCP `design_drift_lint`) always reads the positional catalog plus
 `components.library.json` beside it and the `design/export/libraries/*/components.json` listed in
-`libraries/index.json` (repeatable `--catalog <file>`), printing which; map-bootstrap does the same only with
+`libraries/index.json` (repeatable `--catalog <file>`; the MCP tool's `catalogs`), printing which; map-bootstrap does the same only with
 `--screen`/`--from-proposals` (a full bootstrap stubs just the named catalog). So a component from a pulled library
 is mapped, not orphaned. Fix an `ok:false` map before generating against it; heed a stale-snapshot warning.
 

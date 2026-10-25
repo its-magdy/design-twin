@@ -7,7 +7,8 @@ import path from "node:path";
 import type { ComponentsCatalog, IndexRow, TextStylesDoc, TokensDoc } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { walkWithHidden } from "./visible-tree.ts";
-import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
+import { loadSplitFile, readOptionalDoc } from "./catalog-input.ts";
+import { exitCli } from "./proc.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
 import { exportRootOfScreen, readExportIndex } from "./export-index.ts";
@@ -134,24 +135,36 @@ function discoverCatalogs(namedFile: string, screenFile?: string): DiscoveredCat
   add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
   return out;
 }
-// The CLI's set: the named catalog, each --catalog (the user named it: a broken one fails loud, exit 2),
-// then discoverCatalogs' files — a broken DISCOVERED file is reported through `onSkip` and left out,
-// like the MCP tool does (it was never asked for).
-function readCatalogSet(namedFile: string, named: ComponentsCatalog, extraFiles: readonly string[], screenFile?: string, onSkip?: (file: string) => void): CatalogSource[] {
-  const out: CatalogSource[] = [{ file: namedFile, catalog: named, role: "named" }];
+/** loadCatalogSet's answer: every catalog read in precedence order, and the discovered files left out as unreadable. */
+export interface CatalogSet { sources: CatalogSource[]; skipped: string[] }
+// The set as a value, never exiting: the named catalog, each --catalog (the user named it: a broken one is the
+// `error`), then discoverCatalogs' files — a broken DISCOVERED file is left out and listed in `skipped` (it was
+// never asked for).
+function loadCatalogSet(namedFile: string, named: ComponentsCatalog, extraFiles: readonly string[], screenFile?: string): CatalogSet | { error: string } {
+  const sources: CatalogSource[] = [{ file: namedFile, catalog: named, role: "named" }];
+  const skipped: string[] = [];
   const seen = new Set([path.resolve(namedFile)]);
   for (const f of extraFiles) {
     if (seen.has(path.resolve(f))) continue;
     seen.add(path.resolve(f));
-    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+    const r = loadSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json");
+    if ("error" in r) return r;
+    sources.push({ file: f, role: "extra", catalog: r.doc });
   }
   for (const d of discoverCatalogs(namedFile, screenFile)) {
     if (seen.has(path.resolve(d.file))) continue;
     seen.add(path.resolve(d.file));
-    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
-    else if (onSkip) onSkip(d.file);
+    if (d.catalog) sources.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else skipped.push(d.file);
   }
-  return out;
+  return { sources, skipped };
+}
+// The same set for a CLI: a broken --catalog is its one-line error and exit 2; each skipped file goes to `onSkip`.
+function readCatalogSet(namedFile: string, named: ComponentsCatalog, extraFiles: readonly string[], screenFile?: string, onSkip?: (file: string) => void): CatalogSource[] {
+  const r = loadCatalogSet(namedFile, named, extraFiles, screenFile);
+  if ("error" in r) { console.error(`error  ${r.error}`); exitCli(2); }
+  if (onSkip) for (const f of r.skipped) onSkip(f);
+  return r.sources;
 }
 /** Every catalog's components in precedence order, the first row per key kept (the union a screen's
  *  instances are looked up in). Rows without a key are all kept. */
@@ -226,4 +239,4 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
   return { layers, unexportedShots: [...shots].sort(), textsOf };
 }
 
-export { designSystemFiles, readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };
+export { designSystemFiles, readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, loadCatalogSet, readCatalogSet, unionCatalog, catalogSetLine };

@@ -16,19 +16,20 @@ import { TYPE_TO_KIND } from "./kinds.ts"; // shared vocab — kept in sync with
 import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition of the freshness stamp
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./visible-tree.ts";
-import { readDocFile, readJsonFile, readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { loadDocFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { anyJson } from "./read-json.ts";
 import { isComponentsCatalog } from "./doc-guards.ts";
-import { cliParse, scriptCmd } from "./cli-args.ts";
+import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
 import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import type {
-  CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, PropMap,
+  CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, MapValidationResult, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
-import { readCatalogSet, unionCatalog, catalogSetLine, discoverCatalogs } from "./design-system-dir.ts";
+import { loadCatalogSet, unionCatalog, catalogSetLine, type CatalogSource } from "./design-system-dir.ts";
 import { runCli } from "./proc.ts";
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -40,15 +41,6 @@ export interface ExtraCatalog { file: string; catalog: ComponentsCatalog }
 /** What driftLint accepts as `opts`. `extraCatalogs`: map entries also resolve against these —
  *  coverage (unmapped-component) and the freshness banner stay about the named catalog. */
 export interface DriftLintOptions { maxAgeMs?: number; now?: number; extraCatalogs?: readonly ExtraCatalog[] }
-
-/** The catalogs a map may also point into, found beside `namedFile` WITHOUT ever exiting: the MCP server
- *  (figma-mcp.ts design_drift_lint) runs driftLint in-process, where any process.exit would take the
- *  whole server down. Same discovery (discoverCatalogs) as readCatalogSet with no --catalog — `screenFile`
- *  is the CLI's first --screen (the libraries/ beside that export count too); an absent or unreadable file
- *  is skipped (and so is not in the tool's catalogsRead). */
-function discoverExtraCatalogs(namedFile: string, screenFile?: string): ExtraCatalog[] {
-  return discoverCatalogs(namedFile, screenFile).flatMap((d) => (d.catalog ? [{ file: d.file, catalog: d.catalog }] : []));
-}
 
 type Push = (arr: DriftFinding[], code: DriftCode, message: string, extra?: Partial<DriftFinding>) => void;
 
@@ -322,30 +314,25 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
 
 /** One screen-coverage warning: the CLI prints `warn   [code] message`, the MCP tool returns it as is. */
 export interface CoverageWarning { code: "catalog-rekeyed" | "screen-coverage"; message: string }
-/** What screenCoverageReport is handed: the validated map, the NAMED catalog (null = a non-catalog, linted
- *  as "no catalog" like driftLint does), the screen docs already read and guarded, and the other catalogs. */
-export interface ScreenCoverageInput {
+/** What screenCoverageReport is handed: the validated map, the NAMED catalog, the screen docs already read and
+ *  guarded, the other catalogs, and the union of them all (the set's precedence order) to look instances up in. */
+interface ScreenCoverageInput {
   map: CodeConnectMap;
   catalogFile: string;
-  catalog: ComponentsCatalog | null;
+  catalog: ComponentsCatalog;
   screens: ReadonlyArray<{ file: string; doc: ScreenDoc }>;
   extraCatalogs: readonly ExtraCatalog[];
-  /** The union to look instances up in; built from catalog + extraCatalogs when omitted. */
-  union?: ComponentsCatalog;
+  union: ComponentsCatalog;
 }
-/** The coverage of the given screens plus the 0%-coverage warnings, with the catalogs read. */
-export interface ScreenCoverageReport { coverage: ScreenCoverage; warnings: CoverageWarning[]; catalogsRead: string[] }
+/** The coverage of the given screens plus the 0%-coverage warnings. */
+export interface ScreenCoverageReport { coverage: ScreenCoverage; warnings: CoverageWarning[] }
 
-// the CLI's --screen coverage block as a value — never prints, never exits — so the MCP tool
-// (design_drift_lint `screens`) returns the same numbers and the same two warnings the CLI prints.
+// the --screen coverage block as a value — never prints, never exits.
 function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport {
-  const { map, catalogFile, catalog, screens, extraCatalogs } = input;
-  const named: ComponentsCatalog = catalog || { components: [] };
-  const union = input.union || unionCatalog([{ file: catalogFile, catalog: named, role: "named" }, ...extraCatalogs.map((x) => ({ file: x.file, catalog: x.catalog, role: "extra" as const }))]);
+  const { map, catalogFile, catalog: named, screens, extraCatalogs, union } = input;
   const cov = screenCoverage(map, union, screens.map((r) => r.doc)); // "in the catalog" = in ANY catalog read
   const warnings: CoverageWarning[] = [];
-  const catalogsRead = [catalogFile, ...extraCatalogs.map((x) => x.file)];
-  if (!cov.distinct) return { coverage: cov, warnings, catalogsRead };
+  if (!cov.distinct) return { coverage: cov, warnings };
   // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
   // every name and prop signature intact. Tell the two cases apart before
   // pointing the user at "the wrong library".
@@ -388,24 +375,76 @@ function screenCoverageReport(input: ScreenCoverageInput): ScreenCoverageReport 
         cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", …" : ""),
     });
   }
-  return { coverage: cov, warnings, catalogsRead };
+  return { coverage: cov, warnings };
 }
 
-// validateMap is re-exported so the MCP server's lazily-loaded drift-lint layer (bridge/src/figma-mcp.ts
-// DriftLintModule) can apply the same map gate as the CLI below from this one module.
-export { driftLint, discoverExtraCatalogs, validateMap, isScreenDoc, screenCoverage, screenCoverageReport, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+// ---------------------------------------------------------------- one run, for the CLI and the MCP tool
+/** The files one run reads — the CLI's positionals and flags, or the MCP tool's arguments resolved to paths. */
+export interface DriftLintRunInput {
+  mapFile: string;
+  /** the SPLIT component file (components.local.json), never the design-system.json manifest */
+  catalogFile: string;
+  /** --catalog: more catalogs the map may point into. They were asked for, so a broken one makes the run unusable. */
+  extraCatalogFiles?: readonly string[];
+  /** --screen: coverage is of these together; the first also decides which pulled libraries count */
+  screenFiles?: readonly string[];
+  maxAgeMs?: number;
+  now?: number;
+}
+/** What one run found. Problems come back as values — the run never prints and never exits:
+ *  - `unusable`: an input could not be read as what it should be (the CLI's exit 2, the tool's error);
+ *  - `map-invalid`: the map failed map-validate.ts, so it was not linted (the CLI's exit 1, the tool's error);
+ *  - `linted`: driftLint's result over the whole catalog set, a `catalog-unreadable` warning per discovered file
+ *    left out, and the screens' coverage (null without screens). */
+export type DriftLintRun =
+  | { status: "unusable"; message: string }
+  | { status: "map-invalid"; message: string; errors: MapValidationResult["errors"] }
+  | (DriftLintResult & { status: "linted"; catalogs: CatalogSource[]; coverage: ScreenCoverageReport | null });
 
-// The CLI's inputs are files the user named. The MAP goes through map-validate.ts's full validator
-// (below): an "is it an object" guard would let {"components":{"X":null}} through to driftLint, which
-// would die on it with a TypeError and a stack. The catalog and the screens are checked by their
-// doc-guards.ts / export-shape.ts guards as they are read — a wrong file is a one-line error, exit 2.
+// The catalog first, then the map, then the screens — the order a user fixes them in. The MAP goes through
+// map-validate.ts's full validator: an "is it an object" guard would let {"components":{"X":null}} through to
+// driftLint, which would die on it with a TypeError. The catalog and the screens are checked by their doc-guards.ts /
+// export-shape.ts guards as they are read.
+function runDriftLint(input: DriftLintRunInput): DriftLintRun {
+  const { mapFile, catalogFile } = input;
+  const named = loadSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
+  if ("error" in named) return { status: "unusable", message: named.error };
+  const mapRaw = loadDocFile(mapFile, "component map", anyJson, `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out ${shellArg(mapFile)}\`.`);
+  if ("error" in mapRaw) return { status: "unusable", message: mapRaw.error };
+  const valid = validateMap(mapRaw.doc);
+  if (!valid.ok || !isCodeConnectMap(mapRaw.doc)) { // isCodeConnectMap IS validateMap's check: it only narrows the type
+    const lines = valid.errors.map((e) => `ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`);
+    return { status: "map-invalid", errors: valid.errors, message: lines.join("\n") + `\n\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`${scriptCmd("map-validate")} ${shellArg(mapFile)}\`.` };
+  }
+  const map = mapRaw.doc;
+  const screens: Array<{ file: string; doc: ScreenDoc }> = [];
+  for (const file of input.screenFiles || []) {
+    const r = loadDocFile(file, "screen export", isScreenDoc);
+    if ("error" in r) return { status: "unusable", message: r.error };
+    screens.push({ file, doc: r.doc });
+  }
+  const set = loadCatalogSet(catalogFile, named.doc, input.extraCatalogFiles || [], screens[0]?.file);
+  if ("error" in set) return { status: "unusable", message: set.error };
+  const extraCatalogs = set.sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
+  const res = driftLint(map, named.doc, { ...ifDefined("maxAgeMs", input.maxAgeMs), ...ifDefined("now", input.now), extraCatalogs });
+  const skipped: DriftFinding[] = set.skipped.map((file) => ({ code: "catalog-unreadable", file,
+    message: `${file} is not a readable component catalog — skipped (map entries that live only there will show as orphaned).` }));
+  const warnings = [...skipped, ...res.warnings];
+  const coverage = screens.length
+    ? screenCoverageReport({ map, catalogFile, catalog: named.doc, screens, extraCatalogs, union: unionCatalog(set.sources) })
+    : null;
+  return { status: "linted", ...res, warnings, summary: { ...res.summary, warningCount: warnings.length }, catalogs: set.sources, coverage };
+}
+
+export { runDriftLint, driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
 // CLI: bun design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
 //        [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]
 // Beside the named catalog it also reads components.library.json in the same dir and every
-// libraries/<dir>/components.json of the export (design-system-dir.ts readCatalogSet), and names them all.
-// Exit: 1 for a lint error (map-invalid, orphaned-entry, …); 0% screen coverage and catalog-rekeyed are
-// warnings with a question to confirm — they do not fail the run.
+// libraries/<dir>/components.json of the export (design-system-dir.ts loadCatalogSet), and names them all.
+// Exit: 2 for an unusable input, 1 for a lint error (map-invalid, orphaned-entry, …); 0% screen coverage and
+// catalog-rekeyed are warnings with a question to confirm — they do not fail the run.
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // with no `components` array (see bridge/src/design-system-layout.ts).
 async function main(argv: string[]): Promise<number> {
@@ -423,40 +462,23 @@ async function main(argv: string[]): Promise<number> {
     maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
     if (!(maxAgeHours > 0)) { console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours"); return 2; }
   }
-  const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
-  const screenFiles: string[] = flags.screen || [];
-
   const [mapFile, catalogFile] = positionals;
   if (!mapFile || !catalogFile) { console.error(USAGE); return 2; }
-  const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
-    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  const mapRaw = readJsonFile(mapFile, "component map", `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out codeconnect.local.json\`.`);
-  // Validate BEFORE linting: driftLint trusts the map's shape. Printed like the lint's own errors,
-  // one per line, and exit 1 — the same code a lint error gets (2 is kept for usage mistakes).
-  const valid = validateMap(mapRaw);
-  if (!valid.ok) {
-    valid.errors.forEach((e) => console.error(`ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`));
-    console.error(`\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`${scriptCmd("map-validate")} ${mapFile}\`.`);
-    return 1;
-  }
-  if (!isCodeConnectMap(mapRaw)) return 1; // unreachable: validateMap just passed (isCodeConnectMap IS that check)
-  const map = mapRaw;
-  const sources = readCatalogSet(catalogFile, catalog, flags.catalog || [], screenFiles[0],
-    (f) => console.error(`warn   [catalog-unreadable] ${f} is not a readable component catalog — skipped (map entries that live only there will show as orphaned).`));
-  console.error(catalogSetLine(sources));
-  const extraCatalogs = sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
-  const union = unionCatalog(sources);
-  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs), extraCatalogs });
-  res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
-  res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
-  const s = res.summary;
+  const run = runDriftLint({ mapFile, catalogFile, extraCatalogFiles: flags.catalog || [], screenFiles: flags.screen || [], ...ifDefined("maxAgeMs", maxAgeHours ? maxAgeHours * 3600000 : undefined) });
+  if (run.status === "unusable") { console.error(`error  ${run.message}`); return 2; }
+  // printed like the lint's own errors, and exit 1 — the code a lint error gets (2 is kept for usage mistakes)
+  if (run.status === "map-invalid") { console.error(run.message); return 1; }
+
+  console.error(catalogSetLine(run.catalogs));
+  run.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
+  run.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
+  const s = run.summary;
   console.error(`\n${s.mapped}/${s.catalogComponents} components mapped${s.mappedElsewhere ? ` (+${s.mappedElsewhere} map entr${s.mappedElsewhere === 1 ? "y" : "ies"} resolved in the other catalog(s))` : ""} · ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
   console.error(`      (that number is the CATALOG measured against the map — it says nothing about any particular screen.)`);
 
   // The number a builder is actually asking for. Printed last, because it is the headline.
-  if (screenFiles.length) {
-    const screens = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
-    const { coverage: cov, warnings } = screenCoverageReport({ map, catalogFile, catalog, screens, extraCatalogs, union });
+  if (run.coverage) {
+    const { coverage: cov, warnings } = run.coverage;
     if (!cov.distinct) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
     } else {
@@ -475,19 +497,20 @@ async function main(argv: string[]): Promise<number> {
 
   // Strictly opt-in: only attempted when both are present, and any failure is a warning, never a
   // crash — this check is a bonus on top of the offline exportedAt/maxAge guarantee above, not a
-  // replacement for it.
+  // replacement for it. CLI only: the MCP tool reads the export on disk and makes no network call.
   const fileKey = process.env.FIGMA_FILE_KEY;
   const token = process.env.FIGMA_TOKEN;
+  const exportedAt = run.catalogs[0]?.catalog.exportedAt;
   if (fileKey && token) {
     try {
-      const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
-      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) — it is confirmed stale, not just old.`);
+      const live = await checkLiveFreshness(fileKey, token, exportedAt);
+      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${exportedAt}) — it is confirmed stale, not just old.`);
     } catch (e) {
       console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
   }
   // A rejection main() did not catch is one `drift-lint: <stack>` line and exit 1 (runCli).
-  return res.errors.length ? 1 : 0;
+  return run.errors.length ? 1 : 0;
 }
 
 if (import.meta.main) runCli(main, { name: "drift-lint" }); // exitCode, not exit(): every printed line flushes first (proc.ts)

@@ -369,12 +369,14 @@ export interface AuditReport {
 export type DriftCode =
   | "unknown-freshness" | "stale-snapshot" | "ambiguous-prop" | "duplicate-key" | "orphaned-entry" | "stale-name" | "stale-prop"
   | "uncovered-prop" | "kind-mismatch" | "no-variant-options" | "unknown-variant-value" | "unmapped-variant-value"
-  | "double-mapped" | "unmapped-component";
+  | "double-mapped" | "unmapped-component" | "catalog-unreadable";
 export interface DriftFinding {
   code: DriftCode;
   message: string;
   mapKey?: string; prop?: string; key?: string; name?: string; keys?: string[]; suggestedKey?: string;
   from?: string; to?: string; exportedAt?: string; ageMs?: number; maxAgeMs?: number;
+  /** catalog-unreadable: the discovered catalog file left out */
+  file?: string;
 }
 export interface FreshnessWarning { code: "unknown-freshness" | "stale-snapshot"; message: string }
 /** drift-lint.ts driftLint(). (There is no `ok`: the CLI exits 1 on `errors.length`.) */

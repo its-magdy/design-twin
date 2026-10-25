@@ -828,9 +828,11 @@ paired with the NEW siblings. A page/full/design-system spill keeps one per chan
 `design-system/` plus `design-system.json`, listed in `wrote.prevKept`, with the count. `figma_status` reports
 `lastScreenExport` (the newest screen on disk: name, id, file, exportedAt, ageMs) and `lastWrite` (this server process's
 last export: tool, time, whether implicit, file, `prev`, `prevKept` count). `figma_whoami`'s `connection` is the addressed
-client's. `page` and `screens` arguments accept an array, a JSON-encoded array string or a bare string.
-`design_drift_lint` takes `screens: string[]` (screen files under the working directory) and returns
-`screenCoverage` with warnings, like the CLI's `--screen`. An interrupted tool call (Claude Code's cancel,
+client's. `page`, `screens` and `catalogs` arguments accept an array, a JSON-encoded array string or a bare string.
+`design_drift_lint` runs the CLI's own lint run: `screens: string[]` (the CLI's `--screen`) adds `screenCoverage`
+with its warnings, `catalogs: string[]` (the CLI's `--catalog`) adds catalogs the map may point into, both under the
+working directory. A file the CLI would refuse (exit 2: a missing or non-catalog file, a broken `catalogs` entry, a
+non-screen) is a tool error with the CLI's message; an unreadable discovered catalog is a `catalog-unreadable` warning. An interrupted tool call (Claude Code's cancel,
 or the session ending) cancels the in-flight read in the plugin; `figma_write` is never cancelled, since a
 write cannot be un-applied.
 
