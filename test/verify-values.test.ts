@@ -8,6 +8,7 @@ import { compare, radiusCorners } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import type { ExpectInput } from "../design-to-code/verify-expect.ts";
 import { measureElements } from "../design-to-code/probe-page.ts";
+import { PAGE_RUNTIME } from "../design-to-code/page-runtime.ts";
 import type { MeasureInput, MeasureResult } from "../design-to-code/probe-page.ts";
 import type { JsonValue, MeasuredNode, MeasuredStyles, VerifyMeasured, VerifyReportV2 } from "../design-to-code/types.ts";
 import { malformed, screenExport } from "./fixtures.ts";
@@ -213,6 +214,8 @@ console.log("the shipped probe drops impossible gaps (chromium):");
         <table id="rows" style="border-spacing:0 8px"><tr><td>a</td></tr><tr><td>b</td></tr><tr><td>c</td></tr></table>
         <table id="flat"><tbody style="display:flex"><tr style="display:block;width:80px;height:40px"><td>x</td></tr><tr style="display:block;width:80px;height:40px"><td>y</td></tr></tbody></table>
       </body>`);
+      // the probe's page runtime (window.__dt) — the init script installs it on a navigation; setContent has none
+      await page.evaluate(PAGE_RUNTIME);
       const item = (nodeId: string, sel: string) => ({ nodeId, path: sel, isText: false, isPaint: false, isPlaceholder: false, sharesWith: null });
       const input: MeasureInput = { frameRect: { x: 0, y: 0, w: 1280, h: 800 }, keys: ["gap", "gapVisual"], items: [item("9:1", "#pct"), item("9:2", "#side"), item("9:3", "#rows"), item("9:4", "#flat")] };
       const out: MeasureResult[] = await page.evaluate(measureElements, input);

@@ -34,6 +34,7 @@ import { must } from "./fixtures.ts";
 import type * as PDT from "../design-to-code/probe-drive.ts";
 import type { VerifyExpectation, VerifyInteraction } from "../design-to-code/types.ts";
 import type * as PBT from "../design-to-code/probe-behaviour.ts";
+import { installPageRuntime } from "../design-to-code/page-runtime.ts";
 import { parseCssColor } from "../design-to-code/color.ts";
 import { PROC_HOST, type ProcHost } from "../design-to-code/kill-tree.ts";
 import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
@@ -55,6 +56,11 @@ const t = (name: string, fn: () => boolean): boolean => { let r = false; try { r
 const fakeDe = (root: unknown, extra?: Record<string, unknown>): Record<string, unknown> => ({ tagName: "HTML", children: [root], childNodes: [], parentElement: null, shadowRoot: null,
   getBoundingClientRect: () => ({ x: 0, y: 0, width: 1000, height: 700, right: 1000, bottom: 700 }), getClientRects: () => [], checkVisibility: () => true,
   getAttribute: () => null, clientWidth: 1000, clientHeight: 700, css: {}, before: {}, overflow: "visible", ...extra });
+/** a fake page's window with the probe's page runtime installed (window.__dt) — a page-side function reads its readers there.
+ *  The runtime reads the page's globals (document, getComputedStyle, …) when called, so a fake document set later is the one read. */
+const pageWindow = <W extends object>(w: W): W => { Reflect.set(globalThis, "window", w); installPageRuntime(); return w; };
+// the default window of every fake page below that does not bring its own
+pageWindow({});
 const block = (name: string, fn: () => void): void => { try { fn(); } catch (e) { check(`${name} — setup threw: ${e instanceof Error ? e.message : String(e)}`, false); } };
 
 // ---- compare/contract
@@ -795,14 +801,17 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     interface FakeText { nodeType: 3; nodeValue: string; w: number; h: number }
     interface FakeTagEl {
       nodeType: 1; dt: string | null; w: number; h: number; css: Record<string, string>; checks: boolean; children: FakeTagEl[]; childNodes: Array<FakeTagEl | FakeText>; parent: FakeTagEl | null;
-      getAttribute(n: string): string | null; getBoundingClientRect(): { width: number; height: number }; checkVisibility(): boolean; contains(o: FakeTagEl): boolean;
+      getAttribute(n: string): string | null; getBoundingClientRect(): { width: number; height: number }; getClientRects(): Array<{ width: number; height: number }>;
+      checkVisibility(o?: { visibilityProperty?: boolean }): boolean; contains(o: FakeTagEl): boolean;
     }
     const el = (dt: string | null, w: number, h: number, kids: Array<FakeTagEl | FakeText> = [], css: Record<string, string> = {}, checks = true): FakeTagEl => {
       const e: FakeTagEl = { nodeType: 1, dt, w, h, css, checks, children: kids.filter((k): k is FakeTagEl => k.nodeType === 1), childNodes: kids, parent: null,
         getAttribute: (n) => (n === "data-dt-node" ? e.dt : null),
         // a display:contents element has no box of its own
         getBoundingClientRect: () => (e.css.display === "contents" ? { width: 0, height: 0 } : { width: e.w, height: e.h }),
-        checkVisibility: () => e.checks,
+        getClientRects: () => (e.css.display === "contents" ? [] : [e.getBoundingClientRect()]),
+        // (visibilityProperty: a computed visibility other than "visible" hides it, as Chromium's does)
+        checkVisibility: (o) => e.checks && !(o?.visibilityProperty && (e.css.visibility ?? "visible") !== "visible"),
         contains: (o) => { for (let p: FakeTagEl | null = o; p; p = p.parent) if (p === e) return true; return false; } };
       for (const c of e.children) c.parent = e;
       return e;
@@ -1560,7 +1569,7 @@ block("probe-drive:", () => {
     };
     const at = (root: CpEl, hit: CpEl): unknown => {
       // ownContent reads window.__dtTipPre (none here: no tooltip is exempt)
-      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: {}, getComputedStyle: () => ({ getPropertyValue: (prop: string) => (prop.startsWith("overflow") ? "visible" : "") }),
+      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: pageWindow({}), getComputedStyle: () => ({ getPropertyValue: (prop: string) => (prop.startsWith("overflow") ? "visible" : "") }),
         document: { documentElement: fakeDe(root), elementFromPoint: () => hit, createRange: () => ({ selectNodeContents: () => undefined, getClientRects: () => [] }) } });
       return Reflect.apply(cp, undefined, [root]);
     };
@@ -1612,7 +1621,7 @@ block("probe-drive:", () => {
     const run = (root: H1, hit: H1): unknown => {
       let sel: Txt | null = null;
       // ownContent reads window.__dtTipPre (none here: no tooltip is exempt)
-      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: {}, getComputedStyle: () => ({ getPropertyValue: (prop: string) => (prop.startsWith("overflow") ? "visible" : "") }),
+      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: pageWindow({}), getComputedStyle: () => ({ getPropertyValue: (prop: string) => (prop.startsWith("overflow") ? "visible" : "") }),
         document: { documentElement: fakeDe(root), elementFromPoint: () => hit,
           createRange: () => ({ selectNodeContents: (n: Txt) => { sel = n; }, getClientRects: () => (sel ? sel.rects : []) }) } });
       try { return Reflect.apply(cp, undefined, [root]); } catch (e) { return `throws ${String(e)}`; }
@@ -1724,7 +1733,7 @@ block("behaviour helpers", () => {
       install: (root, active = null) => {
         all = [root, ...desc(root)];
         const hitAt = (px: number, py: number): FakeEl | null => all.filter((e) => px >= e.rect.x && px < e.rect.right && py >= e.rect.y && py < e.rect.bottom).at(-1) ?? null;
-        Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, window: { __dtBeh: undefined }, document: { activeElement: active, body: root, documentElement: fakeDe(root),
+        Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, window: pageWindow({ __dtBeh: undefined }), document: { activeElement: active, body: root, documentElement: fakeDe(root),
           querySelectorAll: (sel: string) => { const m = /^\[data-dt-node="(.*)"\]$/.exec(sel); return m ? all.filter((e) => e.dt === m[1]) : []; }, elementFromPoint: hitAt } });
       },
     };
@@ -1765,8 +1774,9 @@ block("behaviour helpers", () => {
     return !a.ok && /the opener is a container/.test(a.why) && b.ok && !c.ok;
   });
   // A container's sole centred button-like control is the opener's own ONLY when the container shows
-  // nothing of its own outside it — the keyboard battery (markOpener's control) and the click drive (clickPointControl) run the
-  // same inline check; both on the SAME fake DOMs (text nodes with Range rects, overflow clipping, visibility, media)
+  // nothing of its own outside it — the keyboard battery (markOpener's control) and the click drive (clickPointControl) ask the
+  // one check (the page runtime's ownContent, page-runtime.ts); both callers on the SAME fake DOMs (text nodes with Range rects,
+  // overflow clipping, visibility, media)
   interface D51Node { nodeType: number; nodeValue: string | null; rects: Array<{ x: number; y: number; width: number; height: number; right: number; bottom: number }> }
   // computed style per element (`css`) and per pseudo-element (`before`), an open shadow root (`shadow`; its top
   // elements' root host is `host`) — display:contents has no box (checkVisibility false), as in Chromium
@@ -1802,7 +1812,7 @@ block("behaviour helpers", () => {
       const all = [root, ...desc(root)];
       let sel: D51Node | null = null;
       const hitAt = (px: number, py: number): D51El | null => all.filter((e) => px >= e.rect.x && px < e.rect.right && py >= e.rect.y && py < e.rect.bottom).at(-1) ?? null;
-      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: { __dtBeh: undefined },
+      Object.assign(globalThis, { innerWidth: 1000, innerHeight: 700, scrollX: 0, scrollY: 0, window: pageWindow({ __dtBeh: undefined }),
         getComputedStyle: (e: D51El, pseudo?: string | null) => ({ getPropertyValue: (prop: string) => (pseudo && e.ps?.[pseudo] ? e.ps[pseudo][prop] ?? "" : pseudo === "::before" ? e.before[prop] ?? "" : pseudo ? "" : e.css[prop] ?? (prop.startsWith("overflow") ? e.overflow : "")) }),
         document: { activeElement: null, body: root, documentElement: fakeDe(root), elementFromPoint: hitAt, elementsFromPoint: (px: number, py: number) => all.filter((e) => px >= e.rect.x && px < e.rect.right && py >= e.rect.y && py < e.rect.bottom).reverse(),
           querySelectorAll: (q: string) => { const m = /^\[data-dt-node="(.*)"\]$/.exec(q); return m ? all.filter((e) => e.dt === m[1]) : []; },
@@ -1917,7 +1927,7 @@ block("behaviour helpers", () => {
   // border sides in different colours or a stripe are content; a uniform border and a 1-px divider are not. A label laid over the
   // container from OUTSIDE its subtree (a positioned sibling, an ancestor's absolute ::after) counts when at least half of it lies
   // over the container and it is not proven to lie under it; a fixed / sticky one (a toast) is foreign; one mostly outside it does
-  // not count. A scroll container's ::scroll-button is a second control. Both copies (markOpener, clickPointControl) agree.
+  // not count. A scroll container's ::scroll-button is a second control. Both callers (markOpener, clickPointControl) agree.
   // `pre` = tipPreMark's set (what was shown before the probe's hover); undefined = it never ran on the page (no set)
   const d51In = (page: D51El, boxEl: D51El, btn: D51El, pre?: D51El[]): [boolean, string | null | "throws"] => {
     if (!PB.markOpener || !PD.clickPointControl) return [false, "throws"];
@@ -2419,7 +2429,7 @@ block("behaviour helpers", () => {
       const opener: Record<string, unknown> = { tagName: "BUTTON", id: "", isConnected: true, parentElement: null, textContent: "Edit",
         getAttribute: () => null, getClientRects: () => [rect], getBoundingClientRect: () => rect, contains: (o: unknown) => o === opener,
         closest: () => opener, checkVisibility: (o?: { visibilityProperty?: boolean; checkVisibilityCSS?: boolean; opacityProperty?: boolean }) => !(hidden && (o?.visibilityProperty || o?.checkVisibilityCSS)) };
-      Object.assign(globalThis, { window: { __dtBeh: { opener } }, document: { activeElement: opener, body: {}, documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => opacity }) });
+      Object.assign(globalThis, { window: pageWindow({ __dtBeh: { opener } }), document: { activeElement: opener, body: {}, documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => opacity }) });
       return Reflect.apply(fr, undefined, [null]);
     };
     const hiddenRead = mk(true, "1"), faded = mk(false, "0"), shown = mk(false, "1");
@@ -2542,9 +2552,11 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     JSON.stringify(win) === oneKill && JSON.stringify(winRejected) === oneKill && winGone.length === 0 && winClosed.length === 0);
 }
 
-// The page-side text read, on a minimal fake DOM (no browser): measureElements' `text` keeps a line break the page
-// shows — a <br>, or a newline under white-space pre / pre-wrap / pre-line / break-spaces — as "\n" and collapses every
-// other run of spaces, tabs and newlines; collectCandidates finds "Line one Line two" in "Line one<br>Line two".
+// The page runtime (page-runtime.ts, window.__dt) on a minimal fake DOM (no browser) — the readers every page-side function
+// calls: an element's path and its way back (through an open shadow root too), a form control's shown text, the text a page
+// shows, visibility, a description. Then the two passes that read text through it: measureElements' `text` keeps a line
+// break the page shows — a <br>, or a newline under white-space pre / pre-wrap / pre-line / break-spaces — as "\n" and
+// collapses every other run of spaces, tabs and newlines; collectCandidates finds "Line one Line two" in "Line one<br>Line two".
 {
   type FakeNode = FakeText | FakeEl;
   class FakeText {
@@ -2553,12 +2565,34 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     constructor(v: string) { this.nodeValue = v; }
     get textContent(): string { return this.nodeValue; }
   }
+  /** an open shadow root: its top-level elements have no parentElement — getRootNode() is the root, whose host is the element */
+  class FakeShadow {
+    host: FakeEl;
+    childNodes: FakeNode[];
+    activeElement: FakeEl | null = null;
+    constructor(host: FakeEl, kids: FakeEl[]) {
+      this.host = host;
+      this.childNodes = kids;
+      for (const k of kids) k.root = this;
+    }
+    get children(): FakeEl[] { return this.childNodes.filter((n): n is FakeEl => n instanceof FakeEl); }
+  }
   class FakeEl {
     nodeType = 1;
     tagName: string;
     css: Record<string, string>;
+    attrs: Record<string, string> = {};
     parentElement: FakeEl | null = null;
+    root: FakeShadow | null = null;
+    shadowRoot: FakeShadow | null = null;
     childNodes: FakeNode[];
+    value?: string;
+    type?: string;
+    multiple?: boolean;
+    size?: number;
+    selectedOptions?: FakeEl[];
+    label?: string;
+    box = true;
     constructor(tag: string, css: Record<string, string>, kids: Array<FakeNode | string>) {
       this.tagName = tag.toUpperCase();
       this.css = css;
@@ -2567,11 +2601,16 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     }
     get children(): FakeEl[] { return this.childNodes.filter((n): n is FakeEl => n instanceof FakeEl); }
     get textContent(): string { return this.childNodes.map((n) => n.textContent).join(""); }
-    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 20, left: 0, top: 0, right: 100, bottom: 20 }; }
-    getClientRects() { return [this.getBoundingClientRect()]; }
-    getAttribute(_name: string): string | null { return null; }
-    closest(_sel: string): FakeEl | null { return null; }
-    checkVisibility(): boolean { return true; }
+    getRootNode(): FakeShadow | { host?: undefined } { let top: FakeEl = this; while (top.parentElement) top = top.parentElement; return top.root ?? {}; }
+    getBoundingClientRect() { return this.box ? { x: 0, y: 0, width: 100, height: 20, left: 0, top: 0, right: 100, bottom: 20 } : { x: 0, y: 0, width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0 }; }
+    getClientRects() { return this.css.display === "none" ? [] : [this.getBoundingClientRect()]; }
+    getAttribute(name: string): string | null { return this.attrs[name] ?? null; }
+    // (only the plain tag names of a selector list match — enough for "a[href], button, …")
+    closest(sel: string): FakeEl | null { const tags = sel.split(",").map((t) => t.trim()); for (let p: FakeEl | null = this; p; p = p.parentElement) if (tags.includes(p.tagName.toLowerCase())) return p; return null; }
+    // (visibilityProperty: a computed visibility other than "visible" hides it; opacityProperty: opacity 0 does)
+    checkVisibility(o?: { visibilityProperty?: boolean; opacityProperty?: boolean }): boolean {
+      return this.css.display !== "none" && !(o?.visibilityProperty && (this.css.visibility ?? "visible") !== "visible") && !(o?.opacityProperty && this.css.opacity === "0");
+    }
     contains(o: FakeEl): boolean { for (let p: FakeEl | null = o; p; p = p.parentElement) if (p === this) return true; return false; }
     querySelectorAll(sel: string): FakeEl[] {
       const out: FakeEl[] = [];
@@ -2583,6 +2622,7 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     }
   }
   const el = (tag: string, kids: Array<FakeNode | string>, css: Record<string, string> = {}): FakeEl => new FakeEl(tag, css, kids);
+  const withAttrs = (e: FakeEl, attrs: Record<string, string>): FakeEl => { e.attrs = attrs; return e; };
   const cases: Array<{ name: string; node: FakeEl; want: string }> = [
     { name: "a <br> is a line break", node: el("p", ["Line one", el("br", []), "Line two"]), want: "Line one\nLine two" },
     { name: "spaces and newlines in source around a <br> are dropped", node: el("p", ["Line one  \n  ", el("br", []), "\n   Line two"]), want: "Line one\nLine two" },
@@ -2591,32 +2631,93 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
     { name: "white-space pre-wrap keeps it (no white-space-collapse reported: the white-space value)", node: el("p", ["Line one\r\nLine two"], { "white-space": "pre-wrap" }), want: "Line one\nLine two" },
     { name: "preserve-spaces turns a newline into a space", node: el("p", ["Line one\nLine two"], { "white-space-collapse": "preserve-spaces" }), want: "Line one Line two" },
     { name: "the white-space is the text node's own element's, not the measured element's", node: el("div", [el("span", ["Line one\nLine two"], { "white-space-collapse": "preserve" }), "\nand more"]), want: "Line one\nLine two and more" },
-    { name: "a nested <br> counts; a non-breaking space is kept as written", node: el("p", [el("b", ["Total", el("br", [])]), "\u00a0due"]), want: "Total\n\u00a0due" },
+    { name: "a nested <br> counts; a non-breaking space is kept as written", node: el("p", [el("b", ["Total", el("br", [])]), " due"]), want: "Total\n due" },
   ];
-  const byPath = new Map<string, FakeEl>(cases.map((c, i) => [`p${i}`, c.node]));
   // only for collectCandidates: a <br> inside a child, with no other separator ("Total<br>due" has textContent "Totaldue")
   const nested = el("p", [el("b", ["Total", el("br", [])]), "due"]);
-  const body = el("body", [...cases.map((c) => c.node), nested]);
+  // a web component: <x-card> with an open shadow root holding <div><span>Title</span><button>Save</button></div>, and a
+  // light-DOM <div><span/><button>Light</button></div> beside the root (the plain path of the shadow button names THIS one's)
+  const save = el("button", ["Save"]);
+  const shadowDiv = el("div", [el("span", ["Title"]), save]);
+  const card = el("x-card", [el("div", [el("span", []), el("button", ["Light"])])]);
+  card.shadowRoot = new FakeShadow(card, [shadowDiv]);
+  // form controls and visibility
+  const field = el("input", []); field.value = "Typed"; field.type = "text";
+  const pwd = el("input", []); pwd.value = "secret"; pwd.type = "password";
+  const opt = el("option", ["Second"]); opt.label = "Second";
+  const pick = el("select", [el("option", ["First"]), opt]); pick.selectedOptions = [opt];
+  const listBox = el("select", [el("option", ["A"])]); listBox.multiple = true;
+  const note = el("textarea", ["stale default"]); note.value = "Now typed";
+  const formRow = el("p", ["Pick", pick, "or", note]);
+  const hidden = el("span", ["x"], { visibility: "hidden" }), faded = el("span", ["y"], { opacity: "0" }), none = el("span", ["z"], { display: "none" }), flat = el("span", ["w"]);
+  flat.box = false;
+  const body = el("body", [...cases.map((c) => c.node), nested, card, field, pwd, listBox, formRow, hidden, faded, none, flat]);
   const html = el("html", [body]);
   const fakeDocument = {
-    body, documentElement: html,
-    querySelector: (p: string): FakeEl | null => byPath.get(p) ?? null,
+    body, documentElement: html, activeElement: card as FakeEl | null,
+    querySelector: (_p: string): FakeEl | null => null,
     querySelectorAll: (sel: string): FakeEl[] => html.querySelectorAll(sel),
     createRange: () => ({ selectNodeContents: (_n: unknown): void => {}, getBoundingClientRect: () => ({ x: 0, y: 0, width: 50, height: 20, left: 0, top: 0, right: 50, bottom: 20 }) }),
   };
   const fakeStyle = (e: FakeEl) => ({ getPropertyValue: (k: string): string => e.css[k] ?? "" });
   Object.assign(globalThis, { document: fakeDocument, getComputedStyle: fakeStyle, scrollX: 0, scrollY: 0, innerWidth: 1000, innerHeight: 800 });
   try {
-    const res = PP.measureElements({ frameRect: { x: 0, y: 0, w: 1000, h: 800 }, keys: ["text"], items: cases.map((_c, i) => ({ nodeId: `n${i}`, path: `p${i}`, isText: true, isPaint: false, isPlaceholder: false, sharesWith: null })) });
+    // the runtime as these fakes call it (page-dom.ts PageRuntime, over the fake elements)
+    interface FakeDt {
+      path(e: FakeEl): string; paths(): (e: FakeEl) => string; find(p: string): FakeEl | null;
+      controlText(e: FakeEl): { text: string } | { why: string } | null; ownText(e: FakeEl): string; shownText(e: FakeEl, lines?: boolean): string;
+      visible(e: FakeEl, o?: { sized?: boolean; opacity?: boolean }): boolean; active(): FakeEl | null; describe(e: FakeEl | null, keys?: readonly string[], name?: boolean): string;
+    }
+    const isFakeDt = (v: unknown): v is FakeDt => typeof v === "object" && v !== null
+      && ["path", "paths", "find", "controlText", "ownText", "shownText", "visible", "active", "describe"].every((k) => typeof Reflect.get(v, k) === "function");
+    const installed: unknown = Reflect.get(pageWindow({}), "__dt");
+    if (!isFakeDt(installed)) throw new Error("the page runtime did not install window.__dt");
+    const dt = installed;
+    const at = (i: number): string => `html > body:nth-child(1) > p:nth-child(${i})`;
+    const cardAt = `html > body:nth-child(1) > x-card:nth-child(${cases.length + 2})`;
+
+    // ---- paths, both ways
+    check("[page runtime] path: a light-DOM element's nth-child path from <html>, and find() resolves it back", dt.path(must(cases[1], "case 1").node) === at(2) && dt.find(at(2)) === cases[1]?.node);
+    const savePath = dt.path(save);
+    check(`[page runtime] path through an open shadow root: the host's path, a space, then the root's own chain (got ${savePath})`, savePath === `${cardAt} div:nth-child(1) > button:nth-child(2)`);
+    check("[page runtime] find() resolves the shadow path to the shadow root's button — not the host's light-DOM button at the same steps", dt.find(savePath) === save && dt.find(`${cardAt} > div:nth-child(1) > button:nth-child(2)`) !== save);
+    check("[page runtime] find(): a path whose element is gone (wrong tag, no such child, no shadow root) → null; any other selector goes to document.querySelector",
+      dt.find(`${cardAt} div:nth-child(1) > a:nth-child(2)`) === null && dt.find(`${at(1)} > b:nth-child(9)`) === null && dt.find(`${at(1)} b:nth-child(1)`) === null && dt.find("#nope") === null);
+    const many = dt.paths();
+    check("[page runtime] paths(): one call's path function names every element as path() does", many(save) === savePath && many(must(cases[1], "case 1").node) === at(2) && many(html) === "html");
+
+    // ---- text
+    const ct = (e: FakeEl): string => JSON.stringify(dt.controlText(e));
+    check("[page runtime] controlText: an <input type=text> → its value; a password → why; a collapsed <select> → its selected option's label; a list box → why; a <textarea> → its value; a <p> → null",
+      ct(field) === '{"text":"Typed"}' && /password/.test(ct(pwd)) && ct(pick) === '{"text":"Second"}' && /list-box/.test(ct(listBox)) && ct(note) === '{"text":"Now typed"}' && ct(formRow) === "null");
+    check("[page runtime] shownText: controls inside read as what they show (never every option, never the stale default); without lines every break is a space",
+      dt.shownText(formRow) === "Pick Second or Now typed" && dt.shownText(must(cases[0], "case 0").node, false) === "Line one Line two" && dt.ownText(formRow) === "Pickor");
+
+    // ---- visibility, the active element, describing
+    check("[page runtime] visible: visibility:hidden / display:none → not; opacity 0 → visible unless asked about opacity; a box with no size → visible unless sized",
+      !dt.visible(hidden) && !dt.visible(none) && dt.visible(faded) && !dt.visible(faded, { opacity: true }) && dt.visible(flat) && !dt.visible(flat, { sized: true }));
+    if (card.shadowRoot) card.shadowRoot.activeElement = save;
+    check("[page runtime] active(): through the open shadow root to its focused button", dt.active() === (save));
+    withAttrs(save, { type: "button", "aria-label": "Save crate", readonly: "", role: "" });
+    check("[page runtime] describe: the listed attributes it carries (a boolean one bare, an empty one left out), then its aria-label or text; null → nothing",
+      dt.describe(save, ["type", "readonly", "role", "tabindex"]) === '<button type="button" readonly>' && dt.describe(save, ["type"], true) === '<button type="button"> "Save crate"'
+      && dt.describe(shadowDiv, [], true) === '<div> "TitleSave"' && dt.describe(null) === "nothing");
+
+    // ---- measure and the drive / behaviour passes agree on a shadow-DOM element: the path one names, the other resolves
+    const [m] = PP.measureElements({ frameRect: { x: 0, y: 0, w: 1000, h: 800 }, keys: ["text"], items: [{ nodeId: "s", path: savePath, isText: true, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+    check("[page runtime] measureElements resolves the path the drive and behaviour passes give a shadow-DOM element (dt.path) to that element", m?.found === true && m.styles.text === "Save");
+    check("[page runtime] focusablePath names a shadow-DOM element's focusable by the path it was given (the span beside it has none)", PP.focusablePath(savePath) === savePath && PP.focusablePath(dt.path(must(shadowDiv.children[0], "the shadow span"))) === null);
+
+    const res = PP.measureElements({ frameRect: { x: 0, y: 0, w: 1000, h: 800 }, keys: ["text"], items: cases.map((c, i) => ({ nodeId: `n${i}`, path: dt.path(c.node), isText: true, isPaint: false, isPlaceholder: false, sharesWith: null })) });
     cases.forEach((c, i) => {
       const got = res[i]?.styles.text;
       check(`[probe text] ${c.name}: ${JSON.stringify(c.want)}${got === c.want ? "" : ` (got ${JSON.stringify(got)})`}`, got === c.want);
     });
-    const found = PP.collectCandidates({ frames: [], texts: ["Line one Line two", "Total due"], positions: [] });
-    const at = (i: number): string => `html > body:nth-child(1) > p:nth-child(${i})`;
+    const found = PP.collectCandidates({ frames: [], texts: ["Line one Line two", "Total due", "Pick Second or Now typed"], positions: [] });
     check("[probe text] collectCandidates finds 'Line one<br>Line two' by the text 'Line one Line two'",
       (found.text["Line one Line two"]?.exact ?? []).some((c) => c.path === at(1)));
     check("[probe text] …and '<b>Total<br></b>due' by 'Total due' (a nested <br>)", (found.text["Total due"]?.exact ?? []).some((c) => c.path === at(cases.length + 1)));
+    check("[probe text] …and a paragraph holding a <select> and a <textarea> by what they show", (found.text["Pick Second or Now typed"]?.exact ?? []).some((c) => c.path === dt.path(formRow)));
   } finally {
     for (const k of ["document", "getComputedStyle", "scrollX", "scrollY", "innerWidth", "innerHeight"]) Reflect.deleteProperty(globalThis, k);
   }
