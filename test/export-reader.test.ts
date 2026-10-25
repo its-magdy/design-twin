@@ -11,7 +11,7 @@ import { check, report } from "./assert.ts";
 import { buildPageLayout } from "../bridge/src/pages-layout.ts";
 import { node } from "./fixtures.ts";
 import type { LayersDoc, LayersDocLayer } from "../bridge/src/doc-types.ts";
-import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen-core.ts";
 import { locateExport } from "../design-to-code/verify-locate.ts";
 import { exportSiblings } from "../design-to-code/screen-inputs.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";

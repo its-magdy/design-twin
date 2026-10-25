@@ -9,8 +9,10 @@
 // file), else the report whose nodeIds[] has the node — the same rule audit.ts refuses a second report by — else an older
 // plain-slug report (`positions.json`) by the exact slug of the screen's name.
 import path from "node:path";
-import { blockerIds, reportFindings } from "./audit.ts";
-import { legacyBlockerIds } from "./finding-id.ts";
+import { findingIds, legacyBlockerIds } from "./finding-id.ts";
+import { isJsonObject } from "./types.ts";
+import type { JsonValue } from "./types.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isAuditReport } from "./doc-guards.ts";
 import { readJson } from "../bridge/src/read-json.ts";
 import { nodeArtefacts } from "./node-artefacts.ts";
@@ -26,6 +28,24 @@ export interface AuditGateStatus {
   unreadable?: true;
   /** why it is unreadable (bridge/src/read-json.ts wording: "is not valid JSON — …", "is not an audit report …") */
   error?: string;
+}
+
+// The id of each blocker finding, so a plan's `auditGate.overridden` can name exactly
+// which blocker(s) the user decided to build past. It is the finding's own `id` (audit.ts writes one); an
+// older report has none, and gets the same rule (finding-id.ts findingIds) computed over ALL
+// its findings in report order. What plan-skeleton.ts pre-fills and verify-build.ts checks against (which
+// also still accepts the older positional `<code>#<i>`, finding-id.ts legacyBlockerIds).
+// Takes anything (an audit report, or whatever a caller read off disk): only `findings[]` is looked at.
+function blockerIds(auditDoc: unknown): string[] {
+  const findings = reportFindings(auditDoc);
+  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
+  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
+}
+/** A report's `findings[]` as far as ids go (anything else in an entry is ignored; a non-object entry is dropped). */
+function reportFindings(auditDoc: unknown): Array<{ code?: string; nodeId?: string; severity?: string; id?: string }> {
+  const findings: unknown[] = (auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings)) ? auditDoc.findings : [];
+  const str = (v: JsonValue | undefined): string | undefined => typeof v === "string" && v ? v : undefined;
+  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
 }
 
 function auditGateStatus(cwd: string, nodeId: string | null | undefined, screenFile: string | null | undefined, screenName: string | null | undefined): AuditGateStatus {

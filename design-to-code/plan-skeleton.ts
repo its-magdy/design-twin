@@ -27,7 +27,7 @@
 //                 on every merge.
 //
 // Hidden predicate — the ONE rule (design-to-code/visible-tree.ts, shared with verify-screen/audit/drift-lint
-// and, through visibility() below, verify-build.ts): a node is hidden when it or any ancestor carries
+// and, through its visibility(), verify-build.ts): a node is hidden when it or any ancestor carries
 // `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
 // name in this export (`"visible": "Show Breadcrumb"`).
 //
@@ -40,7 +40,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { matchByNameAndSignature, nameVerdict, parseVariant } from "./component-match.ts";
-import { walkWithHidden } from "./visible-tree.ts";
+import { visibility, walkNodes as walkRoots } from "./visible-tree.ts";
+import type { NodeVisitor, Visibility } from "./visible-tree.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
@@ -48,7 +49,7 @@ import { isComponentsCatalog, isTokensDoc, parsePlan } from "./doc-guards.ts";
 import { pagesRootOfScreen, readExportIndex } from "../bridge/src/export-reader.ts";
 import type { DocGuard } from "../bridge/src/read-json.ts";
 import { anyJson, readJson } from "../bridge/src/read-json.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
+import { isCodeConnectMap } from "./map-validate-core.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type {
@@ -99,46 +100,8 @@ const USAGE = [
   "                       Nothing filled is ever overwritten. Seeded rows carry `seededFrom` — review them.",
 ].join("\n");
 
-/** What walkNodes hands its visitor beside the node. */
-export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoot: boolean; insideInstance: string | null }
-
-// Walk every node with its ancestry and hidden state, through the ONE shared predicate (visible-tree.ts:
-// the node or an ancestor carries `hidden`; never `visible`). `insideInstance` is the nearest INSTANCE
-// above the node — its internals belong to that component.
-function walkNodes(doc: ScreenDoc | null | undefined, visit: (n: IrNode, ctx: NodeContext) => void): void {
-  for (const r of screenRoots(doc)) {
-    walkWithHidden(r, (n, c) => {
-      const above = c.ancestors.findLast((a) => a.node.type === "INSTANCE");
-      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above ? above.node.id || null : null });
-    });
-  }
-}
-
-export interface VisibleEntry { node: IrNode; parentId: string | null; insideInstance: string | null }
-export interface Visibility { visible: Map<string, VisibleEntry>; hidden: Set<string>; hiddenRoots: PlanHiddenRoot[] }
-
-// { visible: Map(id -> {node, parentId}), hidden: Set(id), hiddenRoots: [...] }
-function visibility(doc: ScreenDoc | null | undefined): Visibility {
-  const visible = new Map<string, VisibleEntry>(), hidden = new Set<string>(), hiddenRoots: PlanHiddenRoot[] = [];
-  const count = new Map<string, PlanHiddenRoot>();
-  walkNodes(doc, (n, ctx) => {
-    if (!n.id) return;
-    if (ctx.hidden) {
-      hidden.add(n.id);
-      if (ctx.hiddenRoot) { const root: PlanHiddenRoot = { id: n.id, name: n.name, type: n.type, nodes: 0 }; hiddenRoots.push(root); count.set(n.id, root); }
-    } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
-  });
-  // how many nodes each hidden root hides (itself included)
-  const tally = (n: IrNode | null | undefined, root: string | null): void => {
-    if (!n || typeof n !== "object") return;
-    const r = root || (count.has(n.id) ? n.id : null);
-    const entry = r ? count.get(r) : undefined; // r is always a key of count (root, or n.id when count has it)
-    if (entry) entry.nodes++;
-    for (const c of n.children || []) tally(c, r);
-  };
-  for (const r of screenRoots(doc)) tally(r, null);
-  return { visible, hidden, hiddenRoots };
-}
+// Every node of the screen with its ancestry and hidden state (visible-tree.ts walkNodes, over the screen's roots).
+const walkNodes = (doc: ScreenDoc | null | undefined, visit: NodeVisitor): void => walkRoots(screenRoots(doc), visit);
 
 // ---------------------------------------------------------------- tokens
 
@@ -440,7 +403,7 @@ function suggestAnchors(doc: ScreenDoc | null | undefined, vis: Visibility): Anc
 }
 
 function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }: SkeletonInput): SkeletonPlan {
-  const vis = visibility(doc);
+  const vis = visibility(screenRoots(doc));
   const roots = screenRoots(doc);
   const root: IrNode | undefined = roots[0];
   const exp = screenExportOf(doc);
@@ -714,7 +677,7 @@ export function main(argv: string[]): number {
   return 0;
 }
 
-export { skeleton, merge, seed, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
+export { skeleton, merge, seed, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
 if (import.meta.main) runCli(main, { name: "plan-skeleton" }); // exitCode, never exit(): every printed line drains first (proc.ts)

@@ -45,10 +45,10 @@ import type { Backdrop, WalkContext, WalkFrame } from "./visible-tree.ts";
 import { parseHex, contrastRatio, compositeOver, colorKey, formatHex, normHex } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
-import { SEVERITY_ORDER, crossCheck } from "./cross-check.ts";
+import { SEVERITY_ORDER, crossCheck } from "./cross-check-core.ts";
 import { crossCheckInputOf, readScreenInputs, withCatalog } from "./screen-inputs.ts";
 import { controlKind, outermostControl, isDisabledLayer, DISABLED_WORD } from "./control-kind.ts";
-import type { CrossCheckScreen } from "./cross-check.ts";
+import type { CrossCheckScreen } from "./cross-check-core.ts";
 import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { findExportNeighbours } from "./design-system-dir.ts";
 import type { ExportNeighbours, LibraryExport } from "./design-system-dir.ts";
@@ -57,11 +57,10 @@ import { findingIds } from "./finding-id.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import type { SliceSources } from "./slice-sources.ts";
-import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
   AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, CodeConnectMap, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, ScreenAssetsDoc, ScreenDoc,
-  ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable, JsonValue,
+  ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { alnumKey } from "./map-util.ts";
@@ -1405,26 +1404,8 @@ function toMarkdown(res: AuditReport): string {
   return L.join("\n") + "\n";
 }
 
-// The id of each blocker finding, so a plan's `auditGate.overridden` can name exactly
-// which blocker(s) the user decided to build past. It is the finding's own `id`; an
-// older report has none, and gets the same rule (finding-id.ts findingIds) computed over ALL
-// its findings in report order. What plan-skeleton.ts pre-fills and verify-build.ts checks against (which
-// also still accepts the older positional `<code>#<i>`, finding-id.ts legacyBlockerIds).
-// Takes anything (an audit report, or whatever a caller read off disk): only `findings[]` is looked at.
-function blockerIds(auditDoc: unknown): string[] {
-  const findings = reportFindings(auditDoc);
-  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
-  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
-}
-/** A report's `findings[]` as far as ids go (anything else in an entry is ignored; a non-object entry is dropped). */
-function reportFindings(auditDoc: unknown): Array<{ code?: string; nodeId?: string; severity?: string; id?: string }> {
-  const findings: unknown[] = (auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings)) ? auditDoc.findings : [];
-  const str = (v: JsonValue | undefined): string | undefined => typeof v === "string" && v ? v : undefined;
-  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
-}
-
 // The ONLY codes that can be a blocker. The audit-design SKILL's "Blocker codes:" line must list
-// exactly these (test/audit.test.ts parses both, and scans audit.ts/cross-check.ts for "blocker" emits).
+// exactly these (test/audit.test.ts parses both, and scans audit.ts/cross-check-core.ts for "blocker" emits).
 // Everything else with a sensible default is a warning — cross-file ones carry a `confirm` question.
 // What an overrides entry can name its finding by — every per-finding key a finding of one code can vary in.
 const OVERRIDE_KEYS = ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen"] as const;
@@ -1433,7 +1414,7 @@ const BLOCKER_CODES: readonly BlockerCode[] = ["export-truncated", "assets-faile
 const _allBlockerCodes: Record<BlockerCode, true> = { "export-truncated": true, "assets-failed": true, "missing-font": true, "token-name-collision": true };
 void _allBlockerCodes;
 
-export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, reportFindings, BLOCKER_CODES };
+export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, BLOCKER_CODES };
 
 // CLI: bun design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
