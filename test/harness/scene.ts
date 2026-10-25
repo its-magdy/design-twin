@@ -24,7 +24,7 @@ export function fixtures() {
     v_allscope: { id: "v_allscope", name: "misc/bad", resolvedType: "FLOAT", variableCollectionId: "c_sem",
       scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, valuesByMode: { m_light: 4, m_dark: 4 } },
     // Named EASING variable — a motion easing/style-prop alias resolves to {aliasOf: "easing/emphasized"}
-    // through the same getVariableByIdAsync memo (state.ts varName) variables.ts uses. Keyed by the
+    // through the same getVariableByIdAsync memo (run.ts Run.varName) variables.ts uses. Keyed by the
     // "VariableID:2" id the animationStyles fixture below binds to.
     "VariableID:2": { id: "VariableID:2", name: "easing/emphasized", resolvedType: "EASING", variableCollectionId: "c_sem",
       scopes: [], codeSyntax: {}, remote: false, valuesByMode: { m_light: { type: "EASE_OUT" } } },

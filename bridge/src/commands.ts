@@ -379,7 +379,7 @@ export const NO_NODE_ID = "No node id provided.";
 // `*Args` interface declares, or returns null. Two rules keep every call that worked before this
 // check working:
 //   - an UNDECLARED key is ignored, never refused. The collectors have only ever read the keys they
-//     know (applyOpts walks runOpts' keys, listPages reads `depth`, autoCss spreads and reads `css`),
+//     know (Run.useReads walks the read-option names, listPages reads `depth`, autoCss spreads and reads `css`),
 //     so an extra key — e.g. a read option sent to a catalog pull — has always been harmless.
 //   - `undefined` is "absent" (JSON drops it on the wire; in-process callers pass it for "default").
 // `null` is NOT "absent" for an optional key (no typed sender produces it) — except `nodeId`, where the

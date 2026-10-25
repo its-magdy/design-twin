@@ -15,7 +15,8 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // esbuild inlines here — see bridge/src/pages-layout.ts.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { assetRetention, cancelBridgeRequest, cancelBridgeRuns, serializeRun, type Asset } from "./state";
+import { cancelBridgeRequest, cancelBridgeRuns, serializeRun } from "./state";
+import { assetRetention, type Asset } from "./run";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren, type ScreenResult, type FullResult } from "./collect";
 import { serialize } from "./serialize";
@@ -185,7 +186,7 @@ figma.ui.onmessage = async (raw: unknown) => {
         // bridge itself abandoned fails the same way with ABANDONED_MESSAGE (usually to nobody).
         error = errMsg(e);
       }
-      // No releaseAssets() here: a queued run drops its assets when it settles (state.ts bracket), and
+      // No release here: a queued run drops its assets when it settles (state.ts bracket closes its run), and
       // this reply may be an identity read (ping, whoami) answering DURING an export that is still filling them.
       post({ type: "bridge-result", ...ifDefined("id", raw.id), ok: !error, result, ...ifDefined("error", error) });
       break;

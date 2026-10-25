@@ -1,12 +1,12 @@
 // Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are
 // readable FREE via the Plugin API — a plane the paid get_motion_context tool otherwise covers.
-// Opt-in (runOpts.motion) because it's niche and can be verbose.
+// Opt-in (the run's motion read) because it's niche and can be verbose.
 import type {
   JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, MotionIndexedTracks, MotionPaintTrack, MotionEffectTracks, NodeMotion,
   MotionStylePropValue, MotionStyle, MotionStyleEntry, VariableAlias as IrVariableAlias,
 } from "../../bridge/src/doc-types.ts";
 import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
-import { varName, styleNameLookup } from "./state";
+import { run } from "./run";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
@@ -39,11 +39,11 @@ function keyframeValue(kv: KeyframeValue | undefined | null): JsonValue | undefi
 
 // An alias id -> {aliasOf: target name}, falling back to the raw id when the target cannot be resolved —
 // the same shape and resolution variables.ts's own (unexported) aliasValue uses for a top-level
-// VARIABLE_ALIAS, via state.ts's `varName` memo (figma.variables.getVariableByIdAsync; typings 1.139
+// VARIABLE_ALIAS, via the run's `varName` memo (run.ts) (figma.variables.getVariableByIdAsync; typings 1.139
 // VariablesAPI.getVariableByIdAsync(id): Promise<Variable | null> — the sync getVariableById is
 // @deprecated and throws under dynamic-page).
 async function aliasValue(id: string): Promise<IrVariableAlias> {
-  return { aliasOf: (await varName(id)) || id };
+  return { aliasOf: (await run().varName(id)) || id };
 }
 
 // MotionEasing -> compact (mirrors the prototype-transition easing surface: named curve + exact params).
@@ -285,12 +285,12 @@ export async function customAnimationEntries(style: CustomAnimationStyle): Promi
 }
 
 // An applied CUSTOM style's styleId -> what the CustomAnimationStyle itself carries: its description and
-// its animation entries. The lookup goes through state.ts's styleNameLookup memo (figma.getStyleByIdAsync,
+// its animation entries. The lookup goes through the run's styleName memo (run.ts) (figma.getStyleByIdAsync,
 // one fetch per styleId per run, a throw or rejection normalised to null), since one custom style is
 // typically applied on many nodes. A null result, a style of another type, or a failed read adds nothing,
 // leaving the applied row's own ids, name and timelineOffset.
 async function customStyleDetail(styleId: string): Promise<Pick<MotionStyle, "description" | "entries">> {
-  const style = await styleNameLookup.obj(styleId);
+  const style = await run().styleName.obj(styleId);
   if (!style || style.type !== "CUSTOM_ANIMATION") return {};
   try {
     const detail: Pick<MotionStyle, "description" | "entries"> = {};

@@ -373,7 +373,7 @@ const writeShape = {
 };
 
 // ---- read options, per export tool (opt-in; each costs extra Plugin-API work) ----
-// DERIVED from bridge/src/read-opts.ts — the ONE registry the CLI flag table and the plugin's own runOpts
+// DERIVED from bridge/src/read-opts.ts — the ONE registry the CLI flag table and the plugin's own run reads
 // come from too — rather than a fifth hand-written list of the same names and help text. A restated
 // literal is how skipAssets went missing on two of the three export tools: the MCP SDK validates args
 // with z.object(inputSchema) and hands the callback `parseResult.data`, and Zod's default object mode

@@ -12,8 +12,8 @@
 // reads; nothing it changes reaches another case.
 //
 // Each world is a new VM running the plugin bundle, which is built ONCE per process from the current
-// figma-plugin/src (build-options.ts, in memory): the plugin's module-level run state (state.ts — the memo caches,
-// runOpts, the run chain) starts empty for every case, and the code under test is never a stale committed code.js.
+// figma-plugin/src (build-options.ts, in memory): the plugin's module-level state (the run in
+// progress, run.ts, and the run chain, state.ts) starts empty for every case, and the code under test is never a stale committed code.js.
 import fs from "node:fs";
 import vm from "node:vm";
 import esbuild from "esbuild";
@@ -142,7 +142,7 @@ interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
 export interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
 /** collect.ts ScreenshotResult (w/h/scale). */
-interface ScreenshotOut { id: string; name: string; type: string; w?: number; h?: number; scale?: number; reference: string; assets: Asset[] }
+interface ScreenshotOut { id: string; name: string; type: string; w?: number; h?: number; scale?: number; reference: string; manifest: Manifest; assets: Asset[] }
 /** collect.ts CollectOpts */
 interface CollectOpts extends Partial<Record<ReadOptName, boolean>> { allPages?: boolean; page?: string | string[] }
 export interface DesignExportApi {
@@ -161,7 +161,7 @@ export interface DesignExportApi {
   serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
   requestCancel(): RunInfo | null;
   collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotOut>;
-  /** state.ts assetRetention: entries the run-owned asset array and dedupe tables still hold. */
+  /** run.ts assetRetention: entries the run-owned asset array and dedupe tables still hold. */
   assetRetention(): { assets: number; byContent: number; byName: number };
 }
 

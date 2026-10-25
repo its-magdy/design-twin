@@ -14,7 +14,7 @@ import { world } from "./scene.ts";
 /** The base selection read, made per case: `collectSelection()` with no args on a fresh copy of the
  *  representative file (its selection is the scroll frame), and the frame's three children — the mixed text, the
  *  gradient rect, the reacting instance. A single small selection, so the CSS oracle auto-enables (collect.ts
- *  autoCss) and runOpts.css is left on afterwards. */
+ *  autoCss), and its run — css read on — stays the one in progress for a direct serialize() afterwards. */
 export async function selection() {
   const w = world();
   const sel = await w.api.collectSelection();

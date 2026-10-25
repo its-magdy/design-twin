@@ -131,8 +131,8 @@ export const cases: Case[] = [{
       rDs.v === null && rDs.err?.message === ABANDONED && variantKidsRead === 0);
     ok("…and skipInvisibleInstanceChildren is back to its value before the run (the catalog's finally)",
       figma.skipInvisibleInstanceChildren === false);
-    // runOpts.skipAssets was set by the variant walk and must be restored by its finally: the next
-    // export of a vector really exports it.
+    // The variant walk renders nothing (asset policy "none"), and that is the walk's own argument, not a
+    // toggle on anything the next run sees: the next export of a vector really exports it.
     let liveSvg = 0;
     const vecFrame: FakeNode = { type: "FRAME", name: "VecHost", id: "lvx:1", visible: true, width: 20, height: 20, layoutMode: "NONE",
       exportAsync: async () => new Uint8Array([137, 80, 78, 71]),

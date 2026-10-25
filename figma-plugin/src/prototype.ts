@@ -5,7 +5,7 @@
 import type { Action as IrAction, Reaction as IrReaction, Transition as IrTransition } from "../../bridge/src/doc-types.ts";
 import { easingCurve, xy, isList } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
-import { varName, nodeNameLookup, getCollection } from "./state";
+import { run } from "./run";
 import { isVariableAlias } from "./variables";
 
 // A prototype Transition -> compact descriptor (type/direction/duration + the exact easing curve).
@@ -34,7 +34,7 @@ async function simplifyVariableData(vd: VariableData | undefined): Promise<unkno
   if (!vd || typeof vd !== "object") return vd;
   const v: unknown = "value" in vd ? vd.value : vd;
   if (isVariableAlias(v)) {
-    return { token: (await varName(v.id)) || v.id };
+    return { token: (await run().varName(v.id)) || v.id };
   }
   return v;
 }
@@ -56,18 +56,18 @@ async function serializeAction(a: Action | undefined | null): Promise<IrAction |
     // the SKIP_* variants) — typings 5664-5681; the same name-resolved `destination` as a NODE action.
     if (a.destinationId) {
       ao.destinationId = a.destinationId;
-      const dn = await nodeNameLookup(a.destinationId);
+      const dn = await run().nodeName(a.destinationId);
       if (dn) ao.destination = dn;
     }
     ao.mediaAction = String(a.mediaAction).toLowerCase();
     if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
     if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;
   } else if (a.type === "SET_VARIABLE") {
-    if (a.variableId) ao.variable = (await varName(a.variableId)) || a.variableId;
+    if (a.variableId) ao.variable = (await run().varName(a.variableId)) || a.variableId;
     if (a.variableValue != null) ao.value = await simplifyVariableData(a.variableValue);
   } else if (a.type === "SET_VARIABLE_MODE") {
     if (a.variableCollectionId) {
-      const c = await getCollection(a.variableCollectionId);
+      const c = await run().collection(a.variableCollectionId);
       ao.collection = c ? c.name : a.variableCollectionId;
       if (a.variableModeId) {
         const m = c && Array.isArray(c.modes) ? c.modes.find((x) => x.modeId === a.variableModeId) : null;
@@ -86,7 +86,7 @@ async function serializeAction(a: Action | undefined | null): Promise<IrAction |
   } else if (a.type === "NODE") {
     if (a.destinationId) {
       ao.destinationId = a.destinationId;
-      const dn = await nodeNameLookup(a.destinationId);
+      const dn = await run().nodeName(a.destinationId);
       if (dn) ao.destination = dn;
     }
     if (a.navigation) ao.navigation = a.navigation.toLowerCase();

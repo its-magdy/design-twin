@@ -26,7 +26,7 @@ export const cases: Case[] = [{
     // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it
     // was the only O(nodes) read with no opt-out — getCSSAsync, its cheaper twin, has had one all along.
     // Skipping must be LOUD: a missing `asset` is otherwise indistinguishable from "no graphic here".
-    // Driven through the PUBLIC collect API (not by poking runOpts), so the test exercises the same
+    // Driven through the PUBLIC collect API (not by poking the run's reads), so the test exercises the same
     // path figma-pull --no-assets uses rather than an internal it could drift from.
     let exportCalls = 0;
     const countingRect = { type: "RECTANGLE", name: "Photo2", visible: true, id: "img:2", width: 40, height: 40,

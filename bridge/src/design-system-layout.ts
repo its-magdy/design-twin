@@ -127,7 +127,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
 
   // The heavy part of a COMPONENT_SET entry — variants[].node, a full serialized node tree per variant
-  // (opt-in via runOpts.variantVisuals in components.ts) — is what makes components.local.json huge on
+  // (opt-in via the variantVisuals read in components.ts) — is what makes components.local.json huge on
   // a real design-system file. Neither drift-lint.ts nor map-bootstrap.ts ever reads `.node` (both key
   // off name/id/key/type/props), so it is safe to split out unread. Everything else on the entry,
   // INCLUDING each variant's id/name/key/values, stays in the catalog byte for byte.

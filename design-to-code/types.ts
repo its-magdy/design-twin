@@ -10,7 +10,7 @@
 //
 // Derived from FOUR sources, reconciled in this order of authority:
 //   1. The PRODUCER: figma-plugin/src/serialize.ts (+ paint.ts, text.ts, layout.ts, effects.ts,
-//      prototype.ts, variables.ts, components.ts, libraries.ts, assets.ts, collect.ts, state.ts) and the
+//      prototype.ts, variables.ts, components.ts, libraries.ts, assets.ts, collect.ts, run.ts) and the
 //      bridge writers that put those documents on disk (bridge/src/pages-layout.ts, design-system-layout.ts,
 //      variables-merge.ts, write-out.ts). The plugin types its output as a loose string-keyed bag
 //      (util.ts `Obj`), so what it ASSIGNS is what is declared here.

@@ -2,7 +2,7 @@
 // for mixed text. Reads defensively so TEXT_PATH (which shares most of the surface) degrades safely.
 import type { LengthSpec, FontSpec, TextRun, TextFields } from "../../bridge/src/doc-types.ts";
 import { round, lower, solidFromFills } from "./util";
-import { warnKind } from "./state";
+import { run } from "./run";
 import { styleName, resolveBoundMap } from "./variables";
 
 // A Figma length ({value, unit}) -> the emitted descriptor. The PERCENT -> "percent"/"px" mapping is
@@ -292,13 +292,13 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
     // `cell.text as TextNode` cast would produce "undefined (undefined)" there; the type is explicit.
     const name = "name" in node ? node.name : undefined;
     const id = "id" in node ? node.id : undefined;
-    warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
+    run().warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
   }
   // Zero-width text thread is a data smell (a collapsed/broken node) — surface it.
   if ("width" in node && node.width === 0) {
     const name = "name" in node ? node.name : undefined;
     const id = "id" in node ? node.id : undefined;
-    warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
+    run().warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
   }
   return out;
 }
