@@ -13,6 +13,7 @@
 // outer reference is a ReferenceError in the page, which the e2e suites (they run the BUILT bundle in a real browser) catch.
 // test/verify-probe.test.ts runs it on a fake DOM.
 
+import type { Locator, Page, Selectors } from "playwright";
 import type { PageDocument, PageElement, PageNode, PageBox, PageRuntime, PageStyle, PageWindow, PageVisibleOpts } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- the page, as far as the runtime uses it (page-dom.ts)
@@ -538,3 +539,43 @@ export function installPageRuntime(): void {
 /** The runtime as a script: what the probe's init script runs first in every document (verify-probe.ts INIT_SCRIPT), and what
  *  a test evaluates in a page it built with setContent (no navigation, so no init script). */
 export const PAGE_RUNTIME = `(${installPageRuntime.toString()})();`;
+
+// ---------------------------------------------------------------- the same paths, resolved by Playwright
+// A path is resolved by dt.find in the page; the probe also hands paths to Playwright (to click, hover, focus or read an aria
+// snapshot of the element), and Playwright's css engine reads them more loosely: it lets a step cross from a shadow host into
+// its shadow root, so `host > div:nth-child(1) > button:nth-child(2)` also matches a shadow-root div at that place, and a
+// host whose slotted light-DOM children repeat its shadow structure gives one path several elements (`.first()` then picks
+// one by document order — a toolbar's slotted button for its own shadow button). So the probe registers a selector engine
+// (PATH_ENGINE) that IS dt.find, and byPath hands Playwright `dtpath=<path>`: the one element the path names, or none.
+
+/** The selector engine's name: `dtpath=<a path from dt.path>`. */
+export const PATH_ENGINE = "dtpath";
+/** The engine, run in the page's main world (where the init script put window.__dt). In a scoped query (a locator chained
+ *  under another) only an element inside the scope counts. A document without the runtime falls back to querySelector. */
+const PATH_ENGINE_SCRIPT = `(() => {
+  const query = (root, path) => {
+    const dt = window.__dt;
+    let el = null;
+    if (dt) el = dt.find(path);
+    else { try { el = document.querySelector(path); } catch (e) { el = null; } }
+    if (!el || root === document || root === document.documentElement) return el;
+    for (let p = el; p; p = p.assignedSlot || p.parentElement || (p.getRootNode && p.getRootNode().host) || null) if (p === root) return el;
+    return null;
+  };
+  return { query, queryAll: (root, path) => { const el = query(root, path); return el ? [el] : []; } };
+})()`;
+/** Whether this process's Playwright has the engine (registerPathEngine): without it byPath hands Playwright the plain css
+ *  path, as before the engine (a test that drives a page from its own Playwright without registering). */
+let pathEngine = false;
+/** Register the engine on a Playwright's selectors — once per Playwright instance, BEFORE any of its pages opens (by
+ *  experiment, a page whose frames already hold Playwright's injected script does not get an engine registered after it:
+ *  "reading 'queryAll' of undefined"). Registered already (by this process) counts as registered. A refusal leaves byPath on
+ *  the css path. */
+export async function registerPathEngine(selectors: Pick<Selectors, "register">): Promise<void> {
+  try { await selectors.register(PATH_ENGINE, { content: PATH_ENGINE_SCRIPT }); pathEngine = true; } catch (e) {
+    if (e instanceof Error && /already registered/.test(e.message)) pathEngine = true;
+  }
+}
+/** The element a path from dt.path names, as a Playwright locator — exactly dt.find's element (registerPathEngine), never a
+ *  look-alike that Playwright's css engine would also match. */
+export const byPath = (page: Pick<Page, "locator">, path: string): Locator => page.locator(pathEngine ? `${PATH_ENGINE}=${path}` : path);

@@ -46,6 +46,7 @@ import type { ProbeSession } from "./probe-session.ts";
 import { firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { parseCssColor } from "./color.ts";
+import { byPath } from "./page-runtime.ts";
 import type { BehState, PageDocument, PageElement, PageStyle, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
@@ -1084,7 +1085,7 @@ async function safeCloseOn(page: Page, closedAfter: () => Promise<boolean>, act:
   const cands = await page.evaluate(closeCandidates, null);
   for (const c of cands) {
     if (!safeCloseName(c.name, c.ariaLabel)) continue;
-    const loc = page.locator(c.path).first();
+    const loc = byPath(page, c.path).first();
     if ((await loc.evaluate(submitGuard)) !== null) continue;
     const before = page.url();
     act();
@@ -1524,7 +1525,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
           u.guard();
           if (!s.connected) { nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: "not-run: left the document during the walk" }); continue; }
           let snap = "";
-          try { snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2000 }); } catch (e) {
+          try { snap = await byPath(page, s.path).first().ariaSnapshot({ timeout: 2000 }); } catch (e) {
             if (endsUnit(e, page)) throw e;
             nameRows.push({ id: "a11y.name", status: "not-run", ...(s.dt !== null ? { nodeId: s.dt } : {}), target: s.path, detail: `not-run: no accessibility snapshot (${firstLine(e)})` });
             continue;
@@ -1724,12 +1725,12 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
         if (!st.visible && st.hoverPath !== null) {
           await page.mouse.move(0, 0);
           u.act();
-          await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
+          await byPath(page, st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
           await raf2(page);
           st = await page.evaluate(openerState, { id: row.nodeId });
         }
         if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-        const loc = page.locator(st.path).first();
+        const loc = byPath(page, st.path).first();
         if ((await loc.evaluate(submitGuard)) !== null) return { opened: null, why: "the opener would submit a form" };
         await markOpenerSeen(page, row.nodeId, u.act);
         await page.evaluate(armDetector, { destId, contract });
@@ -1881,7 +1882,7 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
         add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation — the dialog holds only a native <select>/date control, whose popup headless Chromium does not open" }
           : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
       } else {
-        const loc = page.locator(x.path).first();
+        const loc = byPath(page, x.path).first();
         if ((await loc.evaluate(submitGuard)) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
         else {
           u.act();

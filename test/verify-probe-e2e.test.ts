@@ -19,7 +19,7 @@ import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { liveStatusFile, lockFileOfStatus, stageDirOf, writeStatus } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { collectCandidates, focusablePath, freeHoverPoint, measureElements, type CollectOutput } from "../design-to-code/probe-page.ts";
-import { PAGE_RUNTIME } from "../design-to-code/page-runtime.ts";
+import { PAGE_RUNTIME, byPath, registerPathEngine } from "../design-to-code/page-runtime.ts";
 import { BEHAVIOUR_OFF_ENV, LAUNCH_ARGS } from "../design-to-code/verify-probe.ts";
 import { shellArg } from "../design-to-code/cli-args.ts";
 import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
@@ -704,6 +704,9 @@ fs.writeFileSync(g17Exp, JSON.stringify({ frame: { nodeId: "70:1", name: "Loom Q
 // an executable to name — Playwright's own chromium when it is installed, else the headless shell of the same revision
 // in the same cache (a machine may hold only that). Never downloaded; none found → the --browser-path checks are skipped (printed).
 const pwChromium = await import("playwright").then((m) => m.chromium, () => null);
+// the probe's path engine (page-runtime.ts byPath), registered as the probe registers it: before any page of this Playwright opens
+const pwSelectors = await import("playwright").then((m) => m.selectors, () => null);
+if (pwSelectors) await registerPathEngine(pwSelectors);
 function cachedBrowser(): string | null {
   if (!pwChromium) return null;
   const full = pwChromium.executablePath();
@@ -863,6 +866,22 @@ else {
   check(`a shadow-DOM button: the path the drive and behaviour passes give it is the one the measure pass and Playwright resolve to it (got ${JSON.stringify([sp, shadowM?.styles.text, located])})`,
     sp === "html > body:nth-child(2) > x-card:nth-child(1) div:nth-child(1) > button:nth-child(2)" && shadowM?.found === true && shadowM.styles.text === "Save"
     && JSON.stringify(located) === '["Save"]' && await pg.evaluate(focusablePath, sp) === sp);
+  // Playwright resolves a path as dt.find does (byPath, the probe's path engine): a toolbar web component holding its own shadow
+  // button, a slotted light-DOM button and a nested shadow button gives the shadow button a path Playwright's css engine
+  // also matches on the other two (it lets a step cross from the host into its shadow root) — `.first()` there focused the
+  // slotted one. Through byPath the path names that one button: count 1, focus lands on it.
+  await pg.setContent(`<!doctype html><body style="margin:0;font:14px sans-serif"><x-toolbar id="bar"><button id="slotted">Slotted action</button></x-toolbar>` +
+    `<script>document.getElementById("bar").attachShadow({ mode: "open" }).innerHTML = '<button id="internal">Open menu</button><slot></slot><div><button id="nested">Nested action</button></div>';</script></body>`);
+  await pg.evaluate(PAGE_RUNTIME);
+  const barPath: unknown = await pg.evaluate("window.__dt.path(document.getElementById('bar').shadowRoot.getElementById('internal'))");
+  const bp = typeof barPath === "string" ? barPath : "";
+  const cssMatches = bp ? await pg.locator(bp).count() : 0;
+  const exact = bp ? await byPath(pg, bp).allTextContents() : [];
+  if (bp) await byPath(pg, bp).focus({ timeout: 2000 });
+  const focusedId: unknown = await pg.evaluate("document.getElementById('bar').shadowRoot.activeElement?.id ?? document.activeElement?.id ?? ''");
+  check(`a shadow button whose path Playwright's css engine matches more than once (a slotted and a nested button beside it) → byPath names that one button, and focus lands on it (got ${JSON.stringify([bp, cssMatches, exact, focusedId])})`,
+    pwSelectors !== null && cssMatches > 1 && JSON.stringify(exact) === '["Open menu"]' && focusedId === "internal");
+  check("…a path whose element is gone → byPath finds nothing (no look-alike)", bp !== "" && await byPath(pg, bp.replace(/button:nth-child\(1\)$/, "button:nth-child(9)")).count() === 0);
   await ctlBrowser.close();
 }
 const chkBad = await probe(["--check", "--project", ROOT, "--browser-path", path.join(tmp, "no-such-browser")]);

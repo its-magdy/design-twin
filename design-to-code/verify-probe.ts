@@ -55,9 +55,9 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, BrowserType, Page, Request, Response } from "playwright";
+import type { Browser, BrowserType, Page, Request, Response, Selectors } from "playwright";
 import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements, screenTags } from "./probe-page.ts";
-import { PAGE_RUNTIME } from "./page-runtime.ts";
+import { PAGE_RUNTIME, byPath, registerPathEngine } from "./page-runtime.ts";
 import type { Candidate, CollectOutput, ForeignRoot, MeasureInput, MeasureItem, Rect, ScreenTags } from "./probe-page.ts";
 import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
@@ -90,8 +90,8 @@ import { expectationSetProblem, outBaseOf, setFile, setNameOfFile, statusBaseOf 
 
 // ---------------------------------------------------------------- resolving the project's Playwright
 export const PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"] as const;
-/** The part of a Playwright package this probe uses. */
-export interface PlaywrightModule { chromium: BrowserType }
+/** The part of a Playwright package this probe uses (its selectors: the probe's path engine — page-runtime.ts byPath). */
+export interface PlaywrightModule { chromium: BrowserType; selectors?: Pick<Selectors, "register"> }
 export function isPlaywrightModule(x: unknown): x is PlaywrightModule {
   if (typeof x !== "object" || x === null || !("chromium" in x)) return false;
   const c = x.chromium;
@@ -212,6 +212,8 @@ async function launch(r: Extract<Resolution, { ok: true }>, dir: string, executa
   // grayscale AA, which Figma's PNG exports use and macOS Chromium uses by default. Linux chromium's default LCD (subpixel RGB)
   // text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's 4-decimal scale
   // came out as hot regions in the visual diff (the e2e's correct twin, on CI).
+  // the probe's path engine (page-runtime.ts byPath), on this Playwright's selectors before any context opens
+  if (r.mod.selectors) await registerPathEngine(r.mod.selectors);
   try { return { browser: await r.mod.chromium.launch({ headless: true, args: [...LAUNCH_ARGS], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
     return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`,
@@ -971,13 +973,13 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
           if (focusPath === null) { node.note = "focus state not measured: the element is not focusable (nor is any ancestor)"; continue; }
           // keyboard first (programmatic focus, then Shift+Tab, Tab) so :focus-visible applies as for a user;
           // programmatic focus() alone when the Tab order does not come back to it
-          await page.locator(focusPath).first().focus({ timeout: 2000 });
+          await byPath(page, focusPath).first().focus({ timeout: 2000 });
           await page.keyboard.press("Shift+Tab");
           await page.keyboard.press("Tab");
           let info = await page.evaluate(focusInfo, focusPath);
           node.focusVia = "keyboard";
           if (!info.focused) {
-            await page.locator(focusPath).first().focus({ timeout: 2000 });
+            await byPath(page, focusPath).first().focus({ timeout: 2000 });
             info = await page.evaluate(focusInfo, focusPath);
             node.focusVia = "programmatic";
             stateNotes.add("a focus state was measured after a programmatic focus(), which Chromium may not match to :focus-visible");
@@ -996,7 +998,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
         node.note = `${state} state not measured: ${firstLine(e)}`;
       } finally {
         if (state === "hover") await page.mouse.move(0, 0).catch(() => undefined);
-        else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2000 }).catch(() => undefined);
+        else if (focusPath !== null) await byPath(page, focusPath).first().blur({ timeout: 2000 }).catch(() => undefined);
       }
     }
     if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
@@ -1049,7 +1051,7 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
     const tried: string[] = [];
     let covered: string | null = null;
     for (const c of [{ id: oh.id, path: oh.path }, ...oh.next]) {
-      const loc = page.locator(c.path).first();
+      const loc = byPath(page, c.path).first();
       await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
       const position = await page.evaluate(freeHoverPoint, { owner: c.path, avoid: m.path });
       tried.push(c.id);
@@ -1064,7 +1066,7 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
     const on = `its drawn-hovered container ${tried[0]}${tried.length > 1 ? ` (nor on ${tried.slice(1).join(", ")})` : ""}`;
     note = covered !== null ? `hovered the element itself: no usable free point on ${on} — ${covered}` : `hovered the element itself: no free point on ${on}`;
   }
-  await page.locator(own).first().hover({ timeout: 2000 });
+  await byPath(page, own).first().hover({ timeout: 2000 });
   return { hovered: own, note };
 }
 

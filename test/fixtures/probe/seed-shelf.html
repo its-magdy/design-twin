@@ -205,6 +205,10 @@
   if (on("cycle-date")) document.querySelector("header nav").insertAdjacentHTML("afterend", '<label style="color:#fff">From <input type="date" id="from"></label>');
   if (on("cycle-shadow")) { const host = document.createElement("span"); host.id = "pager"; document.querySelector("header nav").after(host); host.attachShadow({ mode: "open" }).innerHTML = "<button>Prev</button><button>Next</button>"; }
   if (on("cycle-iframe")) document.querySelector("header nav").insertAdjacentHTML("afterend", '<iframe title="Map" style="height:40px;width:200px" srcdoc="<button>Zoom in</button><button>Zoom out</button>"></iframe>');
+  // a toolbar web component whose own shadow button (a Tab stop, named) sits at the same nth-child step as a slotted light-DOM
+  // button that is out of the Tab order and has no name: the stop's path names the shadow button exactly (dt.find), but
+  // Playwright's css engine matches the slotted one first — the a11y.name snapshot must be the shadow button's (byPath)
+  if (on("shadow-toolbar")) { document.getElementById("trays").insertAdjacentHTML("beforeend", '<x-toolbar id="tbar"><button type="button" tabindex="-1" aria-label=""></button></x-toolbar>'); document.getElementById("tbar").attachShadow({ mode: "open" }).innerHTML = '<button type="button">Open tray menu</button><slot></slot>'; }
   // M2: a disclosure <summary> (its snapshot line is `- text:`) and a focusable unnamed role=group (a group's name is optional)
   if (on("names")) document.getElementById("trays").insertAdjacentHTML("beforeend", '<details><summary>Tray rules</summary><p>Water daily.</p></details><div role="group" tabindex="0">Tray A · Tray B</div>');
   // M3: Headless UI's Dialog shape for "Move crate" (80:16): <div role=dialog aria-modal=true> with a 0-px box holding the fixed

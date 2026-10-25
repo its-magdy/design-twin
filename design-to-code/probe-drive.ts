@@ -33,6 +33,7 @@ import type { InteractionEvidence, InteractionOutcome, PageOverflow, ProbeActiva
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { decodePng } from "../bridge/src/png.ts";
+import { byPath } from "./page-runtime.ts";
 import type { DriveScroll, PageDocument, PageElement, PageShadowRoot, PageSheet, PageStyle, PageWindow } from "./page-dom.ts";
 
 // ---------------------------------------------------------------- the page, as far as these functions use it (page-dom.ts)
@@ -908,8 +909,8 @@ async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks:
   if (st.disabled) return { ...base, ok: null, detail: "opener is disabled — not driven" };
   // nor one whose click submits a form (the probe navigates and opens, never submits)
   // judged where the click will land — scrolled into view the way Playwright's click does it first
-  if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
-  const submits = await page.locator(st.path).first().evaluate(submitGuard);
+  if (st.visible) await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
   if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) — not driven` };
   // what is on screen before the probe's first hover — a tooltip shown before it is not the control's
   await page.evaluate(tipPreMark, null).catch(() => false);
@@ -919,7 +920,7 @@ async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks:
     if (st.hoverPath !== null) {
       revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
       await page.mouse.move(0, 0);
-      await page.locator(st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
+      await byPath(page, st.hoverPath).first().hover({ timeout: 2000 }).catch(() => undefined);
       await raf2(page);
       st = await page.evaluate(openerState, { id: row.nodeId });
     }
@@ -929,15 +930,15 @@ async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks:
   // the pointer goes where the click will put it FIRST — a row action revealed on :hover (by visibility,
   // display or pointer-events) is under the click point only then, and Playwright's click would land on it. force: no 2 s
   // actionability wait (a covered opener); two frames for the hover styles; the submit guard looks again
-  await page.locator(openerPath).first().hover({ timeout: 2000, force: true }).catch(() => undefined);
+  await byPath(page, openerPath).first().hover({ timeout: 2000, force: true }).catch(() => undefined);
   await raf2(page);
-  const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
+  const submitsHovered = await byPath(page, openerPath).first().evaluate(submitGuard);
   if (submitsHovered !== null) return { ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}), detail: `opener would submit a form (${submitsHovered}) — not driven` };
   // nor one whose click point is another control inside it (a card's centred Delete) — the drive has no
   // write block
   const notOwn = (ctl: string, why?: string): InteractionEvidence => ({ ...base, ok: null, ...(revealedBy !== undefined ? { revealedBy } : {}),
     detail: `the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element — not driven${why !== undefined ? ` (${why})` : ""}` });
-  const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
+  const inner = await byPath(page, openerPath).first().evaluate(clickPointControl, { mark: true });
   if (inner !== null) return notOwn(inner, (await page.evaluate(ownWhy, null).catch(() => null)) ?? undefined);
   // a container's sole control the DOM check let through — the pixels decide (the pointer parked away, unless the opener
   // only shows while its ancestor is hovered: the hover-reveal path keeps that hover)
@@ -948,9 +949,9 @@ async function driveRow({ page, loads }: Reached, row: VerifyInteraction, hooks:
   const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
   const loadsBefore = loads();
   let activation: ProbeActivation = "mouse", clickWhy = "";
-  await page.locator(openerPath).first().evaluate(saveScroll);
+  await byPath(page, openerPath).first().evaluate(saveScroll);
   try {
-    await page.locator(openerPath).first().click({ timeout: 2000 });
+    await byPath(page, openerPath).first().click({ timeout: 2000 });
   } catch (e) {
     const m = errMsg(e);
     const kind = pwErrorKind(e, page);
