@@ -242,7 +242,7 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
     const ms = settings.idleMs;
     // Already quiet for the whole window (and nothing in flight): idleOut's check-at-once would shut it down right
     // away, so say that instead of "still serving".
-    if (ms && a.inFlight === 0 && Date.now() - a.lastActivity >= ms) {
+    if (ms && a.inFlight === 0 && a.idleForMs >= ms) {
       return release(`the MCP client went away (${how}); other dtwin commands/sessions used this shared bridge (${a.frames} request(s)), but none in the last ${humanMs(ms)} (FIGMA_DAEMON_IDLE_MIN) — closing it and exiting`);
     }
     const used = `other dtwin commands/sessions use this shared bridge (${a.frames} request(s) so far)`;

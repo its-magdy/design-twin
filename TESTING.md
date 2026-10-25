@@ -187,6 +187,10 @@ bun test/pending-requests.test.ts # expect: all checks pass, exit 0 — every co
                                  # on a fake clock (test/fake-clock.ts): the budget and its re-arm by the request's own start,
                                  # the stall check, abort, replies only from the target connection, a lost connection, close;
                                  # and clock.ts's deadline rule and adapters — no port, no sleep
+bun test/served-session.test.ts # expect: all checks pass, exit 0 — the daemon's served session (served-session.ts) with no
+                                 # socket: request-frame checks and activity, __ping/__status/__shutdown, forwarding and
+                                 # progress frames, the idle shutdown (window, beat, in-flight hold, idleOut), a client
+                                 # leaving, shutdown's order — on a fake clock
 bun test/await-client.test.ts  # expect: all checks pass, exit 0 — server-core's client registry and the one wait for
                                  # a Figma client every front-end uses (awaitClient: named target, connId, no target,
                                  # leave/abort/close, listeners and timers released), on plain objects — binds no port
@@ -214,7 +218,7 @@ bun test/mcp-delivery.test.ts  # expect: all checks pass, exit 0 — how an MCP 
                                  # tools IN PROCESS (figma-mcp.ts loaded as a module — it starts nothing on import — over an
                                  # in-memory transport) through a recording daemon on FIGMA_BRIDGE_PORT=8789's socket, every
                                  # writeToDisk / outDir / reply-kind path; and that `bun figma-mcp.ts` and `dtwin mcp` both serve
-bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
+bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/served-session.ts bridge/src/pending-requests.ts bridge/src/clock.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
 ```
 
 `verifyClientWith` deserves direct coverage because the interesting cases are negative ones — a sandboxed

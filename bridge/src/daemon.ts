@@ -33,89 +33,27 @@ import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
 import { deadline, systemClock } from "./clock.ts";
 import { bridgePortOrExit } from "./ports.ts";
-import { daemonTokenOf, humanMs, idleMsFromEnv, tokenSetting } from "./settings.ts";
-import { isCmd, replyShapeError } from "./commands.ts";
+import { daemonTokenOf, idleMsFromEnv, tokenSetting } from "./settings.ts";
+import { replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
-import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
-import type { Sent, UpstreamRequest } from "./route.ts";
+import type { ClientRow, ProgressTick } from "./server-core.ts";
+import type { Sent } from "./route.ts";
 import { exitFlushed } from "./stdio.ts";
+import { CONTROL, createServedSession } from "./served-session.ts";
+import type { DaemonActivity, DaemonBridge, DaemonCommandRequest, DaemonControlRequest, DaemonReply, DaemonStatus, SessionFrame } from "./served-session.ts";
+import type { Clock } from "./clock.ts";
 
-// ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
-//
-// Progress (opt-in). A command frame that carries `progress: true` may be answered with any number of
-// PROGRESS frames `{ id?, progress: ProgressTick }` before its one reply frame `{ ok, id?, … }` — the
-// plugin's ticks as server-core hands them to the bridge request's `onProgress` listener. A progress
-// frame has NO `ok` field, so it can never be mistaken for a reply; and it is only ever sent to a
-// client that asked, because a client from before this field reads every frame as the reply and would
-// reject a progress frame ("bad reply frame: not a daemon reply"). A daemon from before this field
-// ignores `progress: true` and never sends one; the client below copes (it simply sees the reply).
-// Why: an MCP export routed through a daemon owes its caller notifications/progress (MCP spec
-// 2025-06-18, basic/utilities/progress) exactly as one that holds the bridge does.
-
-/** A bridge command to forward, typed per command from commands.ts (`switch (msg.cmd)` narrows `args`). */
-export type DaemonCommandRequest<C extends Cmd = Cmd> = {
-  [K in C]: {
-    /** optional correlation id, echoed back on the reply */
-    id?: string;
-    cmd: K;
-    args?: Commands[K]["args"];
-    timeoutMs?: number;
-    /** routing target, forwarded verbatim to the bridge (connId / fileKey / file-name substring) */
-    client?: string | null;
-    /** ms to wait for a plugin to connect before sending */
-    waitForConnection?: number;
-    /** opt in to progress frames before the reply (the protocol note above). Set by the client when
-     *  the caller passes an `onProgress` listener — never needed by hand. */
-    progress?: boolean;
-  };
-}[C];
-
-/** One of the daemon's own commands — answered here, never forwarded. */
-export interface DaemonControlRequest {
-  id?: string;
-  cmd: "__ping" | "__status" | "__shutdown";
-}
-
-/** A request frame: a bridge command to forward, or one of the daemon's own `__ping`/`__status`/`__shutdown`. */
-export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
-
-const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
-const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
+// ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection). The frames, how a
+// request frame is checked and what the daemon answers are the served session's (served-session.ts), which reads them;
+// this module is the socket around it (serve) and the client end (request / connect / stop / status).
+export { daemonRequestError, isDaemonRequest } from "./served-session.ts";
+export type { DaemonActivity, DaemonBridge, DaemonCommandRequest, DaemonControlRequest, DaemonRequest, DaemonStatus } from "./served-session.ts";
 
 /** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
  *  is read as the bridge's own describe() wrote it. */
 function isClientRow(x: unknown): x is ClientRow {
   return isRecord(x) && typeof x.connId === "string";
 }
-
-/** Why `x` is not a well-formed request frame, or null when it is one. A `{}` frame would be forwarded
- *  with `cmd: undefined`, and `timeoutMs: "x"` would reach setTimeout as NaN. Both are refused here. */
-export function daemonRequestError(x: unknown): string | null {
-  if (!isRecord(x)) return "not an object";
-  if (typeof x.cmd !== "string") return "`cmd` is missing";
-  if (x.id !== undefined && typeof x.id !== "string") return "`id` is not a string";
-  if (CONTROL.has(x.cmd)) return null;
-  if (!isCmd(x.cmd)) return `unknown cmd '${x.cmd}'`;
-  if (x.args !== undefined && !isRecord(x.args)) return "`args` is not an object";
-  if (x.timeoutMs !== undefined && !(typeof x.timeoutMs === "number" && Number.isFinite(x.timeoutMs) && x.timeoutMs > 0)) return "`timeoutMs` is not a positive number";
-  if (x.client !== undefined && x.client !== null && typeof x.client !== "string") return "`client` is not a string";
-  if (x.waitForConnection !== undefined && !(typeof x.waitForConnection === "number" && Number.isFinite(x.waitForConnection) && x.waitForConnection >= 0)) return "`waitForConnection` is not a number";
-  if (x.progress !== undefined && typeof x.progress !== "boolean") return "`progress` is not a boolean";
-  return null;
-}
-
-export function isDaemonRequest(x: unknown): x is DaemonRequest {
-  return daemonRequestError(x) === null;
-}
-
-/** A reply frame. `client` (on a forwarded command's success) is the connected file the bridge used —
- *  absent from a daemon older than this field. */
-type DaemonReply =
-  | { ok: true; id?: string; result: unknown; client?: ClientRow }
-  | { ok: false; id?: string; error: string };
-
-/** A progress frame: one plugin tick, relayed while request `id` is in flight (opt-in, see above). */
-type DaemonProgressFrame = { id?: string; progress: ProgressTick };
 
 const finiteOrNull = (v: unknown): v is number | null => v === null || (typeof v === "number" && Number.isFinite(v));
 const stringOrNull = (v: unknown): v is string | null => v === null || typeof v === "string";
@@ -138,42 +76,12 @@ function parseDaemonReply(x: unknown): DaemonReply | null {
   return null;
 }
 
-/** `__status`'s result — what `dtwin --daemon-status`, doctor and `list clients` read. */
-export interface DaemonStatus {
-  daemon: true;
-  pid: number;
-  port: number;
-  pluginConnected: boolean;
-  clients: ClientRow[];
-  connection: ConnectionInfo | null;
-  idleMs: number | null;
-  idleForMs: number;
-}
-
 /** What status() hands back: `daemon: true` is the one field every daemon has sent; a daemon from an
  *  OLDER bridge may omit the newer ones (see staleness.ts daemonRowStalenessNote), so the rest is Partial. */
 export type DaemonStatusView = Partial<DaemonStatus> & { daemon: true };
 
 function isDaemonStatus(x: unknown): x is DaemonStatusView {
   return isRecord(x) && x.daemon === true;
-}
-
-/** What serve() drives: a bridge this process holds (route.ts servedBridge builds one from server-core's
- *  createBridge() result; the test suites pass fakes). `request` is the own adapter's (route.ts Upstream):
- *  the frame's fields as they arrived — `target` its `client`, `waitMs` its `waitForConnection` (the bridge
- *  waits that long for the target first, server-core awaitClient), `onProgress` receives every tick the
- *  chosen connection sends while the request is in flight (the source of progress frames), and `signal` is
- *  aborted when the daemon's client disconnects (or the daemon shuts down) before the reply — server-core
- *  then sends the plugin a cancel frame for the request. It answers WHICH client the command went to (null
- *  when a fake does not say). The daemon never passes `stallMs`. */
-export interface DaemonBridge {
-  port: number;
-  isConnected(): boolean;
-  // Method syntax, and `args` as the frame carries it (absent is forwarded as absent, as it always was).
-  request<C extends Cmd>(cmd: C, args: Commands[C]["args"] | undefined, o: UpstreamRequest): Promise<Sent<C>>;
-  close(): void;
-  listClients?: () => ClientRow[];
-  connectionInfo?: () => ConnectionInfo;
 }
 
 export interface ServeOptions {
@@ -193,6 +101,8 @@ export interface ServeOptions {
   handshake?: boolean;
   /** The bridge token the pipe name and handshake key on (defaults to daemonToken()'s resolution). */
   token?: string | null;
+  /** What the session's idle clock runs on (clock.ts; systemClock when absent) — a suite's fake one steps it. */
+  clock?: Clock;
 }
 
 /** What a request through the daemon takes beside its frame (the frame carries the command, its budget, target
@@ -203,7 +113,7 @@ export interface ServeOptions {
  *  settles. A daemon older than progress frames sends none; the request still answers.
  *  `signal`: the caller giving up. Aborting it closes this request's socket, which the daemon reads as its
  *  client leaving — a request still waiting for its plugin is never sent, a sent one gets the plugin a cancel
- *  frame (serve()'s `abandon`), which drops it from the plugin's queue or stops it at its next safe point. Any
+ *  frame (the served session's leave, served-session.ts), which drops it from the plugin's queue or stops it at its next safe point. Any
  *  daemon, old or new, treats a closed socket that way. */
 export interface DaemonRequestOptions {
   guardMs?: number | undefined;
@@ -558,22 +468,9 @@ export function installCrashHandlers(log: (m: string) => void, cleanup?: () => v
   return forget;
 }
 
-// Requests are FORWARDED AS THEY ARRIVE, never ordered here. Which commands may run alongside which is a
-// property of the command (commands.ts runKind), and the plugin's run scheduler enforces it for every caller
-// (figma-plugin/src/state.ts scheduleRun) — this socket's clients, the MCP server that holds the bridge, and
-// the plugin window's own buttons alike. A queue here could only see this socket's share of a file's runs, held
-// one file's reads behind another file's export, and moved to the next request when an abandoned one's cancel
-// was SENT, while the plugin was still unwinding it. The plugin's own chain moves when the run has ENDED.
-
-/** What the served socket has seen so far — read by a host that has to decide whether OTHER processes
- *  use it (figma-mcp.ts, after its own client went away). `frames` counts every frame received since
- *  serve() started, control frames (`__ping`/`__status`) included; `inFlight` is forwarded requests not yet
- *  answered; `lastActivity` is the epoch ms of the last frame or finished request. */
-export interface DaemonActivity { frames: number; inFlight: number; lastActivity: number }
-
-/** serve()'s handle. `idleOut(ms)` (re)arms the idle shutdown with a window of `ms` (0 disarms it): an
- *  unref'd check every min(30 s, ms) that shuts down once nothing is in flight and the socket has been
- *  quiet for `ms` — and it checks once AT ONCE, so a socket already quiet that long shuts down now. */
+/** serve()'s handle: the socket it listens on, and the served session's own (served-session.ts) — `activity()` (what
+ *  the socket has seen, which a host reads to decide whether OTHER processes use it), `idleOut(ms)` ((re)arms the idle
+ *  shutdown with a window of `ms`, 0 disarms it, and checks once AT ONCE) and `shutdown()`. */
 export interface ServeHandle {
   sock: string;
   shutdown: () => void;
@@ -581,7 +478,10 @@ export interface ServeHandle {
   idleOut(ms: number): void;
 }
 
-export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, signals = true, crashHandlers = signals, platform, handshake, token }: ServeOptions = {}): Promise<ServeHandle> {
+// serve() is the socket adapter around the served session (served-session.ts): the net.Server, the listen race and
+// takeover of a stale socket file, the handshake, and the process's signals and crash hooks. What a frame is, what the
+// daemon answers, the idle decision and cancel-on-leave are the session's.
+export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, signals = true, crashHandlers = signals, platform, handshake, token, clock }: ServeOptions = {}): Promise<ServeHandle> {
   const place: SockPlace = { ...ifDefined("platform", platform), ...ifDefined("handshake", handshake), ...ifDefined("token", token) };
   return assertNoDaemon(port, place).then((sock) => {
     // A pipe (win32) has no file: nothing stale to remove before listening, or after.
@@ -590,123 +490,34 @@ export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, sig
     const auth = ipcAuth(sock, place);
     if (!pipe) { try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ } }
 
-    // Idle shutdown. A daemon outlives the terminal that started it, so without this an orphan holds
-    // port 8787 until someone remembers --stop — and the next thing to want the bridge (a pull, or
-    // the MCP server) fails with EADDRINUSE pointing at a process the user forgot about.
-    //
-    // Deliberately generous: this exists to reap ABANDONED daemons, not to punish thinking time. The
-    // clock resets on every request, and a request in flight holds it off entirely (a 15-minute
-    // --all-pages export must never be shot in the back by its own daemon). 0 disables it.
-    // `idleMs` 0 lets a host that has its OWN lifetime (the MCP server lives as long as its Claude
-    // session) serve the socket without being reaped from under that session.
-    // `idleOut` (the handle) may change the window later: the bridge holder switches an MCP session's from 0
-    // to the settings' window once its own client has gone and only others use the socket (bridge-holder.ts).
-    let stopped = false;
-    let idleMs = idleWindow ?? idleMsFromEnv();
-    let lastActivity = Date.now();
-    let inFlight = 0;
-    let frames = 0;
-    const touch = () => { lastActivity = Date.now(); };
-    let idleTimer: ReturnType<typeof setInterval> | null = null;
-    const check = () => {
-      if (stopped || !idleMs) return;
-      if (inFlight === 0 && Date.now() - lastActivity >= idleMs) {
-        if (log) log(`idle for ${humanMs(idleMs)} — shutting down (set FIGMA_DAEMON_IDLE_MIN=0 to disable).`);
-        shutdown();
-      }
-    };
-    const armIdle = (ms: number) => {
-      if (idleTimer) clearInterval(idleTimer);
-      idleTimer = null;
-      idleMs = ms;
-      if (!ms || stopped) return;
-      // Checked on an interval rather than a rearmed timeout: one timer, and `inFlight` is consulted
-      // at fire time instead of having to cancel/rearm around every request. Never coarser than the
-      // window itself, so a short window (a test's, or the MCP server's after its client left) is honoured.
-      idleTimer = setInterval(check, Math.min(30000, ms));
-      // unref: the idle CHECK must not be the thing keeping the process alive — the socket server and
-      // the WS server are. Otherwise a daemon whose servers closed would linger for the interval.
-      if (idleTimer.unref) idleTimer.unref();
-    };
-    armIdle(idleMs);
+    let forgetExit: (() => void) | null = null;
+    let forgetCrash: (() => void) | null = null;
+    // The session's shutdown lets the socket go FIRST (release), synchronously: stop listening, remove the socket file,
+    // drop the process hooks — then it aborts its requests and closes the bridge.
+    const session = createServedSession(bridge, {
+      idleMs: idleWindow ?? idleMsFromEnv(),
+      ...ifDefined("clock", clock),
+      ...ifDefined("log", log),
+      release: () => {
+        try { server.close(); } catch { /* already closed */ }
+        if (!pipe) { try { fs.unlinkSync(sock); } catch { /* already gone */ } }
+        if (forgetExit) { forgetExit(); forgetExit = null; }
+        if (forgetCrash) { forgetCrash(); forgetCrash = null; }
+      },
+    });
+    const shutdown = session.shutdown;
 
-    // CANCEL: every forwarded request, waiting for its client or in flight, has an
-    // AbortController here AND in its connection's own set. A client that goes away before its reply
-    // (Ctrl-C on a CLI, an MCP session ending) aborts its own requests: an in-flight one makes
-    // server-core send the plugin `{ type: "cancel", id }` — the daemon's socket to the plugin stays
-    // open, so without the frame the plugin would walk the export for nobody and hold every later
-    // command behind it (the plugin drops one it still has queued) — and one still waiting for its plugin to
-    // connect is never forwarded. shutdown() aborts all of them.
-    const outstanding = new Set<AbortController>();
     const server = net.createServer((conn) => {
       conn.setEncoding("utf8");
-      const mine = new Set<AbortController>();
+      const client = session.connect((frame) => { send(conn, frame); });
       // 'end' counts too: net.Server's default allowHalfOpen:false ends our side as soon as the peer
       // ends its own, so no reply could be written after it anyway.
-      const abandon = () => {
-        for (const ac of mine) ac.abort(new Error("the daemon's client disconnected before the reply"));
-        mine.clear();
-      };
-      conn.on("close", abandon);
-      conn.on("end", abandon);
-      // A client that dies mid-export must not take the daemon with it: the write below would emit
+      conn.on("close", client.leave);
+      conn.on("end", client.leave);
+      // A client that dies mid-export must not take the daemon with it: the write in send() would emit
       // EPIPE on a dead socket, which is an unhandled 'error' event => process exit.
-      conn.on("error", abandon);
-      const onFrames = framer((line) => {
-        touch(); // any client contact counts as activity, including the probe
-        frames++; // …and is counted: every frame here comes from ANOTHER process (activity() above)
-        let parsed: unknown;
-        try { parsed = JSON.parse(line) as unknown; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
-        // The frame is checked BEFORE anything reads it: a `{}` would forward `cmd: undefined` to
-        // the bridge, and a `timeoutMs: "x"` would reach setTimeout as NaN.
-        const bad = daemonRequestError(parsed);
-        if (bad !== null || !isDaemonRequest(parsed)) return reply(conn, { ok: false, error: "bad request frame: " + (bad ?? "malformed") });
-        const msg = parsed;
-        // A frame that lands after shutdown() (an idle shutdown, `dtwin stop`, the MCP host leaving) on a
-        // connection opened before it: server.close() does not end live connections, and the bridge is
-        // closed — refuse it here instead of forwarding it to a closed bridge.
-        if (stopped) return reply(conn, { ok: false, ...ifDefined("id", msg.id), error: "the shared bridge daemon has shut down — run the command again (it starts or finds a bridge of its own)" });
-        if (isControl(msg)) return control(conn, msg);
-        // Forwarded now: the plugin orders it against every other run in its file (see the note above serve()).
-        inFlight++; // work in flight counts as activity, so a long export can't be reaped as idleness.
-        const ac = new AbortController();
-        mine.add(ac);
-        outstanding.add(ac);
-        // Never throws (every path ends in a reply). An abort before the send (the client left during the
-        // connect wait) is the bridge's to honour: it rejects with the signal's reason and sends nothing.
-        const run = async (): Promise<void> => {
-          try {
-            // msg.waitForConnection is the caller's connect window (route.ts: the CLI's own window, at least
-            // NAMED_CLIENT_WAIT_MS for a named client): the bridge waits for the target first, a named
-            // one capped at NAMED_CLIENT_WAIT_MS once a plugin is connected (server-core awaitClient), so
-            // `--client <name>` does not fail on the first file that happened to reconnect after a Figma
-            // restart. A window that runs out is not the error: the request then fails in the bridge's own
-            // resolveClient ("Figma plugin not connected. Open the file in Figma and run the plugin.") —
-            // the text every other path prints. A client that leaves during the wait ends it (ac.signal).
-            // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
-            // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
-            // The client the bridge picked rides back on the reply (a fake bridge that answers null
-            // simply doesn't say).
-            // Progress frames only for a client that opted in (`progress: true`) — an older client
-            // reads every frame as the reply. Written on the same socket ahead of the reply, so the
-            // client sees the ticks in the order they arrived, and all of them before the reply.
-            const id = msg.id;
-            const onProgress = msg.progress === true
-              ? (tick: ProgressTick) => { send(conn, id === undefined ? { progress: tick } : { id, progress: tick }); }
-              : undefined;
-            const o = await bridge.request(msg.cmd, msg.args, { timeoutMs: msg.timeoutMs, target: msg.client, onProgress, signal: ac.signal, waitMs: msg.waitForConnection });
-            reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, ...(o.client ? { client: o.client } : {}) });
-          } catch (e) {
-            reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(e) });
-          } finally {
-            mine.delete(ac);
-            outstanding.delete(ac);
-            inFlight--;
-            touch(); // the idle clock starts when work FINISHES, not when it was requested
-          }
-        };
-        void run();
-      });
+      conn.on("error", client.leave);
+      const onFrames = framer(client.line);
       if (!auth) { conn.on("data", onFrames); return; }
       // Handshaking: until the client has proved the token, its bytes go to the handshake (capped, timed),
       // never to the frame reader — so no __ping, no __status and no request is read, and no activity
@@ -720,55 +531,6 @@ export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, sig
       conn.on("close", hs.stop);
     });
 
-    // The daemon's own three commands — answered here, never forwarded to the bridge.
-    function control(conn: net.Socket, msg: DaemonControlRequest): void {
-      if (msg.cmd === "__ping") return reply(conn, { ok: true, ...ifDefined("id", msg.id), result: { daemon: true, pid: process.pid, port: bridge.port } });
-      if (msg.cmd === "__status") {
-        const result: DaemonStatus = {
-          daemon: true, pid: process.pid, port: bridge.port, pluginConnected: bridge.isConnected(),
-          // The daemon owns the bridge, so it is the only side that can see WHICH files are
-          // connected — a CLI process routing through it has no socket of its own to ask.
-          // Guarded because `bridge` here is any object with the bridge shape (the test suite
-          // passes a minimal fake): a status call must never be the thing that kills the daemon.
-          clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
-          // The socket stats too. `dtwin whoami` documents "socket uptime, and how many times a
-          // new connection displaced an earlier one", but with a daemon in front the CLI has no
-          // bridge of its own to read it from, so it could only tell the reader to run a different
-          // command. The daemon has it. One extra field and the documented output is real.
-          connection: typeof bridge.connectionInfo === "function" ? bridge.connectionInfo() : null,
-          // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
-          // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
-          idleMs: idleMs || null,
-          idleForMs: Date.now() - lastActivity,
-        };
-        return reply(conn, { ok: true, ...ifDefined("id", msg.id), result });
-      }
-      // "__shutdown"
-      reply(conn, { ok: true, ...ifDefined("id", msg.id), result: { stopped: true } });
-      shutdown();
-    }
-
-    let forgetExit: (() => void) | null = null;
-    let forgetCrash: (() => void) | null = null;
-    // Idempotent: the idle check, `__shutdown`, a signal and a host's own shutdown can all race.
-    function shutdown() {
-      if (stopped) return;
-      stopped = true;
-      if (idleTimer) clearInterval(idleTimer);
-      idleTimer = null;
-      try { server.close(); } catch { /* already closed */ }
-      if (!pipe) { try { fs.unlinkSync(sock); } catch { /* already gone */ } }
-      if (forgetExit) { forgetExit(); forgetExit = null; }
-      if (forgetCrash) { forgetCrash(); forgetCrash = null; }
-      // Abort every outstanding request BEFORE the bridge closes. This fires first: each in-flight
-      // abort makes server-core send its cancel frame and drop the request from `pending`, so
-      // bridge.close() below finds nothing left to cancel for it (were one sent twice, the plugin
-      // ignores the second). The reason keeps the text a caller saw before: "bridge closed".
-      for (const ac of outstanding) ac.abort(new Error("bridge closed"));
-      outstanding.clear();
-      bridge.close();
-      if (log) log("daemon stopped.");
-    }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
     // socket nobody is listening on. `as const`: process.on's overload wants NodeJS.Signals, not string.
     // shutdown() releases the socket file, the socket and the port synchronously; the exit then waits for the log lines
@@ -791,12 +553,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, sig
     // "synchronous cleanup" the Node docs allow an uncaughtException handler before it exits.
     if (crashHandlers) forgetCrash = installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
 
-    const handle: ServeHandle = {
-      sock,
-      shutdown,
-      activity: () => ({ frames, inFlight, lastActivity }),
-      idleOut: (ms: number) => { armIdle(Math.max(0, ms) || 0); check(); },
-    };
+    const handle: ServeHandle = { sock, shutdown, activity: session.activity, idleOut: session.idleOut };
     return new Promise<ServeHandle>((resolve, reject) => {
       const onListening = () => {
         if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: dtwin --stop`);
@@ -827,10 +584,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, sig
   });
 }
 
-function reply(conn: net.Socket, obj: DaemonReply): void {
-  send(conn, obj);
-}
-function send(conn: net.Socket, obj: DaemonReply | DaemonProgressFrame): void {
+function send(conn: net.Socket, obj: SessionFrame): void {
   try { conn.write(JSON.stringify(obj) + "\n"); } catch { /* client went away mid-reply */ }
 }
 
