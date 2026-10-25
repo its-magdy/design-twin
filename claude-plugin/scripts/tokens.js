@@ -976,23 +976,28 @@ function variableResolver(input) {
   function closure(v) {
     const vars = [];
     let complete = true;
-    const visit = (x, path5) => {
+    const done = /* @__PURE__ */ new Set();
+    const path5 = /* @__PURE__ */ new Set();
+    const visit = (x) => {
       if (path5.has(x)) {
         complete = false;
         return;
       }
-      if (!vars.includes(x)) vars.push(x);
-      const next = new Set(path5).add(x);
+      if (done.has(x)) return;
+      vars.push(x);
+      path5.add(x);
       for (const val of Object.values(x.values || {})) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);
-          if (t) visit(t, next);
+          if (t) visit(t);
           else complete = false;
         }
       }
+      path5.delete(x);
+      done.add(x);
     };
-    visit(v, /* @__PURE__ */ new Set());
+    visit(v);
     return { vars, complete };
   }
   return {

@@ -136,6 +136,14 @@ console.log("cycles — a chain that comes back is unresolved; a long one is not
     { name: "A", type: "FLOAT", values: { L: { aliasOf: "B" }, D: { aliasOf: "C" } } },
     { name: "B", type: "FLOAT", values: { L: { aliasOf: "D" } } }, { name: "C", type: "FLOAT", values: { L: { aliasOf: "D" } } }, { name: "D", type: "FLOAT", values: { L: 1 } }]);
   check("[closure] every mode's aliases, each variable once; a diamond is no cycle", diamond.names === "A,B,D,C" && diamond.complete);
+  check("[closure] a 40-link chain whose four modes all alias the next link is walked once per variable (not once per path)", (() => {
+    const modes = ["Desktop", "Tablet", "Mobile", "Compact"];
+    const links: VariableInput[] = Array.from({ length: 40 }, (_, i) => ({ name: i === 0 ? "A" : `L${i}`, type: "STRING" as const,
+      values: Object.fromEntries(modes.map((m) => [m, i === 39 ? "Inter" : { aliasOf: `L${i + 1}` }])) }));
+    const started = performance.now();
+    const c = closureOf(links);
+    return c.complete && c.names.split(",").length === 40 && performance.now() - started < 1000;
+  })());
   check("[closure] a cycle is incomplete", !closureOf([{ name: "A", type: "FLOAT", values: { L: { aliasOf: "B" } } }, { name: "B", type: "FLOAT", values: { L: { aliasOf: "A" } } }]).complete);
   check("[closure] a dangling alias (here a composed colour's opacity half) is incomplete",
     !closureOf([{ name: "A", type: "COLOR", values: { L: { composed: { color: "#fff", opacity: { aliasOf: "Gone" } } } } }]).complete);

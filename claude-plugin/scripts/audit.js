@@ -1943,23 +1943,28 @@ function variableResolver(input) {
   function closure(v) {
     const vars = [];
     let complete = true;
-    const visit2 = (x, path13) => {
+    const done = /* @__PURE__ */ new Set();
+    const path13 = /* @__PURE__ */ new Set();
+    const visit2 = (x) => {
       if (path13.has(x)) {
         complete = false;
         return;
       }
-      if (!vars.includes(x)) vars.push(x);
-      const next = new Set(path13).add(x);
+      if (done.has(x)) return;
+      vars.push(x);
+      path13.add(x);
       for (const val of Object.values(x.values || {})) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);
-          if (t) visit2(t, next);
+          if (t) visit2(t);
           else complete = false;
         }
       }
+      path13.delete(x);
+      done.add(x);
     };
-    visit2(v, /* @__PURE__ */ new Set());
+    visit2(v);
     return { vars, complete };
   }
   return {

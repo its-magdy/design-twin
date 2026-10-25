@@ -197,19 +197,27 @@ function variableResolver(input: VariableSource | null | undefined | ReadonlyArr
   function closure(v: Variable): AliasClosure {
     const vars: Variable[] = [];
     let complete = true;
-    const visit = (x: Variable, path: ReadonlySet<Variable>): void => {
-      if (path.has(x)) { complete = false; return; } // back on the path: a cycle
-      if (!vars.includes(x)) vars.push(x);
-      const next = new Set(path).add(x);
+    // `path`: the variables on the chain being walked (back on it = a cycle); `done`: walked to the end already, so
+    // another mode reaching it adds nothing — without it a chain whose modes all alias the next link is walked
+    // once per path, exponentially in its length.
+    const done = new Set<Variable>();
+    const path = new Set<Variable>();
+    const visit = (x: Variable): void => {
+      if (path.has(x)) { complete = false; return; }
+      if (done.has(x)) return;
+      vars.push(x);
+      path.add(x);
       for (const val of Object.values(x.values || {})) {
         const names = isAlias(val) ? [val.aliasOf] : isComposed(val) ? [val.composed.color, val.composed.opacity].filter(isAlias).map((a) => a.aliasOf) : [];
         for (const n of names) {
           const t = target(n, x);
-          if (t) visit(t, next); else complete = false;
+          if (t) visit(t); else complete = false;
         }
       }
+      path.delete(x);
+      done.add(x);
     };
-    visit(v, new Set());
+    visit(v);
     return { vars, complete };
   }
 
