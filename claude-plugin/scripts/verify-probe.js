@@ -1603,6 +1603,14 @@ function isJsonObject(x) {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -2200,16 +2208,6 @@ ${usage}`;
   }
   console.error(failure);
   exitCli(exitCode);
-}
-
-// design-to-code/plan-waivers.ts
-function canonical(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
 }
 
 // design-to-code/probe-steps.ts

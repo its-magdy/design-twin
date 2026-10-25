@@ -9,6 +9,8 @@
 // or a fresh clone flips) and the hash of the plan's waivers[]/descopes[]. git HEAD is recorded and shown, never a reason:
 // a commit does not say whether the tree was dirty. The git calls go through `Git` (injected; systemGit runs git).
 //
+// The waivers hash is plan-binding.ts's (waiversHash): it records it at --compare (report.inputs.waivers), this judges by it.
+//
 // The consequence of a reason is each caller's: plan-status reads a stale report as `unverified`, verify-compare grades
 // an unbound measured file `incomplete`, verify-run refuses to record it.
 import fs from "node:fs";
@@ -16,7 +18,7 @@ import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, fileHashes, planCodeFiles } from "./content-hash.ts";
 import { isVerifyReport } from "./doc-guards.ts";
-import { waiversHash } from "./plan-waivers.ts";
+import { waiversHash } from "./plan-binding.ts";
 import { runSync } from "./proc.ts";
 import { readRegularFile } from "./read-json.ts";
 import { isJsonObject } from "./types.ts";
@@ -98,7 +100,7 @@ export function staleText(rel: string, r: StaleReason): string {
 }
 
 /** What a report records about the design and the run it was computed against (verify-compare writes it into
- *  report.inputs beside the code and waivers `stamp` gives): the expectation's sha256 and the export content hash it
+ *  report.inputs beside the code `stamp` gives and plan-binding.ts's waivers hash): the expectation's sha256 and the export content hash it
  *  carries, the measured file's sha256 and the expectation it says it measured. Pure: the shas are the caller's. */
 export function stampEvidence(o: { expectation: { exportContentSha256?: unknown }; expectationSha256?: string | undefined; measuredSha256?: string | undefined; measured: { expectationSha256?: unknown } }):
   { expectationSha256?: string; measuredSha256?: string; measuredAgainst?: string; exportContentSha256?: string } {
@@ -182,9 +184,9 @@ export function reportRecordNames(report: unknown, reportSha256: unknown, cwd: s
 export type CachedBytes = (rel: string) => Uint8Array | undefined;
 
 export interface ReportFreshness {
-  /** what --compare records about the plan it used: the code (each code file's content hash and git HEAD — none when the
-   *  plan lists no files[]) and the plan's waivers/descopes hash */
-  stamp(plan: { file: string; plan: Plan }): { code?: CodeInputs; waivers: { plan: string; sha256: string } };
+  /** what --compare records about the code of the plan it used: each code file's content hash and git HEAD — none when the
+   *  plan lists no files[] (the plan's waivers/descopes hash is plan-binding.ts's, beside it) */
+  stamp(plan: { file: string; plan: Plan }): { code?: CodeInputs };
   /** why report `rel` (project-relative; its expectation is `<set>.expected.json` beside it) no longer holds for this plan
    *  and export, in order — [] = fresh */
   judge(rel: string, inputs: ReportInputs, now: { plan: Plan; exportDoc: unknown }): StaleReason[];
@@ -207,10 +209,7 @@ export function reportFreshness(root: string, o: { git?: Git; cached?: CachedByt
 
   return {
     stamp(p) {
-      return {
-        ...(p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {}),
-        waivers: { plan: p.file, sha256: waiversHash(p.plan) },
-      };
+      return p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {};
     },
     judge(rel, inputs, now) {
       const out: StaleReason[] = [];

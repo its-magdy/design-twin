@@ -224,8 +224,8 @@ console.log("a plan deviation that marks the reference PNG illustrative:");
   const e = expect1([{ type: "FRAME", id: "8:1", name: "Chart", fills: [{ type: "solid", color: "#121319" }], box: { x: 100, y: 100, w: 400, h: 200 } }]);
   const m = measured([node("8:1", { backgroundColor: "#ffffff" })]);
   const plan: Plan = { nodeId: "1:1", deviations: [{ nodeId: "8:1", field: "reference", designed: "a sample chart", built: "the live chart", reason: "the designer drew placeholder data" }] };
-  const withDev = compare(e, m, { plan: { file: "design/plan/Orders__1_1.json", plan, choice: "only" } });
-  const plain = compare(e, m, { plan: { file: "design/plan/Orders__1_1.json", plan: { nodeId: "1:1" }, choice: "only" } });
+  const withDev = compare(e, m, { plan: { now: { file: "design/plan/Orders__1_1.json", plan, choice: "only" } } });
+  const plain = compare(e, m, { plan: { now: { file: "design/plan/Orders__1_1.json", plan: { nodeId: "1:1" }, choice: "only" } } });
   safe("[illustrative] report.visual.illustrative: one row {nodeId, reason}", () =>
     withDev.visual.illustrative?.length === 1 && withDev.visual.illustrative[0]?.nodeId === "8:1" && withDev.visual.illustrative[0].reason === "the designer drew placeholder data");
   safe("[illustrative] the VISUAL line says so; an input note names the plan", () =>

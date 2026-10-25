@@ -19,7 +19,8 @@ import type {
 import type {
   DtcgColor, DtcgDimension, DtcgFigmaExtension, DtcgGroup, DtcgLeaf, DtcgLeafValue, ResolverDoc, ResolverModifier,
 } from "../design-to-code/tokens.ts";
-import type { BooleanPropMap, EnumPropMap, InstancePropMap, StringPropMap } from "../design-to-code/types.ts";
+import type { BooleanPropMap, EnumPropMap, InstancePropMap, Plan, StringPropMap } from "../design-to-code/types.ts";
+import type { ChosenPlan, PlanResolution } from "../design-to-code/plan-binding.ts";
 import type { Asset, VariablesDoc } from "../bridge/src/doc-types.ts";
 import type { ScreenReply } from "../bridge/src/commands.ts";
 import type { Stamped } from "../bridge/src/write-out.ts";
@@ -32,6 +33,11 @@ export class FixtureError extends Error {
   override name = "FixtureError";
 }
 const fail = (msg: string): never => { throw new FixtureError(msg); };
+
+/** compare()'s `plan` option: the plan --compare uses (plan-binding.ts PlanResolution) — by default the frame's only plan. */
+export function usingPlan(plan: Plan, file = "design/plan/Screen__1_1.json", choice: ChosenPlan["choice"] = "only"): PlanResolution {
+  return { now: { file, plan, ...(choice ? { choice } : {}) } };
+}
 
 /**
  * A deliberately malformed input: `x` does NOT satisfy `T`, and the test is about what the code does

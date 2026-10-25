@@ -22,7 +22,7 @@ import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import { isPlan, isVerificationRecord, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import type { JsonObject, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanVerification, VerifyReportV2 } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { must, readFixture, screenExport } from "./fixtures.ts";
+import { must, readFixture, screenExport, usingPlan } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 
 const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts");
@@ -55,8 +55,8 @@ const behaviour: MeasuredBehaviour = { version: 1, ran: true, browser: { name: "
 const waiver = { nodeId: "80:3", field: "width", designed: 200, built: 230, exportContentSha256: exp.exportContentSha256 ?? "", reason: "wider panel agreed", decidedBy: "owner", decidedAt: "2026-10-01" };
 const base = { measuredAt: "2026-10-02T01:00:00Z", renderer: "playwright-chromium", nodes, artifacts: ["design/verify/Crates.png", "design/verify/gone.png"] };
 const measured = { ...base, behaviour };
-const rep: VerifyReportV2 = compare(exp, measured, { waivers: [waiver] });
-const noBehaviour: VerifyReportV2 = compare(exp, base, { waivers: [waiver] });
+const rep: VerifyReportV2 = compare(exp, measured, { plan: usingPlan({ waivers: [waiver] }) });
+const noBehaviour: VerifyReportV2 = compare(exp, base, { plan: usingPlan({ waivers: [waiver] }) });
 
 console.log("the fixture report (real compare() output):");
 check(`compare() gave 1 open high, 1 open medium, 1 accepted, 2 lows, behaviour 1 fail + 1 warn (got ${JSON.stringify(rep.summary)})`,

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import { RUNNER_RE } from "./plugin-invocation.ts";
-import { PASSING_VERDICTS } from "../design-to-code/plan-waivers.ts";
+import { PASSING_VERDICTS } from "../design-to-code/types.ts";
 import * as PM from "../design-to-code/probe-match.ts";
 import { QUICK_KEYS } from "../bridge/src/quick-keys.ts";
 

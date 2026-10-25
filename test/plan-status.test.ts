@@ -10,6 +10,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, legacyPlanHash, planHash } from "../design-to-code/content-hash.ts";
 import { parsePlan } from "../design-to-code/doc-guards.ts";
 import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "../design-to-code/plan-status.ts";
+import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { reportFreshness } from "../design-to-code/report-freshness.ts";
 import type { Git } from "../design-to-code/report-freshness.ts";
 import type { ExportHit } from "../design-to-code/verify-locate.ts";
@@ -139,7 +140,7 @@ console.log("status — precedence over the lifecycle, the hook's state and the 
   const putReport = (plan: Plan, verdict: string, extra: object = {}): void => {
     const s = reportFreshness(p.root, { git: noGit }).stamp({ file: PLAN, plan });
     p.put(REP, { schema: "designtwin/verify-report@2", screen: "Plots", verdict, headline: `${verdict.toUpperCase()} — 3/3`, why: [],
-      inputs: { exportContentSha256: exportContentSha256(doc), ...s }, ...extra });
+      inputs: { exportContentSha256: exportContentSha256(doc), ...s, waivers: { plan: PLAN, sha256: waiversHash(plan) } }, ...extra });
   };
 
   const ab = at({ ...base, status: "abandoned" }), aw = at({ ...base, status: "awaiting-user" });
@@ -221,7 +222,7 @@ console.log("status — precedence over the lifecycle, the hook's state and the 
   p.put("design/verify/Plots.expected.json", EXP);
   const s = reportFreshness(p.root, { git: noGit }).stamp({ file: PLAN, plan: base });
   p.put("design/verify/Plots.report.json", { schema: "designtwin/verify-report@2", screen: "Plots", verdict: "pass", why: [],
-    inputs: { exportContentSha256: exportContentSha256(doc), expectationSha256: sha256Hex(EXP), ...s } });
+    inputs: { exportContentSha256: exportContentSha256(doc), expectationSha256: sha256Hex(EXP), ...s, waivers: { plan: PLAN, sha256: waiversHash(base) } } });
   const byFrame = at(hooked(p.root, base));
   check("[reports] a set found through its expectation's frame.nodeId is read: verified", byFrame.status === "verified" && byFrame.reports[0]?.matchedBy === "expectation frame");
   p.put("design/verify/Plots.expected.json", EXP.replace('"Plots"', '"Plots "'));

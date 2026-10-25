@@ -29,13 +29,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
-import { ifDefined } from "../bridge/src/json-util.ts";
+import { canonical, ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, RECORD_V1_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
 import { reportRecordNames } from "./report-freshness.ts";
 import { siblingFile } from "./verify-sets.ts";
 import { hookHashOf, planHash } from "./content-hash.ts";
-import { canonical } from "./plan-waivers.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
 import type {

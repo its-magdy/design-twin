@@ -38,3 +38,14 @@ export function ifDefined<K extends string, V>(key: K, v: V | undefined): Partia
   if (v !== undefined) o[key] = v;
   return o;
 }
+
+/** JSON with object keys sorted at every depth (array order kept; undefined members dropped) — the canonical form a
+ *  hash is taken of (design-to-code plan-binding.ts, probe-steps.ts stepsSha256, plan-record.ts). */
+export function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
