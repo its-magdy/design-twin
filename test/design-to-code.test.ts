@@ -3,7 +3,7 @@
 import { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue } from "../design-to-code/tokens.ts";
 import { cssVarName } from "../design-to-code/token-naming.ts";
 import { toNative, platformOf } from "../design-to-code/tokens-native.ts";
-import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate.ts";
+import { isCodeConnectMap, validateMap } from "../design-to-code/map-validate-core.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
 import { isManifest } from "../design-to-code/catalog-input.ts";

@@ -24,7 +24,7 @@ import { parseArgs } from "node:util";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import { isCodeConnectMap, validateMap } from "./map-validate.ts";
+import { isCodeConnectMap, validateMap } from "./map-validate-core.ts";
 import type {
   CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, MapValidationResult, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,

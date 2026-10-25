@@ -766,7 +766,7 @@ function parseVariant(s) {
   return Object.keys(out).length ? out : null;
 }
 
-// design-to-code/map-validate.ts
+// design-to-code/map-validate-core.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
@@ -901,7 +901,6 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/design-system-dir.ts
 import fs2 from "node:fs";

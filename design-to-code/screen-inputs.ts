@@ -25,14 +25,14 @@ import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import { readDocFile } from "./catalog-input.ts";
 import { findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
 import type { DesignSystemDir, LibraryExport } from "./design-system-dir.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
+import { isCodeConnectMap } from "./map-validate-core.ts";
 import { isScreenAssetsDoc } from "./doc-guards.ts";
 import { exportRootOfScreen, pagesRootOfScreen, readExportIndex, screenSiblingFile } from "../bridge/src/export-reader.ts";
 import { isScreenDoc } from "./export-shape.ts";
 import { readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
-import type { CrossCheckInput, CrossCheckScreen } from "./cross-check.ts";
+import type { CrossCheckInput, CrossCheckScreen } from "./cross-check-core.ts";
 import type { CodeConnectMap, ComponentsCatalog, ScreenAssetsDoc, ScreenDoc, TokensDoc } from "./types.ts";
 
 /** One screen as both CLIs read it: crossCheck's screen, plus its file and asset manifest (null when absent or unreadable —

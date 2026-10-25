@@ -2,13 +2,13 @@
 // state, the ancestor chain and the backdrop each node sits on, through the walk's own interface on small
 // hand-built trees. The last block runs audit.ts and cross-check.ts on one tree: they must name the same backdrop.
 //   bun test/visible-tree.test.ts
-import { walkWithHidden, walkVisible, hiddenIds, hiddenRoots, paintedOver } from "../design-to-code/visible-tree.ts";
+import { walkWithHidden, walkVisible, walkNodes, visibility, hiddenIds, hiddenRoots, paintedOver } from "../design-to-code/visible-tree.ts";
 import type { WalkContext } from "../design-to-code/visible-tree.ts";
 import { audit } from "../design-to-code/audit.ts";
-import { crossCheck } from "../design-to-code/cross-check.ts";
+import { crossCheck } from "../design-to-code/cross-check-core.ts";
 import type { IrNode } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { node, screenExport, tokens } from "./fixtures.ts";
+import { malformed, node, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 
 const solid = (color: string, token?: string) => ({ type: "solid" as const, color, ...(token ? { tokens: { color: token } } : {}) });
@@ -43,6 +43,24 @@ console.log("visible-tree — hidden state and ancestry:");
   check("the flag is `hidden`, never `visible` (a component property can be called that)",
     contexts(walkVisible, node({ type: "FRAME", id: "1", name: "P", children: [{ type: "INSTANCE", id: "2", name: "Crumb", props: { visible: "Show Breadcrumb" } }] })).size === 2);
   check("hiddenIds / hiddenRoots", hiddenIds([tree]).join() === "2,3" && hiddenRoots([tree]).map((n) => n.id).join() === "2");
+}
+
+console.log("visible-tree — a screen's visibility (plan-skeleton's anchors, verify-build's coverage):");
+{
+  // `visible: false` is not a field the producer writes — which is the point: it must not hide anything.
+  const roots = [node({ id: "1:1", type: "FRAME", children: [
+    malformed<NodeInput>({ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false, children: [{ id: "1:5", type: "TEXT" }] }),
+    { id: "1:3", type: "FRAME", hidden: true, children: [{ id: "1:4", type: "FRAME" }] },
+  ] })];
+  const v = visibility(roots);
+  check("never reads `visible` — a component PROPERTY called \"visible\" does not hide a node", v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4"));
+  check("each hidden subtree's top, with how many nodes it hides (itself included)", v.hiddenRoots.length === 1 && v.hiddenRoots[0]?.id === "1:3" && v.hiddenRoots[0].nodes === 2);
+  check("a visible entry knows its parent and the instance it sits inside",
+    v.visible.get("1:5")?.parentId === "1:2" && v.visible.get("1:5")?.insideInstance === "1:2" && v.visible.get("1:2")?.insideInstance === null);
+  const seen: string[] = [];
+  walkNodes(roots, (n, c) => { if (c.hiddenRoot) seen.push(n.id); });
+  check("walkNodes marks the top of a hidden subtree", seen.join() === "1:3");
+  check("no roots: nothing visible, nothing hidden", visibility(null).visible.size === 0 && visibility([]).hiddenRoots.length === 0);
 }
 
 console.log("visible-tree — backdrop through ancestors:");

@@ -5,7 +5,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES, blockerIds } from "../design-to-code/audit.ts";
+import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES } from "../design-to-code/audit.ts";
+import { blockerIds } from "../design-to-code/audit-gate.ts";
 import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { auditGateStatus } from "../design-to-code/audit-gate.ts";
@@ -694,10 +695,10 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
   const listed = [...line.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
   check("[doc-guard] SKILL.md's 'Blocker codes:' list equals BLOCKER_CODES", JSON.stringify(listed) === JSON.stringify([...BLOCKER_CODES].sort()));
   const emitted = new Set<string>();
-  for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check.ts"]) {
+  for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check-core.ts"]) {
     for (const m of readRepo(f).matchAll(/"blocker"(?:\s*:\s*"(?:warning|info)")?,\s*"([a-z]+(?:-[a-z]+)+)"/g)) if (m[1]) emitted.add(m[1]);
   }
-  check("[doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check.ts is in BLOCKER_CODES (and the scan found some)",
+  check("[doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check-core.ts is in BLOCKER_CODES (and the scan found some)",
     emitted.size >= 3 && [...emitted].every((c) => (BLOCKER_CODES as readonly string[]).includes(c)));
   check("[doc-guard] the scan also sees the conditional token-name-collision emit", emitted.has("token-name-collision"));
 }
@@ -783,7 +784,7 @@ const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, re
 }
 {
   // every CLI remediation hint in finding text names its MCP twin, or says it has none.
-  const lines = ["design-to-code/cross-check.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
+  const lines = ["design-to-code/cross-check.ts", "design-to-code/cross-check-core.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
   const asLib = lines.filter((l) => /dtwin pull --as-library/.test(l));
   const listLib = lines.filter((l) => /dtwin list libraries/.test(l));
   check("every `dtwin pull --as-library` hint says it is CLI only", asLib.length >= 2 && asLib.every((l) => /CLI only/.test(l)));

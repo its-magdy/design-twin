@@ -5,464 +5,9 @@
 import fs8 from "node:fs";
 import path7 from "node:path";
 
-// design-to-code/types.ts
-var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
-
-// design-to-code/export-shape.ts
-function isIrNode(x) {
-  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
-}
-function isScreenExport(x) {
-  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
-}
-function isLayerFile(x) {
-  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
-}
-function isScreenDoc(x) {
-  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
-}
-isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
-function screenRoots(doc) {
-  if (isScreenExport(doc)) return doc.nodes;
-  if (isLayerFile(doc)) return [doc.tree];
-  if (isIrNode(doc)) return [doc];
-  return [];
-}
-function screenExportOf(doc) {
-  return isScreenExport(doc) ? doc : null;
-}
-
-// bridge/src/hex-color.ts
-function formatHex(c) {
-  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-function clampOpacityPct(n) {
-  return Math.min(100, Math.max(0, n));
-}
-function composeAlpha(alpha, opacityPct) {
-  return alpha * (clampOpacityPct(opacityPct) / 100);
-}
-function compositeOver(fg, bg) {
-  return {
-    r: fg.r * fg.a + bg.r * (1 - fg.a),
-    g: fg.g * fg.a + bg.g * (1 - fg.a),
-    b: fg.b * fg.a + bg.b * (1 - fg.a),
-    a: 1
-  };
-}
-function luminance(c) {
-  const ch = (v) => {
-    v /= 255;
-    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-}
-function contrastRatio(a, b) {
-  const la = luminance(a), lb = luminance(b);
-  const hi = Math.max(la, lb), lo = Math.min(la, lb);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
-// design-to-code/visible-tree.ts
-var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
-var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-var WHITE = { r: 255, g: 255, b: 255, a: 1 };
-var NOTHING = { color: null, complex: false, token: null };
-var paintToken = (p) => {
-  const t = p.tokens && p.tokens.color;
-  const s = Array.isArray(t) ? t[0] : t;
-  return typeof s === "string" && s ? s : null;
-};
-function paintOver(base, n) {
-  if (n.type === "TEXT") return base;
-  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
-  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
-  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
-  let { color, complex, token } = base;
-  for (const f of fills) {
-    if (f.opacity === 0 || f.visible === false) continue;
-    if (f.type !== "solid") {
-      complex = true;
-      token = null;
-      continue;
-    }
-    const c = parseHex(f.color);
-    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
-    if (!c) {
-      token = tok;
-      continue;
-    }
-    if (c.a <= 0) continue;
-    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
-    if (c.a >= 1) {
-      complex = false;
-      token = tok;
-    } else token = null;
-  }
-  return { color, complex, token };
-}
-function paintedOver(under, layers, tokenColor) {
-  let color = under, complex = false, painted = false;
-  for (const n of layers) {
-    if (n.type === "TEXT") continue;
-    const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
-    const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
-    const lt = !fills.length && nodeTok && tokenColor ? tokenColor(nodeTok) : null;
-    if (lt && lt.a > 0) {
-      color = compositeOver(lt, color);
-      painted = true;
-      if (lt.a >= 1) complex = false;
-    }
-    for (const f of fills) {
-      if (f.opacity === 0 || f.visible === false) continue;
-      if (f.type !== "solid") {
-        complex = true;
-        painted = true;
-        continue;
-      }
-      const c = parseHex(f.color);
-      if (!c || c.a <= 0) continue;
-      color = compositeOver(c, color);
-      painted = true;
-      if (c.a >= 1) complex = false;
-    }
-  }
-  return painted ? { color, complex } : null;
-}
-var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
-function isIconInk(n) {
-  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
-  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
-}
-function overlaps(a, b) {
-  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
-function beneathOf(parent, kids, i) {
-  const child = kids[i];
-  if (!child) return [];
-  const stacks = !parent.layout || parent.layout.mode === "absolute";
-  if (!stacks && !child.absolute) return [];
-  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
-}
-function memo(fn) {
-  let cell = null;
-  return () => (cell ??= { v: fn() }).v;
-}
-function walk(root, fn, prune, opts) {
-  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path8, ancestors, under, beneath) {
-    if (!node || typeof node !== "object") return;
-    const hidden = isHidden(node, parentHidden);
-    if (hidden && prune) return;
-    const backdrop = memo(() => beneath().reduce(paintOver, under()));
-    const parentFrame = ancestors[ancestors.length - 1];
-    const frame = { node, hidden, get backdrop() {
-      return backdrop();
-    }, get beneath() {
-      return beneath();
-    } };
-    fn(node, {
-      hidden,
-      parentHidden: !!parentHidden,
-      path: path8,
-      parent: parentFrame ? parentFrame.node : null,
-      depth: ancestors.length,
-      ancestors,
-      get backdrop() {
-        return backdrop();
-      },
-      get beneath() {
-        return beneath();
-      }
-    });
-    const kids = Array.isArray(node.children) ? node.children : [];
-    if (!kids.length) return;
-    const inside2 = memo(() => paintOver(backdrop(), node));
-    const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
-  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
-}
-function walkVisible(root, fn, opts) {
-  walk(root, fn, true, opts);
-}
-
-// bridge/src/json-util.ts
-function nullProto() {
-  return /* @__PURE__ */ Object.create(null);
-}
-function isRecord(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
-}
-function ifDefined(key, v) {
-  const o = {};
-  if (v !== void 0) o[key] = v;
-  return o;
-}
-
-// design-to-code/map-util.ts
-var alnumKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-function getOrInit(m, k, init) {
-  const have = m.get(k);
-  if (have !== void 0) return have;
-  const made = init();
-  m.set(k, made);
-  return made;
-}
-
-// design-to-code/component-match.ts
-function visibleInstances(doc, label) {
-  const out = [];
-  const visit = (n) => {
-    if (n.type === "INSTANCE" && n.mainComponent) {
-      const mc = n.mainComponent;
-      out.push({
-        screen: label,
-        nodeId: n.id,
-        layer: n.name,
-        name: mc.setName || mc.name || n.name,
-        ...ifDefined("key", mc.key),
-        ...ifDefined("setKey", mc.setKey),
-        remote: mc.remote === true,
-        variant: parseVariant(n.component) || parseVariant(mc.variant),
-        props: n.props && typeof n.props === "object" ? n.props : {}
-      });
-    }
-  };
-  for (const r of screenRoots(doc)) walkVisible(r, visit);
-  return out;
-}
-function parseVariant(s) {
-  if (isJsonObject(s)) {
-    const out2 = Object.fromEntries(Object.entries(s).filter((e) => typeof e[1] === "string"));
-    return Object.keys(out2).length ? out2 : null;
-  }
-  if (!s || typeof s !== "string" || !s.includes("=")) return null;
-  const out = {};
-  for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
-    const i = part.indexOf("=");
-    if (i < 0) continue;
-    out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
-  }
-  return Object.keys(out).length ? out : null;
-}
-var baseProp = (p) => String(p).split("#")[0] ?? "";
-var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
-function signature(inst, cand) {
-  const props = {};
-  for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
-  const reasons = [];
-  let score = 40, verified = true;
-  reasons.push("name matches catalog entry verbatim");
-  const variant = inst.variant;
-  if (variant) {
-    const axes = Object.keys(variant);
-    const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
-    if (known.length === axes.length) {
-      score += 25;
-      reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
-    } else {
-      verified = false;
-      score += known.length ? 10 : -15;
-      reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
-    }
-    const bad = Object.entries(variant).filter(([k, val]) => {
-      const d = props[k];
-      return d && d.type === "VARIANT" && !(d.options || []).includes(val);
-    }).map(([k]) => k);
-    if (known.length && !bad.length) {
-      score += 25;
-      reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
-    } else if (bad.length) {
-      verified = false;
-      score -= 20;
-      reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
-    }
-  } else if (cand.type === "COMPONENT") {
-    score += 15;
-    reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
-  } else {
-    verified = false;
-    reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
-  }
-  const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
-  if (own.length) {
-    const typed = own.filter((k) => {
-      const d = props[baseProp(k)], v = inst.props[k];
-      if (!d) return false;
-      if (typeof v === "boolean") return d.type === "BOOLEAN";
-      return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
-    });
-    if (typed.length === own.length) {
-      score += 15;
-      reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
-    } else {
-      verified = false;
-      score += typed.length ? 5 : -10;
-      reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
-    }
-  }
-  if (SHARED_PAGE.test(String(cand.page || ""))) {
-    score += 5;
-    reasons.push(`lives on a shared page (${cand.page})`);
-  }
-  return { verified, score, reasons };
-}
-var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
-function matchByNameAndSignature(instances, catalog, library) {
-  const comps = catalog && catalog.components || [];
-  const byName = /* @__PURE__ */ new Map();
-  comps.forEach((c, i) => {
-    getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c));
-  });
-  const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
-  const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
-  const libNames = new Set((library && library.components || []).map((c) => c.name));
-  const groups = /* @__PURE__ */ new Map();
-  for (const inst of instances) {
-    const group = groups.get(inst.name);
-    if (group) group.push(inst);
-    else groups.set(inst.name, [inst]);
-  }
-  const rows = [];
-  for (const [name, list] of groups) {
-    const byKey = list.some((i) => catKeys.has(i.key ?? "") || catKeys.has(i.setKey ?? ""));
-    const row = {
-      name,
-      instances: list.length,
-      nodeIds: list.map((i) => i.nodeId),
-      screens: [...new Set(list.map((i) => i.screen).filter((s) => !!s))],
-      instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k) => !!k))],
-      remote: list.every((i) => i.remote),
-      byKey,
-      match: null,
-      alternatives: [],
-      reasons: []
-    };
-    const cands = byName.get(name) || [];
-    if (!cands.length) {
-      const inLibrary = list.some((i) => libKeys.has(i.key ?? "") || libKeys.has(i.setKey ?? ""));
-      row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
-      row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
-      rows.push(row);
-      continue;
-    }
-    if (cands.length > 1) row.candidates = cands.map((c) => ({ ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }));
-    const [firstInst, ...otherInsts] = list;
-    const scored = cands.map((c) => {
-      const first = signature(firstInst, c);
-      const per = [first, ...otherInsts.map((i) => signature(i, c))];
-      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
-    }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
-    const best = scored[0];
-    if (best === void 0) throw new Error("component-match: a non-empty candidate list scored to nothing");
-    if (!best.verified) {
-      row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
-      rows.push(row);
-      continue;
-    }
-    const verifiedOnes = scored.filter((s) => s.verified);
-    const runnerUp = verifiedOnes[1];
-    const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
-    row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
-    row.reasons = best.reasons.slice();
-    if (ties.length) {
-      const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
-      row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
-      row.tie = identical ? "duplicate-definitions" : "different-signatures";
-    } else if (scored.length > 1) {
-      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
-    }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
-    row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
-    rows.push(row);
-  }
-  const proposals = rows.filter((r) => !!r.match && !r.byKey);
-  return {
-    rows,
-    proposals,
-    summary: {
-      instances: instances.length,
-      names: rows.length,
-      byKey: rows.filter((r) => r.byKey).length,
-      proposed: proposals.length,
-      proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
-      withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
-      unmatched: rows.filter((r) => !r.match).length,
-      remote: instances.filter((i) => i.remote).length
-    }
-  };
-}
-function nameVerdict(row) {
-  if (row.match && row.tie === "different-signatures") {
-    return { status: "ambiguous", reason: `several catalog entries named ${JSON.stringify(row.name)} agree with the instance equally but have DIFFERENT signatures \u2014 confirm which one` };
-  }
-  if (row.match) return { status: "matched", reason: `name + ${row.evidence === "name+no-props" ? "no props to check (a plain component)" : "prop signature"}${row.tie === "duplicate-definitions" ? "; same-named duplicates of one definition" : ""}` };
-  const n = (row.candidates || []).length;
-  if (n > 1) return { status: "ambiguous", reason: `${n} catalog entries are named ${JSON.stringify(row.name)} and none agrees with the instance's prop signature \u2014 confirm which one, if any` };
-  const why = (row.reasons || []).find((r) => /no catalog entry named|no prop signature agrees/.test(r));
-  return { status: "unmatched", reason: why || `no catalog entry named ${JSON.stringify(row.name)} agrees with the instance` };
-}
-var REKEY_MIN_PROPOSALS = 3;
-var REKEY_MIN_SHARE = 0.5;
-function isRekeyed(result) {
-  const s = result.summary;
-  return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
-}
-
-// design-to-code/finding-id.ts
-function findingIds(findings) {
-  const seen = /* @__PURE__ */ new Map();
-  return findings.map((f) => {
-    const base = f.nodeId ? `${f.code}@${f.nodeId}` : f.code;
-    const n = (seen.get(base) || 0) + 1;
-    seen.set(base, n);
-    return n === 1 ? base : `${base}~${n}`;
-  });
-}
-
 // design-to-code/screen-inputs.ts
 import fs7 from "node:fs";
-import path6 from "node:path";
+import path5 from "node:path";
 
 // bridge/src/project-layout.ts
 import fs from "node:fs";
@@ -508,6 +53,22 @@ function findMapFile(cwd) {
   return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
 }
 
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isRecord(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
 // bridge/src/pages-layout.ts
 var isObjectLike = (x) => !!x && typeof x === "object";
 var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
@@ -549,6 +110,12 @@ var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), C
 
 // design-to-code/catalog-input.ts
 import fs3 from "node:fs";
+
+// design-to-code/types.ts
+var PLAN_VERIFICATION_RECORD_SCHEMA = "designtwin/plan-verification-record@2";
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
 
 // bridge/src/read-json.ts
 import fs2 from "node:fs";
@@ -772,6 +339,217 @@ function readOptionalDoc(file, what, guard) {
 // design-to-code/design-system-dir.ts
 import fs5 from "node:fs";
 import path3 from "node:path";
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function screenExportOf(doc) {
+  return isScreenExport(doc) ? doc : null;
+}
+
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+function luminance(c) {
+  const ch = (v) => {
+    v /= 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
+}
+function contrastRatio(a, b) {
+  const la = luminance(a), lb = luminance(b);
+  const hi = Math.max(la, lb), lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// design-to-code/visible-tree.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+var WHITE = { r: 255, g: 255, b: 255, a: 1 };
+var NOTHING = { color: null, complex: false, token: null };
+var paintToken = (p) => {
+  const t = p.tokens && p.tokens.color;
+  const s = Array.isArray(t) ? t[0] : t;
+  return typeof s === "string" && s ? s : null;
+};
+function paintOver(base, n) {
+  if (n.type === "TEXT") return base;
+  const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+  const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+  if (!fills.length) return nodeTok ? { ...base, token: nodeTok } : base;
+  let { color, complex, token } = base;
+  for (const f of fills) {
+    if (f.opacity === 0 || f.visible === false) continue;
+    if (f.type !== "solid") {
+      complex = true;
+      token = null;
+      continue;
+    }
+    const c = parseHex(f.color);
+    const tok = paintToken(f) ?? (fills.length === 1 ? nodeTok : null);
+    if (!c) {
+      token = tok;
+      continue;
+    }
+    if (c.a <= 0) continue;
+    color = color ? compositeOver(c, color) : c.a >= 1 ? c : compositeOver(c, WHITE);
+    if (c.a >= 1) {
+      complex = false;
+      token = tok;
+    } else token = null;
+  }
+  return { color, complex, token };
+}
+function paintedOver(under, layers, tokenColor) {
+  let color = under, complex = false, painted = false;
+  for (const n of layers) {
+    if (n.type === "TEXT") continue;
+    const fills = (Array.isArray(n.fills) ? n.fills : []).filter(Boolean);
+    const nodeTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills ? n.tokens.fills : null;
+    const lt = !fills.length && nodeTok && tokenColor ? tokenColor(nodeTok) : null;
+    if (lt && lt.a > 0) {
+      color = compositeOver(lt, color);
+      painted = true;
+      if (lt.a >= 1) complex = false;
+    }
+    for (const f of fills) {
+      if (f.opacity === 0 || f.visible === false) continue;
+      if (f.type !== "solid") {
+        complex = true;
+        painted = true;
+        continue;
+      }
+      const c = parseHex(f.color);
+      if (!c || c.a <= 0) continue;
+      color = compositeOver(c, color);
+      painted = true;
+      if (c.a >= 1) complex = false;
+    }
+  }
+  return painted ? { color, complex } : null;
+}
+var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+function isIconInk(n) {
+  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
+  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
+}
+function overlaps(a, b) {
+  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+var paintsSurface = (n) => !hiddenSelf(n) && n.type !== "TEXT" && !isIconInk(n) && Array.isArray(n.fills) && n.fills.length > 0;
+function beneathOf(parent, kids, i) {
+  const child = kids[i];
+  if (!child) return [];
+  const stacks = !parent.layout || parent.layout.mode === "absolute";
+  if (!stacks && !child.absolute) return [];
+  return kids.slice(0, i).filter((s) => s && typeof s === "object" && paintsSurface(s) && overlaps(s.box, child.box));
+}
+function memo(fn) {
+  let cell = null;
+  return () => (cell ??= { v: fn() }).v;
+}
+function walk(root, fn, prune, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path8, ancestors, under, beneath) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    if (hidden && prune) return;
+    const backdrop = memo(() => beneath().reduce(paintOver, under()));
+    const parentFrame = ancestors[ancestors.length - 1];
+    const frame = { node, hidden, get backdrop() {
+      return backdrop();
+    }, get beneath() {
+      return beneath();
+    } };
+    fn(node, {
+      hidden,
+      parentHidden: !!parentHidden,
+      path: path8,
+      parent: parentFrame ? parentFrame.node : null,
+      depth: ancestors.length,
+      ancestors,
+      get backdrop() {
+        return backdrop();
+      },
+      get beneath() {
+        return beneath();
+      }
+    });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    if (!kids.length) return;
+    const inside2 = memo(() => paintOver(backdrop(), node));
+    const chain = [...ancestors, frame];
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path8 ? path8 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+  })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
+}
+function walkVisible(root, fn, opts) {
+  walk(root, fn, true, opts);
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1176,99 +954,7 @@ function findLibraryExports(screenFile, dsDir) {
   });
 }
 
-// design-to-code/cli-args.ts
-import path4 from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
-function joinNegativeValues(argv, options) {
-  const out = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i], next = argv[i + 1];
-    if (tok === void 0) continue;
-    if (tok === "--") {
-      out.push(...argv.slice(i));
-      break;
-    }
-    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
-    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
-      out.push(`${tok}=${next}`);
-      i++;
-    } else out.push(tok);
-  }
-  return out;
-}
-function badShortWords(args, options) {
-  const shorts = /* @__PURE__ */ new Map();
-  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
-  const bad = [];
-  let takesNext = false;
-  for (const a of args) {
-    if (a === "--") break;
-    if (takesNext) {
-      takesNext = false;
-      continue;
-    }
-    if (a.startsWith("--")) {
-      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
-      continue;
-    }
-    if (!/^-[^-]/.test(a)) continue;
-    let ok = true;
-    for (const [i, c] of [...a.slice(1)].entries()) {
-      const type = shorts.get(c);
-      if (type === void 0) {
-        ok = false;
-        break;
-      }
-      if (type === "string") {
-        takesNext = i === a.length - 2;
-        break;
-      }
-    }
-    if (!ok) bad.push(a);
-  }
-  return bad;
-}
-function cliParse(tool, argv, options, usage, exitCode, parse) {
-  const args = joinNegativeValues(argv, options);
-  const unknownFlags = () => {
-    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
-    const short = badShortWords(args, options);
-    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
-    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
-    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
-${usage}`;
-  };
-  let failure;
-  try {
-    const parsed = parse(args);
-    if (!badShortWords(args, options).length) return parsed;
-    failure = unknownFlags();
-  } catch (e) {
-    const code = errCode(e);
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      failure = unknownFlags();
-    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const msg = e instanceof Error ? e.message : "";
-      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
-      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
-      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`;
-    } else {
-      failure = `${tool}: ${errMsg(e)}
-${usage}`;
-    }
-  }
-  console.error(failure);
-  exitCli(exitCode);
-}
-
-// design-to-code/map-validate.ts
+// design-to-code/map-validate-core.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
@@ -1403,11 +1089,10 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
 
 // design-to-code/slice-sources.ts
 import fs6 from "node:fs";
-import path5 from "node:path";
+import path4 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -1416,12 +1101,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path5.dirname(docPath) : ".";
+  const base = docPath ? path4.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path5.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path4.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -1433,7 +1118,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path5.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path4.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -1451,9 +1136,9 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path5.resolve(path5.dirname(firstFile), "..", "..");
-    const rootVars = path5.join(exportRoot, MERGED_VARIABLES_FILE);
-    const sibling = path5.join(path5.dirname(firstFile), MERGED_VARIABLES_FILE);
+    const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
+    const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
     if (fs6.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs6.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
@@ -1461,15 +1146,15 @@ function variablesContext(screenFiles, varsFile, opts) {
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy2 = path5.join(path5.resolve(path5.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(legacy2) && path5.resolve(legacy2) !== path5.resolve(variablesPath || "")) staleLegacy = legacy2;
+    const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
 
 // design-to-code/screen-inputs.ts
 function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path6.resolve(f)));
+  const checked = new Set(files.map((f) => path5.resolve(f)));
   const roots = /* @__PURE__ */ new Set();
   for (const f of checked) {
     const root = exportRootOfScreen(f);
@@ -1486,7 +1171,7 @@ function exportSiblings(files) {
         if (file === null || seen.has(file)) continue;
         seen.add(file);
         const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path6.basename(file, ".json") });
+        if (doc) out.push({ doc, label: path5.basename(file, ".json") });
       }
     }
     return out;
@@ -1495,11 +1180,11 @@ function exportSiblings(files) {
 function designSystemDirOf(firstFile, named) {
   if (named) return { dir: named, given: true };
   const shown = (abs) => {
-    const rel = path6.relative(process.cwd(), abs);
-    return rel && !rel.startsWith("..") && !path6.isAbsolute(rel) ? rel.split(path6.sep).join("/") : abs;
+    const rel = path5.relative(process.cwd(), abs);
+    return rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel.split(path5.sep).join("/") : abs;
   };
   const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
-  const dir = root !== null ? path6.join(root, DESIGN_SYSTEM_DIR) : path6.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  const dir = root !== null ? path5.join(root, DESIGN_SYSTEM_DIR) : path5.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
   return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
 }
 function readScreenInputs(files, flags = {}) {
@@ -1512,7 +1197,7 @@ function readScreenInputs(files, flags = {}) {
   const screens = files.map((f, i) => ({
     file: f,
     doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path6.basename(f, ".json"),
+    label: path5.basename(f, ".json"),
     ...ctx.own[i] ? { vars: ctx.own[i] } : {},
     assets: readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc)
   }));
@@ -1567,6 +1252,323 @@ function crossCheckInputOf(c, fallback = {}) {
     map: c.map ?? null,
     siblings: c.siblings ?? null
   };
+}
+
+// design-to-code/cli-args.ts
+import path6 from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path6.join(path6.dirname(SELF), name + path6.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  exitCli(exitCode);
+}
+
+// design-to-code/cross-check.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
+// design-to-code/map-util.ts
+var alnumKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
+// design-to-code/component-match.ts
+function visibleInstances(doc, label) {
+  const out = [];
+  const visit = (n) => {
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent;
+      out.push({
+        screen: label,
+        nodeId: n.id,
+        layer: n.name,
+        name: mc.setName || mc.name || n.name,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
+        remote: mc.remote === true,
+        variant: parseVariant(n.component) || parseVariant(mc.variant),
+        props: n.props && typeof n.props === "object" ? n.props : {}
+      });
+    }
+  };
+  for (const r of screenRoots(doc)) walkVisible(r, visit);
+  return out;
+}
+function parseVariant(s) {
+  if (isJsonObject(s)) {
+    const out2 = Object.fromEntries(Object.entries(s).filter((e) => typeof e[1] === "string"));
+    return Object.keys(out2).length ? out2 : null;
+  }
+  if (!s || typeof s !== "string" || !s.includes("=")) return null;
+  const out = {};
+  for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+var baseProp = (p) => String(p).split("#")[0] ?? "";
+var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
+function signature(inst, cand) {
+  const props = {};
+  for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
+  const reasons = [];
+  let score = 40, verified = true;
+  reasons.push("name matches catalog entry verbatim");
+  const variant = inst.variant;
+  if (variant) {
+    const axes = Object.keys(variant);
+    const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
+    if (known.length === axes.length) {
+      score += 25;
+      reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
+    } else {
+      verified = false;
+      score += known.length ? 10 : -15;
+      reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
+    }
+    const bad = Object.entries(variant).filter(([k, val]) => {
+      const d = props[k];
+      return d && d.type === "VARIANT" && !(d.options || []).includes(val);
+    }).map(([k]) => k);
+    if (known.length && !bad.length) {
+      score += 25;
+      reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
+    } else if (bad.length) {
+      verified = false;
+      score -= 20;
+      reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
+    }
+  } else if (cand.type === "COMPONENT") {
+    score += 15;
+    reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
+  } else {
+    verified = false;
+    reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
+  }
+  const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
+  if (own.length) {
+    const typed = own.filter((k) => {
+      const d = props[baseProp(k)], v = inst.props[k];
+      if (!d) return false;
+      if (typeof v === "boolean") return d.type === "BOOLEAN";
+      return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
+    });
+    if (typed.length === own.length) {
+      score += 15;
+      reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
+    } else {
+      verified = false;
+      score += typed.length ? 5 : -10;
+      reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
+    }
+  }
+  if (SHARED_PAGE.test(String(cand.page || ""))) {
+    score += 5;
+    reasons.push(`lives on a shared page (${cand.page})`);
+  }
+  return { verified, score, reasons };
+}
+var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
+function matchByNameAndSignature(instances, catalog, library) {
+  const comps = catalog && catalog.components || [];
+  const byName = /* @__PURE__ */ new Map();
+  comps.forEach((c, i) => {
+    getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c));
+  });
+  const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
+  const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
+  const libNames = new Set((library && library.components || []).map((c) => c.name));
+  const groups = /* @__PURE__ */ new Map();
+  for (const inst of instances) {
+    const group = groups.get(inst.name);
+    if (group) group.push(inst);
+    else groups.set(inst.name, [inst]);
+  }
+  const rows = [];
+  for (const [name, list] of groups) {
+    const byKey = list.some((i) => catKeys.has(i.key ?? "") || catKeys.has(i.setKey ?? ""));
+    const row = {
+      name,
+      instances: list.length,
+      nodeIds: list.map((i) => i.nodeId),
+      screens: [...new Set(list.map((i) => i.screen).filter((s) => !!s))],
+      instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k) => !!k))],
+      remote: list.every((i) => i.remote),
+      byKey,
+      match: null,
+      alternatives: [],
+      reasons: []
+    };
+    const cands = byName.get(name) || [];
+    if (!cands.length) {
+      const inLibrary = list.some((i) => libKeys.has(i.key ?? "") || libKeys.has(i.setKey ?? ""));
+      row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
+      row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
+      rows.push(row);
+      continue;
+    }
+    if (cands.length > 1) row.candidates = cands.map((c) => ({ ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }));
+    const [firstInst, ...otherInsts] = list;
+    const scored = cands.map((c) => {
+      const first = signature(firstInst, c);
+      const per = [first, ...otherInsts.map((i) => signature(i, c))];
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
+    }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
+    const best = scored[0];
+    if (best === void 0) throw new Error("component-match: a non-empty candidate list scored to nothing");
+    if (!best.verified) {
+      row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
+      rows.push(row);
+      continue;
+    }
+    const verifiedOnes = scored.filter((s) => s.verified);
+    const runnerUp = verifiedOnes[1];
+    const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
+    row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
+    row.reasons = best.reasons.slice();
+    if (ties.length) {
+      const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
+      row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
+      row.tie = identical ? "duplicate-definitions" : "different-signatures";
+    } else if (scored.length > 1) {
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
+    }
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
+    row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
+    rows.push(row);
+  }
+  const proposals = rows.filter((r) => !!r.match && !r.byKey);
+  return {
+    rows,
+    proposals,
+    summary: {
+      instances: instances.length,
+      names: rows.length,
+      byKey: rows.filter((r) => r.byKey).length,
+      proposed: proposals.length,
+      proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
+      withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
+      unmatched: rows.filter((r) => !r.match).length,
+      remote: instances.filter((i) => i.remote).length
+    }
+  };
+}
+function nameVerdict(row) {
+  if (row.match && row.tie === "different-signatures") {
+    return { status: "ambiguous", reason: `several catalog entries named ${JSON.stringify(row.name)} agree with the instance equally but have DIFFERENT signatures \u2014 confirm which one` };
+  }
+  if (row.match) return { status: "matched", reason: `name + ${row.evidence === "name+no-props" ? "no props to check (a plain component)" : "prop signature"}${row.tie === "duplicate-definitions" ? "; same-named duplicates of one definition" : ""}` };
+  const n = (row.candidates || []).length;
+  if (n > 1) return { status: "ambiguous", reason: `${n} catalog entries are named ${JSON.stringify(row.name)} and none agrees with the instance's prop signature \u2014 confirm which one, if any` };
+  const why = (row.reasons || []).find((r) => /no catalog entry named|no prop signature agrees/.test(r));
+  return { status: "unmatched", reason: why || `no catalog entry named ${JSON.stringify(row.name)} agrees with the instance` };
+}
+var REKEY_MIN_PROPOSALS = 3;
+var REKEY_MIN_SHARE = 0.5;
+function isRekeyed(result) {
+  const s = result.summary;
+  return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
+}
+
+// design-to-code/finding-id.ts
+function findingIds(findings) {
+  const seen = /* @__PURE__ */ new Map();
+  return findings.map((f) => {
+    const base = f.nodeId ? `${f.code}@${f.nodeId}` : f.code;
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}~${n}`;
+  });
 }
 
 // design-to-code/control-kind.ts
@@ -1740,8 +1742,7 @@ function variableResolver(input) {
   };
 }
 
-// design-to-code/cross-check.ts
-import { parseArgs as parseArgs2 } from "node:util";
+// design-to-code/cross-check-core.ts
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 var ABSURD_NUMBER = 1e4;
 var WRONG_CATALOG_PCT = 5;
@@ -2690,6 +2691,8 @@ function toMarkdown(res) {
   }
   return L.join("\n") + "\n";
 }
+
+// design-to-code/cross-check.ts
 function main(argv) {
   const USAGE = `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] [--variables design/export/variables.json] [--map design/codeconnect.local.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
   const OPTIONS = {
@@ -2735,10 +2738,5 @@ function main(argv) {
 }
 if (import.meta.main) runCli(main, { name: "cross-check" });
 export {
-  ABSURD_NUMBER,
-  SEVERITY_ORDER,
-  WRONG_CATALOG_PCT,
-  crossCheck,
-  main,
-  toMarkdown
+  main
 };

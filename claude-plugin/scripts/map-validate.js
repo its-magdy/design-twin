@@ -232,7 +232,7 @@ function isRecord(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
-// design-to-code/map-validate.ts
+// design-to-code/map-validate-core.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
@@ -367,6 +367,8 @@ function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+
+// design-to-code/map-validate.ts
 function main(argv) {
   const file = argv[0];
   const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
@@ -391,7 +393,5 @@ ${res.errors.length} error(s)`);
 }
 if (import.meta.main) runCli(main, { name: "map-validate" });
 export {
-  isCodeConnectMap,
-  main,
-  validateMap
+  main
 };

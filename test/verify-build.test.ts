@@ -8,12 +8,12 @@ import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
 import type { Writable } from "node:stream";
-import { blockerIds } from "../design-to-code/audit.ts";
+import { blockerIds } from "../design-to-code/audit-gate.ts";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-binding.ts";
-import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
+import { build, seamViolations, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import { checkPlan, isStale, validatePlanHeader, anchorCoverage, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import type { CheckPlanResult } from "../design-to-code/verify-build.ts";
 import { moduleImported, projectGraph } from "../design-to-code/code-scanner.ts";
@@ -30,7 +30,7 @@ import { hookRunsScript } from "./plugin-invocation.ts";
 import { codeMap, must, parseAs, readFixture, screenExport } from "./fixtures.ts";
 import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
-import { isCodeConnectMap } from "../design-to-code/map-validate.ts";
+import { isCodeConnectMap } from "../design-to-code/map-validate-core.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
 
@@ -1969,7 +1969,24 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 // An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
-void build(tmp).then(async () => {
+void build(tmp).then(async (results) => {
+  // The seam rule (build-scripts.ts header): no entry module imports another, no other module carries a CLI guard. The
+  // build above would have thrown on a breach — these show the check reads the build's real input names, and fires.
+  const inputsOf = (i: number): string[] => Object.keys(results[i]?.metafile?.inputs ?? {});
+  check("each build's metafile names its own entry as design-to-code/<entry>.ts (the names the seam check reads)",
+    ENTRIES.every((n, i) => inputsOf(i).includes(`design-to-code/${n}.ts`)));
+  const vb = ENTRIES.indexOf("verify-build");
+  const src = (input: string): string => fs.readFileSync(path.join(import.meta.dirname, "..", input), "utf8");
+  check("the seam check holds on a real bundle", seamViolations("verify-build", inputsOf(vb), src).length === 0);
+  const breach = seamViolations("verify-build", [...inputsOf(vb), "design-to-code/plan-skeleton.ts", "design-to-code/lib.ts"],
+    (input) => (input === "design-to-code/lib.ts" ? "export const x = 1;\nif (import.meta.main) run();\n" : src(input)));
+  check(`…and names an inlined entry and a library's CLI guard (got ${JSON.stringify(breach)})`,
+    breach.length === 2 && /imports the entry module design-to-code\/plan-skeleton\.ts/.test(breach[0] ?? "") && /lib\.ts carries an import\.meta\.main guard/.test(breach[1] ?? ""));
+  const bridgeCli = seamViolations("verify-build", ["design-to-code/verify-build.ts", "bridge/src/cli.ts", "node_modules/dep/index.ts"],
+    (input) => (input === "design-to-code/verify-build.ts" ? "" : "if (import.meta.main) run();\n"));
+  check(`…and a bridge module's CLI guard too, never a dependency's (got ${JSON.stringify(bridgeCli)})`,
+    bridgeCli.length === 1 && /^bridge\/src\/cli\.ts carries an import\.meta\.main guard/.test(bridgeCli[0] ?? ""));
+  check("…but not a guard mentioned in a comment", seamViolations("verify-build", ["design-to-code/lib.ts"], () => "// the import.meta.main guard of a CLI\n").length === 0);
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
   check("claude-plugin/scripts/ is in sync with design-to-code/ (else: bun claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   // the exec bit is part of the build: a bundle with a shebang (design-diff.js) 0755, every other 0644 — in a rebuild and in
