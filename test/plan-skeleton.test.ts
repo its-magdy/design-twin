@@ -8,9 +8,9 @@ import path from "node:path";
 import { runSync } from "../design-to-code/proc.ts";
 import { cliRunner } from "./cli-runner.ts";
 import { main as planSkeletonMain } from "../design-to-code/plan-skeleton.ts";
-import { visibility, buildTokens } from "../design-to-code/plan-skeleton.ts";
+import { buildTokens } from "../design-to-code/plan-skeleton.ts";
 import { check, report } from "./assert.ts";
-import { malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
+import { must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isPlan } from "../design-to-code/doc-guards.ts";
 import type { DocGuard } from "../bridge/src/read-json.ts";
@@ -186,12 +186,6 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   check(`Guided Policies (1359:21337): 50 tokens (50 distinct in its .vars.json), 42 visible instances, 207 anchors, 0 hidden — got ${gp.tokens.length}/${gp.components.length}/${Object.keys(gp.anchors).length}`,
     gp.tokens.length === 50 && gp.components.length === 42 && Object.keys(gp.anchors).length === 207 && Object.keys(gp.anchors).every((id) => !gh.has(id)));
 }
-check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node", (() => {
-  // `visible: false` is not a field the producer writes — which is the point: it must not hide anything.
-  const v = visibility(screenExport([{ id: "1:1", type: "FRAME", children: [malformed<NodeInput>({ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false }), { id: "1:3", type: "FRAME", hidden: true, children: [{ id: "1:4", type: "FRAME" }] }] }]));
-  return v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4") && v.hiddenRoots.length === 1 && v.hiddenRoots[0]?.nodes === 2;
-})());
-
 console.log("CLI:");
 const help = run(["--help"]);
 // The script's path is double-quoted in the usage line, or single-quoted when it holds a backslash (cli-args.ts shellQuote): every Windows path.

@@ -463,355 +463,47 @@ function findingIds(findings) {
   });
 }
 
-// design-to-code/screen-inputs.ts
-import fs7 from "node:fs";
-import path6 from "node:path";
-
-// bridge/src/project-layout.ts
-import fs from "node:fs";
-import path from "node:path";
-var DESIGN_DIR = "design";
-var EXPORT_SUBDIR = "export";
-var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
-var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
-var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
-var LEGACY_MAP_FILE = "codeconnect.local.json";
-var PLAN_DIR = path.join(DESIGN_DIR, "plan");
-var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
-var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
-var SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
-var MERGED_VARIABLES_FILE = "variables.json";
-var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
-var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
-var slashed = (p) => p.split(path.sep).join("/");
-var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
-var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
-function looksLikeExportDir(dir) {
-  try {
-    if (!fs.statSync(dir).isDirectory()) return false;
-  } catch {
-    return false;
+// design-to-code/control-kind.ts
+var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
+function controlKind(name) {
+  const s = String(name || "");
+  const toggle = TOGGLE_WORD.test(s);
+  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
+  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
+  if (toggle) return "toggle";
+  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
+  if (/\blink\b/i.test(s)) return "link";
+  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
+  return null;
+}
+var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
+  const k = controlKind(l);
+  return k === "input" || k === "select" || k === "toggle";
+});
+function outermostControl(near) {
+  for (let i = 0; i < near.length; i++) {
+    const a = near[i];
+    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
   }
-  return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
-}
-function findExportDir(cwd) {
-  const modern = path.join(cwd, EXPORT_DIR);
-  const legacy2 = path.join(cwd, DESIGN_DIR);
-  const modernExists = looksLikeExportDir(modern);
-  const legacyExists = looksLikeExportDir(legacy2);
-  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
-  return { dir: modern, layout: "none", rel: EXPORT_DIR };
-}
-function findMapFile(cwd) {
-  const modern = path.join(cwd, MAP_FILE);
-  if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-  const legacy2 = path.join(cwd, LEGACY_MAP_FILE);
-  if (fs.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
-  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
-}
-function listPlans(dir) {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
-}
-
-// bridge/src/pages-layout.ts
-function safe(id) {
-  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-}
-var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
-function nodeIdFromSafe(safeId) {
-  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
-  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
-}
-function nodeIdFromStem(stem) {
-  const s = String(stem || "");
-  const i = s.lastIndexOf("__");
-  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
-}
-function screenStem(name, id) {
-  return safe(name || "layer") + "__" + safe(id);
-}
-var isObjectLike = (x) => !!x && typeof x === "object";
-var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
-var sameFigmaFile = (l, entry) => {
-  if (l.sourceFile && entry.sourceFile) {
-    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  for (let i = near.length - 1; i >= 0; i--) {
+    const a = near[i];
+    if (a && isBoundaryKind(a)) return i;
   }
-  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
-  return samePage(l, entry);
-};
-var notSameRow = (entry) => (l) => {
-  if (!isObjectLike(l)) return !!l;
-  if (l.file === entry.file) return false;
-  if (l.id !== entry.id) return true;
-  return !sameFigmaFile(l, entry);
-};
-var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
-
-// bridge/src/design-system-layout.ts
-var DIR = "design-system";
-var COMPONENTS_DIR = "components";
-var TOKENS = "tokens.json";
-var COMPONENTS_LOCAL = "components.local.json";
-var COMPONENTS_LIBRARY = "components.library.json";
-var HYGIENE = "hygiene.json";
-var MANIFEST = "design-system.json";
-var STYLE_KIND_ROWS = {
-  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
-  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
-  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
-  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
-  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
-  // local custom animation styles
-};
-var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
-var DESIGN_SYSTEM_DIR = DIR;
-var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
-var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
-
-// design-to-code/catalog-input.ts
-import fs3 from "node:fs";
-
-// bridge/src/read-json.ts
-import fs2 from "node:fs";
-
-// bridge/src/errmsg.ts
-var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
-var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
-
-// bridge/src/read-json.ts
-var anyJson = (_x) => true;
-function readFailure(e) {
-  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-  if (code === "ENOENT") return { error: "does not exist", missing: true };
-  return {
-    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
-  };
+  return -1;
 }
-function readJson(file, guard) {
-  let buf;
-  try {
-    buf = fs2.readFileSync(file);
-  } catch (e) {
-    return readFailure(e);
+var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
+var ON_VALUE = /^(true|yes|on)$/i;
+function isDisabledLayer(layer) {
+  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
+    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
+    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
   }
-  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
-    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  for (const [k, v] of Object.entries(layer.props || {})) {
+    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
+    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
   }
-  let raw = buf.toString("utf8");
-  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
-  let parsed;
-  try {
-    const value = JSON.parse(raw);
-    parsed = value;
-  } catch (e) {
-    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
-  }
-  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
-  return { doc: parsed };
+  return false;
 }
-function readJsonOrNull(file, guard) {
-  const r = readJson(file, guard);
-  return "doc" in r ? r.doc : null;
-}
-
-// bridge/src/stdio.ts
-import { format, inspect } from "node:util";
-function installQueuedConsole(o = {}) {
-  trackWrites(process.stdout);
-  trackWrites(process.stderr);
-  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
-  const err = process.stderr;
-  let indent = "";
-  const write = (s, text) => {
-    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
-  };
-  const line = (s) => (...a) => {
-    write(s, format(...a));
-  };
-  console.log = console.info = console.debug = line(out);
-  console.warn = console.error = line(err);
-  console.dir = (item, options) => {
-    write(out, inspect(item, { customInspect: false, ...options }));
-  };
-  console.dirxml = line(out);
-  console.table = (data) => {
-    write(out, inspect(data));
-  };
-  console.write = (...data) => {
-    let n = 0;
-    for (const d of data) {
-      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
-      if (b.length) {
-        out.write(b);
-        n += b.length;
-      }
-    }
-    return n;
-  };
-  console.clear = () => {
-    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
-  };
-  console.trace = (...a) => {
-    const e = new Error(format(...a));
-    e.name = "Trace";
-    Error.captureStackTrace(e, console.trace);
-    write(err, e.stack ?? `Trace: ${e.message}`);
-  };
-  console.assert = (cond, ...a) => {
-    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
-  };
-  console.group = console.groupCollapsed = (...a) => {
-    if (a.length) write(out, format(...a));
-    indent += "  ";
-  };
-  console.groupEnd = () => {
-    indent = indent.slice(0, -2);
-  };
-  const counts = /* @__PURE__ */ new Map();
-  console.count = (label = "default") => {
-    const n = (counts.get(label) ?? 0) + 1;
-    counts.set(label, n);
-    write(out, `${label}: ${n}`);
-  };
-  console.countReset = (label = "default") => {
-    counts.delete(label);
-  };
-  const timers = /* @__PURE__ */ new Map();
-  const elapsed = (label) => {
-    const t = timers.get(label);
-    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
-  };
-  console.time = (label = "default") => {
-    timers.set(label, performance.now());
-  };
-  console.timeLog = (label = "default", ...a) => {
-    const e = elapsed(label);
-    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
-    else write(out, [e, ...a.map((x) => format(x))].join(" "));
-  };
-  console.timeEnd = (label = "default") => {
-    const e = elapsed(label);
-    timers.delete(label);
-    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
-  };
-}
-var inFlight = /* @__PURE__ */ new Map();
-function trackWrites(s) {
-  if (inFlight.has(s)) return;
-  const st = { n: 0, idle: [] };
-  inFlight.set(s, st);
-  const write = s.write.bind(s);
-  const settle = () => {
-    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
-  };
-  s.write = (chunk, encoding, cb) => {
-    const done = typeof encoding === "function" ? encoding : cb;
-    const enc = typeof encoding === "function" ? void 0 : encoding;
-    if (chunk.length === 0) return write(chunk, enc, done);
-    st.n++;
-    let called = false;
-    return write(chunk, enc, (err) => {
-      if (!called) {
-        called = true;
-        settle();
-      }
-      done?.(err);
-    });
-  };
-}
-var CliExit = class extends Error {
-  code;
-  constructor(code) {
-    super(`exit ${code}`);
-    this.name = "CliExit";
-    this.code = code;
-  }
-};
-var cliDepth = 0;
-function exitCli(code) {
-  if (cliDepth > 0) throw new CliExit(code);
-  process.exit(code);
-}
-function runCli(main2, o, argv = process.argv.slice(2)) {
-  installQueuedConsole();
-  const done = o.done ?? ((code) => {
-    process.exitCode = code;
-  });
-  const fail = (e) => {
-    if (e instanceof CliExit) return done(e.code);
-    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
-    done(o.errorCode ?? 1);
-  };
-  cliDepth++;
-  let settled = false;
-  const leave = () => {
-    if (!settled) {
-      settled = true;
-      cliDepth--;
-    }
-  };
-  try {
-    const r = main2(argv);
-    if (typeof r === "number") {
-      leave();
-      done(r);
-    } else r.then((c) => {
-      leave();
-      done(c);
-    }, (e) => {
-      leave();
-      fail(e);
-    });
-  } catch (e) {
-    leave();
-    fail(e);
-  }
-}
-
-// design-to-code/proc.ts
-var pause = new Int32Array(new SharedArrayBuffer(4));
-
-// design-to-code/catalog-input.ts
-function isManifest(doc, payloadKey) {
-  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
-}
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  if (isManifest(doc, payloadKey)) {
-    console.error(
-      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-    );
-    exitCli(2);
-  }
-}
-function readJsonFile(file, what, hint) {
-  return readDocFile(file, what, anyJson, hint);
-}
-function readDocFile(file, what, guard, hint) {
-  const r = readJson(file, guard);
-  if ("doc" in r) return r.doc;
-  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
-  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
-       ${hint}` : ""));
-  exitCli(2);
-}
-function readOptionalDoc(file, what, guard) {
-  return fs3.existsSync(file) ? readDocFile(file, what, guard) : null;
-}
-function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
-  const doc = readJsonFile(file, what, hint);
-  assertNotManifest(doc, file, payloadKey, wantFile);
-  if (guard(doc)) return doc;
-  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
-  exitCli(2);
-}
-
-// design-to-code/design-system-dir.ts
-import fs5 from "node:fs";
-import path3 from "node:path";
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1025,680 +717,6 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
-// bridge/src/export-reader.ts
-import fs4 from "node:fs";
-import path2 from "node:path";
-var PAGES = "pages";
-var INDEX = "index.json";
-function resolveInside(base, rel, within = base) {
-  const root = path2.resolve(within), file = path2.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path2.sep) ? file : null;
-}
-var inside = (root, rel) => typeof rel === "string" && rel && !path2.isAbsolute(rel) ? resolveInside(root, rel) : null;
-var relOf = (root, file) => path2.relative(root, file).split(path2.sep).join("/");
-var problemOf = (root, file, read) => "error" in read && !read.missing ? { file: relOf(root, file), error: read.error } : null;
-var optStr2 = (x) => x === void 0 || typeof x === "string";
-var isIndexRowLike = (x) => isRecord(x) && typeof x.id === "string" && typeof x.name === "string";
-var isRowList = (x) => Array.isArray(x) && x.every((r) => r === null || isIndexRowLike(r));
-var isPagesRootIndex = /* @__PURE__ */ Object.assign(
-  (x) => isRecord(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isRecord(d) && optStr2(d.dir) && optStr2(d.index)) && (x.layers === void 0 || isRowList(x.layers)) && optStr2(x.exportedAt),
-  { expected: "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})" }
-);
-var isPageIndex = /* @__PURE__ */ Object.assign(
-  (x) => isRecord(x) && isRowList(x.layers),
-  { expected: "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}" }
-);
-function screenSiblingFile(screenFile, kind) {
-  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
-}
-var rootIndexFile = (exportRoot) => path2.join(exportRoot, PAGES, INDEX);
-var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
-function pagesRootOfScreen(screenFile) {
-  const pages = path2.dirname(path2.dirname(path2.resolve(screenFile)));
-  return path2.basename(pages) === PAGES ? path2.dirname(pages) : null;
-}
-function exportRootOfScreen(screenFile) {
-  const root = pagesRootOfScreen(screenFile);
-  return root !== null && hasExportIndex(root) ? root : null;
-}
-function pageIndexFiles(root, pageDirs) {
-  const files = [];
-  const add = (f) => {
-    if (f !== null && !files.includes(path2.resolve(f))) files.push(path2.resolve(f));
-  };
-  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path2.join(root, PAGES, dir, INDEX) : null;
-  for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
-  let dirs = [];
-  try {
-    dirs = fs4.readdirSync(path2.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
-  } catch {
-  }
-  for (const d of dirs) add(ofDir(d));
-  return files;
-}
-function readExportIndex(exportRoot) {
-  const root = exportRoot;
-  const rootFile = rootIndexFile(root);
-  const read = readJson(rootFile, isPagesRootIndex);
-  const rootDoc = "doc" in read ? read.doc : null;
-  const problems = [];
-  const rootProblem = problemOf(root, rootFile, read);
-  if (rootProblem) problems.push(rootProblem);
-  const rows = [];
-  const byId = /* @__PURE__ */ new Map();
-  const files = /* @__PURE__ */ new Set();
-  const fromRoot = /* @__PURE__ */ new Set();
-  const written = /* @__PURE__ */ new Map();
-  const writtenAt = (row) => {
-    let t = written.get(row);
-    if (t === void 0) {
-      const f = inside(root, row.file);
-      try {
-        t = f === null ? -1 : fs4.statSync(f).mtimeMs;
-      } catch {
-        t = -1;
-      }
-      written.set(row, t);
-    }
-    return t;
-  };
-  const hasFile = (row) => {
-    const file = row.file;
-    return typeof file === "string" && file !== "";
-  };
-  const probeOf = (row) => hasFile(row) ? row : { ...row, file: "\0no file " + rows.length };
-  const sameScreen = (older, newer) => hasFile(older) && older.file === newer.file || sameScreenRow(probeOf(older), newer);
-  const keep = (row, isRoot) => {
-    rows.push(row);
-    const bucket = byId.get(row.id);
-    if (bucket) bucket.push(row);
-    else byId.set(row.id, [row]);
-    if (hasFile(row)) files.add(row.file);
-    if (isRoot) fromRoot.add(row);
-  };
-  const take = (row, isRoot) => {
-    const candidates = [...byId.get(row.id) ?? [], ...hasFile(row) && files.has(row.file) ? rows.filter((k) => k.file === row.file && k.id !== row.id) : []];
-    if (isRoot) {
-      if (!candidates.some((k) => sameScreen(row, k))) keep(row, true);
-      return;
-    }
-    const newer = (k) => writtenAt(row) > writtenAt(k);
-    const conflicts = candidates.filter((k) => fromRoot.has(k) || !newer(k) ? sameScreen(row, k) : sameScreen(k, row));
-    if (!conflicts.length) {
-      keep(row, false);
-      return;
-    }
-    if (conflicts.some((k) => fromRoot.has(k) || !newer(k))) return;
-    const at = Math.min(...conflicts.map((k) => rows.indexOf(k)));
-    for (const k of conflicts) {
-      rows.splice(rows.indexOf(k), 1);
-      const bucket = byId.get(k.id) ?? [];
-      bucket.splice(bucket.indexOf(k), 1);
-      if (!bucket.length) byId.delete(k.id);
-      if (hasFile(k) && !rows.some((r) => r.file === k.file)) files.delete(k.file);
-    }
-    keep(row, false);
-    rows.splice(rows.length - 1, 1);
-    rows.splice(at, 0, row);
-  };
-  for (const row of rootDoc?.layers ?? []) if (row) take(row, true);
-  for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
-    const page = readJson(f, isPageIndex);
-    const problem = problemOf(root, f, page);
-    if (problem) problems.push(problem);
-    if ("doc" in page) {
-      for (const row of page.doc.layers) if (row) take(row, false);
-    }
-  }
-  const rootStamp = rootDoc?.exportedAt || void 0;
-  return {
-    root,
-    indexed: rootDoc !== null,
-    rootProblem: rootProblem && rootProblem.error,
-    problems,
-    rows,
-    isExported: (id) => byId.has(id),
-    fileOf: (row) => inside(root, row.file),
-    exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)
-  };
-}
-
-// bridge/src/library-layout.ts
-var ROOT = "libraries";
-var INDEX2 = "index.json";
-var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
-var COMPONENTS = "components.json";
-var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
-
-// design-to-code/design-system-dir.ts
-var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
-var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
-function designSystemFiles(dir) {
-  const local = path3.join(dir, COMPONENTS_LOCAL2);
-  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path3.join(dir, COMPONENTS));
-  return {
-    tokens: path3.join(dir, TOKENS3),
-    components: isLibrary ? path3.join(dir, COMPONENTS) : local,
-    componentsLibrary: path3.join(dir, COMPONENTS_LIBRARY2),
-    stylesText: path3.join(dir, STYLES_TEXT),
-    componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
-    isLibrary
-  };
-}
-function readDesignSystemDir(dir) {
-  const f = designSystemFiles(dir);
-  return {
-    tokens: readOptionalDoc(f.tokens, "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(f.components, "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(f.componentsLibrary, "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(f.stylesText, "text styles", isTextStylesDoc),
-    componentsFile: f.componentsFile,
-    isLibrary: f.isLibrary
-  };
-}
-function exportRootOf(screenFile, dsDir) {
-  const roots = [];
-  if (screenFile) {
-    const pages = path3.dirname(path3.dirname(screenFile));
-    if (path3.basename(pages) === "pages") roots.push(path3.dirname(pages));
-  }
-  if (dsDir) {
-    const parent = path3.dirname(path3.normalize(dsDir));
-    roots.push(path3.basename(parent) === ROOT ? path3.dirname(parent) : parent);
-  }
-  return roots.find((r) => fs5.existsSync(path3.join(r, ROOT, INDEX2))) ?? null;
-}
-function findLibraryExports(screenFile, dsDir) {
-  const root = exportRootOf(screenFile, dsDir);
-  if (!root) return [];
-  const index = readJsonOrNull(path3.join(root, ROOT, INDEX2), isLibrariesIndex);
-  if (!index) return [];
-  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
-    const rel = path3.join(root, ROOT, r.dir).split(path3.sep).join("/");
-    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, COMPONENTS), isComponentsCatalog) };
-  });
-}
-function readFrameTexts(file) {
-  const doc = readJsonOrNull(file, isScreenDoc);
-  if (!doc) return null;
-  const all = [], shallow = [];
-  for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
-    if (n.type === "TEXT" && typeof n.text === "string" && n.text.trim()) {
-      all.push(n.text);
-      if (c.depth <= 6) shallow.push(n.text);
-    }
-  });
-  return { all, shallow };
-}
-function findExportNeighbours(screenFile) {
-  const root = exportRootOfScreen(screenFile);
-  if (root === null) return null;
-  const ix = readExportIndex(root);
-  if (!ix.indexed) return null;
-  const layers = [...ix.rows];
-  const cache = /* @__PURE__ */ new Map();
-  const textsOf = (row) => {
-    const f = ix.fileOf(row);
-    if (f === null) return null;
-    if (!cache.has(f)) cache.set(f, readFrameTexts(f));
-    return cache.get(f) ?? null;
-  };
-  const known = new Set(layers.map((l) => safe(l.id)));
-  const shots = /* @__PURE__ */ new Set();
-  let files = [];
-  try {
-    files = fs5.readdirSync(path3.join(root, "assets"));
-  } catch {
-    files = [];
-  }
-  for (const f of files) {
-    const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
-    const id = m && m[1] && !known.has(m[1]) ? nodeIdFromSafe(m[1]) : null;
-    if (id) shots.add(id);
-  }
-  return { layers, unexportedShots: [...shots].sort(), textsOf };
-}
-
-// design-to-code/cli-args.ts
-import path4 from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
-var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var SCRIPT_RUNNER = "bun --no-install --no-env-file";
-var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
-var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path4.join(path4.dirname(SELF), name + path4.extname(SELF)))}`;
-function joinNegativeValues(argv, options) {
-  const out = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i], next = argv[i + 1];
-    if (tok === void 0) continue;
-    if (tok === "--") {
-      out.push(...argv.slice(i));
-      break;
-    }
-    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
-    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
-      out.push(`${tok}=${next}`);
-      i++;
-    } else out.push(tok);
-  }
-  return out;
-}
-function badShortWords(args, options) {
-  const shorts = /* @__PURE__ */ new Map();
-  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
-  const bad = [];
-  let takesNext = false;
-  for (const a of args) {
-    if (a === "--") break;
-    if (takesNext) {
-      takesNext = false;
-      continue;
-    }
-    if (a.startsWith("--")) {
-      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
-      continue;
-    }
-    if (!/^-[^-]/.test(a)) continue;
-    let ok = true;
-    for (const [i, c] of [...a.slice(1)].entries()) {
-      const type = shorts.get(c);
-      if (type === void 0) {
-        ok = false;
-        break;
-      }
-      if (type === "string") {
-        takesNext = i === a.length - 2;
-        break;
-      }
-    }
-    if (!ok) bad.push(a);
-  }
-  return bad;
-}
-function cliParse(tool, argv, options, usage, exitCode, parse) {
-  const args = joinNegativeValues(argv, options);
-  const unknownFlags = () => {
-    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
-    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
-    const short = badShortWords(args, options);
-    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
-    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
-    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
-${usage}`;
-  };
-  let failure;
-  try {
-    const parsed = parse(args);
-    if (!badShortWords(args, options).length) return parsed;
-    failure = unknownFlags();
-  } catch (e) {
-    const code = errCode(e);
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      failure = unknownFlags();
-    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const msg = e instanceof Error ? e.message : "";
-      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
-      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
-      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
-${usage}`;
-    } else {
-      failure = `${tool}: ${errMsg(e)}
-${usage}`;
-    }
-  }
-  console.error(failure);
-  exitCli(exitCode);
-}
-
-// design-to-code/map-validate.ts
-var STATUSES = ["active", "deprecated", "needs-review"];
-var KEYS = {
-  root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
-  figma: ["key", "id", "name", "unstable"],
-  code: ["module", "export", "targets"],
-  target: ["module", "export"],
-  vo: ["when", "code"],
-  voCode: ["module", "export"],
-  children: ["layerNamePattern", "slot"],
-  prop: Object.assign(nullProto(), {
-    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
-    boolean: ["kind", "codeProp", "default", "omitDefault"],
-    string: ["kind", "codeProp"],
-    instance: ["kind", "codeProp", "slot"]
-  })
-};
-var PROP_KINDS = Object.keys(KEYS.prop);
-var isStr = (v) => typeof v === "string";
-var isBool = (v) => typeof v === "boolean";
-var noExtra = (obj, allowed, at, err) => {
-  if (!Array.isArray(allowed)) return;
-  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
-};
-var optStrings = (obj, keys, at, err) => {
-  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
-};
-function validateMap(map) {
-  const errors = [];
-  const err = (path12, message) => errors.push({ path: path12, message });
-  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
-  noExtra(map, KEYS.root, "", err);
-  if (map.version !== 1) err("version", "must be 1");
-  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isRecord(map.components)) {
-    err("components", "must be an object");
-    return { ok: false, errors };
-  }
-  for (const key of Object.keys(map.components)) {
-    const e = map.components[key];
-    const at = `components.${key}`;
-    if (!isRecord(e)) {
-      err(at, "entry must be an object");
-      continue;
-    }
-    noExtra(e, KEYS.entry, at, err);
-    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
-    else {
-      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
-      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
-      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
-      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
-    }
-    if (!isRecord(e.code)) err(`${at}.code`, "required object");
-    else {
-      noExtra(e.code, KEYS.code, `${at}.code`, err);
-      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
-      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
-      if (e.code.targets !== void 0) {
-        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
-        else for (const t of Object.keys(e.code.targets)) {
-          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isRecord(tv)) err(ta, "must be an object");
-          else {
-            noExtra(tv, KEYS.target, ta, err);
-            optStrings(tv, ["module", "export"], ta, err);
-          }
-        }
-      }
-    }
-    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
-    optStrings(e, ["note"], at, err);
-    if (e.props !== void 0) {
-      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
-      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
-    }
-    if (e.variantOverrides !== void 0) {
-      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
-      else e.variantOverrides.forEach((vo, i) => {
-        const va = `${at}.variantOverrides[${i}]`;
-        if (!isRecord(vo)) {
-          err(va, "must be an object");
-          return;
-        }
-        noExtra(vo, KEYS.vo, va, err);
-        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
-        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
-        else {
-          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
-          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
-          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
-        }
-      });
-    }
-    if (e.childrenByLayer !== void 0) {
-      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
-      else {
-        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
-        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
-      }
-    }
-  }
-  return { ok: errors.length === 0, errors };
-}
-function validateProp(p, at, err) {
-  if (!isRecord(p)) {
-    err(at, "prop must be an object");
-    return;
-  }
-  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
-  if (!Array.isArray(allowed)) {
-    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
-    return;
-  }
-  noExtra(p, allowed, at, err);
-  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
-  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
-  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
-  if (p.kind === "enum") {
-    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
-      const t = typeof p.values[k];
-      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
-    }
-    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
-  }
-  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
-  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
-}
-function isCodeConnectMap(x) {
-  return validateMap(x).ok;
-}
-isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
-if (false) runCli2(main, { name: "map-validate" });
-
-// design-to-code/slice-sources.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
-function sourcesOf(doc, docPath) {
-  const out = /* @__PURE__ */ new Map();
-  const add = (key, screen) => {
-    if (typeof key !== "string" || !key || !screen) return;
-    const list = out.get(key) || [];
-    if (!list.includes(screen)) list.push(screen);
-    out.set(key, list);
-  };
-  const base = docPath ? path5.dirname(docPath) : ".";
-  for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
-    if (!sl) continue;
-    let read = false;
-    if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path5.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
-      if (slice) {
-        for (const v of slice.variables || []) add(v.key, sl.screen);
-        read = true;
-      }
-    }
-    if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
-  }
-  for (const c of doc && Array.isArray(doc._conflicts) ? doc._conflicts : []) {
-    for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
-  }
-  if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path5.basename(docPath, ".vars.json"));
-  }
-  return out;
-}
-function variablesContext(screenFiles, varsFile, opts) {
-  const invalid = [];
-  const readTokens = (f) => {
-    if (!f) return null;
-    const r = readJson(f, isTokensDoc);
-    if ("doc" in r) return r.doc;
-    if (!r.missing) invalid.push({ file: f, error: r.error });
-    return null;
-  };
-  const files = screenFiles || [];
-  const own = files.map((f) => readTokens(screenSiblingFile(String(f), "vars")));
-  let variablesPath = varsFile || null;
-  const firstFile = files[0];
-  if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path5.resolve(path5.dirname(firstFile), "..", "..");
-    const rootVars = path5.join(exportRoot, MERGED_VARIABLES_FILE);
-    const sibling = path5.join(path5.dirname(firstFile), MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs6.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
-  }
-  const variablesDoc = readTokens(variablesPath);
-  let staleLegacy = null;
-  if (firstFile !== void 0) {
-    const legacy2 = path5.join(path5.resolve(path5.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
-    if (fs6.existsSync(legacy2) && path5.resolve(legacy2) !== path5.resolve(variablesPath || "")) staleLegacy = legacy2;
-  }
-  return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
-}
-
-// design-to-code/screen-inputs.ts
-function exportSiblings(files) {
-  const checked = new Set(files.map((f) => path6.resolve(f)));
-  const roots = /* @__PURE__ */ new Set();
-  for (const f of checked) {
-    const root = exportRootOfScreen(f);
-    if (root !== null) roots.add(root);
-  }
-  if (!roots.size) return null;
-  return () => {
-    const out = [];
-    const seen = new Set(checked);
-    for (const root of roots) {
-      const ix = readExportIndex(root);
-      for (const row of ix.rows) {
-        const file = ix.fileOf(row);
-        if (file === null || seen.has(file)) continue;
-        seen.add(file);
-        const doc = readJsonOrNull(file, isScreenDoc);
-        if (doc) out.push({ doc, label: path6.basename(file, ".json") });
-      }
-    }
-    return out;
-  };
-}
-function designSystemDirOf(firstFile, named) {
-  if (named) return { dir: named, given: true };
-  const shown = (abs) => {
-    const rel = path6.relative(process.cwd(), abs);
-    return rel && !rel.startsWith("..") && !path6.isAbsolute(rel) ? rel.split(path6.sep).join("/") : abs;
-  };
-  const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
-  const dir = root !== null ? path6.join(root, DESIGN_SYSTEM_DIR) : path6.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
-  return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
-}
-function readScreenInputs(files, flags = {}) {
-  const ctx = variablesContext(files, flags.variables, { sliceFallback: true });
-  if (ctx.invalid.length) return { errors: ctx.invalid.map((bad) => `error  variables: '${bad.file}' ${bad.error}`) };
-  const notes = [];
-  if (ctx.variablesPath) notes.push(`variables: ${ctx.variablesPath}`);
-  else notes.push("note  no variables: no variables.json at the export root or beside the screen (pass --variables)");
-  if (ctx.staleLegacy) notes.push(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const screens = files.map((f, i) => ({
-    file: f,
-    doc: readDocFile(f, "screen export", isScreenDoc),
-    label: path6.basename(f, ".json"),
-    ...ctx.own[i] ? { vars: ctx.own[i] } : {},
-    assets: readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc)
-  }));
-  const firstFile = files[0];
-  const at = designSystemDirOf(firstFile, flags.designSystem);
-  const designSystem = at === null ? null : { ...readDesignSystemDir(at.dir), ...at };
-  if (at === null) notes.push(`note  no design system: none given, and no ${DESIGN_SYSTEM_DIR}/ beside the export (pass --design-system)`);
-  else if (at.given && !fs7.existsSync(at.dir)) notes.push(`note  --design-system ${at.dir} does not exist \u2014 no design system was read`);
-  else notes.push(`design system: ${at.dir}${at.given ? "" : " (found beside the export; pass --design-system to choose another)"}`);
-  const libraries = findLibraryExports(firstFile, at?.dir);
-  let map = null, mapFile = null;
-  if (flags.map) {
-    map = readDocFile(flags.map, "component map", isCodeConnectMap);
-    mapFile = flags.map;
-  } else {
-    const found = findMapFile(process.cwd());
-    const r = found.missing ? null : readJson(found.rel, isCodeConnectMap);
-    if (r && "doc" in r) {
-      map = r.doc;
-      mapFile = found.rel;
-      notes.push(`map: ${found.rel}`);
-    } else if (r) notes.push(`warn  ${found.rel} ${r.error} \u2014 proposals are not labelled alreadyMapped${flags.mapFlag ? " (pass --map to fail on it)" : ""}`);
-  }
-  return {
-    inputs: {
-      screens,
-      variables: ctx.variablesDoc,
-      variablesPath: ctx.variablesPath,
-      sliceSources: ctx.sliceSources,
-      designSystem,
-      libraries,
-      map,
-      mapFile,
-      siblings: exportSiblings(files),
-      notes
-    }
-  };
-}
-function withCatalog(ds, catalog) {
-  if (ds === null || catalog === void 0) return ds;
-  return { ...ds, components: ds.given ? ds.components || catalog : catalog };
-}
-function crossCheckInputOf(c, fallback = {}) {
-  const ds = c.designSystem;
-  return {
-    screens: c.screens,
-    variables: c.variables ?? null,
-    variablesPath: c.variablesPath ?? null,
-    sliceSources: c.sliceSources ?? null,
-    tokens: ds?.tokens ?? null,
-    components: ds?.components || fallback.components || null,
-    componentsLibrary: ds?.componentsLibrary ?? null,
-    stylesText: ds?.stylesText ?? null,
-    ...ds?.componentsFile !== void 0 ? { componentsFile: ds.componentsFile } : {},
-    ...ds?.isLibrary !== void 0 ? { designSystemIsLibrary: ds.isLibrary } : {},
-    map: c.map ?? null,
-    siblings: c.siblings ?? null
-  };
-}
-
-// design-to-code/control-kind.ts
-var TOGGLE_WORD = /\b(checkbox|check box|radio|switch|toggle)\b/i;
-function controlKind(name) {
-  const s = String(name || "");
-  const toggle = TOGGLE_WORD.test(s);
-  if (!toggle && /\b(select|dropdown|drop ?down|combo ?box|multi-?select|picker)\b/i.test(s.replace(/\bselect ?all\b/gi, ""))) return "select";
-  if (/\b(input|text ?field|textfield|search|textarea)\b/i.test(s)) return "input";
-  if (toggle) return "toggle";
-  if (/\b(tab|tabs|segmented|nav ?item|navigation item)\b/i.test(s)) return "tab";
-  if (/\blink\b/i.test(s)) return "link";
-  if (/\b(button|btn|cta|icon ?button|chip)\b/i.test(s)) return "button";
-  return null;
-}
-var isBoundaryKind = (a) => [a.name, a.mainComponent && a.mainComponent.setName, a.component].some((l) => {
-  const k = controlKind(l);
-  return k === "input" || k === "select" || k === "toggle";
-});
-function outermostControl(near) {
-  for (let i = 0; i < near.length; i++) {
-    const a = near[i];
-    if (a && a.type === "INSTANCE" && isBoundaryKind(a)) return i;
-  }
-  for (let i = near.length - 1; i >= 0; i--) {
-    const a = near[i];
-    if (a && isBoundaryKind(a)) return i;
-  }
-  return -1;
-}
-var DISABLED_WORD = /^(disabled|inactive|is ?disabled)$/i;
-var ON_VALUE = /^(true|yes|on)$/i;
-function isDisabledLayer(layer) {
-  for (const part of String(layer.mainComponent && layer.mainComponent.name || "").split(",")) {
-    const [k = "", v = ""] = part.split("=").map((x) => x.trim());
-    if (DISABLED_WORD.test(v) || DISABLED_WORD.test(k) && ON_VALUE.test(v)) return true;
-  }
-  for (const [k, v] of Object.entries(layer.props || {})) {
-    if (DISABLED_WORD.test(k.trim()) && (v === true || typeof v === "string" && ON_VALUE.test(v.trim()))) return true;
-    if (!layer.mainComponent && typeof v === "string" && /^disabled$/i.test(v.trim())) return true;
-  }
-  return false;
-}
-
 // design-to-code/variable-resolve.ts
 var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 var definedModes = (v) => {
@@ -1828,7 +846,7 @@ function variableResolver(input) {
   };
 }
 
-// design-to-code/cross-check.ts
+// design-to-code/cross-check-core.ts
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 var ABSURD_NUMBER = 1e4;
 var WRONG_CATALOG_PCT = 5;
@@ -2701,7 +1719,987 @@ function contrastRendered(screens, variables, tokens, push) {
     { tokenPairs: list }
   );
 }
-if (false) runCli3(main, { name: "cross-check" });
+
+// design-to-code/screen-inputs.ts
+import fs7 from "node:fs";
+import path5 from "node:path";
+
+// bridge/src/project-layout.ts
+import fs from "node:fs";
+import path from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+var LEGACY_MAP_FILE = "codeconnect.local.json";
+var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+var SNAPSHOT_DIR = path.join(DESIGN_DIR, ".sync");
+var MERGED_VARIABLES_FILE = "variables.json";
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+var VITE_WATCH_IGNORED_NOTE = `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above \u2014 both stop it`;
+var slashed = (p) => p.split(path.sep).join("/");
+var VERIFY_GITIGNORE_NOTE = `${slashed(VERIFY_DIR)}/ is regenerated on every verify run (measurements, screenshots, reports) \u2014 consider adding \`${slashed(VERIFY_DIR)}/\` to .gitignore; decisions live in ${slashed(PLAN_DIR)}/ and are not affected`;
+var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", MERGED_VARIABLES_FILE, "assets", "libraries"];
+function looksLikeExportDir(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+}
+function findExportDir(cwd) {
+  const modern = path.join(cwd, EXPORT_DIR);
+  const legacy2 = path.join(cwd, DESIGN_DIR);
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy2);
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy2, layout: "legacy-flat", rel: DESIGN_DIR };
+  return { dir: modern, layout: "none", rel: EXPORT_DIR };
+}
+function findMapFile(cwd) {
+  const modern = path.join(cwd, MAP_FILE);
+  if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+  const legacy2 = path.join(cwd, LEGACY_MAP_FILE);
+  if (fs.existsSync(legacy2)) return { file: legacy2, rel: LEGACY_MAP_FILE, legacy: true };
+  return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+}
+function listPlans(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+}
+
+// bridge/src/pages-layout.ts
+function safe(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+}
+var SAFE_NODE_ID_RE = /^(?:\d+_\d+|I\d+_\d+(?:_\d+_\d+)+)$/;
+function nodeIdFromSafe(safeId) {
+  if (!SAFE_NODE_ID_RE.test(safeId)) return null;
+  return safeId.replace(/(\d+)_(\d+)/g, "$1:$2").replace(/_/g, ";");
+}
+function nodeIdFromStem(stem) {
+  const s = String(stem || "");
+  const i = s.lastIndexOf("__");
+  return i < 0 ? null : nodeIdFromSafe(s.slice(i + 2));
+}
+function screenStem(name, id) {
+  return safe(name || "layer") + "__" + safe(id);
+}
+var isObjectLike = (x) => !!x && typeof x === "object";
+var samePage = (l, entry) => !!entry.pageId && l.pageId === entry.pageId && (l.page ?? null) === (entry.page ?? null);
+var sameFigmaFile = (l, entry) => {
+  if (l.sourceFile && entry.sourceFile) {
+    return l.sourceFileKey && entry.sourceFileKey ? l.sourceFileKey === entry.sourceFileKey : l.sourceFile === entry.sourceFile;
+  }
+  if (entry.sourceFile) return !!entry.pageId && l.pageId === entry.pageId;
+  return samePage(l, entry);
+};
+var notSameRow = (entry) => (l) => {
+  if (!isObjectLike(l)) return !!l;
+  if (l.file === entry.file) return false;
+  if (l.id !== entry.id) return true;
+  return !sameFigmaFile(l, entry);
+};
+var sameScreenRow = (older, newer) => isObjectLike(older) && !notSameRow(newer)(older);
+
+// bridge/src/design-system-layout.ts
+var DIR = "design-system";
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var STYLE_KIND_ROWS = {
+  paint: { kind: "paint", file: "styles.paint.json", key: "stylesPaint" },
+  text: { kind: "text", file: "styles.text.json", key: "stylesText" },
+  effect: { kind: "effect", file: "styles.effect.json", key: "stylesEffect" },
+  grid: { kind: "grid", file: "styles.grid.json", key: "stylesGrid" },
+  animation: { kind: "animation", file: "styles.animation.json", key: "stylesAnimation" }
+  // local custom animation styles
+};
+var STYLE_KINDS = Object.values(STYLE_KIND_ROWS);
+var DESIGN_SYSTEM_DIR = DIR;
+var DESIGN_SYSTEM_FILES = { TOKENS, COMPONENTS_LOCAL, COMPONENTS_LIBRARY, COMPONENTS_DIR, HYGIENE, MANIFEST };
+var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), COMPONENTS_LOCAL, COMPONENTS_LIBRARY, HYGIENE, MANIFEST];
+
+// design-to-code/catalog-input.ts
+import fs3 from "node:fs";
+
+// bridge/src/read-json.ts
+import fs2 from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+var errCode = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+
+// bridge/src/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let buf;
+  try {
+    buf = fs2.readFileSync(file);
+  } catch (e) {
+    return readFailure(e);
+  }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
+// bridge/src/stdio.ts
+import { format, inspect } from "node:util";
+function installQueuedConsole(o = {}) {
+  trackWrites(process.stdout);
+  trackWrites(process.stderr);
+  const out = o.logTo === "stderr" ? process.stderr : process.stdout;
+  const err = process.stderr;
+  let indent = "";
+  const write = (s, text) => {
+    s.write((indent ? text.replace(/^/gm, indent) : text) + "\n");
+  };
+  const line = (s) => (...a) => {
+    write(s, format(...a));
+  };
+  console.log = console.info = console.debug = line(out);
+  console.warn = console.error = line(err);
+  console.dir = (item, options) => {
+    write(out, inspect(item, { customInspect: false, ...options }));
+  };
+  console.dirxml = line(out);
+  console.table = (data) => {
+    write(out, inspect(data));
+  };
+  console.write = (...data) => {
+    let n = 0;
+    for (const d of data) {
+      const b = typeof d === "string" ? Buffer.from(d) : d instanceof ArrayBuffer ? Buffer.from(d) : Buffer.from(d.buffer, d.byteOffset, d.byteLength);
+      if (b.length) {
+        out.write(b);
+        n += b.length;
+      }
+    }
+    return n;
+  };
+  console.clear = () => {
+    if (out.isTTY) out.write("\x1B[1;1H\x1B[0J");
+  };
+  console.trace = (...a) => {
+    const e = new Error(format(...a));
+    e.name = "Trace";
+    Error.captureStackTrace(e, console.trace);
+    write(err, e.stack ?? `Trace: ${e.message}`);
+  };
+  console.assert = (cond, ...a) => {
+    if (!cond) write(err, a.length ? "Assertion failed: " + format(...a) : "Assertion failed");
+  };
+  console.group = console.groupCollapsed = (...a) => {
+    if (a.length) write(out, format(...a));
+    indent += "  ";
+  };
+  console.groupEnd = () => {
+    indent = indent.slice(0, -2);
+  };
+  const counts = /* @__PURE__ */ new Map();
+  console.count = (label = "default") => {
+    const n = (counts.get(label) ?? 0) + 1;
+    counts.set(label, n);
+    write(out, `${label}: ${n}`);
+  };
+  console.countReset = (label = "default") => {
+    counts.delete(label);
+  };
+  const timers = /* @__PURE__ */ new Map();
+  const elapsed = (label) => {
+    const t = timers.get(label);
+    return t === void 0 ? null : `${label}: ${(performance.now() - t).toFixed(3)}ms`;
+  };
+  console.time = (label = "default") => {
+    timers.set(label, performance.now());
+  };
+  console.timeLog = (label = "default", ...a) => {
+    const e = elapsed(label);
+    if (e === null) write(err, `Warning: No such label '${label}' for console.timeLog()`);
+    else write(out, [e, ...a.map((x) => format(x))].join(" "));
+  };
+  console.timeEnd = (label = "default") => {
+    const e = elapsed(label);
+    timers.delete(label);
+    write(e === null ? err : out, e ?? `Warning: No such label '${label}' for console.timeEnd()`);
+  };
+}
+var inFlight = /* @__PURE__ */ new Map();
+function trackWrites(s) {
+  if (inFlight.has(s)) return;
+  const st = { n: 0, idle: [] };
+  inFlight.set(s, st);
+  const write = s.write.bind(s);
+  const settle = () => {
+    if (--st.n === 0) for (const r of st.idle.splice(0)) r();
+  };
+  s.write = (chunk, encoding, cb) => {
+    const done = typeof encoding === "function" ? encoding : cb;
+    const enc = typeof encoding === "function" ? void 0 : encoding;
+    if (chunk.length === 0) return write(chunk, enc, done);
+    st.n++;
+    let called = false;
+    return write(chunk, enc, (err) => {
+      if (!called) {
+        called = true;
+        settle();
+      }
+      done?.(err);
+    });
+  };
+}
+var CliExit = class extends Error {
+  code;
+  constructor(code) {
+    super(`exit ${code}`);
+    this.name = "CliExit";
+    this.code = code;
+  }
+};
+var cliDepth = 0;
+function exitCli(code) {
+  if (cliDepth > 0) throw new CliExit(code);
+  process.exit(code);
+}
+function runCli(main2, o, argv = process.argv.slice(2)) {
+  installQueuedConsole();
+  const done = o.done ?? ((code) => {
+    process.exitCode = code;
+  });
+  const fail = (e) => {
+    if (e instanceof CliExit) return done(e.code);
+    console.error(o.errorLine ? o.errorLine(e) : `${o.name}: ${e instanceof Error && e.stack || String(e)}`);
+    done(o.errorCode ?? 1);
+  };
+  cliDepth++;
+  let settled = false;
+  const leave = () => {
+    if (!settled) {
+      settled = true;
+      cliDepth--;
+    }
+  };
+  try {
+    const r = main2(argv);
+    if (typeof r === "number") {
+      leave();
+      done(r);
+    } else r.then((c) => {
+      leave();
+      done(c);
+    }, (e) => {
+      leave();
+      fail(e);
+    });
+  } catch (e) {
+    leave();
+    fail(e);
+  }
+}
+
+// design-to-code/proc.ts
+var pause = new Int32Array(new SharedArrayBuffer(4));
+
+// design-to-code/catalog-input.ts
+function isManifest(doc, payloadKey) {
+  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  if (isManifest(doc, payloadKey)) {
+    console.error(
+      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
+    );
+    exitCli(2);
+  }
+}
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  exitCli(2);
+}
+function readOptionalDoc(file, what, guard) {
+  return fs3.existsSync(file) ? readDocFile(file, what, guard) : null;
+}
+function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const doc = readJsonFile(file, what, hint);
+  assertNotManifest(doc, file, payloadKey, wantFile);
+  if (guard(doc)) return doc;
+  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
+  exitCli(2);
+}
+
+// design-to-code/design-system-dir.ts
+import fs5 from "node:fs";
+import path3 from "node:path";
+
+// bridge/src/export-reader.ts
+import fs4 from "node:fs";
+import path2 from "node:path";
+var PAGES = "pages";
+var INDEX = "index.json";
+function resolveInside(base, rel, within = base) {
+  const root = path2.resolve(within), file = path2.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path2.sep) ? file : null;
+}
+var inside = (root, rel) => typeof rel === "string" && rel && !path2.isAbsolute(rel) ? resolveInside(root, rel) : null;
+var relOf = (root, file) => path2.relative(root, file).split(path2.sep).join("/");
+var problemOf = (root, file, read) => "error" in read && !read.missing ? { file: relOf(root, file), error: read.error } : null;
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+var isIndexRowLike = (x) => isRecord(x) && typeof x.id === "string" && typeof x.name === "string";
+var isRowList = (x) => Array.isArray(x) && x.every((r) => r === null || isIndexRowLike(r));
+var isPagesRootIndex = /* @__PURE__ */ Object.assign(
+  (x) => isRecord(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isRecord(d) && optStr2(d.dir) && optStr2(d.index)) && (x.layers === void 0 || isRowList(x.layers)) && optStr2(x.exportedAt),
+  { expected: "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})" }
+);
+var isPageIndex = /* @__PURE__ */ Object.assign(
+  (x) => isRecord(x) && isRowList(x.layers),
+  { expected: "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}" }
+);
+function screenSiblingFile(screenFile, kind) {
+  return screenFile.replace(/\.json$/i, "") + "." + kind + ".json";
+}
+var rootIndexFile = (exportRoot) => path2.join(exportRoot, PAGES, INDEX);
+var hasExportIndex = (exportRoot) => fs4.existsSync(rootIndexFile(exportRoot));
+function pagesRootOfScreen(screenFile) {
+  const pages = path2.dirname(path2.dirname(path2.resolve(screenFile)));
+  return path2.basename(pages) === PAGES ? path2.dirname(pages) : null;
+}
+function exportRootOfScreen(screenFile) {
+  const root = pagesRootOfScreen(screenFile);
+  return root !== null && hasExportIndex(root) ? root : null;
+}
+function pageIndexFiles(root, pageDirs) {
+  const files = [];
+  const add = (f) => {
+    if (f !== null && !files.includes(path2.resolve(f))) files.push(path2.resolve(f));
+  };
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path2.join(root, PAGES, dir, INDEX) : null;
+  for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
+  let dirs = [];
+  try {
+    dirs = fs4.readdirSync(path2.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  } catch {
+  }
+  for (const d of dirs) add(ofDir(d));
+  return files;
+}
+function readExportIndex(exportRoot) {
+  const root = exportRoot;
+  const rootFile = rootIndexFile(root);
+  const read = readJson(rootFile, isPagesRootIndex);
+  const rootDoc = "doc" in read ? read.doc : null;
+  const problems = [];
+  const rootProblem = problemOf(root, rootFile, read);
+  if (rootProblem) problems.push(rootProblem);
+  const rows = [];
+  const byId = /* @__PURE__ */ new Map();
+  const files = /* @__PURE__ */ new Set();
+  const fromRoot = /* @__PURE__ */ new Set();
+  const written = /* @__PURE__ */ new Map();
+  const writtenAt = (row) => {
+    let t = written.get(row);
+    if (t === void 0) {
+      const f = inside(root, row.file);
+      try {
+        t = f === null ? -1 : fs4.statSync(f).mtimeMs;
+      } catch {
+        t = -1;
+      }
+      written.set(row, t);
+    }
+    return t;
+  };
+  const hasFile = (row) => {
+    const file = row.file;
+    return typeof file === "string" && file !== "";
+  };
+  const probeOf = (row) => hasFile(row) ? row : { ...row, file: "\0no file " + rows.length };
+  const sameScreen = (older, newer) => hasFile(older) && older.file === newer.file || sameScreenRow(probeOf(older), newer);
+  const keep = (row, isRoot) => {
+    rows.push(row);
+    const bucket = byId.get(row.id);
+    if (bucket) bucket.push(row);
+    else byId.set(row.id, [row]);
+    if (hasFile(row)) files.add(row.file);
+    if (isRoot) fromRoot.add(row);
+  };
+  const take = (row, isRoot) => {
+    const candidates = [...byId.get(row.id) ?? [], ...hasFile(row) && files.has(row.file) ? rows.filter((k) => k.file === row.file && k.id !== row.id) : []];
+    if (isRoot) {
+      if (!candidates.some((k) => sameScreen(row, k))) keep(row, true);
+      return;
+    }
+    const newer = (k) => writtenAt(row) > writtenAt(k);
+    const conflicts = candidates.filter((k) => fromRoot.has(k) || !newer(k) ? sameScreen(row, k) : sameScreen(k, row));
+    if (!conflicts.length) {
+      keep(row, false);
+      return;
+    }
+    if (conflicts.some((k) => fromRoot.has(k) || !newer(k))) return;
+    const at = Math.min(...conflicts.map((k) => rows.indexOf(k)));
+    for (const k of conflicts) {
+      rows.splice(rows.indexOf(k), 1);
+      const bucket = byId.get(k.id) ?? [];
+      bucket.splice(bucket.indexOf(k), 1);
+      if (!bucket.length) byId.delete(k.id);
+      if (hasFile(k) && !rows.some((r) => r.file === k.file)) files.delete(k.file);
+    }
+    keep(row, false);
+    rows.splice(rows.length - 1, 1);
+    rows.splice(at, 0, row);
+  };
+  for (const row of rootDoc?.layers ?? []) if (row) take(row, true);
+  for (const f of pageIndexFiles(root, rootDoc?.pageDirs ?? [])) {
+    const page = readJson(f, isPageIndex);
+    const problem = problemOf(root, f, page);
+    if (problem) problems.push(problem);
+    if ("doc" in page) {
+      for (const row of page.doc.layers) if (row) take(row, false);
+    }
+  }
+  const rootStamp = rootDoc?.exportedAt || void 0;
+  return {
+    root,
+    indexed: rootDoc !== null,
+    rootProblem: rootProblem && rootProblem.error,
+    problems,
+    rows,
+    isExported: (id) => byId.has(id),
+    fileOf: (row) => inside(root, row.file),
+    exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)
+  };
+}
+
+// bridge/src/library-layout.ts
+var ROOT = "libraries";
+var INDEX2 = "index.json";
+var { TOKENS: TOKENS2, HYGIENE: HYGIENE2 } = DESIGN_SYSTEM_FILES;
+var COMPONENTS = "components.json";
+var LIBRARY_FILE_NAMES = [TOKENS2, ...STYLE_KINDS.map((row) => row.file), COMPONENTS, HYGIENE2, INDEX2];
+
+// design-to-code/design-system-dir.ts
+var { TOKENS: TOKENS3, COMPONENTS_LOCAL: COMPONENTS_LOCAL2, COMPONENTS_LIBRARY: COMPONENTS_LIBRARY2 } = DESIGN_SYSTEM_FILES;
+var STYLES_TEXT = STYLE_KIND_ROWS.text.file;
+function designSystemFiles(dir) {
+  const local = path3.join(dir, COMPONENTS_LOCAL2);
+  const isLibrary = !fs5.existsSync(local) && fs5.existsSync(path3.join(dir, COMPONENTS));
+  return {
+    tokens: path3.join(dir, TOKENS3),
+    components: isLibrary ? path3.join(dir, COMPONENTS) : local,
+    componentsLibrary: path3.join(dir, COMPONENTS_LIBRARY2),
+    stylesText: path3.join(dir, STYLES_TEXT),
+    componentsFile: isLibrary ? COMPONENTS : COMPONENTS_LOCAL2,
+    isLibrary
+  };
+}
+function readDesignSystemDir(dir) {
+  const f = designSystemFiles(dir);
+  return {
+    tokens: readOptionalDoc(f.tokens, "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(f.components, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(f.componentsLibrary, "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(f.stylesText, "text styles", isTextStylesDoc),
+    componentsFile: f.componentsFile,
+    isLibrary: f.isLibrary
+  };
+}
+function exportRootOf(screenFile, dsDir) {
+  const roots = [];
+  if (screenFile) {
+    const pages = path3.dirname(path3.dirname(screenFile));
+    if (path3.basename(pages) === "pages") roots.push(path3.dirname(pages));
+  }
+  if (dsDir) {
+    const parent = path3.dirname(path3.normalize(dsDir));
+    roots.push(path3.basename(parent) === ROOT ? path3.dirname(parent) : parent);
+  }
+  return roots.find((r) => fs5.existsSync(path3.join(r, ROOT, INDEX2))) ?? null;
+}
+function findLibraryExports(screenFile, dsDir) {
+  const root = exportRootOf(screenFile, dsDir);
+  if (!root) return [];
+  const index = readJsonOrNull(path3.join(root, ROOT, INDEX2), isLibrariesIndex);
+  if (!index) return [];
+  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
+    const rel = path3.join(root, ROOT, r.dir).split(path3.sep).join("/");
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, COMPONENTS), isComponentsCatalog) };
+  });
+}
+function readFrameTexts(file) {
+  const doc = readJsonOrNull(file, isScreenDoc);
+  if (!doc) return null;
+  const all = [], shallow = [];
+  for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
+    if (n.type === "TEXT" && typeof n.text === "string" && n.text.trim()) {
+      all.push(n.text);
+      if (c.depth <= 6) shallow.push(n.text);
+    }
+  });
+  return { all, shallow };
+}
+function findExportNeighbours(screenFile) {
+  const root = exportRootOfScreen(screenFile);
+  if (root === null) return null;
+  const ix = readExportIndex(root);
+  if (!ix.indexed) return null;
+  const layers = [...ix.rows];
+  const cache = /* @__PURE__ */ new Map();
+  const textsOf = (row) => {
+    const f = ix.fileOf(row);
+    if (f === null) return null;
+    if (!cache.has(f)) cache.set(f, readFrameTexts(f));
+    return cache.get(f) ?? null;
+  };
+  const known = new Set(layers.map((l) => safe(l.id)));
+  const shots = /* @__PURE__ */ new Set();
+  let files = [];
+  try {
+    files = fs5.readdirSync(path3.join(root, "assets"));
+  } catch {
+    files = [];
+  }
+  for (const f of files) {
+    const m = /^(\d+_\d+)(?:_ref(?:-[0-9A-Za-z]+(?:_\d+)?)?|_shot@[\d.]+x)\.png$/.exec(f);
+    const id = m && m[1] && !known.has(m[1]) ? nodeIdFromSafe(m[1]) : null;
+    if (id) shots.add(id);
+  }
+  return { layers, unexportedShots: [...shots].sort(), textsOf };
+}
+
+// design-to-code/map-validate-core.ts
+var STATUSES = ["active", "deprecated", "needs-review"];
+var KEYS = {
+  root: ["version", "figmaFileKey", "components"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
+  figma: ["key", "id", "name", "unstable"],
+  code: ["module", "export", "targets"],
+  target: ["module", "export"],
+  vo: ["when", "code"],
+  voCode: ["module", "export"],
+  children: ["layerNamePattern", "slot"],
+  prop: Object.assign(nullProto(), {
+    enum: ["kind", "codeProp", "values", "default", "omitDefault"],
+    boolean: ["kind", "codeProp", "default", "omitDefault"],
+    string: ["kind", "codeProp"],
+    instance: ["kind", "codeProp", "slot"]
+  })
+};
+var PROP_KINDS = Object.keys(KEYS.prop);
+var isStr = (v) => typeof v === "string";
+var isBool = (v) => typeof v === "boolean";
+var noExtra = (obj, allowed, at, err) => {
+  if (!Array.isArray(allowed)) return;
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)");
+};
+var optStrings = (obj, keys, at, err) => {
+  for (const k of keys) if (obj[k] !== void 0 && !isStr(obj[k])) err(`${at}.${k}`, "must be a string");
+};
+function validateMap(map) {
+  const errors = [];
+  const err = (path12, message) => errors.push({ path: path12, message });
+  if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  noExtra(map, KEYS.root, "", err);
+  if (map.version !== 1) err("version", "must be 1");
+  if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
+  if (!isRecord(map.components)) {
+    err("components", "must be an object");
+    return { ok: false, errors };
+  }
+  for (const key of Object.keys(map.components)) {
+    const e = map.components[key];
+    const at = `components.${key}`;
+    if (!isRecord(e)) {
+      err(at, "entry must be an object");
+      continue;
+    }
+    noExtra(e, KEYS.entry, at, err);
+    if (!isRecord(e.figma)) err(`${at}.figma`, "required object");
+    else {
+      noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
+      if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
+      if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
+    }
+    if (!isRecord(e.code)) err(`${at}.code`, "required object");
+    else {
+      noExtra(e.code, KEYS.code, `${at}.code`, err);
+      if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
+      if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
+      if (e.code.targets !== void 0) {
+        if (!isRecord(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        else for (const t of Object.keys(e.code.targets)) {
+          const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
+          if (!isRecord(tv)) err(ta, "must be an object");
+          else {
+            noExtra(tv, KEYS.target, ta, err);
+            optStrings(tv, ["module", "export"], ta, err);
+          }
+        }
+      }
+    }
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
+    if (e.props !== void 0) {
+      if (!isRecord(e.props)) err(`${at}.props`, "must be an object");
+      else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
+    }
+    if (e.variantOverrides !== void 0) {
+      if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
+      else e.variantOverrides.forEach((vo, i) => {
+        const va = `${at}.variantOverrides[${i}]`;
+        if (!isRecord(vo)) {
+          err(va, "must be an object");
+          return;
+        }
+        noExtra(vo, KEYS.vo, va, err);
+        if (!isRecord(vo.when)) err(`${va}.when`, "required object");
+        else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
+        if (!isRecord(vo.code)) err(`${va}.code`, "required object");
+        else {
+          noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
+          if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
+          if (!isStr(vo.code.export)) err(`${va}.code.export`, "required string");
+        }
+      });
+    }
+    if (e.childrenByLayer !== void 0) {
+      if (!isRecord(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      else {
+        noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
+        optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+function validateProp(p, at, err) {
+  if (!isRecord(p)) {
+    err(at, "prop must be an object");
+    return;
+  }
+  const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : void 0;
+  if (!Array.isArray(allowed)) {
+    err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`);
+    return;
+  }
+  noExtra(p, allowed, at, err);
+  if (p.kind !== "instance" && !isStr(p.codeProp)) err(`${at}.codeProp`, "required string");
+  if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
+  if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
+  if (p.kind === "enum") {
+    if (p.values !== void 0 && !isRecord(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isRecord(p.values)) for (const k of Object.keys(p.values)) {
+      const t = typeof p.values[k];
+      if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
+    }
+    if (p.default !== void 0 && !["string", "number", "boolean"].includes(typeof p.default)) err(`${at}.default`, "must be string|number|boolean");
+  }
+  if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
+  if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
+}
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+
+// design-to-code/slice-sources.ts
+import fs6 from "node:fs";
+import path4 from "node:path";
+function sourcesOf(doc, docPath) {
+  const out = /* @__PURE__ */ new Map();
+  const add = (key, screen) => {
+    if (typeof key !== "string" || !key || !screen) return;
+    const list = out.get(key) || [];
+    if (!list.includes(screen)) list.push(screen);
+    out.set(key, list);
+  };
+  const base = docPath ? path4.dirname(docPath) : ".";
+  for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
+    if (!sl) continue;
+    let read = false;
+    if (typeof sl.file === "string") {
+      const slice = readJsonOrNull(path4.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      if (slice) {
+        for (const v of slice.variables || []) add(v.key, sl.screen);
+        read = true;
+      }
+    }
+    if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
+  }
+  for (const c of doc && Array.isArray(doc._conflicts) ? doc._conflicts : []) {
+    for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
+  }
+  if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
+    for (const v of doc && doc.variables || []) add(v.key, path4.basename(docPath, ".vars.json"));
+  }
+  return out;
+}
+function variablesContext(screenFiles, varsFile, opts) {
+  const invalid = [];
+  const readTokens = (f) => {
+    if (!f) return null;
+    const r = readJson(f, isTokensDoc);
+    if ("doc" in r) return r.doc;
+    if (!r.missing) invalid.push({ file: f, error: r.error });
+    return null;
+  };
+  const files = screenFiles || [];
+  const own = files.map((f) => readTokens(screenSiblingFile(String(f), "vars")));
+  let variablesPath = varsFile || null;
+  const firstFile = files[0];
+  if (!variablesPath && firstFile !== void 0) {
+    const exportRoot = path4.resolve(path4.dirname(firstFile), "..", "..");
+    const rootVars = path4.join(exportRoot, MERGED_VARIABLES_FILE);
+    const sibling = path4.join(path4.dirname(firstFile), MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs6.existsSync(sibling)) variablesPath = sibling;
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = screenSiblingFile(String(firstFile), "vars");
+  }
+  const variablesDoc = readTokens(variablesPath);
+  let staleLegacy = null;
+  if (firstFile !== void 0) {
+    const legacy2 = path4.join(path4.resolve(path4.dirname(firstFile), "..", ".."), "..", MERGED_VARIABLES_FILE);
+    if (fs6.existsSync(legacy2) && path4.resolve(legacy2) !== path4.resolve(variablesPath || "")) staleLegacy = legacy2;
+  }
+  return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
+}
+
+// design-to-code/screen-inputs.ts
+function exportSiblings(files) {
+  const checked = new Set(files.map((f) => path5.resolve(f)));
+  const roots = /* @__PURE__ */ new Set();
+  for (const f of checked) {
+    const root = exportRootOfScreen(f);
+    if (root !== null) roots.add(root);
+  }
+  if (!roots.size) return null;
+  return () => {
+    const out = [];
+    const seen = new Set(checked);
+    for (const root of roots) {
+      const ix = readExportIndex(root);
+      for (const row of ix.rows) {
+        const file = ix.fileOf(row);
+        if (file === null || seen.has(file)) continue;
+        seen.add(file);
+        const doc = readJsonOrNull(file, isScreenDoc);
+        if (doc) out.push({ doc, label: path5.basename(file, ".json") });
+      }
+    }
+    return out;
+  };
+}
+function designSystemDirOf(firstFile, named) {
+  if (named) return { dir: named, given: true };
+  const shown = (abs) => {
+    const rel = path5.relative(process.cwd(), abs);
+    return rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel.split(path5.sep).join("/") : abs;
+  };
+  const root = firstFile === void 0 ? null : pagesRootOfScreen(firstFile);
+  const dir = root !== null ? path5.join(root, DESIGN_SYSTEM_DIR) : path5.resolve(findExportDir(process.cwd()).rel, DESIGN_SYSTEM_DIR);
+  return fs7.existsSync(dir) && fs7.statSync(dir).isDirectory() ? { dir: shown(dir), given: false } : null;
+}
+function readScreenInputs(files, flags = {}) {
+  const ctx = variablesContext(files, flags.variables, { sliceFallback: true });
+  if (ctx.invalid.length) return { errors: ctx.invalid.map((bad) => `error  variables: '${bad.file}' ${bad.error}`) };
+  const notes = [];
+  if (ctx.variablesPath) notes.push(`variables: ${ctx.variablesPath}`);
+  else notes.push("note  no variables: no variables.json at the export root or beside the screen (pass --variables)");
+  if (ctx.staleLegacy) notes.push(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
+  const screens = files.map((f, i) => ({
+    file: f,
+    doc: readDocFile(f, "screen export", isScreenDoc),
+    label: path5.basename(f, ".json"),
+    ...ctx.own[i] ? { vars: ctx.own[i] } : {},
+    assets: readJsonOrNull(screenSiblingFile(f, "assets"), isScreenAssetsDoc)
+  }));
+  const firstFile = files[0];
+  const at = designSystemDirOf(firstFile, flags.designSystem);
+  const designSystem = at === null ? null : { ...readDesignSystemDir(at.dir), ...at };
+  if (at === null) notes.push(`note  no design system: none given, and no ${DESIGN_SYSTEM_DIR}/ beside the export (pass --design-system)`);
+  else if (at.given && !fs7.existsSync(at.dir)) notes.push(`note  --design-system ${at.dir} does not exist \u2014 no design system was read`);
+  else notes.push(`design system: ${at.dir}${at.given ? "" : " (found beside the export; pass --design-system to choose another)"}`);
+  const libraries = findLibraryExports(firstFile, at?.dir);
+  let map = null, mapFile = null;
+  if (flags.map) {
+    map = readDocFile(flags.map, "component map", isCodeConnectMap);
+    mapFile = flags.map;
+  } else {
+    const found = findMapFile(process.cwd());
+    const r = found.missing ? null : readJson(found.rel, isCodeConnectMap);
+    if (r && "doc" in r) {
+      map = r.doc;
+      mapFile = found.rel;
+      notes.push(`map: ${found.rel}`);
+    } else if (r) notes.push(`warn  ${found.rel} ${r.error} \u2014 proposals are not labelled alreadyMapped${flags.mapFlag ? " (pass --map to fail on it)" : ""}`);
+  }
+  return {
+    inputs: {
+      screens,
+      variables: ctx.variablesDoc,
+      variablesPath: ctx.variablesPath,
+      sliceSources: ctx.sliceSources,
+      designSystem,
+      libraries,
+      map,
+      mapFile,
+      siblings: exportSiblings(files),
+      notes
+    }
+  };
+}
+function withCatalog(ds, catalog) {
+  if (ds === null || catalog === void 0) return ds;
+  return { ...ds, components: ds.given ? ds.components || catalog : catalog };
+}
+function crossCheckInputOf(c, fallback = {}) {
+  const ds = c.designSystem;
+  return {
+    screens: c.screens,
+    variables: c.variables ?? null,
+    variablesPath: c.variablesPath ?? null,
+    sliceSources: c.sliceSources ?? null,
+    tokens: ds?.tokens ?? null,
+    components: ds?.components || fallback.components || null,
+    componentsLibrary: ds?.componentsLibrary ?? null,
+    stylesText: ds?.stylesText ?? null,
+    ...ds?.componentsFile !== void 0 ? { componentsFile: ds.componentsFile } : {},
+    ...ds?.isLibrary !== void 0 ? { designSystemIsLibrary: ds.isLibrary } : {},
+    map: c.map ?? null,
+    siblings: c.siblings ?? null
+  };
+}
+
+// design-to-code/cli-args.ts
+import path6 from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var SCRIPT_RUNNER = "bun --no-install --no-env-file";
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
+var scriptCmd = (name) => `${SCRIPT_RUNNER} ${shellQuote(path6.join(path6.dirname(SELF), name + path6.extname(SELF)))}`;
+function joinNegativeValues(argv, options) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
+    if (tok === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = tok.startsWith("--") ? tok.slice(2) : void 0;
+    if (name !== void 0 && next !== void 0 && options[name]?.type === "string" && /^-\d/.test(next)) {
+      out.push(`${tok}=${next}`);
+      i++;
+    } else out.push(tok);
+  }
+  return out;
+}
+function badShortWords(args, options) {
+  const shorts = /* @__PURE__ */ new Map();
+  for (const o of Object.values(options)) if (o.short) shorts.set(o.short, o.type);
+  const bad = [];
+  let takesNext = false;
+  for (const a of args) {
+    if (a === "--") break;
+    if (takesNext) {
+      takesNext = false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      takesNext = !a.includes("=") && options[a.slice(2)]?.type === "string";
+      continue;
+    }
+    if (!/^-[^-]/.test(a)) continue;
+    let ok = true;
+    for (const [i, c] of [...a.slice(1)].entries()) {
+      const type = shorts.get(c);
+      if (type === void 0) {
+        ok = false;
+        break;
+      }
+      if (type === "string") {
+        takesNext = i === a.length - 2;
+        break;
+      }
+    }
+    if (!ok) bad.push(a);
+  }
+  return bad;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  const args = joinNegativeValues(argv, options);
+  const unknownFlags = () => {
+    const { tokens } = parseArgs({ args, options, strict: false, allowPositionals: true, tokens: true });
+    const long = tokens.flatMap((t) => t.kind === "option" && t.rawName.startsWith("--") && args[t.index]?.startsWith("--") && !(t.name in options) ? [{ name: t.rawName, at: t.index }] : []);
+    const short = badShortWords(args, options);
+    const hint = short.some((w) => w.length > 2) ? ' (a value starting with "-": put -- before it, or use --flag=value)' : "";
+    const named = [...long, ...short.map((w) => ({ name: w, at: args.indexOf(w) }))].sort((a, b) => a.at - b.at).map((n) => n.name);
+    return `${tool}: unknown flag ${[...new Set(named)].join(", ")}${hint}
+${usage}`;
+  };
+  let failure;
+  try {
+    const parsed = parse(args);
+    if (!badShortWords(args, options).length) return parsed;
+    failure = unknownFlags();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      failure = unknownFlags();
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const names = /Option '([^']*)'/.exec(msg)?.[1]?.match(/--?[\w-]+/g) ?? [];
+      const typed = names.find((n) => args.some((a) => a === n || a.startsWith(n + "="))) ?? names.at(-1);
+      failure = `${tool}: ${typed ?? "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`;
+    } else {
+      failure = `${tool}: ${errMsg(e)}
+${usage}`;
+    }
+  }
+  console.error(failure);
+  exitCli(exitCode);
+}
 
 // design-to-code/audit.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -4175,16 +4173,6 @@ function toMarkdown(res) {
   }
   return L.join("\n") + "\n";
 }
-function blockerIds(auditDoc) {
-  const findings = reportFindings(auditDoc);
-  const ids = findingIds(findings.map((f) => ({ code: f.code || "blocker", nodeId: f.nodeId })));
-  return findings.flatMap((f, i) => f.severity === "blocker" ? [f.id || ids[i] || f.code || "blocker"] : []);
-}
-function reportFindings(auditDoc) {
-  const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
-  const str = (v) => typeof v === "string" && v ? v : void 0;
-  return findings.filter(isJsonObject).map((f) => ({ ...ifDefined("code", str(f.code)), ...ifDefined("nodeId", str(f.nodeId)), ...ifDefined("severity", str(f.severity)), ...ifDefined("id", str(f.id)) }));
-}
 var OVERRIDE_KEYS = ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen"];
 var BLOCKER_CODES = ["export-truncated", "assets-failed", "missing-font", "token-name-collision"];
 function main(argv) {
@@ -4299,12 +4287,10 @@ export {
   BLOCKER_CODES,
   TOUCH_MIN,
   audit,
-  blockerIds,
   contrastRatio,
   controlKind,
   deltaE,
   main,
   parseHex,
-  reportFindings,
   toMarkdown
 };

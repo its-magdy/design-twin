@@ -2198,7 +2198,7 @@ function toNodeId(raw) {
   return parseNodeId(raw) || (raw == null ? "" : String(raw));
 }
 
-// design-to-code/resolve-screen.ts
+// design-to-code/resolve-screen-core.ts
 import path15 from "node:path";
 
 // bridge/src/export-reader.ts
@@ -2572,7 +2572,7 @@ function nodeArtefacts(root, dirs = {}) {
   };
 }
 
-// design-to-code/resolve-screen.ts
+// design-to-code/resolve-screen-core.ts
 var STEM_TAIL_RE = /(?:\.[A-Za-z0-9-]+)*$/;
 function queryIds(q) {
   const out = [];
@@ -2693,7 +2693,6 @@ function resolveScreen(exportDir, query, opts) {
   }
   return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
-if (false) runCli2(main, { name: "resolve-screen" });
 
 // design-to-code/screen-key.ts
 function claimSet(opts) {
@@ -3488,7 +3487,7 @@ var STYLE_KEY_SHAPE = {
   tag: "tagName, lower-case",
   display: "getComputedStyle(el).display"
 };
-var MEASURED_KEYS_DOC = {
+var measuredKeysDoc = () => ({
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
   "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
@@ -3508,7 +3507,7 @@ var MEASURED_KEYS_DOC = {
   "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
   "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against"
-};
+});
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
 
@@ -4388,7 +4387,7 @@ function expectationOf(bx, docs, plan, referenceImage) {
     ...frames.length > 1 ? { frames: frames.map(rootFrame) } : {},
     coordinates: COORDINATES,
     note: "Generated from the export \u2014 do NOT retype these numbers into code comments. Every row is the value the design states; a field the export does not define is absent rather than defaulted. Layers the designer switched off (hidden: true on the node or an ancestor) have NO row: do not build, measure or drive them \u2014 their ids are listed under `hidden`. Feed this to a renderer probe and compare with `verify-screen.js --compare`; the probe's field names are listed under `measuredKeys`.",
-    measuredKeys: MEASURED_KEYS_DOC,
+    measuredKeys: measuredKeysDoc(),
     tolerance: TOLERANCE,
     counts: {
       nodes: nodes.length,

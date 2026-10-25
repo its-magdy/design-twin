@@ -33,7 +33,7 @@ const resolveCli = cliRunner(path.join(import.meta.dirname, "..", "design-to-cod
 import { check as ok, report } from "./assert.ts";
 import { buildPageLayout, collectTexts, deriveTitle, nodeIdFromSafe, nodeIdFromStem, safe, screenPaths, screenStem } from "../bridge/src/pages-layout.ts";
 import { listPlans } from "../bridge/src/project-layout.ts";
-import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import { resolveScreen } from "../design-to-code/resolve-screen-core.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
 import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
 import { must, readFixture } from "./fixtures.ts";

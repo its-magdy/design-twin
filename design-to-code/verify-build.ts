@@ -47,7 +47,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { errMsg } from "../bridge/src/errmsg.ts";
-import { visibility } from "./plan-skeleton.ts";
+import { visibility } from "./visible-tree.ts";
+import { screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
@@ -56,7 +57,7 @@ import { cliParse, scriptCmd } from "./cli-args.ts";
 import { recordedReport } from "./report-freshness.ts";
 import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
 import { anyJson, readJsonOrNull } from "../bridge/src/read-json.ts";
-import { isCodeConnectMap } from "./map-validate.ts";
+import { isCodeConnectMap } from "./map-validate-core.ts";
 import type {
   IrNodeType, Plan, PlanAnchor, PlanHookRecord, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc,
@@ -146,7 +147,7 @@ interface NodeRef { id: string; name: string; type: IrNodeType }
 export interface AnchorCoverage { visible: number; unmapped: NodeRef[]; unmappedNodes: number; wrappers: NodeRef[]; hiddenAnchored: string[]; unknown: string[] }
 
 function anchorCoverage(plan: Plan, doc: ScreenDoc): AnchorCoverage {
-  const { visible, hidden } = visibility(doc);
+  const { visible, hidden } = visibility(screenRoots(doc));
   const anchors: Record<string, PlanAnchor> = plan.anchors || {};
   const covered = new Map<string, boolean>();
   const isCovered = (id: string): boolean => {
@@ -484,7 +485,7 @@ const isWebProfile = (p: string | null): boolean => !!p && /^web(-|$)/i.test(p);
 // counted); visible = drawn by the export (all anchored ids when the export cannot be found).
 function tagCoverageOf(plan: Plan, exp: ExportHit | null, files: FileText[]): { tagged: number; anchored: number; attribute: boolean; untagged: string[] } {
   const anchors: Record<string, PlanAnchor> = plan.anchors || {};
-  const vis = exp ? visibility(exp.doc).visible : null;
+  const vis = exp ? visibility(screenRoots(exp.doc)).visible : null;
   const ids = Object.keys(anchors).filter((id) => { const a = anchors[id]; return anchored(a) && !(a && typeof a.omitted === "string" && a.omitted.trim()) && (!vis || vis.has(id)); });
   const attribute = files.some((f) => f.text.includes("data-dt-node"));
   // verify reads data-dt-node only: with the attribute nowhere, an id in some other attribute tags nothing.

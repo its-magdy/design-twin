@@ -22,7 +22,7 @@ import { getOrInit } from "./map-util.ts";
 import { EXPORT_DIR } from "../bridge/src/project-layout.ts";
 import { resolveInside } from "../bridge/src/export-reader.ts";
 import {
-  EXPECTATION_SCHEMA, MEASURED_KEYS_DOC, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, fontWeightOf, lineHeightPx, normColor, num, r2,
+  EXPECTATION_SCHEMA, PAD_SIDES, TEXT_BOX_HEIGHT, TOLERANCE, fontWeightOf, lineHeightPx, measuredKeysDoc, normColor, num, r2,
 } from "./verify-shared.ts";
 import type { PadSide } from "./verify-shared.ts";
 
@@ -1003,7 +1003,7 @@ function expectationOf(bx: ExpectBuild, docs: ExpectInput[], plan: Pick<VerifyEx
       "Layers the designer switched off (hidden: true on the node or an ancestor) have NO row: do not build, " +
       "measure or drive them — their ids are listed under `hidden`. Feed this to a renderer probe and compare " +
       "with `verify-screen.js --compare`; the probe's field names are listed under `measuredKeys`.",
-    measuredKeys: MEASURED_KEYS_DOC,
+    measuredKeys: measuredKeysDoc(),
     tolerance: TOLERANCE,
     counts: {
       nodes: nodes.length, instances: instances.length, interactions: interactions.length, notComparable: notComparable.length,
