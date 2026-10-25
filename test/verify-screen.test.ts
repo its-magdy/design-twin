@@ -1139,6 +1139,21 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const rec = run("--compare", exp, meas);
   okOuter(`[plans] the recorded plan wins at --compare over two plans of the node (a note), and the code hashes come from it (got ${rec.status}, ${codeOf()})`,
     (rec.status === 0 || rec.status === 1) && codeOf() === "scratch/mine.json src/A.tsx" && /note {2}using scratch\/mine\.json \(the plan --expect merged interactions from\); 2 plans in design\/plan\/ describe this frame now/.test(rec.stderr));
+  const recRep = repOf();
+  okOuter("[plans] …its waivers bind (report.inputs.waivers names it) and the note is a report input note",
+    recRep?.inputs?.waivers?.plan === "scratch/mine.json" && (recRep.probe?.inputNotes ?? []).some((n) => n.startsWith("using scratch/mine.json (the plan --expect merged interactions from)")));
+  // the recorded plan gone, two plans of the node and no --plan: a data error before anything is compared or written
+  fs.rmSync(path.join(cwd, "scratch/mine.json"));
+  const repBefore = fs.readFileSync(report, "utf8");
+  const goneTwo = run("--compare", exp, meas);
+  okOuter(`[plans] the recorded plan gone + two plans of the node → exit 2 naming both, the report untouched (got ${goneTwo.status}: ${goneTwo.stderr.trim()})`,
+    goneTwo.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\)/m.test(goneTwo.stderr) && fs.readFileSync(report, "utf8") === repBefore);
+  // an expectation naming two plans (no --expect writes one): refused the same way
+  const expDoc2 = readFixture(path.join(cwd, exp), isVerifyExpectation);
+  put(exp, { ...expDoc2, planPlaceholders: { plan: "scratch/other.json", sha256: "0".repeat(64), nodeIds: [], dropped: [] } });
+  const twoPlans = run("--compare", exp, meas);
+  okOuter(`[plans] an expectation whose interactions and placeholder rows name different plans → exit 2, both named, the report untouched (got ${twoPlans.status}: ${twoPlans.stderr.trim()})`,
+    twoPlans.status === 2 && /names two plans — interactions from scratch\/mine\.json, placeholder rows from scratch\/other\.json/.test(twoPlans.stderr) && fs.readFileSync(report, "utf8") === repBefore);
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 

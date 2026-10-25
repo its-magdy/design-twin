@@ -598,7 +598,7 @@ function recordedPlanOf(exp) {
   const [first, ...rest] = named;
   const clash = rest.find((r) => first && !samePlanFile(r.file, first.file));
   if (first && clash) return { error: `the expectation names two plans \u2014 interactions from ${first.file}, placeholder rows from ${clash.file} \u2014 one --expect reads one plan: re-run --expect` };
-  return first ? { file: first.file, section: first.s } : {};
+  return first ? { file: first.file, section: first.s.key } : {};
 }
 function resolvePlan(exp, sel, flagged, read2) {
   const rec = recordedPlanOf(exp);
@@ -610,7 +610,7 @@ function resolvePlan(exp, sel, flagged, read2) {
     if (!("doc" in r)) recordedGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
     else if (!flagged) {
       const foundNow = now ? ` instead of ${now.file}, the plan found in design/plan/ now` : sel.all.length ? `; ${sel.all.length} plans in design/plan/ describe this frame now (${sel.all.map((h) => h.file).join(", ")})` : "; no plan in design/plan/ describes this frame";
-      note = `using ${rec.file} (the plan --expect ${rec.section === INTERACTIONS ? "merged interactions from" : "read placeholder rows from"})${foundNow} \u2014 its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`;
+      note = `using ${rec.file} (the plan --expect ${rec.section === "planInteractions" ? "merged interactions from" : "read placeholder rows from"})${foundNow} \u2014 its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`;
       now = { file: rec.file, plan: r.doc, choice: "recorded" };
     }
   }
@@ -5079,7 +5079,6 @@ function compareCtx(expectation, measured, opts) {
     delta: bad.delta
   }, extra));
   const plan = planAtCompare(expectation, opts.plan);
-  const anchors = plan.anchors;
   const folded = [];
   const probeFrames = [...Array.isArray(measured.frames) ? measured.frames : [], ...measured.frame ? [measured.frame] : []];
   const multiFrame = (expectation.frames || []).length > 1;
@@ -5131,7 +5130,6 @@ function compareCtx(expectation, measured, opts) {
     gap,
     push,
     plan,
-    anchors,
     folded,
     probeFrames,
     multiFrame,
@@ -5157,7 +5155,7 @@ function compareSpec(cx, spec) {
   capSeverity(cx, n, own, sizeRow);
 }
 function matchSpec(cx, spec) {
-  const { frameOf, byId, viaSharedPath, probeWhy, notMeasured, anchors, folded, frameMeasured } = cx;
+  const { frameOf, byId, viaSharedPath, probeWhy, notMeasured, plan: { anchors }, folded, frameMeasured } = cx;
   let m = byId.get(String(spec.nodeId));
   let matchedBy = m ? m.matchedBy || "id" : null;
   if (!m) {
@@ -5832,7 +5830,7 @@ function componentEvidence(cx) {
   return { comps, bySet, untaggedInstanceSets, setsViaSharedPath };
 }
 function sharedShellOf(cx, g) {
-  const { expectation, hiddenSet, specs, matchKind, anchors, folded } = cx;
+  const { expectation, hiddenSet, specs, matchKind, plan: { anchors }, folded } = cx;
   const { untaggedInstanceSets } = g;
   const visibleInstances = (expectation.instances || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
   const instanceById = new Map(visibleInstances.map((i) => [String(i.nodeId), i]));
@@ -6227,7 +6225,7 @@ function reachInputOf(cx) {
     const matchesPlan = nav === null ? null : planSha !== null && planSha === reach.sha256;
     reachInput = { sha256: reach.sha256, steps: reach.steps.length, source: reach.source, matchesPlan };
     if (matchesPlan === false) inputNotes.push(nav && "error" in nav ? `the plan's navigate ${nav.error} \u2014 the probe's steps (sha ${reach.sha256.slice(0, 12)}\u2026) were not checked against it` : `the probe's steps (sha ${reach.sha256.slice(0, 12)}\u2026, ${reach.source}) are not the plan's navigate (sha ${(planSha ?? "").slice(0, 12)}\u2026) \u2014 measured another way than the plan says`);
-  } else if (reachRaw === void 0 && plan.file !== null && plan.navigate && plan.navigate.declared) {
+  } else if (reachRaw === void 0 && plan.file !== null && plan.navigate?.declared) {
     inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${plan.file}) \u2014 it measured whatever the URL shows first; re-run the probe with --steps ${plan.file}`);
   }
   return { reachInput };

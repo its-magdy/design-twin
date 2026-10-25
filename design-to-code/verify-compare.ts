@@ -21,7 +21,7 @@ import { CANONICAL_MATCHED_BY, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   ArtifactCheck, BehaviourCheck, BehaviourStatus, BuildIdentity, ProbeIdentity, BehaviourSummary, CodeInputs, DeltaSeverity, InteractionEvidence, JsonValue, MeasuredComponent,
-  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, PlanAnchor, PlanDescope, ProbeFrame, ReportBehaviour,
+  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, PlanDescope, ProbeFrame, ReportBehaviour,
   ReportVisual, VerifyDelta, VerifyCoverageV2, VerifyInteraction, VerifyInteractionResult, VerifyMeasured, VerifyAgainst, VerifyReport, VerifyReportV2,
   VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
@@ -562,7 +562,7 @@ interface CompareCtx extends MeasuredIndex {
   paintedVia: Array<{ nodeId: string; how: string }>; lineBoxWhyOf: Map<string, string>;
   gap: (spec: VerifySpec, field: string, why: string, absent?: boolean) => number;
   push: (spec: VerifySpec, field: string, severity: DeltaSeverity, bad: Bad, extra?: Partial<VerifyDelta>) => number;
-  plan: PlanBinding; anchors: Record<string, PlanAnchor>; folded: VerifyReportV2["folded"]; probeFrames: ProbeFrame[]; multiFrame: boolean; frameMeasured: (id: string) => boolean;
+  plan: PlanBinding; folded: VerifyReportV2["folded"]; probeFrames: ProbeFrame[]; multiFrame: boolean; frameMeasured: (id: string) => boolean;
   builtTexts: Map<string, string[]>; inputNotes: string[]; reopened: VerifyReportV2["waivers"]["reopened"]; unused: VerifyReportV2["waivers"]["unused"];
 }
 /** One measured spec as the checks read it: the measurement and how it was found, the styles compared (a drawn state's
@@ -777,7 +777,6 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
   // the plan's binding (its rows, and whether the ones the expectation read still hold); its anchors fold a layout-only
   // wrapper into a measured ancestor
   const plan = planAtCompare(expectation, opts.plan);
-  const anchors = plan.anchors;
   const folded: VerifyReportV2["folded"] = [];
   const probeFrames: ProbeFrame[] = [...(Array.isArray(measured.frames) ? measured.frames : []), ...(measured.frame ? [measured.frame] : [])];
   const multiFrame = (expectation.frames || []).length > 1;
@@ -797,7 +796,7 @@ function compareCtx(expectation: Expectation, measured: VerifyMeasured, opts: Co
   return {
     expectation, measured, opts, hiddenSet, legacy, specs, frameOf, byId, duplicateNodeIds, unknownKeys, keysSeen, expectedIds, viaSharedPath, probeWhy, deltas, notMeasured, fieldsNotMeasured, unverifiable, census,
       tally, fieldsChecked, nodesMeasured, nodesMatchedByComponentPath, fieldsReportedNull, matchedByCensus, typographyOn, matchKind, matchCapOf, absentGaps, placementGaps, undrawnStates, paintedVia, lineBoxWhyOf, gap,
-      push, plan, anchors, folded, probeFrames, multiFrame, frameMeasured, builtTexts, inputNotes, reopened, unused,
+      push, plan, folded, probeFrames, multiFrame, frameMeasured, builtTexts, inputNotes, reopened, unused,
   };
 }
 
@@ -819,7 +818,7 @@ function compareSpec(cx: CompareCtx, spec: VerifySpec): void {
 /** the measurement for a spec — by id, else through a shared component's internal path; none → folded into a measured
  *  ancestor (a plan anchor, checked) or not measured (null) */
 function matchSpec(cx: CompareCtx, spec: VerifySpec): { m: MeasuredNode; matchedBy: string | null } | null {
-  const { frameOf, byId, viaSharedPath, probeWhy, notMeasured, anchors, folded, frameMeasured } = cx;
+  const { frameOf, byId, viaSharedPath, probeWhy, notMeasured, plan: { anchors }, folded, frameMeasured } = cx;
   let m = byId.get(String(spec.nodeId));
   let matchedBy: string | null = m ? m.matchedBy || "id" : null;
   if (!m) {
@@ -1446,7 +1445,7 @@ function sharedShellOf(
   cx: CompareCtx,
   g: Pick<Graded, "untaggedInstanceSets">,
 ): Pick<Graded, "sharedShell" | "untaggedInstanceSetsInShell" | "untaggedOnScreen"> {
-  const { expectation, hiddenSet, specs, matchKind, anchors, folded } = cx;
+  const { expectation, hiddenSet, specs, matchKind, plan: { anchors }, folded } = cx;
   const { untaggedInstanceSets } = g;
   // ---- the shared shell, counted apart (informational — never the verdict). An OUTERMOST instance
   // (an `I<instance>;…` id names its outermost instance; a plain id is one when it is an instance) is a shared shell
@@ -1869,7 +1868,7 @@ function reachInputOf(cx: CompareCtx): Pick<Graded, "reachInput"> {
     reachInput = { sha256: reach.sha256, steps: reach.steps.length, source: reach.source, matchesPlan };
     if (matchesPlan === false) inputNotes.push(nav && "error" in nav ? `the plan's navigate ${nav.error} — the probe's steps (sha ${reach.sha256.slice(0, 12)}…) were not checked against it`
       : `the probe's steps (sha ${reach.sha256.slice(0, 12)}…, ${reach.source}) are not the plan's navigate (sha ${(planSha ?? "").slice(0, 12)}…) — measured another way than the plan says`);
-  } else if (reachRaw === undefined && plan.file !== null && plan.navigate && plan.navigate.declared) {
+  } else if (reachRaw === undefined && plan.file !== null && plan.navigate?.declared) {
     // the plan says how to reach the screen, the probe was never told — it measured the landing page
     inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${plan.file}) — it measured whatever the URL shows first; re-run the probe with --steps ${plan.file}`);
   }

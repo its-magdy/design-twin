@@ -2,7 +2,7 @@
 // the selection rule, the rows --expect consumes and records, the plan --compare resolves (flag / found / recorded / gone),
 // and the table of {what the expectation recorded, the plan used now} → the reasons and notes compare is handed.
 // Run with:  bun test/plan-binding.test.ts
-import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, recordedPlanOf, resolvePlan, waiversHash } from "../design-to-code/plan-binding.ts";
+import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, resolvePlan, waiversHash } from "../design-to-code/plan-binding.ts";
 import type { ChosenPlan, ExpectNodes, PlanReader, PlanResolution, PlanSelection } from "../design-to-code/plan-binding.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -163,8 +163,8 @@ console.log("resolvePlan — the plan --expect recorded wins over another found 
     const note = "error" in t.r ? undefined : t.r.note;
     check(`${t.name} (got ${nowOf(t.r)}${note ? `; note ${note}` : ""})`, nowOf(t.r) === t.want && (t.note === undefined || (t.note === null ? note === undefined : !!note && t.note.test(note))));
   }
-  const both = recordedPlanOf({ ...recorded(B, { ix: ix("url") }), ...recorded(`./${B}`, { ph: ph("hint") }) });
-  check("recordedPlanOf: interactions and placeholder rows of one plan (spelled two ways) are one plan", "file" in both && both.file === B);
+  const both = res({ ...recorded(B, { ix: ix("dialog") }), ...recorded(`./${B}`, { ph: ph("hint") }) }, sel([B]), false);
+  check(`interactions and placeholder rows of one plan, spelled two ways, are one plan: no error, no note (got ${nowOf(both)})`, nowOf(both) === `${B}/only` && !("error" in both) && both.note === undefined);
 }
 
 // ---------------------------------------------------------------- --expect: the rows the expectation consumes

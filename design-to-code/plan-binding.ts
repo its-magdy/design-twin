@@ -70,7 +70,7 @@ type PlanChoice = "flag" | "only" | "recorded";
 export interface ChosenPlan { file: string; plan: Plan; choice?: PlanChoice }
 
 /** Two spellings of one plan file (`./design/plan/x.json`, an absolute path) are the same plan. */
-export function samePlanFile(a: string, b: string): boolean { return path.resolve(a) === path.resolve(b); }
+function samePlanFile(a: string, b: string): boolean { return path.resolve(a) === path.resolve(b); }
 
 /** The plans of a frame's node found on disk (verify-screen.ts plansForNode): the hits, the plans naming no node, and the
  *  refusal when there are several. */
@@ -181,12 +181,12 @@ const recordOf = (exp: Recorded, s: BoundSection): { plan: string; sha256: strin
 
 /** The plan file the expectation read (one --expect reads one plan), with the section that names it; two sections naming
  *  different plans is an error no --expect writes. */
-export function recordedPlanOf(exp: Recorded): { file?: string; section?: BoundSection } | { error: string } {
+function recordedPlanOf(exp: Recorded): { file?: string; section?: BoundSection["key"] } | { error: string } {
   const named = SECTIONS.flatMap((s) => { const v: unknown = exp[s.key]; return isJsonObject(v) && typeof v.plan === "string" ? [{ s, file: v.plan }] : []; });
   const [first, ...rest] = named;
   const clash = rest.find((r) => first && !samePlanFile(r.file, first.file));
   if (first && clash) return { error: `the expectation names two plans — interactions from ${first.file}, placeholder rows from ${clash.file} — one --expect reads one plan: re-run --expect` };
-  return first ? { file: first.file, section: first.s } : {};
+  return first ? { file: first.file, section: first.s.key } : {};
 }
 
 /** The plan --compare uses: the one chosen now, unless the expectation recorded another — gone (`recordedGone`: why it
@@ -210,7 +210,7 @@ export function resolvePlan(exp: Recorded, sel: PlanSelection, flagged: boolean,
     else if (!flagged) {
       const foundNow = now ? ` instead of ${now.file}, the plan found in design/plan/ now` : sel.all.length ? `; ${sel.all.length} plans in design/plan/ describe this frame now (${sel.all.map((h) => h.file).join(", ")})`
         : "; no plan in design/plan/ describes this frame";
-      note = `using ${rec.file} (the plan --expect ${rec.section === INTERACTIONS ? "merged interactions from" : "read placeholder rows from"})${foundNow} — its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`;
+      note = `using ${rec.file} (the plan --expect ${rec.section === "planInteractions" ? "merged interactions from" : "read placeholder rows from"})${foundNow} — its interactions[], placeholder rows, waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`;
       now = { file: rec.file, plan: r.doc, choice: "recorded" };
     }
   }
