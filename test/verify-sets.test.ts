@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { VERIFY_DIR } from "../bridge/src/project-layout.ts";
 import { CACHE_NAME, RUN_CACHE_SEGMENTS, runCacheOf } from "../design-to-code/run-cache.ts";
-import { SET_FILE, allSets, isJournalFile, isToolOwned, journalFile, setBaseOf, setFile, setNameOfFile, siblingFile } from "../design-to-code/verify-sets.ts";
+import { SET_FILE, allSets, isJournalFile, isToolOwned, journalFile, openVerifySet, setBaseOf, setFile, setNameOfFile, siblingFile } from "../design-to-code/verify-sets.ts";
 import { check, report } from "./assert.ts";
 
 console.log("setFile / journalFile — each file of a set, by kind:");
@@ -41,6 +41,32 @@ console.log("isToolOwned — the files only the verify tools write (never by han
   check("[not owned] a screenshot, a state's shot, any other *.prev.json, a file merely mentioning a suffix",
     !isToolOwned("Plots__1_1.png") && !isToolOwned("Plots__1_1-dialog.png") && !isToolOwned("Plots__1_1.measured.prev.json") && !isToolOwned("report.json.bak"));
   check("[owned] the list is the table's: every owned kind is in SET_FILE", owned.every((k) => typeof SET_FILE[k] === "string"));
+}
+
+console.log("openVerifySet — the set an expectation file opens, where its files go and its status base:");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "verify-sets-open-"));
+  const dir = path.join(tmp, "elsewhere");
+  fs.mkdirSync(dir);
+  const exp = path.join(dir, "Plots__1_1.w320.expected.json");
+  const own = openVerifySet(exp, "1:1", undefined);
+  check("[open] no --out: the set's files go beside its expectation — the same dir as its status base, wherever the cwd is",
+    !("error" in own) && own.name === "Plots__1_1.w320" && own.outBase === path.join(dir, "Plots__1_1.w320") && own.statusBase === own.outBase && own.notes.length === 0);
+  const other = path.join(tmp, "out");
+  fs.mkdirSync(other);
+  const into = openVerifySet(exp, "1:1", other);
+  check("[open] --out <dir>: the files go there; the status base stays the expectation's",
+    !("error" in into) && into.outBase === path.join(other, "Plots__1_1.w320") && into.statusBase === path.join(dir, "Plots__1_1.w320"));
+  const old = openVerifySet(exp, "1:1", path.join(other, "Plots__1_1.w320"));
+  check("[open] --out <dir>/<set> (the older spelling): taken, with a note naming the directory",
+    !("error" in old) && old.outBase === path.join(other, "Plots__1_1.w320") && old.notes.length === 1 && old.notes[0] === `--out ${path.join(other, "Plots__1_1.w320")} names the set: pass the directory ${other}`);
+  const legacy = openVerifySet(path.join(dir, "Nick.expected.json"), "1:1", undefined);
+  check("[open] a legacy-named expectation is refused (--migrate)", "error" in legacy && /legacy-named verify set/.test(legacy.error));
+  const wrong = openVerifySet(exp, "9:9", undefined);
+  check("[open] a set named for another node than the frame is refused", "error" in wrong && /is named for node 1:1, its frame is 9:9/.test(wrong.error));
+  const nick = openVerifySet(exp, "1:1", path.join(other, "Nick"));
+  check("[open] --out <dir>/<another name> is refused", "error" in nick && /this set is Plots__1_1\.w320/.test(nick.error));
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log("the run cache — its place under a project:");

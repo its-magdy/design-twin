@@ -26,7 +26,7 @@
 // compared in verify-compare.ts and rendered in verify-report-md.ts. This file reads the inputs, writes the artefacts and
 // routes the modes:
 //   bun verify-screen.js --expect  <screen.json>... [--out design/verify]
-//   bun verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out design/verify]
+//   bun verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out <dir>, default the expectation's]
 // --out is the verify directory; the set's name is its node's (`<Layer>__<id>`, verify-sets.ts), never the caller's.
 //
 // There is NO browser here. `--compare` diffs two JSON files; the rendering, measuring and
@@ -67,7 +67,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { endsInSep, expectationSetProblem, formatSetName, outBaseOf, setBaseOf, setFile, setNameOfFile, statusBaseOf, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
+import { endsInSep, formatSetName, openVerifySet, outBaseOf, setBaseOf, setFile, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -193,13 +193,13 @@ export function main(argv: string[]): number | Promise<number> {
     "      Replacing one that differs keeps the old bytes as\n" +
     "      <Layer>__<id>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export\n" +
     "      content). It notes a last run of <Layer>__<id> that failed, was blocked or never finished (its files are partial).\n" +
-    `  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]\n` +
+    `  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out <dir>]\n` +
     "      writes <Layer>__<id>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…], components:[…], inferred:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
     "      components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}\n" +
     "      — what the build does that the design never drew — are listed under 'Inferred, not designed', never graded).\n" +
-    "      --out is the verify directory (default design/verify); the report takes the expectation's set name. A legacy-named\n" +
+    "      --out is the verify directory (default: the expectation's own, as verify-probe's); the report takes the expectation's set name. A legacy-named\n" +
     "      expectation, or one named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect).\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
     "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +
@@ -499,18 +499,16 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
   }
   // the expectation's set name is the report's: a legacy name, or one of another node than its frame, is refused before
   // anything is compared or written (--migrate renames a legacy set; --expect names the set by its frame)
-  const setName = setNameOfFile(expFile);
-  const setProblem = expectationSetProblem(expFile, expectation.frame && expectation.frame.nodeId, path.dirname(expFile));
-  if (setProblem !== null) { console.error(`error  ${setProblem}`); return 2; }
-  const ob = outBaseOf(out, setName, VERIFY_DIR);
-  if ("error" in ob) { console.error(`error  ${ob.error}`); return 2; }
-  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
-  const compareBase = ob.base;
+  // (openVerifySet: --out defaults to the expectation's own directory, as the probe's does — the report and its implicit
+  // --against baseline are the set's, beside the measured file and the status the probe wrote)
+  const set = openVerifySet(expFile, expectation.frame && expectation.frame.nodeId, out);
+  if ("error" in set) { console.error(`error  ${set.error}`); return 2; }
+  for (const n of set.notes) console.error(`note  ${n}`);
+  const { name: setName, outBase: compareBase, statusBase } = set;
   // the run status of the set: ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the live status in the
   // run cache, else the published <dir>/<set>.status.json — the key every writer of the set's run uses (--status, --wait,
   // verify-probe), wherever the measured file was written. Always looked up: null = looked and found none (a measured file
   // naming its run then has nothing recording it).
-  const statusBase = statusBaseOf(expFile);
   const found = readStatusAt(statusBase);
   const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
   // an artefact listed under the set's old name (renamed by --migrate after its run) is read under the new one — only by
