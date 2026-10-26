@@ -88,7 +88,10 @@ function interactionsOf(file: string, abs: string): { list: InteractionEvidence[
   return { list, components: comps, inferred: obj ? obj.inferred : undefined };
 }
 
-/** Everything --compare reads before compare(): `expFile` and `measuredFile` with `flags`, the project at `root`. */
+/** Everything --compare reads before compare(): `expFile` and `measuredFile` with `flags`, the project at `root`. The set
+ *  (its report's place, its run status, its verify dir) is spelt from `expFile` as given and found from the cwd: a caller
+ *  whose cwd is not `root` passes `expFile` absolute, or the status is not found and a measured file naming its run
+ *  grades incomplete. */
 export function gatherCompareRun(expFile: string, measuredFile: string, flags: CompareRunFlags, root: string): CompareRun | CompareRunRefusal {
   const notes: string[] = [];
   const note = (n: string): void => { notes.push(n); };

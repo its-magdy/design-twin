@@ -148,8 +148,9 @@ export const endsInSep = (p: string): boolean => TRAILING_SEP.test(p);
 /** `p` without its trailing separators (TRAILING_SEP), or `p` itself when nothing else is left (a root). */
 export const trimSep = (p: string): string => p.replace(TRAILING_SEP, "") || p;
 /** `p` read under `root`: an absolute path as it is; a relative one prefixed with root and NOT normalised — `link/../x`
- *  goes through the link as the filesystem does (path.resolve would collapse it to `x`). Without a root, `p` itself. */
-export const underRoot = (p: string, root?: string): string => (root === undefined || path.isAbsolute(p) ? p : `${root}${path.sep}${p}`);
+ *  goes through the link as the filesystem does (path.resolve would collapse it to `x`). Without a root, or for "" (no
+ *  path: never the root itself), `p` itself. */
+export const underRoot = (p: string, root?: string): string => (root === undefined || p === "" || path.isAbsolute(p) ? p : `${root}${path.sep}${p}`);
 
 /** Where a set's files go for `--out`: the base `<dir>/<set>`, its dir, and whether --out was the older spelling (the base
  *  itself, `<dir>/<set>`) — or why --out names no place for this set. */

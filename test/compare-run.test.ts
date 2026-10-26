@@ -174,13 +174,16 @@ console.log("the plan — which one (plan-binding.ts's rule over the project's d
   // the notes the CLI prints, in the order it reads its inputs: the measured file's, the set's (older --out spelling), the
   // plan's skipped modules, then the baseline's
   p.put(`design/verify/${S}.report.json`, "{ not json");
-  p.put(`design/verify/${S}.measured.json`, malformed<VerifyMeasured>({ ...measure(), probe: "handmade" }));
+  p.put(`design/verify/${S}.png`, "png");
+  const handmade = p.put(`design/verify/${S}.measured.json`, malformed<VerifyMeasured>({ ...measure(), runId: "run-m", artifacts: ["design/verify/Garden.png"], probe: "handmade" }));
+  p.put(`design/verify/${S}.status.json`, status({ screen: "Garden", runId: "run-m", measuredSha256: sha(handmade) }));
   const ordered = ran(gatherCompareRun(p.expFile, path.join(p.root, mRel), { out: path.join(p.root, "design/verify", S) }, p.root));
-  const kinds = (ordered?.notes ?? []).map((n) => n.includes(": measured.probe") ? "measured" : n.startsWith("--out ") ? "set" : n.includes("mapModule path(s) not hashed") ? "plan"
-    : n.includes("no coverage baseline") ? "baseline" : `other: ${n}`);
-  check(`[notes] in reading order: measured file, set, plan, baseline (got ${JSON.stringify(kinds)})`, JSON.stringify(kinds) === JSON.stringify(["measured", "set", "plan", "baseline"]));
-  check("[notes] compare's input notes: the measured file's, then the plan's, in that order",
-    JSON.stringify((ordered?.options.inputNotes ?? []).map((n) => n.startsWith("measured.probe") ? "measured" : n.includes("mapModule") ? "plan" : "other")) === JSON.stringify(["measured", "plan"]));
+  const kinds = (ordered?.notes ?? []).map((n) => n.includes(": measured.probe") ? "measured" : n.startsWith("--out ") ? "set" : n.includes("before --migrate") ? "artefact"
+    : n.includes("mapModule path(s) not hashed") ? "plan" : n.includes("no coverage baseline") ? "baseline" : `other: ${n}`);
+  check(`[notes] in reading order: measured file, set, artefact, plan, baseline (got ${JSON.stringify(kinds)})`,
+    JSON.stringify(kinds) === JSON.stringify(["measured", "set", "artefact", "plan", "baseline"]));
+  const inputKinds = (ordered?.options.inputNotes ?? []).map((n) => n.startsWith("measured.probe") ? "measured" : n.includes("mapModule") ? "plan" : n.includes("before --migrate") ? "artefact" : "other");
+  check(`[notes] compare's input notes: the measured file's, the plan's, then the artefacts' (got ${JSON.stringify(inputKinds)})`, JSON.stringify(inputKinds) === JSON.stringify(["measured", "plan", "artefact"]));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
 {
@@ -255,6 +258,17 @@ console.log("paths — read under the root, as the filesystem resolves them, and
   const out = gatherCompareRun(p.expFile, "real-data/m.json", { out: "custom-out" }, p.root);
   check(`[paths] a relative --out is looked for under the root, not the cwd, and spelt as given (got ${out.ok ? out.set.outBase : out.message})`,
     out.ok && out.set.outBase === path.join("custom-out", S));
+  // the root's verify dir, not there yet, named absolutely from a cwd that is not the root: taken (it is the project's
+  // design/verify, not the cwd's)
+  const p2 = project("elsewhere");
+  p2.put("m.json", measure());
+  const rootVerify = path.join(p2.root, "design", "verify");
+  const verifyOut = gatherCompareRun(p2.expFile, "m.json", { out: rootVerify }, p2.root);
+  check(`[paths] --out <root>/design/verify, not there yet, is the project's verify dir (got ${verifyOut.ok ? verifyOut.set.outBase : verifyOut.message})`,
+    !fs.existsSync(rootVerify) && verifyOut.ok && verifyOut.set.outBase === path.join(rootVerify, S));
+  fs.rmSync(p2.root, { recursive: true, force: true });
+  const empty = gatherCompareRun(p.expFile, "real-data/m.json", { out: "" }, p.root);
+  check(`[paths] --out "" names no directory → refused, never the root itself (got ${empty.ok ? empty.set.outBase : empty.message})`, !empty.ok && /^error {2}--out {2}is not a directory/.test(empty.message));
   const missing = gatherCompareRun(p.expFile, "real-data/none.json", {}, p.root);
   check("[paths] a refusal names the file as spelt, not as resolved", !missing.ok && missing.message.startsWith("error  probe measurements: 'real-data/none.json' "));
   fs.rmSync(p.root, { recursive: true, force: true });

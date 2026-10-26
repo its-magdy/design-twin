@@ -6232,7 +6232,7 @@ function statusBaseOf(expectedFile) {
 var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var endsInSep = (p) => TRAILING_SEP.test(p);
 var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
-var underRoot = (p, root) => root === void 0 || path9.isAbsolute(p) ? p : `${root}${path9.sep}${p}`;
+var underRoot = (p, root) => root === void 0 || p === "" || path9.isAbsolute(p) ? p : `${root}${path9.sep}${p}`;
 function outBaseOf(out, setName, defaultDir, root) {
   if (out === void 0) return { base: path9.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
