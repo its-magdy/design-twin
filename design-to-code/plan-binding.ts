@@ -72,7 +72,7 @@ export interface ChosenPlan { file: string; plan: Plan; choice?: PlanChoice }
 /** Two spellings of one plan file (`./design/plan/x.json`, an absolute path) are the same plan. */
 function samePlanFile(a: string, b: string): boolean { return path.resolve(a) === path.resolve(b); }
 
-/** The plans of a frame's node found on disk (verify-screen.ts plansForNode): the hits, the plans naming no node, and the
+/** The plans of a frame's node found on disk (node-artefacts.ts plansFound): the hits, the plans naming no node, and the
  *  refusal when there are several. */
 export interface PlansFound { hits: Array<{ file: string; plan: Plan }>; idless: string[]; several: string | null }
 export interface PlanSelection { hit?: ChosenPlan; all: Array<{ file: string; plan: Plan }>; idless: string[]; note?: string; error?: string }

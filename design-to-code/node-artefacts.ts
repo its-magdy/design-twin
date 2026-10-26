@@ -21,6 +21,7 @@ import { alnumKey } from "./map-util.ts";
 import { anyJson, readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan } from "./types.ts";
+import type { PlansFound } from "./plan-binding.ts";
 import { nodeIdFromSetName, parseSetName, setFacts, stemHolders, verifySets, type SetFacts } from "./verify-sets.ts";
 import { openRunSets } from "./verify-status.ts";
 
@@ -250,3 +251,16 @@ export function nodeArtefacts(root: string, dirs: NodeArtefactDirs = {}): NodeAr
     auditsOf, auditFor, claim,
   };
 }
+
+/** The plans under `root`'s plan dir of node `nodeId`, by node id only (planNode: a plan's `nodeId`, else the id its
+ *  `<Layer>__<id>` file name carries — never its screen or file header), as plan-binding.ts choosePlan takes them.
+ *  `idless`: the plans that name no node either way (none of them can be matched — each one says to add "nodeId");
+ *  `several`: the one refusal for several plans of the node (claim). */
+export function plansFound(root: string, nodeId: string | undefined): PlansFound {
+  const art = nodeArtefacts(root);
+  const hits = nodeId === undefined ? [] : art.plansOf(nodeId);
+  const c = nodeId !== undefined && hits.length > 1 ? art.claim("plan", nodeId) : null;
+  return { hits, idless: art.idlessPlans(), several: c && !c.ok ? c.why : null };
+}
+/** What a "no plan describes this frame" note adds about the plans that name no node. */
+export const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node — add "nodeId")` : "";

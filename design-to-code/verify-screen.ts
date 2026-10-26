@@ -36,30 +36,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
-import { planCodeSkippedNote } from "./content-hash.ts";
-import { reportFreshness } from "./report-freshness.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
-import { readDocFile, readJsonFile } from "./catalog-input.ts";
-import {
-  isInteractionEvidenceList, isMeasuredComponentList, isPlan, isVerifyExpectation, isVerifyMeasured, isVerifyReport,
-  readableMeasured,
-} from "./doc-guards.ts";
-import { choosePlan, resolvePlan } from "./plan-binding.ts";
-import type { PlanResolution } from "./plan-binding.ts";
-import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusFile, statusMain, waitMain } from "./verify-run.ts";
-import type { VerifyStatusV2 } from "./verify-run.ts";
+import { readDocFile } from "./catalog-input.ts";
+import { isPlan, isVerifyReport } from "./doc-guards.ts";
+import { choosePlan } from "./plan-binding.ts";
+import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusMain, waitMain } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
 import { readJson, readJsonOrNull } from "../bridge/src/read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import type { ArtifactCheck, CodeInputs, InteractionEvidence, JsonValue, MeasuredComponent, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
+import type { JsonValue, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
-import { nodeArtefacts } from "./node-artefacts.ts";
+import { idlessNote, nodeArtefacts, plansFound } from "./node-artefacts.ts";
+import { gatherCompareRun } from "./compare-run.ts";
 import { pagesRootOfScreen, readDesignSystemStamp, readExportIndex, resolveInside, rootIndexFile } from "../bridge/src/export-reader.ts";
 import { TEXT_BOX_HEIGHT, fmt, scaleText } from "./verify-shared.ts";
 import { buildExpectation } from "./verify-expect.ts";
@@ -67,7 +61,7 @@ import type { ExpectInput, ExpectOptions } from "./verify-expect.ts";
 import { compare } from "./verify-compare.ts";
 import { probeLine, reportToMarkdown } from "./verify-report-md.ts";
 import { migrateMain } from "./verify-migrate.ts";
-import { endsInSep, formatSetName, openVerifySet, outBaseOf, setBaseOf, setFile, trimSep, variantOverlap, variantProblem, variantsOf, verifySets } from "./verify-sets.ts";
+import { endsInSep, formatSetName, outBaseOf, setBaseOf, setFile, trimSep, variantOverlap, variantProblem, variantsOf } from "./verify-sets.ts";
 
 // what the last verify run of <base> says about the artefacts beside an expectation — for --expect's notes.
 // failed/blocked: its measured/report files are partial (a probe's own run that failed recorded no measured file); a non-terminal phase older than --wait's stall (300 s): it never
@@ -106,43 +100,9 @@ function expectDirOf(out: string | undefined): string {
   return path.dirname(out);
 }
 
-/** Where an artefact the measured file lists under its set's OLD name is now — `<dir>/<set><rest>` — when the set was
- *  renamed (verify-screen --migrate) after the run that wrote it; else null. Every condition holds or nothing is taken:
- *  the listed file is gone; the run's status (v2) names the set by another name (`screen`, the old one, which no live set
- *  of the dir holds now, in any case); the measured file is that run's (its runId) and the very file the run recorded (its sha); the
- *  listed file was in the set's own dir and carries the old name's prefix (`<old>.` / `<old>-`); the renamed file exists.
- *  Never a screenshot of another set, never one that is not on disk. */
-function migratedArtifact(listed: string, o: { setName: string; verifyDir: string; status: VerifyStatusV2 | "v1" | null; measuredRun: string | undefined; measuredSha: string }): string | null {
-  const st = o.status;
-  if (fs.existsSync(listed) || st === null || st === "v1" || st.screen === o.setName) return null;
-  if (o.measuredRun === undefined || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
-  if (path.resolve(path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
-  const base = path.basename(listed);
-  if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
-  // in any case: on a case-insensitive disk `garden.*` are `Garden.*` — a live set under the old name in another case owns them
-  const old = st.screen.toLowerCase();
-  if (verifySets(o.verifyDir).some((n) => n.toLowerCase() === old)) return null;
-  // the listed path's own directory spelling, the new name in place of the old
-  const candidate = listed.slice(0, listed.length - base.length) + o.setName + base.slice(st.screen.length);
-  return fs.existsSync(candidate) ? candidate : null;
-}
-
-// The plans under design/plan/ (relative to the working directory) of node `nodeId`, by node id only (node-artefacts.ts
-// planNode: a plan's `nodeId`, else the id its `<Layer>__<id>` file name carries — never its screen or file header).
-// `idless`: the plans that name no node either way (none of them can be matched — each one says to add "nodeId").
-function plansForNode(nodeId: string | undefined): { hits: Array<{ file: string; plan: Plan }>; idless: string[]; several: string | null } {
-  const art = nodeArtefacts(process.cwd());
-  const hits = nodeId === undefined ? [] : art.plansOf(nodeId);
-  // several plans of the node: the one refusal (node-artefacts.ts claim)
-  const c = nodeId !== undefined && hits.length > 1 ? art.claim("plan", nodeId) : null;
-  return { hits, idless: art.idlessPlans(), several: c && !c.ok ? c.why : null };
-}
-/** What the "no plan describes this frame" note adds about the plans that name no node. */
-const idlessNote = (idless: string[]): string => idless.length ? ` (${idless.join(", ")} name${idless.length === 1 ? "s" : ""} no node — add "nodeId")` : "";
-
-/** The plan for a frame, by plan-binding.ts's one rule for --expect and --compare, over design/plan/ (plansForNode). */
+/** The plan for a frame, by plan-binding.ts's one rule for --expect and --compare, over design/plan/ (plansFound). */
 const planFor = (flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined): ReturnType<typeof choosePlan> =>
-  choosePlan(flagged, plansForNode(frameId), frameId);
+  choosePlan(flagged, plansFound(process.cwd(), frameId), frameId);
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
@@ -464,149 +424,17 @@ function expectMain(files: string[], flags: { out?: string | undefined; plan?: s
 }
 
 /** `--compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan]
- *  [--out <dir>]`: writes <dir>/<set>.report.json + .md (compare), the set the expectation names, and exits 1 unless the verdict passes. */
+ *  [--out <dir>]`: writes <dir>/<set>.report.json + .md (compare), the set the expectation names, and exits 1 unless the verdict passes.
+ *  What compare() is given is gathered by compare-run.ts; this is parse → gather → compare → write → print. */
 function compareMain(files: string[], flags: { out?: string | undefined; interactions?: string | undefined; against?: string | undefined; plan?: string | undefined; "record-plan"?: boolean | undefined },
   USAGE: string): number {
-  const sha = (file: string): string => sha256Hex(fs.readFileSync(file));
-  const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
-  const recordPlanFlag = !!flags["record-plan"];
   const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) { console.error("--compare needs <expected.json> <measured.json>\n" + USAGE); return 2; }
-  const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
-  const measuredRaw = readJsonFile(measuredFile, "probe measurements",
-    "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}.");
-  // A malformed OPTIONAL extra (a hand-written `probe: "handmade"`, `notMeasured: {}`) is dropped with a note;
-  // only measurements compare cannot read at all are refused.
-  const readable = readableMeasured(measuredRaw);
-  if (!readable) { console.error(`error  probe measurements: '${measuredFile}' is not ${isVerifyMeasured.expected}`); return 2; }
-  const measured = readable.doc;
-  for (const n of readable.notes) console.error(`note  ${measuredFile}: ${n}`);
-  let extra: InteractionEvidence[] | undefined;
-  let extraComponents: MeasuredComponent[] | undefined;
-  let extraInferred: unknown;
-  if (interactionsFile) {
-    const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    // The object form ({interactions:[…], components:[…], inferred:[…]}, the verifier's evidence.json) may carry any of
-    // the lists; `inferred` is checked row by row in compare (a malformed row is an input note, not a refusal).
-    const obj = isJsonObject(raw) ? raw : null;
-    const list = isInteractionEvidenceList(raw) ? raw : obj && isInteractionEvidenceList(obj.interactions) ? obj.interactions
-      : obj && obj.interactions === undefined && (obj.components !== undefined || obj.inferred !== undefined) ? [] : null;
-    if (obj && obj.inferred !== undefined) extraInferred = obj.inferred;
-    const comps = obj && obj.components !== undefined ? (isMeasuredComponentList(obj.components) ? obj.components : null) : [];
-    if (!list || !comps) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…], components:[…], inferred:[…]}`); return 2; }
-    extra = list;
-    if (comps.length) extraComponents = comps;
-  }
-  // the expectation's set name is the report's: a legacy name, or one of another node than its frame, is refused before
-  // anything is compared or written (--migrate renames a legacy set; --expect names the set by its frame)
-  // (openVerifySet: --out defaults to the expectation's own directory, as the probe's does — the report and its implicit
-  // --against baseline are the set's, beside the measured file and the status the probe wrote)
-  const set = openVerifySet(expFile, expectation.frame && expectation.frame.nodeId, out);
-  if ("error" in set) { console.error(`error  ${set.error}`); return 2; }
-  for (const n of set.notes) console.error(`note  ${n}`);
-  const { name: setName, outBase: compareBase, statusBase } = set;
-  // the run status of the set: ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the live status in the
-  // run cache, else the published <dir>/<set>.status.json — the key every writer of the set's run uses (--status, --wait,
-  // verify-probe), wherever the measured file was written. Always looked up: null = looked and found none (a measured file
-  // naming its run then has nothing recording it).
-  const found = readStatusAt(statusBase);
-  const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
-  // an artefact listed under the set's old name (renamed by --migrate after its run) is read under the new one — only by
-  // migratedArtifact's rule, and said so
-  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
-  const measuredSha = sha(measuredFile);
-  const migrated = (listed: string): string | null => migratedArtifact(listed, { setName, verifyDir: path.dirname(expFile), status: found ? found.status : null, measuredRun, measuredSha });
-  const artifactNotes: string[] = [];
-  const movedNote = (listed: string, now: string): void => {
-    artifactNotes.push(`${listed} is listed under the set's name before --migrate (run ${measuredRun ?? "?"}) — read as ${now}`);
-    console.error(`note  ${artifactNotes[artifactNotes.length - 1]}`);
-  };
-  // Artifacts are checked on disk, relative to the working directory (the project root), so a report
-  // can never cite a screenshot that does not exist.
-  const artifacts = measured.artifacts || [];
-  const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
-    const listed = typeof a === "string" ? a : a && a.path;
-    const moved = listed ? migrated(listed) : null;
-    if (listed && moved !== null) movedNote(listed, moved);
-    const p = moved ?? listed;
-    const exists = !!p && fs.existsSync(p);
-    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined), ...(moved !== null ? { listedAs: listed } : {}) };
-  });
-  // tie the report to the code it measured — the plan (design/plan/*.json) for this
-  // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
-  let code: CodeInputs | undefined;
-  // the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
-  let planUsed: PlanResolution = { now: null };
-  const compareNotes: string[] = [];
-  let flagged: { file: string; plan: Plan } | undefined;
-  if (planFlag !== undefined) {
-    const r = readJson(planFlag, isPlan);
-    if (!("doc" in r)) { console.error(`--plan '${planFlag}' ${r.error}`); return 2; }
-    flagged = { file: planFlag.split(path.sep).join("/"), plan: r.doc };
-  }
-  {
-    const frameId = expectation.frame && expectation.frame.nodeId;
-    // the same rule --expect used (choosePlan) — never a second way of picking the plan — then the plan --expect read wins
-    // over another found now (plan-binding.ts resolvePlan): several plans of the node and none to go by is a data error,
-    // BEFORE anything is compared or written
-    const chosen = planFor(flagged, frameId);
-    if (chosen.note !== undefined) console.error(`note  ${chosen.note}`);
-    const resolved = resolvePlan(expectation, chosen, !!flagged, (file) => readJson(file, isPlan));
-    if ("error" in resolved) { console.error(`error  ${resolved.error}`); return 2; }
-    const { note: using, ...resolution } = resolved;
-    if (using !== undefined) { compareNotes.push(using); console.error(`note  ${using}`); }
-    planUsed = resolution;
-    const planHit = planUsed.now;
-    // --record-plan writes into the plan this compare uses — none is a usage error BEFORE anything is compared or written
-    if (recordPlanFlag && !planHit) {
-      console.error(`--record-plan: no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} (run from the project root) — pass --plan <plan.json>`);
-      return 2;
-    }
-    // what this compare was computed against (report-freshness.ts stamp): the chosen plan's files[] and every module its
-    // anchors/components map (a shared shell) and git HEAD (the waivers/descopes hash is the plan binding's, in compare)
-    const stamped = planHit ? reportFreshness(process.cwd()).stamp(planHit) : undefined;
-    if (planHit && stamped?.code) {
-      code = stamped.code;
-      // what the code hashes leave out, beside them in the report's input notes
-      const skipped = planCodeSkippedNote(planHit.plan, process.cwd());
-      if (skipped) { compareNotes.push(`${planHit.file}: ${skipped}`); console.error(`note  ${compareNotes[compareNotes.length - 1]}`); }
-    } else {
-      console.error(planHit ? `note  ${planHit.file} lists no files[] — the report records no code hashes, so verify-build --status cannot tie it to the code`
-        : `note  no plan in design/plan/ describes this frame${idlessNote(chosen.idless)} — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code`);
-    }
-  }
-  // the report this run is about to overwrite is the coverage baseline — read BEFORE writing.
-  // --against names another one. An explicit file that cannot be read is an error; an unreadable implicit
-  // one is only noted (it is about to be replaced anyway).
-  let against: { file: string; report: VerifyReport } | undefined;
-  if (againstFile !== undefined) {
-    const r = readJson(againstFile, isVerifyReport);
-    if (!("doc" in r)) { console.error(`--against '${againstFile}' ${r.error}`); return 2; }
-    against = { file: againstFile, report: r.doc };
-  } else {
-    const own = setFile(compareBase, "report");
-    const r = readJson(own, isVerifyReport);
-    if ("doc" in r) against = { file: own, report: r.doc };
-    else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
-  }
-  // the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage), else
-  // under the set's new name (migratedArtifact)
-  const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
-  let visualDiff: { path: string; exists: boolean } | null = null;
-  if (typeof vd === "string" && vd) {
-    const beside = path.join(path.dirname(measuredFile), path.basename(vd));
-    const moved = fs.existsSync(vd) || fs.existsSync(beside) ? null : migrated(vd);
-    if (moved !== null) movedNote(vd, moved);
-    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true }
-      : moved !== null ? { path: moved, exists: true } : { path: vd, exists: false };
-  }
-  const inputNotes = [...readable.notes, ...compareNotes, ...artifactNotes];
-  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}),
-    ...(visualDiff ? { visualDiff } : {}), ...(inputNotes.length ? { inputNotes } : {}),
-    ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), ...(extraInferred !== undefined ? { inferred: extraInferred } : {}), expectationSha256: sha(expFile),
-    measuredSha256: measuredSha, artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), plan: planUsed });
-  const md = reportToMarkdown(rep);
-  write(false, compareBase, rep, md);
+  const run = gatherCompareRun(expFile, measuredFile, { out: flags.out, interactions: flags.interactions, against: flags.against, plan: flags.plan, recordPlan: !!flags["record-plan"] }, process.cwd());
+  for (const n of run.notes) console.error(`note  ${n}`);
+  if (!run.ok) { console.error(run.message); return 2; }
+  const rep = compare(run.expectation, run.measured, run.options);
+  write(false, run.set.outBase, rep, reportToMarkdown(rep));
   console.error(rep.headline);
   console.error(probeLine(rep));
   console.error(rep.behaviour.headline);
@@ -619,12 +447,12 @@ function compareMain(files: string[], flags: { out?: string | undefined; interac
     `fixed? drop them`);
   // the report just written → plan.verification.recorded, the tool-owned block (plan-record.ts). A failure leaves
   // the report in place and says so (exit 1): the plan then still holds the previous record.
-  const planHit = planUsed.now;
-  if (recordPlanFlag && planHit) {
+  const planHit = run.recordInto;
+  if (planHit) {
     // relative to the project by REAL paths — an absolute --out through a symlink (macOS /tmp → /private/tmp) is
     // still inside the project
     const realOf = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
-    const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(setFile(compareBase, "report")))).split(path.sep).join("/");
+    const reportRel = path.relative(realOf(process.cwd()), realOf(path.resolve(setFile(run.set.outBase, "report")))).split(path.sep).join("/");
     try {
       const r = recordPlan(planHit.file, rep, reportRel, { cwd: process.cwd() });
       for (const n of r.notes) console.error(`note  ${n}`);
@@ -669,7 +497,7 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     const set = setBaseOf(path.basename(reportFile), "report") ?? path.basename(reportFile);
     const nodeId = nodeArtefacts(process.cwd(), { verifyDir: path.dirname(reportFile) }).setNode(set);
     if (nodeId === null) { console.error(`error  the set ${set} names no node (its expectation and report name different nodes, or neither names one) — pass --plan <plan.json>`); return 1; }
-    const { hits, idless, several } = plansForNode(nodeId);
+    const { hits, idless, several } = plansFound(process.cwd(), nodeId);
     // several plans of the report's node: a data error, as at --expect and --compare
     if (several !== null) { console.error(`error  ${several}, or pass --plan <plan.json>`); return 2; }
     const only = hits[0];

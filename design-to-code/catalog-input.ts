@@ -54,9 +54,10 @@ function readDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: s
 /** A named input read as a value: the document, or the line(s) a CLI prints after `error  ` before it exits 2. */
 export type DocLoad<T> = { doc: T } | { error: string };
 // readDocFile's decision without the exit — for a caller that must not end the process (a run the MCP server
-// makes in-process) or that reports its own way.
-function loadDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: string): DocLoad<T> {
-  const r = readJson(file, guard);
+// makes in-process) or that reports its own way. `readAt`: where `file` is read (a caller resolving it under its own
+// project root); the error still names `file` as it was spelt.
+function loadDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: string, readAt = file): DocLoad<T> {
+  const r = readJson(readAt, guard);
   if ("doc" in r) return r;
   // A read failure ends in a period (and may carry the caller's hint); a parse/shape failure is a phrase.
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
