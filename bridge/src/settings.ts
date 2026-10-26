@@ -5,10 +5,11 @@
 //
 //   port         FIGMA_BRIDGE_PORT — one of the three the plugin can reach (ports.ts), else a problem.
 //   token        the effective bridge token and its source, by token-store.ts's precedence (--token-file >
-//                FIGMA_BRIDGE_TOKEN > the saved file > mint). Resolved without persisting: a bridge saves a minted
-//                one when it starts (createBridge). A resolution that FAILS (an unreadable --token-file) is kept as
-//                that failure, not thrown: commands that never open a bridge (--token-status) still run, which is
-//                exactly when you want to diagnose it; the bridge or daemon that needs the token reports it.
+//                FIGMA_BRIDGE_TOKEN > the saved file > mint). Resolved without persisting: the bridge holder commits
+//                it (commitToken) once, before it first binds — a minted one is saved then, and the notice printed.
+//                A resolution that FAILS (an unreadable --token-file) is kept as that failure, not thrown: commands
+//                that never open a bridge (--token-status) still run, which is exactly when you want to diagnose
+//                it; the bridge or daemon that needs the token reports it.
 //   maxPayload   FIGMA_BRIDGE_MAX_PAYLOAD_MB — the per-frame cap (maxPayloadFromEnv).
 //   idleMs       FIGMA_DAEMON_IDLE_MIN — how long a shared bridge stays up with nothing using it (idleMsFromEnv).
 //   ephemeralPort  DT_TEST_EPHEMERAL_PORT=1 — the TEST SEAM: bind an ephemeral port instead of `port` (server-core).
@@ -73,8 +74,25 @@ export function tokenSetting({ env = process.env, tokenFile }: SettingsInput = {
   }
 }
 
+/** What committing the settings' token on first use did (token-store.ts commit): the settings as every later bridge
+ *  and daemon lookup of this process should see them, and the lines to tell the user. */
+export interface TokenCommit {
+  readonly settings: BridgeSettings;
+  readonly minted: boolean;
+  readonly saveFailed: boolean;
+  readonly notice: readonly string[];
+}
+
+/** Commit the token before a bridge first uses it: save a minted one, and say which token is in play (printing it
+ *  only on the commit that mints it). A resolution that failed commits nothing — the bridge reports it. */
+export function commitToken(s: BridgeSettings): TokenCommit {
+  if (!s.token.ok) return { settings: s, minted: false, saveFailed: false, notice: [] };
+  const c = tokenStore.commit(s.token.resolved);
+  return { settings: { ...s, token: { ok: true, resolved: c.resolved } }, minted: c.minted, saveFailed: c.saveFailed, notice: c.notice };
+}
+
 /** The token a daemon's pipe is named from and its handshake keys on: the effective one — except a token nothing
- *  saved yet (no daemon anyone could have started under it: a bridge saves the token it mints before it serves) and
+ *  saved yet (no daemon anyone could have started under it: a bridge commits the token it mints before it serves) and
  *  a resolution that failed, both null. */
 export function daemonTokenOf(t: TokenSetting): string | null {
   return t.ok && t.resolved.source !== "ephemeral" ? t.resolved.token : null;

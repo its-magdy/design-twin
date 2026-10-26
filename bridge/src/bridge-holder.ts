@@ -26,17 +26,17 @@ import { daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
 import type { HeldBridge, Upstream } from "./route.ts";
 import type { DaemonBridge, DaemonConnection, DaemonStatusView, ServeHandle } from "./daemon.ts";
 import * as daemon from "./daemon.ts";
-import { daemonPlace, humanMs } from "./settings.ts";
+import { commitToken, daemonPlace, daemonTokenOf, humanMs } from "./settings.ts";
 import type { BridgeSettings } from "./settings.ts";
 import type { Bridge, BridgeOptions } from "./server-core.ts";
 import { errMsg } from "./errmsg.ts";
 
 export type Lifetime = "one-shot" | "serve" | "session";
 
-/** What the holder needs of a bridge it opens: what the route's adapters use (HeldBridge), when it is bound, the
- *  token a daemon serving it is keyed on, and the token it ended up using (a minted one, now saved). server-core's
- *  createBridge result is one; a suite passes a fake. */
-export type OwnBridge = HeldBridge & Pick<Bridge, "listening" | "savedToken" | "tokenInUse">;
+/** What the holder needs of a bridge it opens: what the route's adapters use (HeldBridge) and when it is bound.
+ *  server-core's createBridge result is one; a suite passes a fake. It is given the settings with their token
+ *  committed (commitToken): it only admits with it. */
+export type OwnBridge = HeldBridge & Pick<Bridge, "listening">;
 export type BridgeFactory = (settings: BridgeSettings, opts: BridgeOptions) => OwnBridge;
 
 /** What the holder needs of the daemon socket, bound to a port and token (daemonSide). */
@@ -95,9 +95,11 @@ const RELEASED = "the bridge has been released";
 
 export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
   const { log } = deps;
-  // The settings, updated once a bridge of ours has started: a token it minted is saved from then on, and every later
-  // bridge and daemon lookup uses it as saved — a rebind must not write it over a file rotated since, nor print it again.
+  // The settings, with their token committed before our first bind (commitToken): a token minted then is saved from
+  // then on, and every later bridge and daemon lookup uses it as saved — a rebind must not write it over a file rotated
+  // since, nor print it again. Committed once, even when that first bind then fails (a held port).
   let settings = deps.settings;
+  let committed = false;
   const side = (): DaemonSide => deps.daemon(settings);
   // The bridge this process holds, its adapter, and the socket it is published on (null until serve() bound it).
   let own: { bridge: OwnBridge; up: Upstream; close: () => void } | null = null;
@@ -117,12 +119,15 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
   // Open a bridge of our own. `survive`: a held port is this call's error (session), not an exit (one-shot, serve
   // — server-core prints the fix and exits 1 when no onListenError is given).
   async function bind(survive: boolean): Promise<OwnBridge> {
+    if (!committed) {
+      committed = true;
+      const c = commitToken(settings);
+      settings = c.settings;
+      for (const line of c.notice) log(line);
+    }
     let failed: (e: Error) => void = () => {};
     const bindFailed = new Promise<never>((_, reject) => { failed = reject; });
     const b = deps.createBridge(settings, survive ? { onListenError: (e) => failed(e) } : {});
-    // A token createBridge minted is saved before it binds: adopt it now, so a bind that then fails (a held port)
-    // still leaves the next attempt — and every daemon lookup — with the token as saved.
-    if (settings.token.ok) settings = { ...settings, token: { ok: true, resolved: b.tokenInUse() } };
     try {
       await (survive ? Promise.race([b.listening, bindFailed]) : b.listening);
     } catch (e) {
@@ -155,7 +160,7 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
 
   // Publish the held bridge on the daemon socket. `idleMs` 0 for a session while its client is here.
   function publish(b: OwnBridge, close: () => void, idleMs: number, signals: boolean): Promise<ServeHandle> {
-    return side().serve(servedBridge(b, close), { idleMs, signals, log, token: b.savedToken() });
+    return side().serve(servedBridge(b, close), { idleMs, signals, log, token: daemonTokenOf(settings.token) });
   }
 
   // A daemon found: its adapter (listings from its status, at the place it was found).
@@ -198,7 +203,7 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
     // The already-running probe FIRST: binding with a daemon already up is an EADDRINUSE exit naming "another dtwin
     // bridge" — the right answer is the daemon's own refusal, which names --stop. serve() probes again right before
     // listening (the race is handled there). No saved token yet (Windows, first run): nothing can be serving a pipe
-    // named from a token nobody saved, and the bridge saves the one it mints — the socket is then named from it.
+    // named from a token nobody saved, and bind() commits the one it mints — the socket is then named from it.
     try { await side().assertNoDaemon(); } catch (e) { if (errMsg(e) !== daemon.NO_DAEMON_TOKEN) throw e; }
     if (done) throw new Error(RELEASED);
     const b = await bind(false);

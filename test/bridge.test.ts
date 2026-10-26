@@ -3053,34 +3053,27 @@ void (async () => {
   ok("[token-cli] --token-file is honoured by --show-token",
     runCli(["--show-token", "--token-file", customFile]).stdout.trim() === "custom-tok-value");
 
-  // The mint-on-first-bridge-start path, which no other test reaches: the CLI tests above never open
-  // a bridge, and this suite's own bridges are created with FIGMA_BRIDGE_TOKEN set (source "env",
-  // which never persists). Driven as a subprocess on a spare port so it neither needs a plugin nor
-  // collides with a real bridge on 8787.
+  // Minting, saving and printing a first-run token is the commit before a bridge first binds (settings.ts commitToken,
+  // covered in test/settings.test.ts and test/bridge-holder.test.ts). createBridge only admits with the token it is
+  // given: handed an unsaved one, it neither saves nor prints it. A subprocess, so its stderr is its own.
   const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
   const bootScript = path.join(bootDir, "boot.mjs");
   fs.writeFileSync(bootScript, `
     import { createBridge } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "..", "bridge", "src", "server-core.ts")).href)};
-    const b = createBridge(${childSettings(19788)});
+    const s = ${childSettings(0)};
+    const b = createBridge(s);
+    await b.listening;
     b.close();
+    console.log(s.token.resolved.token);
   `);
   const bootEnv: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: bootDir };
   delete bootEnv.FIGMA_BRIDGE_TOKEN;
   delete bootEnv.FIGMA_BRIDGE_TOKEN_FILE;
   const boot = bunSync([bootScript], { env: bootEnv });
-  const bootFile = path.join(bootDir, "bridge-token");
-  ok("[token-boot] starting a bridge with nothing saved mints and PERSISTS a token", fs.existsSync(bootFile));
-  const bootTok = fs.existsSync(bootFile) ? fs.readFileSync(bootFile, "utf8").trim() : "";
-  ok("[token-boot] and prints it once, to paste into the plugin", boot.stderr.includes(bootTok) && bootTok.length === 48);
-  ok("[token-boot] and says it was saved, so the user knows not to expect it again",
-    /saved to/.test(boot.stderr) && /won't be asked to paste it again/.test(boot.stderr));
-  // The regression the whole store exists to prevent: the SECOND run must reuse, not re-mint.
-  const boot2 = bunSync([bootScript], { env: bootEnv });
-  ok("[token-boot] a SECOND bridge start reuses the saved token instead of minting a new one",
-    fs.readFileSync(bootFile, "utf8").trim() === bootTok);
-  ok("[token-boot] and does NOT reprint the secret into the terminal", !boot2.stderr.includes(bootTok));
-  ok("[token-boot] it reports which token is in play by fingerprint instead",
-    boot2.stderr.includes(String(store.fingerprint(bootTok))));
+  const bootTok = boot.stdout.trim();
+  ok("[token-boot] createBridge given an unsaved token binds with it, but saves nothing and never prints it",
+    boot.status === 0 && bootTok.length === 48 && !fs.existsSync(path.join(bootDir, "bridge-token")) && !boot.stderr.includes(bootTok));
+  fs.rmSync(bootDir, { recursive: true, force: true });
 
   // Regression: an unreadable --token-file once threw out of server-core's module load — a raw stack trace, before
   // any front-end error handling was in scope. Now settings.ts keeps it as a failure the command reports.
