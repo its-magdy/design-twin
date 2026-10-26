@@ -2,7 +2,7 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
-import type { AppliedWrite, WriteOp, WriteResult } from "../../bridge/src/commands.ts";
+import { writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -46,9 +46,9 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
 
 // WriteOp (the args of one op), AppliedWrite and WriteResult are the bridge's wire contract, so they
 // are imported from it rather than re-declared here. WriteOp's optionals are `T | undefined`;
-// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same. `op` is
-// typed as one of the four names, but the default branch below still refuses anything else, because
-// a write can arrive from any bridge client.
+// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same. applyWrites
+// has already checked every op against its WRITE_OPS row (a known op, typed fields, the required ones
+// present); the default branch below still refuses anything else, as a last line.
 async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
@@ -124,6 +124,14 @@ export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
       ...ifDefined("failedOp", first && first.op),
       error: "the file is open in Dev Mode, which is read-only for plugins — switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode.",
     };
+  }
+  // Every op is checked against its WRITE_OPS row (commands.ts writeOpError, the row figma_write's dry run reads)
+  // BEFORE the first one runs: a batch the preview calls invalid is refused whole, never half-applied up to its bad
+  // op. Over the bridge, handleBridge has already refused such a batch with the same check (parseCommandRequest);
+  // this is that check for the callers that reach applyWrites directly (the __designExport surface, the harness).
+  for (const [i, op] of list.entries()) {
+    const bad = writeOpError(op, i);
+    if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
   }
   for (const [i, op] of list.entries()) {
     try {
