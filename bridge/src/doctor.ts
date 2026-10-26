@@ -48,7 +48,7 @@ import { dtwinPortWarning } from "./verbs.ts";
 import pkg from "../package.json" with { type: "json" };
 import type { ClientRow, Bridge } from "./server-core.ts";
 import { exitCli } from "./stdio.ts";
-import { readSettings, tokenSetting } from "./settings.ts";
+import { daemonAddressOf, readSettings, tokenSetting } from "./settings.ts";
 
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
@@ -181,15 +181,15 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   };
 }
 
-// `st` is daemon.status(port): null when none is running. Without a daemon, every `dtwin pull` starts
-// its own throwaway bridge and waits out the plugin's full reconnect window — the difference between
+// `st` is daemon.status(at), at the address the settings resolve to: null when none is running. Without a daemon,
+// every `dtwin pull` starts its own throwaway bridge and waits out the plugin's full reconnect window — the difference between
 // an 8s pull and a 300s+ timeout, and `--client c1` becomes reconnect-order
 // roulette instead of a stable id across a daemon's lifetime. That is a real cost, not a
 // cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
 // `st` is read as DaemonStatusView: a daemon from an OLDER bridge may omit fields, which print as "?".
-// `refused` is daemon.sockProblem(port): the socket location is not private to this user, so no
-// daemon can be started or reached there — every command still works, one-shot. A fail, not a warn:
-// it is someone else's directory (or a loosened one) in the place this user's daemon would listen.
+// `refused` is daemon.sockProblem(at): the socket location is not private to this user (or its path is too long
+// for the platform), so no daemon can be started or reached there — every command still works, one-shot. A fail,
+// not a warn: it is someone else's directory (or a loosened one) in the place this user's daemon would listen.
 // `tokenNote` is sharedTokenNote(): on Windows the daemon's pipe is guarded by the token alone, and the
 // token is read from somewhere other users can usually read — the line is demoted to a warning saying so
 // (a refused location stays the fail it is).
@@ -513,14 +513,16 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     pluginCheck = checkPlugin({ skipped: "the port setting has to be fixed first" });
     add(pluginCheck);
   } else {
-    // A refused socket location is reported, not read as "no daemon" (status() alone would only warn
-    // on stderr and return null). Always pass the port: a daemon call without one reads the env itself
-    // and exits on a bad value, where doctor has to report it.
-    const refused = daemon.sockProblem(port);
-    const st = refused ? null : await daemon.status(port).catch(() => null);
+    // The daemon is looked up where every other command looks it up: the address the settings resolve to — its
+    // socket, or on Windows the pipe named from the token as the settings have it. A refused socket location is
+    // reported, not read as "no daemon" (status() alone would only warn on stderr and return null).
+    const read = readSettings();
+    const at = read.ok ? daemonAddressOf(read.settings, port) : null;
+    const refused = at ? daemon.sockProblem(at) : null;
+    const st = refused || !at ? null : await daemon.status(at).catch(() => null);
     // The file the effective token is read from (none for FIGMA_BRIDGE_TOKEN); a token file that cannot be read
     // is still the one the setup points at.
-    const token = tokenSetting();
+    const token = read.ok ? read.settings.token : tokenSetting();
     const tokenFile = token.ok ? token.resolved.path : (process.env.FIGMA_BRIDGE_TOKEN_FILE || null);
     add(checkDaemon(st, port, refused, sharedTokenNote(tokenFile, process.env.USERPROFILE || os.homedir())));
     const probe = await probePort(port);

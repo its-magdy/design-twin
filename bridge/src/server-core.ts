@@ -24,6 +24,7 @@ import { createPendingRequests } from "./pending-requests.ts";
 import { TIMEOUTS, HEARTBEAT_MS, NAMED_CLIENT_WAIT_MS, SETTLE_MS, MAX_TIMER_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
+import { daemonAddressOf } from "./settings.ts";
 import type { BridgeSettings } from "./settings.ts";
 import { legacySock } from "./daemon.ts";
 import { isConnId, connectionFor } from "./route.ts";
@@ -337,17 +338,16 @@ function refuseUpgrade(code: number, message?: string): Response {
 
 /** The bind refusal when `port` is already held (EADDRINUSE). A daemon from an earlier dtwin build listens on
  *  a socket this build does not look at, so neither routing through it nor `dtwin --stop`'s first look finds
- *  it — the text names it instead. On Windows the daemon's pipe is named from the bridge token (daemon.ts
- *  winPipe), so one started under an EARLIER token is unreachable by name in the same way — the text says so. */
-function portInUseMessage(port: number, platform: NodeJS.Platform = process.platform): string {
+ *  it — the text names it instead (`legacy`, daemon.ts legacySock). On Windows the daemon's pipe is named from the bridge
+ *  token (daemon.ts daemonAddress), so one started under an EARLIER token is unreachable by name in the same way — the text says so. */
+function portInUseMessage(port: number, platform: NodeJS.Platform = process.platform, legacy: string | null = null): string {
   const others = `set FIGMA_BRIDGE_PORT to one of the other allowed ports (${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`;
   if (platform === "win32") {
     return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others} ` +
       "A dtwin daemon started under a different bridge token cannot be found by this one (its pipe is named from the token), so `dtwin --stop` does not reach it — end that process instead.";
   }
-  const sock = legacySock(port, { platform });
-  const legacy = sock ? ` A dtwin daemon from an earlier version may be holding it (socket ${sock}) — \`dtwin --stop\` stops it.` : "";
-  return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others}${legacy}`;
+  const old = legacy ? ` A dtwin daemon from an earlier version may be holding it (socket ${legacy}) — \`dtwin --stop\` stops it.` : "";
+  return `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. Stop it first, or ${others}${old}`;
 }
 
 // ---- the client registry: which plugin sockets are connected, what each `hello` said, and who addresses which.
@@ -879,7 +879,7 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   if (bindError) {
     const e = bindError;
     setImmediate(() => {
-      const err = errCode(e) === "EADDRINUSE" ? new Error(portInUseMessage(port)) : e;
+      const err = errCode(e) === "EADDRINUSE" ? new Error(portInUseMessage(port, process.platform, legacySock(daemonAddressOf(settings, port)))) : e;
       if (opts.onListenError) return opts.onListenError(err);
       console.error(errCode(e) === "EADDRINUSE" ? err.message : `[bridge] could not listen on 127.0.0.1:${port}: ${errMsg(e)}`);
       // Off the CLI's call stack (a turn later), and the caller is awaiting `listening`, which never settles: an

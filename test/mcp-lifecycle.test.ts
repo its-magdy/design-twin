@@ -25,6 +25,8 @@ import { startMcp } from "./children.ts";
 import { fakePlugin as dialPlugin, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { thisHost } from "../bridge/src/settings.ts";
+import { addressAt } from "./bridge-settings.ts";
 import { fakeClock } from "./fake-clock.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Cmd, Commands, FullExportReply, ScreenReply } from "../bridge/src/commands.ts";
@@ -124,7 +126,7 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   p.stdout?.on("error", () => { /* destroyed on purpose */ });
   const s: Server = {
     p, dir, cwd,
-    sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp, token }),
+    sock: daemon.sockPath(daemon.daemonAddress({ ...thisHost(), port: 8789, token, tmpdir: tmp })),
     token,
     err: m.stderr,
     exit: m.exit,
@@ -247,7 +249,7 @@ void (async () => {
     await daemonSection("idle shutdown on a quiet socket", async () => {
       const f = fakeBridge();
       const clock = fakeClock();
-      const h = await daemon.serve(f.b, { port: 19793, idleMs: 0, signals: false, crashHandlers: false, clock });
+      const h = await daemon.serve(f.b, addressAt(19793), { idleMs: 0, signals: false, crashHandlers: false, clock });
       const before = h.activity().frames;
       const alive = await daemon.probe(h.sock);
       ok("activity().frames is 0 before anything used the socket, 1 after one probe, nothing in flight", before === 0 && alive && h.activity().frames === 1 && h.activity().inFlight === 0);
@@ -388,7 +390,7 @@ void (async () => {
     await daemonSection("stdin EOF, routed through a daemon", async () => {
       // routed through a daemon (not holding the bridge) → exits at once (the via path).
       const f = fakeBridge();
-      const fake = await daemon.serve(f.b, { port: 8789, idleMs: 0, signals: false, crashHandlers: false }); // a socket name only
+      const fake = await daemon.serve(f.b, addressAt(8789), { idleMs: 0, signals: false, crashHandlers: false }); // a socket name only
       const s = startServer({ tmp: OWN_TMP });
       if (await up(s, false)) {
         ok("fixture: the server routes through the test's daemon", /Sharing the bridge already running at/.test(s.err()));

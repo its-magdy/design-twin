@@ -13,13 +13,16 @@
 //   maxPayload   FIGMA_BRIDGE_MAX_PAYLOAD_MB — the per-frame cap (maxPayloadFromEnv).
 //   idleMs       FIGMA_DAEMON_IDLE_MIN — how long a shared bridge stays up with nothing using it (idleMsFromEnv).
 //   ephemeralPort  DT_TEST_EPHEMERAL_PORT=1 — the TEST SEAM: bind an ephemeral port instead of `port` (server-core).
+//   runtimeDir   XDG_RUNTIME_DIR — where the daemon socket lives when private (daemonAddressOf; daemon.ts never reads env).
 //
 // --token-file used to reach server-core by being written into process.env before a dynamic import, because the
 // token was resolved at that module's load. It is now an argument here.
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { parsePortEnv, portProblem } from "./ports.ts";
-import type { SockPlace } from "./daemon.ts";
+import os from "node:os";
+import { daemonAddress } from "./daemon.ts";
+import type { DaemonAddress } from "./daemon.ts";
 
 /** The effective token, or why none could be resolved. */
 export type TokenSetting = { ok: true; resolved: ResolvedToken } | { ok: false; error: unknown };
@@ -34,6 +37,8 @@ export interface BridgeSettings {
   /** FIGMA_DAEMON_IDLE_MIN as given (undefined when unset), for a message that says why the window is off */
   readonly idleRaw: string | undefined;
   readonly ephemeralPort: boolean;
+  /** XDG_RUNTIME_DIR — where the daemon socket lives when it is private to this user (daemon.ts daemonAddress) */
+  readonly runtimeDir?: string | undefined;
 }
 
 export interface SettingsInput {
@@ -59,6 +64,7 @@ export function readSettings({ env = process.env, tokenFile }: SettingsInput = {
       idleMs: idleMsFromEnv(env),
       idleRaw: env.FIGMA_DAEMON_IDLE_MIN,
       ephemeralPort: env.DT_TEST_EPHEMERAL_PORT === "1",
+      runtimeDir: env.XDG_RUNTIME_DIR,
     },
   };
 }
@@ -98,9 +104,20 @@ export function daemonTokenOf(t: TokenSetting): string | null {
   return t.ok && t.resolved.source !== "ephemeral" ? t.resolved.token : null;
 }
 
-/** Where this process's daemon socket is looked up or served: the port and the token it is keyed on. */
-export function daemonPlace(s: BridgeSettings): { port: number; place: SockPlace } {
-  return { port: s.port, place: { token: daemonTokenOf(s.token) } };
+/** What the daemon's address takes from the machine rather than the settings: the platform (win32 is a pipe), the
+ *  uid its socket directory must belong to, and the tmpdir that directory falls back under. */
+export interface Host {
+  readonly platform: NodeJS.Platform;
+  readonly uid: number | undefined;
+  readonly tmpdir: string;
+}
+export const thisHost = (): Host => ({ platform: process.platform, uid: process.getuid?.(), tmpdir: os.tmpdir() });
+
+/** Where this process's daemon is looked up or served (daemon.ts daemonAddress): at `port` (the settings' own unless
+ *  given — `dtwin --rotate-token` looks at all three), keyed on the token as these settings have it. Resolved once
+ *  per settings value: a token committed since (commitToken) is a new settings value, and a new address. */
+export function daemonAddressOf(s: BridgeSettings, port: number = s.port, host: Host = thisHost()): DaemonAddress {
+  return daemonAddress({ port, token: daemonTokenOf(s.token), ...host, runtimeDir: s.runtimeDir });
 }
 
 /** Does something other than the saved token file decide the token (FIGMA_BRIDGE_TOKEN or a token file)? Then
@@ -135,7 +152,5 @@ export function idleMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
 }
 export const minutesToMs = (min: unknown): number => Math.max(0, Number(min)) * 60000 || 0;
 
-/** An idle window for a log line: whole minutes from one minute up, else whole seconds. */
-export function humanMs(ms: number): string {
-  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`;
-}
+// The idle window for a log line (human-ms.ts, a leaf the served session imports directly).
+export { humanMs } from "./human-ms.ts";

@@ -15,6 +15,7 @@ import { check, report } from "./assert.ts";
 import { dtwin as runDtwin } from "./children.ts";
 import { manifest, screenReply, clientRow } from "./fixtures.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { addressAt } from "./bridge-settings.ts";
 import { writeAny } from "../bridge/src/write-out.ts";
 import { stampSource } from "../bridge/src/source-stamp.ts";
 import { READ_OPTS } from "../bridge/src/read-opts.ts";
@@ -62,7 +63,7 @@ const fake: DaemonBridge = {
 };
 process.env.FIGMA_BRIDGE_PORT = String(PORT);
 // The token named, so on Windows the pipe is named from this suite's token and never the user's saved one.
-const served = await daemon.serve(fake, { port: PORT, idleMs: 0, signals: false, token: TOKEN });
+const served = await daemon.serve(fake, addressAt(PORT, TOKEN), { idleMs: 0, signals: false });
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "read-plan-e2e-"));
 const env: Record<string, string> = {};

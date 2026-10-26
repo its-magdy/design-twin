@@ -144,6 +144,8 @@ console.log("\nsession:");
   const again = await h.upstream();
   check("routing through a daemon, every call re-resolves: once it has gone, the session takes the bridge over",
     again.kind === "own" && b.made.length === 1 && d.connects() === 2);
+  check("…on ONE daemon address: resolved once for the settings, again only after the token commit before the bind",
+    d.keyedOn.length === 2);
   h.release();
 }
 {

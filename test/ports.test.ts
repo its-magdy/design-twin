@@ -1,16 +1,15 @@
-// FIGMA_BRIDGE_PORT parsing (bridge/src/ports.ts) as pure functions, and the three readers that share
-// it: settings.ts readSettings (portProblem), the daemon's fallback reader (bridgePortOrExit), doctor's resolvePort and
-// the daemon's socket name.
+// FIGMA_BRIDGE_PORT parsing (bridge/src/ports.ts) as pure functions, and what reads it: settings.ts readSettings
+// (portProblem), doctor's resolvePort, and the daemon's socket or pipe name — named from the settings' port.
 //   bun test/ports.test.ts
-// No bridge, no port, no socket: process.exit and console.error are stubbed, and the daemon socket
-// path is only computed (no uid, so the directory is the temp dir itself and nothing is created).
+// No bridge, no port, no socket: the daemon address is only computed (no uid, so the directory is the temp dir
+// itself and nothing is created).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { check, report } from "./assert.ts";
-import { ALLOWED_PORTS, parsePortEnv, bridgePortOrExit } from "../bridge/src/ports.ts";
+import { ALLOWED_PORTS, parsePortEnv } from "../bridge/src/ports.ts";
 import { resolvePort } from "../bridge/src/doctor.ts";
-import * as daemon from "../bridge/src/daemon.ts";
+import { daemonAddressOf, readSettings } from "../bridge/src/settings.ts";
 import { pipeName } from "../bridge/src/daemon-auth.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -35,66 +34,27 @@ check("a non-numeric value is invalid", same(parsePortEnv("abc"), { invalid: "ab
 check("a whitespace-only value is invalid (Number(\" \") is 0), not the default", same(parsePortEnv(" "), { invalid: " " }));
 check("surrounding whitespace is ignored", same(parsePortEnv(" 8788 "), { port: 8788 }) && same(parsePortEnv("8789\n"), { port: 8789 }));
 
-// bridgePortOrExit with process.exit and console.error stubbed: what it returns, prints and exits with.
-function runOrExit(raw: string | undefined): { port?: number; code?: number; printed: string[] } {
-  const realExit = process.exit;
-  const realError = console.error;
-  const printed: string[] = [];
-  let code: number | undefined;
-  const exited = new Error("exited");
-  process.exit = (c?: number) => { code = c; throw exited; };
-  console.error = (...a: unknown[]) => { printed.push(a.map(String).join(" ")); };
-  try {
-    return { port: bridgePortOrExit(raw), printed };
-  } catch (e) {
-    if (e !== exited) throw e;
-    return { ...(code === undefined ? {} : { code }), printed };
-  } finally {
-    process.exit = realExit;
-    console.error = realError;
-  }
-}
-
-console.log("\nbridgePortOrExit (the daemon's reader when no port is passed):");
-{
-  const good = runOrExit("8789");
-  check("a valid value is returned, nothing printed, no exit", good.port === 8789 && good.code === undefined && good.printed.length === 0);
-  const dflt = runOrExit(undefined);
-  check("unset returns the default", dflt.port === ALLOWED_PORTS[0] && dflt.printed.length === 0);
-  const bad = runOrExit("9999");
-  check("an invalid value exits 1", bad.port === undefined && bad.code === 1);
-  check("…after naming the value and the allowed ports on stderr",
-    bad.printed.length === 1 && (bad.printed[0] ?? "").startsWith(`[bridge] FIGMA_BRIDGE_PORT=9999 is not one of ${ALLOWED_PORTS.join(", ")}. The Figma plugin may only open sockets`));
-}
-
 console.log("\ndoctor resolvePort reads the same parse:");
 check("a padded allowed value is that port", resolvePort(" 8788").port === 8788);
 check("a whitespace-only value is a failure, not the default", resolvePort(" ").problem?.status === "fail");
 check("a non-numeric value is a failure naming it", /FIGMA_BRIDGE_PORT=abc is not one of/.test(resolvePort("abc").problem?.detail ?? ""));
 
-console.log("\nthe daemon socket is named after the port server-core binds:");
+console.log("\nthe daemon socket is named after the port the settings carry:");
 {
   const t = fs.mkdtempSync(path.join(os.tmpdir(), "dt-ports-"));
   try {
-    // platform pinned: these are the POSIX socket's names on every host (on win32 the daemon is a pipe — below).
-    const at = (env: NodeJS.ProcessEnv) => daemon.sockPath(undefined, { env, tmpdir: t, uid: undefined, platform: "linux" });
+    // platform pinned and no uid: these are the POSIX socket's names on every host, computed — nothing is created.
+    const host = { platform: "linux" as const, uid: undefined, tmpdir: t };
+    const at = (env: NodeJS.ProcessEnv, port?: number): string | null => {
+      const r = readSettings({ env });
+      if (!r.ok) return null;
+      const a = daemonAddressOf(r.settings, port ?? r.settings.port, host);
+      return a.ok ? a.sock : null;
+    };
     check("unset: the default port's socket", at({}) === path.join(t, `designtwin-${ALLOWED_PORTS[0]}.sock`));
     check("a padded value names the same socket as the bare one", at({ FIGMA_BRIDGE_PORT: " 8788 " }) === path.join(t, "designtwin-8788.sock"));
-    check("an explicit port wins over the env", daemon.sockPath(8789, { env: { FIGMA_BRIDGE_PORT: "8788" }, tmpdir: t, uid: undefined, platform: "linux" }) === path.join(t, "designtwin-8789.sock"));
-    const realExit = process.exit;
-    const realError = console.error;
-    let code: number | undefined;
-    const printed: string[] = [];
-    const exited = new Error("exited");
-    process.exit = (c?: number) => { code = c; throw exited; };
-    console.error = (...a: unknown[]) => { printed.push(a.map(String).join(" ")); };
-    let named: string | null = null;
-    try { named = at({ FIGMA_BRIDGE_PORT: "9999" }); } catch (e) { if (e !== exited) throw e; } finally {
-      process.exit = realExit;
-      console.error = realError;
-    }
-    check("an invalid value exits 1 with server-core's message instead of naming designtwin-9999.sock",
-      named === null && code === 1 && /^\[bridge\] FIGMA_BRIDGE_PORT=9999 is not one of/.test(printed[0] ?? ""));
+    check("an explicit port wins over the settings' (dtwin --rotate-token looks at all three)", at({ FIGMA_BRIDGE_PORT: "8788" }, 8789) === path.join(t, "designtwin-8789.sock"));
+    check("an invalid value is the settings' problem: no address is ever named for it", at({ FIGMA_BRIDGE_PORT: "9999" }) === null);
     check("nothing was created in the socket directory", fs.readdirSync(t).length === 0);
   } finally {
     fs.rmSync(t, { recursive: true, force: true });
@@ -103,25 +63,18 @@ console.log("\nthe daemon socket is named after the port server-core binds:");
 
 console.log("\non win32 the daemon is a pipe named after the same port (and the token):");
 {
-  const win = (env: NodeJS.ProcessEnv, token: string | null = "tok") => ({ env, platform: "win32" as const, token });
-  check("unset: the default port's pipe", daemon.sockPath(undefined, win({})) === pipeName("tok", ALLOWED_PORTS[0]));
-  check("a padded value names the same pipe as the bare one", daemon.sockPath(undefined, win({ FIGMA_BRIDGE_PORT: " 8788 " })) === pipeName("tok", 8788));
-  check("an explicit port wins over the env", daemon.sockPath(8789, win({ FIGMA_BRIDGE_PORT: "8788" })) === pipeName("tok", 8789));
+  const host = { platform: "win32" as const, uid: undefined, tmpdir: os.tmpdir() };
+  const pipe = (env: NodeJS.ProcessEnv, port?: number): string | null => {
+    const r = readSettings({ env });
+    if (!r.ok) return null;
+    const a = daemonAddressOf({ ...r.settings, token: { ok: true, resolved: { token: "tok", source: "env", path: null, created: false } } }, port ?? r.settings.port, host);
+    return a.ok ? a.sock : null;
+  };
+  check("unset: the default port's pipe", pipe({}) === pipeName("tok", ALLOWED_PORTS[0]));
+  check("a padded value names the same pipe as the bare one", pipe({ FIGMA_BRIDGE_PORT: " 8788 " }) === pipeName("tok", 8788));
+  check("an explicit port wins over the settings'", pipe({ FIGMA_BRIDGE_PORT: "8788" }, 8789) === pipeName("tok", 8789));
   check("…and two ports are two pipes", pipeName("tok", 8788) !== pipeName("tok", 8789));
-  const realExit = process.exit;
-  const realError = console.error;
-  let code: number | undefined;
-  const printed: string[] = [];
-  const exited = new Error("exited");
-  process.exit = (c?: number) => { code = c; throw exited; };
-  console.error = (...a: unknown[]) => { printed.push(a.map(String).join(" ")); };
-  let named: string | null = null;
-  try { named = daemon.sockPath(undefined, win({ FIGMA_BRIDGE_PORT: "9999" })); } catch (e) { if (e !== exited) throw e; } finally {
-    process.exit = realExit;
-    console.error = realError;
-  }
-  check("an invalid value exits 1 with server-core's message instead of naming a pipe",
-    named === null && code === 1 && /^\[bridge\] FIGMA_BRIDGE_PORT=9999 is not one of/.test(printed[0] ?? ""));
+  check("an invalid value names no pipe", pipe({ FIGMA_BRIDGE_PORT: "9999" }) === null);
 }
 
 report();

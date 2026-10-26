@@ -22,7 +22,7 @@ import { errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { isCmd } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
-import { humanMs } from "./settings.ts";
+import { humanMs } from "./human-ms.ts";
 import { systemClock } from "./clock.ts";
 import type { Clock } from "./clock.ts";
 import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";

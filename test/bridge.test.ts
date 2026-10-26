@@ -18,7 +18,7 @@ import { WsClient } from "./ws-client.ts";
 import type { ClientOptions, HandshakeRefusal } from "./ws-client.ts";
 import { fakePlugin, HANG, type FakePlugin, type Handler, type Handlers } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
-import { settingsAt } from "./bridge-settings.ts";
+import { addressAt, settingsAt } from "./bridge-settings.ts";
 import { maxPayloadFromEnv } from "../bridge/src/settings.ts";
 import { bunSync, dtwinSync, startChild } from "./children.ts";
 import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
@@ -2370,7 +2370,7 @@ void (async () => {
   };
 
   ok("[daemon] with none running, connect() is null — callers fall back to their own bridge",
-    (await daemon.connect(D_PORT)) === null);
+    (await daemon.connect(addressAt(D_PORT))) === null);
 
   // The port-in-use refusal (server-core portInUseMessage), per platform, on every OS: POSIX keeps its text;
   // Windows adds that a daemon started under another bridge token cannot be found by this one (its pipe is
@@ -2392,30 +2392,30 @@ void (async () => {
   if (process.platform === "win32") {
     console.log("  (skipped on Windows: the socket-file and raw-frame checks below are POSIX's; the pipe and its handshake are daemon-sock.test.ts's)");
   } else {
-    ok("[daemon] and --stop reports there was nothing to stop", (await daemon.stop(D_PORT)) === false);
+    ok("[daemon] and --stop reports there was nothing to stop", (await daemon.stop(addressAt(D_PORT))) === false);
 
     // A socket FILE left by a crashed daemon is not a running daemon. If this read as "alive", every
     // later CLI run would fail until the user hand-deleted a file they don't know about.
-    fs.writeFileSync(daemon.sockPath(D_PORT), "");
+    fs.writeFileSync(daemon.sockPath(addressAt(D_PORT)), "");
     ok("[daemon] a stale socket file reads as NO daemon, not as a hang",
-      (await daemon.connect(D_PORT)) === null);
+      (await daemon.connect(addressAt(D_PORT))) === null);
 
     // crashHandlers:false — the process-wide unhandledRejection handler only LOGS, which inside this
     // suite would turn a crashed test into a silent pass. It is tested in a subprocess below.
-    await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false });
-    ok("[daemon] --serve starts over a stale socket file", !!(await daemon.connect(D_PORT)));
-    const dstat = await daemon.status(D_PORT);
+    await daemon.serve(fakeBridge, addressAt(D_PORT), { idleMs: 0, crashHandlers: false });
+    ok("[daemon] --serve starts over a stale socket file", !!(await daemon.connect(addressAt(D_PORT))));
+    const dstat = await daemon.status(addressAt(D_PORT));
     ok("[daemon] status reports the pid, port and whether the PLUGIN is connected",
       dstat?.pid === process.pid && dstat.port === D_PORT && dstat.pluginConnected === true);
 
     // Starting a second daemon must REFUSE, not silently steal the socket out from under the first.
     let dblErr: Error | undefined;
-    try { await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }); } catch (e) { dblErr = asErr(e); }
+    try { await daemon.serve(fakeBridge, addressAt(D_PORT), { idleMs: 0, crashHandlers: false }); } catch (e) { dblErr = asErr(e); }
     ok("[daemon] a second --serve is refused rather than stealing the live socket",
       !!dblErr && /already running/.test(dblErr.message));
     ok("[daemon] and the refusal names the way out", !!dblErr && /--stop/.test(dblErr.message));
 
-    const dcli = await daemon.connect(D_PORT);
+    const dcli = await daemon.connect(addressAt(D_PORT));
     if (!dcli) throw new Error("daemon.connect() returned null right after serve()");
     ok("[daemon] a request round-trips", (await dcli.request({ cmd: "listPages", timeoutMs: 5000 }, { guardMs: 5000 })).reply.file === "echo:listPages");
     let dReqErr: Error | undefined;
@@ -2436,7 +2436,7 @@ void (async () => {
     // forwarded to the bridge as `cmd: undefined`, and `timeoutMs: "x"` does not reach setTimeout as NaN.
     // Driven over the raw socket, since the typed client cannot even express these frames.
     const rawFrame = (frame: string) => new Promise<string>((resolve, reject) => {
-      const c = net.createConnection(daemon.sockPath(D_PORT));
+      const c = net.createConnection(daemon.sockPath(addressAt(D_PORT)));
       c.setEncoding("utf8");
       let buf = "";
       c.on("data", (d: string) => { buf += d; if (buf.includes("\n")) { c.end(); resolve(buf.trim()); } });
@@ -2475,7 +2475,7 @@ void (async () => {
     const afterWindow = await dcli.request({ cmd: "whoami", client: "NIMA Library", timeoutMs: 5000, waitForConnection: 50 }, { guardMs: 5000 }).then(() => "answered", (e: unknown) => asErr(e).message);
     ok("[daemon] a connect window is forwarded to the bridge with the request", calls.includes("waitMs:50") && calls.includes("whoami") && afterWindow === "answered");
     // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
-    const cstat = await daemon.status(D_PORT);
+    const cstat = await daemon.status(addressAt(D_PORT));
     ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
       Array.isArray(cstat?.clients) && cstat.clients.length === 2 && cstat.clients[0]?.connId === "c1");
 
@@ -2505,9 +2505,9 @@ void (async () => {
     ok("[daemon-progress] a listener against a bridge with no progress source still gets the reply, and no ticks",
       optedNoSource.reply.file === "echo:ping" && noTicks === 0);
 
-    ok("[daemon] --stop stops it", (await daemon.stop(D_PORT)) === true);
+    ok("[daemon] --stop stops it", (await daemon.stop(addressAt(D_PORT))) === true);
     ok("[daemon] and removes the socket file, so the next --serve is not blocked",
-      !fs.existsSync(daemon.sockPath(D_PORT)));
+      !fs.existsSync(daemon.sockPath(addressAt(D_PORT))));
     ok("[daemon] stopping closes the underlying bridge", calls.includes("close"));
 
     // ---------------------------------------------------------------- daemon: progress frames
@@ -2542,8 +2542,8 @@ void (async () => {
           return fakeSent({ exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, row);
         },
       };
-      await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
-      const pcli = await daemon.connect(P_PORT);
+      await daemon.serve(tickBridge, addressAt(P_PORT), { idleMs: 0, crashHandlers: false });
+      const pcli = await daemon.connect(addressAt(P_PORT));
       if (!pcli) throw new Error("daemon.connect() returned null right after serve() (progress daemon)");
 
       // Typed client, opted in: both ticks, exact values, in order, and before the promise settles.
@@ -2558,7 +2558,7 @@ void (async () => {
 
       // Over the raw socket: what an OLD client (one that never sends `progress`) sees vs an opted-in one.
       const rawLines = (frame: string) => new Promise<string[]>((resolve, reject) => {
-        const c = net.createConnection(daemon.sockPath(P_PORT));
+        const c = net.createConnection(daemon.sockPath(addressAt(P_PORT)));
         c.setEncoding("utf8");
         const lines: string[] = [];
         c.on("data", daemon.framer((l) => { lines.push(l); if (l.includes('"ok":')) { c.end(); resolve(lines); } }));
@@ -2592,12 +2592,12 @@ void (async () => {
       ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
         /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
       await sleep(700); // let the late listPages answer before stopping the daemon
-      ok("[daemon-progress] the progress daemon stops", (await daemon.stop(P_PORT)) === true);
+      ok("[daemon-progress] the progress daemon stops", (await daemon.stop(addressAt(P_PORT))) === true);
 
       // A daemon that sends malformed progress frames (or sends them unasked) must not break the reply:
       // bad ticks are dropped, a good one is still delivered, and the reply is the answer.
       const F_PORT = 19790;
-      const fsock = daemon.sockPath(F_PORT);
+      const fsock = daemon.sockPath(addressAt(F_PORT));
       try { fs.unlinkSync(fsock); } catch { /* none */ }
       const seenFrames: unknown[] = [];
       const fake = net.createServer((conn) => {
@@ -2621,7 +2621,7 @@ void (async () => {
         }));
       });
       await new Promise<void>((r) => fake.listen(fsock, r));
-      const fcli = await daemon.connect(F_PORT);
+      const fcli = await daemon.connect(addressAt(F_PORT));
       if (!fcli) throw new Error("daemon.connect() returned null against the hand-rolled daemon");
       const fgot: ProgressTick[] = [];
       const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, { guardMs: 5000, onProgress: (t) => fgot.push(t) }).then((r) => r.reply.file, (e: unknown) => "rejected: " + asErr(e).message);
@@ -2704,7 +2704,10 @@ void (async () => {
     }
     const serveScript = (name: string, port: number): string =>
       `import * as daemon from ${JSON.stringify(daemonUrl)};\n` +
-      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({ reply: {}, client: null }), close: () => {} }, { port: ${port}, crashHandlers: false });\n` +
+      `const { daemonAddressOf, readSettings } = await import(${SETTINGS_URL});\n` +
+      `const read = readSettings({ env: { ...process.env, FIGMA_BRIDGE_PORT: undefined } });\n` +
+      `if (!read.ok) throw new Error(read.problem);\n` +
+      `await daemon.serve({ port: ${port}, isConnected: () => false, request: async () => ({ reply: {}, client: null }), close: () => {} }, daemonAddressOf(read.settings, ${port}), { idleMs: 0, crashHandlers: false });\n` +
       `fs.writeFileSync(${JSON.stringify(path.join(dir, name + ".ready"))}, String(process.pid));`;
     for (const [name, port, twice] of [["sig-once", 8796, false], ["sig-twice", 8797, true]] as const) {
       const s = await start(name, serveScript(name, port));
@@ -3799,9 +3802,9 @@ void (async () => {
     else {
       const { bridge: b, client: ws1 } = await connectedBridge();
       const C_PORT = 19791; // a socket name only (the bridge above has its own TCP port)
-      const { shutdown } = await daemon.serve(servedBridge(b), { port: C_PORT, signals: false, crashHandlers: false });
+      const { shutdown } = await daemon.serve(servedBridge(b), addressAt(C_PORT), { idleMs: 0, signals: false, crashHandlers: false });
       const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
-        const c = net.createConnection(daemon.sockPath(C_PORT));
+        const c = net.createConnection(daemon.sockPath(addressAt(C_PORT)));
         c.on("error", reject);
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
@@ -3857,9 +3860,9 @@ void (async () => {
         request: (cmd, _args, o) => { seen.push({ cmd, signal: o.signal }); return new Promise(() => {}); },
       };
       const F_PORT = 19793; // a socket name only
-      const { shutdown } = await daemon.serve(blindBridge, { port: F_PORT, signals: false, crashHandlers: false });
+      const { shutdown } = await daemon.serve(blindBridge, addressAt(F_PORT), { idleMs: 0, signals: false, crashHandlers: false });
       const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
-        const c = net.createConnection(daemon.sockPath(F_PORT));
+        const c = net.createConnection(daemon.sockPath(addressAt(F_PORT)));
         c.on("error", reject);
         c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
       });
@@ -3907,8 +3910,8 @@ void (async () => {
       await bravo.opened;
       await until(() => b.listClients().filter((c) => c.identified).length === 2);
       const G_PORT = 19789; // a socket name only (the bridge above has its own TCP port)
-      const h = await daemon.serve(servedBridge(b), { port: G_PORT, signals: false, crashHandlers: false });
-      const gcli = must(await daemon.connect(G_PORT), "daemon.connect() right after serve() (two-file daemon)");
+      const h = await daemon.serve(servedBridge(b), addressAt(G_PORT), { idleMs: 0, signals: false, crashHandlers: false });
+      const gcli = must(await daemon.connect(addressAt(G_PORT)), "daemon.connect() right after serve() (two-file daemon)");
       const errOf = (p: Promise<unknown>) => p.then(() => "answered", (e: unknown) => asErr(e).message);
 
       // Alpha's export: forwarded, and held by the plugin.
@@ -4161,8 +4164,8 @@ void (async () => {
           }, { once: true });
         }),
       };
-      const { shutdown } = await daemon.serve(sigBridge, { port: S_PORT, signals: false, crashHandlers: false });
-      const scli = await daemon.connect(S_PORT);
+      const { shutdown } = await daemon.serve(sigBridge, addressAt(S_PORT), { idleMs: 0, signals: false, crashHandlers: false });
+      const scli = await daemon.connect(addressAt(S_PORT));
       if (!scli) throw new Error("daemon.connect() returned null right after serve() (signal daemon)");
       const ac = new AbortController();
       const t0 = Date.now();
