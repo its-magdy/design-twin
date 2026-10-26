@@ -12,6 +12,14 @@ import type { DaemonActivity, DaemonBridge, DaemonConnection, ServeHandle } from
 import type { ConnectionInfo } from "../bridge/src/server-core.ts";
 import { NO_DAEMON_TOKEN } from "../bridge/src/daemon.ts";
 import { setTimeout as sleep } from "node:timers/promises";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// The holder commits a minted token before its first bind (settings.ts commitToken): into an empty config dir, never
+// the real user's.
+const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-holder-"));
+process.env.DESIGNTWIN_CONFIG_DIR = configDir;
 
 const SETTINGS: BridgeSettings = {
   port: 8787,
@@ -50,11 +58,6 @@ function bridges({ held: heldAt = false, bindMs = 0 }: { held?: boolean | "once"
       listClients: () => [],
       close() { b.closes++; },
       listening,
-      savedToken: () => "t",
-      // as server-core: a token it was given to mint is saved by now
-      tokenInUse: () => (_settings.token.ok && _settings.token.resolved.source === "ephemeral"
-        ? { ..._settings.token.resolved, source: "file", path: "/tmp/fake-config/bridge-token", created: false }
-        : _settings.token.ok ? { ..._settings.token.resolved, created: false } : { token: "", source: "ephemeral", path: null, created: false }),
     };
     made.push(b);
     setTimeout(() => {
@@ -275,36 +278,58 @@ console.log("\nsession:");
 }
 
 {
-  // First run: nothing saved, so the settings carry a token that would be minted. The bridge saves it on start.
+  // First run: nothing saved, so the settings carry a token that would be minted. The holder commits it before binding.
   const FIRST: BridgeSettings = { ...SETTINGS, token: { ok: true, resolved: { token: "minted", source: "ephemeral", path: null, created: false } } };
   const b = bridges();
   const d = daemonSide();
-  const { h } = holder("session", b, d, FIRST);
+  const { h, logs } = holder("session", b, d, FIRST);
   await h.upstream();
   await settled();
+  const first = b.given[0];
+  check("the first bridge is given the token already saved (the commit runs before the bind, not inside it)",
+    first?.token.ok === true && first.token.resolved.source === "file" && fs.readFileSync(path.join(configDir, "bridge-token"), "utf8").trim() === "minted");
   const afterBind = d.keyedOn[d.keyedOn.length - 1];
-  check("a token minted and saved by this process's bridge keys every later daemon lookup (first run, then `dtwin serve` elsewhere)",
+  check("a token minted and saved by this process keys every later daemon lookup (first run, then `dtwin serve` elsewhere)",
     afterBind?.token.ok === true && afterBind.token.resolved.source === "file" && afterBind.token.resolved.token === "minted");
+  fs.writeFileSync(path.join(configDir, "bridge-token"), "rotated\n"); // `dtwin --rotate-token` elsewhere
   d.served[0]?.handle.shutdown(); // `dtwin stop` (or a rotation stopping it)
   await settled();
   await h.upstream();
   const rebind = b.given[1];
-  check("…and a rebind is given it as saved: never minted (and written over a rotated file) or printed again",
-    b.given.length === 2 && rebind?.token.ok === true && rebind.token.resolved.source === "file" && !rebind.token.resolved.created);
+  check("…and a rebind is given it as saved: never minted again or written over the rotated file",
+    b.given.length === 2 && rebind?.token.ok === true && rebind.token.resolved.token === "minted" &&
+    fs.readFileSync(path.join(configDir, "bridge-token"), "utf8").trim() === "rotated");
+  check("…and the token is printed once, on the commit that minted it — not again on the rebind",
+    logs.filter((l) => l.includes("minted")).length === 1 && logs.some((l) => /saved to .*won't be asked to paste it again/.test(l)));
   h.release();
+  fs.rmSync(path.join(configDir, "bridge-token"), { force: true });
 }
 
 {
-  // First run with the port held: the bridge saved the token it minted before its bind failed.
+  // First run with the port held: the commit ran before the bind that then failed.
   const FIRST: BridgeSettings = { ...SETTINGS, token: { ok: true, resolved: { token: "minted", source: "ephemeral", path: null, created: false } } };
   const b = bridges({ held: "once" });
   const d = daemonSide();
-  const { h } = holder("session", b, d, FIRST);
+  const { h, logs } = holder("session", b, d, FIRST);
   const err = await errOf(h.upstream());
   await h.upstream();
   const retry = b.given[1];
-  check("a token minted by a bridge whose bind then failed is adopted too: the retry is given it as saved",
-    err !== null && b.given.length === 2 && retry?.token.ok === true && retry.token.resolved.source === "file" && retry.token.resolved.token === "minted");
+  check("a token committed before a bind that then failed stays committed: the retry is given it as saved, unprinted",
+    err !== null && b.given.length === 2 && retry?.token.ok === true && retry.token.resolved.source === "file" &&
+    retry.token.resolved.token === "minted" && logs.filter((l) => l.includes("minted")).length === 1);
+  h.release();
+  fs.rmSync(path.join(configDir, "bridge-token"), { force: true });
+}
+
+{
+  // Through a daemon, nothing is bound — and nothing committed: no token minted into the config dir, nothing printed.
+  const FIRST: BridgeSettings = { ...SETTINGS, token: { ok: true, resolved: { token: "minted", source: "ephemeral", path: null, created: false } } };
+  const b = bridges();
+  const d = daemonSide({ live: true });
+  const { h, logs } = holder("one-shot", b, d, FIRST);
+  await h.upstream();
+  check("a command routed through a daemon commits no token (it never binds)",
+    !fs.existsSync(path.join(configDir, "bridge-token")) && !logs.some((l) => l.includes("auth")));
   h.release();
 }
 
@@ -393,4 +418,5 @@ console.log("\nserve:");
     err === "the bridge has been released" && b.made[0]?.closes === 1 && d.served[0]?.shutdowns === 1 && h.held().kind === "none");
 }
 
+fs.rmSync(configDir, { recursive: true, force: true });
 report();

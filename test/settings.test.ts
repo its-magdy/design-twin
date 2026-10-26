@@ -9,8 +9,9 @@ import { pathToFileURL } from "node:url";
 import { check, report } from "./assert.ts";
 import { bunSync } from "./children.ts";
 import {
-  daemonPlace, daemonTokenOf, humanMs, idleMsFromEnv, readSettings, tokenOverridden, tokenSetting,
+  commitToken, daemonPlace, daemonTokenOf, humanMs, idleMsFromEnv, readSettings, tokenOverridden, tokenSetting,
 } from "../bridge/src/settings.ts";
+import { fingerprint } from "../bridge/src/token-store.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-settings-"));
 // token-store reads FIGMA_BRIDGE_TOKEN and the saved file's place from process.env: an empty config dir, no env token.
@@ -57,6 +58,65 @@ console.log("\ntoken:");
     env.ok && env.settings.token.ok && env.settings.token.resolved.source === "env" &&
     daemonPlace(env.settings).port === 8789 && daemonPlace(env.settings).place.token === "env-tok");
   delete process.env.FIGMA_BRIDGE_TOKEN;
+}
+
+console.log("\ncommitting the token on first use:");
+{
+  const saved = path.join(dir, "bridge-token");
+  const first = readSettings({ env: {} });
+  if (!first.ok) throw new Error("readSettings");
+  const minted = first.settings.token.ok ? first.settings.token.resolved.token : "";
+  const c = commitToken(first.settings);
+  check("nothing saved → the commit mints it and SAVES it, reporting minted (and not save-failed)",
+    c.minted && !c.saveFailed && fs.existsSync(saved) && fs.readFileSync(saved, "utf8").trim() === minted && minted.length === 48);
+  check("…the committed settings carry it as the saved file's, so it keys the daemon from here on",
+    c.settings.token.ok && c.settings.token.resolved.source === "file" && c.settings.token.resolved.path === saved && daemonTokenOf(c.settings.token) === minted);
+  check("…and the notice prints it once, to paste into the plugin, and says it was saved",
+    c.notice.filter((l) => l.includes(minted)).length === 1 && c.notice.some((l) => /saved to .*won't be asked to paste it again/.test(l)));
+  const again = commitToken(c.settings);
+  check("committing what a commit returned saves nothing new and never reprints the secret",
+    !again.minted && !again.saveFailed && fs.readFileSync(saved, "utf8").trim() === minted && !again.notice.some((l) => l.includes(minted)));
+  const next = readSettings({ env: {} });
+  const second = next.ok ? commitToken(next.settings) : null;
+  check("a SECOND run reuses the saved token instead of minting, and names it by fingerprint, not the secret",
+    second !== null && !second.minted && second.settings.token.ok && second.settings.token.resolved.token === minted &&
+    !second.notice.some((l) => l.includes(minted)) && second.notice.some((l) => l.includes(String(fingerprint(minted)))));
+  fs.chmodSync(saved, 0o644);
+  const loose = next.ok ? commitToken(next.settings) : null;
+  check("a saved token readable by other users gets the chmod warning",
+    process.platform === "win32" || (loose !== null && loose.notice.some((l) => /readable by other users — chmod 600/.test(l))));
+  fs.rmSync(saved);
+
+  // An unwritable config dir (no HOME, a read-only FS): the place a directory should be is a file.
+  const blocker = path.join(dir, "blocker");
+  fs.writeFileSync(blocker, "");
+  process.env.DESIGNTWIN_CONFIG_DIR = path.join(blocker, "config");
+  const ro = readSettings({ env: {} });
+  const failed = ro.ok ? commitToken(ro.settings) : null;
+  check("an unwritable config dir: the minted token is still used — save-failed, kept ephemeral, keying no daemon",
+    failed !== null && failed.minted && failed.saveFailed && failed.settings.token.ok &&
+    failed.settings.token.resolved.source === "ephemeral" && daemonTokenOf(failed.settings.token) === null);
+  const failedTok = failed?.settings.token.ok ? failed.settings.token.resolved.token : "?";
+  check("…printed once to paste, with why it could not be saved and the stable alternative",
+    failed !== null && failed.notice.filter((l) => l.includes(failedTok)).length === 1 &&
+    failed.notice.some((l) => /could not save it \(.+\) — it changes every run\. Set FIGMA_BRIDGE_TOKEN/.test(l)));
+  const retried = failed ? commitToken(failed.settings) : null;
+  check("…and committing it again neither retries the save nor reprints it",
+    retried !== null && !retried.minted && !retried.saveFailed && !retried.notice.some((l) => l.includes(failedTok)));
+  process.env.DESIGNTWIN_CONFIG_DIR = dir;
+
+  process.env.FIGMA_BRIDGE_TOKEN = "env-tok";
+  const env = readSettings({ env: {} });
+  const viaEnv = env.ok ? commitToken(env.settings) : null;
+  check("FIGMA_BRIDGE_TOKEN: nothing saved, the notice names the variable and its fingerprint",
+    viaEnv !== null && !viaEnv.minted && !fs.existsSync(saved) && viaEnv.notice.length === 1 &&
+    viaEnv.notice[0] === `auth: using FIGMA_BRIDGE_TOKEN from the environment (${fingerprint("env-tok")}).`);
+  delete process.env.FIGMA_BRIDGE_TOKEN;
+
+  const bad = readSettings({ env: {}, tokenFile: path.join(dir, "nope") });
+  const badCommit = bad.ok ? commitToken(bad.settings) : null;
+  check("a resolution that failed commits nothing: no file, no notice, the failure kept for the bridge to report",
+    badCommit !== null && !badCommit.minted && badCommit.notice.length === 0 && !badCommit.settings.token.ok && !fs.existsSync(saved));
 }
 
 console.log("\nlimits:");
