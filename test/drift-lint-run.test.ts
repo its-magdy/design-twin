@@ -133,7 +133,7 @@ console.log("parity — the CLI and the MCP tool give one answer:");
   const p = project("parity-not-catalog");
   const cli = viaCli(p, { map: p.rel(p.map), catalog: p.rel(p.notCatalog) });
   // the tool reads the catalog the export's manifest points at, and a pointer never leaves the export (export-reader.ts)
-  const inExport = put(path.join(p.root, "design", "export", "design-system", "not-a-catalog.json"), JSON.parse(fs.readFileSync(p.notCatalog, "utf8")));
+  const inExport = put(path.join(p.root, "design", "export", "design-system", "not-a-catalog.json"), { components: "nope" });
   put(path.join(p.root, "design", "export", "design-system.json"), { files: { componentsLocal: "design-system/not-a-catalog.json" } });
   const tool = await viaMcp(p, { map: p.map, catalog: inExport });
   check(`a non-catalog file is refused by both, naming it (cli ${cli.outcome} · mcp ${tool.outcome}: ${firstLine(tool.text)})`,
