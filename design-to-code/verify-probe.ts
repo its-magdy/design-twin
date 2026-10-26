@@ -84,7 +84,7 @@ import type { Expectation } from "./verify-shared.ts";
 import { errMsg, firstLine } from "../bridge/src/errmsg.ts";
 import { pwErrorKind, pwFirstLine } from "./pw-errors.ts";
 import { exitFlushed, runCli } from "./proc.ts";
-import { expectationSetProblem, outBaseOf, setFile, setNameOfFile, statusBaseOf } from "./verify-sets.ts";
+import { openVerifySet, setFile } from "./verify-sets.ts";
 
 // ---------------------------------------------------------------- resolving the project's Playwright
 export const PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"] as const;
@@ -1479,16 +1479,14 @@ async function probeMain(argv: string[], own: OwnRunGuard): Promise<number> {
   // caller's — any other --out basename is refused, the older `<dir>/<set>` spelling taken with a note.
   let outBase = "", statusBase = "";
   if (!f.check && f.expected) {
-    const setProblem = expectationSetProblem(f.expected, frameNodeId, path.dirname(f.expected));
-    if (setProblem !== null) { console.error(`verify-probe: ${setProblem}`); return 2; }
-    const ob = outBaseOf(f.out, setNameOfFile(f.expected), path.dirname(f.expected));
-    if ("error" in ob) { console.error(`verify-probe: ${ob.error}`); return 2; }
-    if (ob.deprecated) console.error(`note  --out ${f.out ?? ""} names the set: pass the directory ${ob.dir}`);
-    outBase = ob.base;
     // the run's status is the set's ONE status base, the expectation's (<its dir>/<set>, statusBaseOf) — the same key
     // --status, --wait and --compare use — even when --out writes the files elsewhere; it is written to the run cache
     // (liveStatusFile), never into the watched project tree
-    statusBase = statusBaseOf(f.expected);
+    const set = openVerifySet(f.expected, frameNodeId, f.out);
+    if ("error" in set) { console.error(`verify-probe: ${set.error}`); return 2; }
+    for (const n of set.notes) console.error(`note  ${n}`);
+    outBase = set.outBase;
+    statusBase = set.statusBase;
   }
   const expSha = expBytes ? sha256Hex(expBytes) : undefined;
   // The run's participant (verify-run.ts joinRun): its --run (a named run), else a run of its own — the screen's only open

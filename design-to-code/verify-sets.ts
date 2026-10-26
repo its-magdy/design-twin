@@ -179,6 +179,23 @@ export function expectationSetProblem(expectedFile: string, frameNodeId: string 
   return null;
 }
 
+/** A set opened from its expectation file: its name, where its files go (`outBase`, `<dir>/<set>`), its ONE status base
+ *  (statusBaseOf) and what opening it says (the older --out spelling) — or why it cannot be opened. */
+export type OpenedSet = { name: string; outBase: string; statusBase: string; notes: string[] } | { error: string };
+/** The set `expectedFile` names, for a run that writes its files (verify-screen --compare, verify-probe): a legacy name or
+ *  one of another node than the frame (`frameNodeId`) is refused (expectationSetProblem); `--out` is read by outBaseOf
+ *  with ONE default, the expectation's own directory — so the set's report, measured file and status all stay together
+ *  wherever the cwd is. */
+export function openVerifySet(expectedFile: string, frameNodeId: string | undefined, out: string | undefined): OpenedSet {
+  const dir = path.dirname(expectedFile);
+  const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
+  if (problem !== null) return { error: problem };
+  const name = setNameOfFile(expectedFile);
+  const ob = outBaseOf(out, name, dir);
+  if ("error" in ob) return ob;
+  return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
+}
+
 // ---------------------------------------------------------------- the verify dir's sets
 
 /** The files whose names give a set its name: its expectation, report and measured file. */
