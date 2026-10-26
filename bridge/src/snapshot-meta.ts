@@ -124,7 +124,7 @@ function topLevelCandidates(dir: string): SnapshotCandidate[] {
 export function snapshotInfoOf(fresh: ExportFreshness): SnapshotInfo | SnapshotParseError | null {
   const named: SnapshotCandidate[] = [];
   if (fresh.designSystem) named.push({ file: fresh.designSystem.from, exportedAt: fresh.designSystem.stamp.exportedAt, sourceFile: fresh.designSystem.stamp.file });
-  if (fresh.index) named.push({ file: fresh.index.from, exportedAt: fresh.index.exportedAt, sourceFile: undefined });
+  if (fresh.index) named.push({ file: fresh.index.from, exportedAt: fresh.index.exportedAt, sourceFile: fresh.index.sourceFile });
   const isStamped = (c: SnapshotCandidate): boolean => !!c.exportedAt;
   let pick = named.find(isStamped);
   if (!pick) {

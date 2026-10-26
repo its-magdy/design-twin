@@ -406,6 +406,13 @@ console.log("freshness, per source");
   const broken = snapshotInfoOf(readExportFreshness(onlyBroken));
   check(`nothing usable but a broken manifest: the problem, not "nothing exported" (got ${JSON.stringify(broken)})`,
     !!broken && "error" in broken && /design-system\.json is not valid JSON/.test(broken.error) && broken.file === path.join(onlyBroken, "design-system.json"));
+  put(path.join(onlyBroken, "pages", "index.json"), "{ not json either");
+  const both = snapshotInfoOf(readExportFreshness(onlyBroken));
+  check("a broken manifest AND a broken root index: the manifest's problem is the one reported", !!both && "error" in both && /^design-system\.json /.test(both.error));
+  const labelled = tmp("fresh-label");
+  put(path.join(labelled, "pages", "index.json"), { exportedAt: "2026-01-03T00:00:00.000Z", file: "Product", pageDirs: [] });
+  const fromIndex = snapshotInfoOf(readExportFreshness(labelled));
+  check(`a page walk's root index names its Figma file (got ${JSON.stringify(fromIndex)})`, !!fromIndex && "sourceFile" in fromIndex && fromIndex.sourceFile === "Product");
 }
 
 console.log("doctor counts each screen once (a screen re-filed under a renamed page's dir)");

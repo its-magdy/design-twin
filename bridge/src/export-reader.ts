@@ -89,7 +89,7 @@ const optStr = (x: unknown): boolean => x === undefined || typeof x === "string"
 const isIndexRowLike = (x: unknown): x is IndexRow => isRecord(x) && typeof x.id === "string" && typeof x.name === "string";
 const isRowList = (x: unknown): x is Array<IndexRow | null> => Array.isArray(x) && x.every((r) => r === null || isIndexRowLike(r));
 /** pages/index.json as read: `pageDirs` entries are checked for their `dir`/`index` pointers only. */
-interface RootIndexOnDisk { pageDirs: Array<Partial<Pick<PageDirEntry, "dir" | "index">>>; layers?: Array<IndexRow | null>; exportedAt?: string }
+interface RootIndexOnDisk { pageDirs: Array<Partial<Pick<PageDirEntry, "dir" | "index">>>; layers?: Array<IndexRow | null>; exportedAt?: string; file?: unknown; sourceFile?: unknown }
 const isPagesRootIndex: DocGuard<RootIndexOnDisk> = /* @__PURE__ */ Object.assign(
   (x: unknown): x is RootIndexOnDisk => isRecord(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isRecord(d) && optStr(d.dir) && optStr(d.index))
     && (x.layers === undefined || isRowList(x.layers)) && optStr(x.exportedAt),
@@ -153,6 +153,8 @@ export interface ExportIndex {
   readonly rows: readonly IndexRow[];
   /** pages/index.json's own `exportedAt` (a page walk stamps its root index once); undefined when absent */
   readonly rootExportedAt: string | undefined;
+  /** the Figma file pages/index.json names: its `file`, else its `sourceFile`, when a non-empty string */
+  readonly rootSourceFile: string | undefined;
   /** some index lists the node */
   isExported(id: string): boolean;
   /** the row's screen file (absolute), when its `file` lies inside the export root; else null */
@@ -242,6 +244,8 @@ export function readExportIndex(exportRoot: string): ExportIndex {
     if ("doc" in page) for (const row of page.doc.layers) if (row) take(row, false);
   }
   const rootStamp = rootDoc?.exportedAt || undefined;
+  const label = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+  const rootLabel = rootDoc ? label(rootDoc.file) ?? label(rootDoc.sourceFile) : undefined;
   return {
     root,
     indexed: rootDoc !== null,
@@ -249,6 +253,7 @@ export function readExportIndex(exportRoot: string): ExportIndex {
     problems,
     rows,
     rootExportedAt: rootStamp,
+    rootSourceFile: rootLabel,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => (typeof row.exportedAt === "string" && row.exportedAt) || (fromRoot.has(row) ? rootStamp : undefined),
@@ -362,13 +367,13 @@ export interface ExportFreshness {
   readonly root: string;
   /** readDesignSystemStamp's answer, when there is one: the stamp and the file (absolute) it was read from */
   readonly designSystem: { readonly stamp: DesignSystemStamp; readonly from: string } | null;
-  /** pages/index.json's own stamp, when it was read */
-  readonly index: { readonly from: string; readonly exportedAt: string | undefined } | null;
+  /** pages/index.json's own stamp and the Figma file it names, when it was read */
+  readonly index: { readonly from: string; readonly exportedAt: string | undefined; readonly sourceFile: string | undefined } | null;
   /** every indexed screen (readExportIndex), grouped by source in first-seen order */
   readonly screens: readonly ScreenSource[];
   /** the row with the newest parseable stamp (a tie goes to the later row: merges append the newest pull) */
   readonly newestScreen: { readonly row: IndexRow; readonly exportedAt: string; readonly t: number } | null;
-  /** every index, manifest or part that is there but unusable */
+  /** every manifest, part or index that is there but unusable — the design system's first, as a reader reports them */
   readonly problems: readonly ExportProblem[];
 }
 
@@ -391,9 +396,9 @@ export function readExportFreshness(root: string): ExportFreshness {
   return {
     root,
     designSystem: ds.stamp && ds.from ? { stamp: ds.stamp, from: ds.from } : null,
-    index: ix.indexed ? { from: rootIndexFile(root), exportedAt: ix.rootExportedAt } : null,
+    index: ix.indexed ? { from: rootIndexFile(root), exportedAt: ix.rootExportedAt, sourceFile: ix.rootSourceFile } : null,
     screens: [...groups].map(([sourceFile, g]) => ({ sourceFile, count: g.count, newestAt: g.newestAt })),
     newestScreen,
-    problems: [...ix.problems, ...ds.problems],
+    problems: [...ds.problems, ...ix.problems],
   };
 }
