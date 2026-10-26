@@ -438,8 +438,8 @@ function manifestProblem(doc, givenPath, payloadKey, wantFile) {
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
 }
-function loadDocFile(file, what, guard, hint) {
-  const r = readJson(file, guard);
+function loadDocFile(file, what, guard, hint, readAt = file) {
+  const r = readJson(readAt, guard);
   if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `

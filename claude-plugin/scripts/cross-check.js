@@ -320,8 +320,8 @@ var pause = new Int32Array(new SharedArrayBuffer(4));
 function readDocFile(file, what, guard, hint) {
   return docOrExit(loadDocFile(file, what, guard, hint));
 }
-function loadDocFile(file, what, guard, hint) {
-  const r = readJson(file, guard);
+function loadDocFile(file, what, guard, hint, readAt = file) {
+  const r = readJson(readAt, guard);
   if ("doc" in r) return r;
   const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
   return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `

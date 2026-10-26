@@ -96,7 +96,7 @@ const SUITE_FILES: readonly string[] = [
   "verify-integrity.test.ts", "verify-probe.test.ts", "pw-errors.test.ts", "probe-session.test.ts", "verify-probe-e2e.test.ts", "verify-drive.test.ts",
   "verify-probe-drive-e2e.test.ts", "verify-probe-drive-tail-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",
   "visual-diff.test.ts", "verify-visual.test.ts", "verify-probe-visual-e2e.test.ts", "cross-check.test.ts", "visible-tree.test.ts",
-  "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "export-reader.test.ts", "screen-inputs.test.ts", "node-artefacts.test.ts", "audit-gate.test.ts", "report-freshness.test.ts", "plan-binding.test.ts", "session-claim.test.ts", "plan-status.test.ts", "verify-sets.test.ts", "token-naming.test.ts", "variable-resolve.test.ts", "drift-lint-run.test.ts", "code-scanner.test.ts", "screen-key.test.ts", "ui.test.ts", "plugin-relay.test.ts", "plugin-es2019.test.ts",
+  "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "export-reader.test.ts", "screen-inputs.test.ts", "node-artefacts.test.ts", "audit-gate.test.ts", "report-freshness.test.ts", "plan-binding.test.ts", "session-claim.test.ts", "plan-status.test.ts", "verify-sets.test.ts", "compare-run.test.ts", "token-naming.test.ts", "variable-resolve.test.ts", "drift-lint-run.test.ts", "code-scanner.test.ts", "screen-key.test.ts", "ui.test.ts", "plugin-relay.test.ts", "plugin-es2019.test.ts",
   "daemon-auth.test.ts", "daemon-sock.test.ts", "mcp-share.test.ts", "mcp-smoke.test.ts", "client-presence.test.ts", "mcp-lifecycle.test.ts", "mcp-delivery.test.ts", "json-size.test.ts",
   // this runner's own self-test (fast, so early)
   "run-suites.test.ts",
