@@ -6253,6 +6253,15 @@ function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
+function openVerifySet(expectedFile, frameNodeId, out) {
+  const dir = path9.dirname(expectedFile);
+  const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
+  if (problem !== null) return { error: problem };
+  const name = setNameOfFile(expectedFile);
+  const ob = outBaseOf(out, name, dir);
+  if ("error" in ob) return ob;
+  return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
+}
 
 // design-to-code/report-freshness.ts
 var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
@@ -7843,19 +7852,14 @@ ${USAGE}`);
   const untaggedRoot = ownTags !== null ? { ...ownTags, seen: false } : void 0;
   let outBase = "", statusBase = "";
   if (!f.check && f.expected) {
-    const setProblem = expectationSetProblem(f.expected, frameNodeId, path12.dirname(f.expected));
-    if (setProblem !== null) {
-      console.error(`verify-probe: ${setProblem}`);
+    const set = openVerifySet(f.expected, frameNodeId, f.out);
+    if ("error" in set) {
+      console.error(`verify-probe: ${set.error}`);
       return 2;
     }
-    const ob = outBaseOf(f.out, setNameOfFile(f.expected), path12.dirname(f.expected));
-    if ("error" in ob) {
-      console.error(`verify-probe: ${ob.error}`);
-      return 2;
-    }
-    if (ob.deprecated) console.error(`note  --out ${f.out ?? ""} names the set: pass the directory ${ob.dir}`);
-    outBase = ob.base;
-    statusBase = statusBaseOf(f.expected);
+    for (const n of set.notes) console.error(`note  ${n}`);
+    outBase = set.outBase;
+    statusBase = set.statusBase;
   }
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
   const joined = f.check || !statusBase ? null : joinRun(statusBase, {

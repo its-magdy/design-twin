@@ -9,14 +9,21 @@
 //   await p.opened;                       // dialled, and the hello sent
 //   p.commands("exportNode"); p.cancels; // what the bridge sent it
 //
-// It speaks the wire frames server-core.ts declares (CommandFrame / CancelFrame in, HelloFrame / ProgressFrame /
-// ReplyFrame out), so a fake reply is checked against the real reply type of its command (commands.ts); a reply that
-// is deliberately not one goes through fixtures.ts `malformed()`. Misbehaviour is a value, not a separate client:
+// Between its socket and its handlers sits the plugin's REAL relay (figma-plugin/src/relay.ts, what ui.html runs):
+// a command frame reaches a handler as the main thread's `bridge` message, the handler's answer goes back out as a
+// `bridge-result` the relay turns into the reply frame, a cancel frame arrives as the main thread's cancel, and the
+// hello is the relay's answer to the socket opening (the identity the main thread would report). So a field renamed in
+// the wire frames (bridge/src/plugin-frames.ts) or the main-thread messages fails these suites, not only Figma.
+// A fake reply is checked against the real reply type of its command (commands.ts); a reply that is deliberately not
+// one goes through fixtures.ts `malformed()`. Progress ticks go straight onto the socket as ProgressFrames: the suites
+// send phases and counters the plugin's own progress posts do not model, to test the bridge's reading of them. Misbehaviour is a value, not a separate client:
 // HANG never answers, fail() answers ok:false, `ctx.send` / `p.send` put any frame on the wire (a malformed one
 // included), `raw: true` is the dead peer that never pongs (ws-client.ts), `redial` keeps dialling until the bridge
 // listens and after it drops the socket. It adds no waits of its own: a suite's timing is its own.
-import type { Cmd, Commands } from "../bridge/src/commands.ts";
+import type { Cmd, Commands, WhoamiReply } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame } from "../bridge/src/server-core.ts";
+import { createRelay, type Relay } from "../figma-plugin/src/relay.ts";
+import type { UIToMain } from "../figma-plugin/src/messages.ts";
 import { WsClient, type HandshakeRefusal, type RawData } from "./ws-client.ts";
 
 /** A handler's answer that never answers: the command hangs until the bridge gives up on it. */
@@ -84,6 +91,12 @@ function isBridgeFrame(v: unknown): v is BridgeFrame {
   return ("type" in v && v.type === "cancel") || ("cmd" in v && typeof v.cmd === "string");
 }
 const isCancel = (f: BridgeFrame): f is CancelFrame => "type" in f && f.type === "cancel";
+/** What the main thread's whoami read would report for a plugin announcing `h` (the relay turns it into the hello;
+ *  an empty string goes out as null, as it does from the real plugin). */
+const identityOf = (h: Omit<HelloFrame, "type">): WhoamiReply => ({
+  instanceId: h.instanceId ?? "", startedAt: 0, uptimeMs: 0, file: h.file ?? "", page: h.page ?? "", pageId: "",
+  editorType: "figma", pluginVersion: h.pluginVersion ?? "", fileKey: h.fileKey ?? null, fileKeyAvailable: typeof h.fileKey === "string",
+});
 
 export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
   const url = `ws://127.0.0.1:${port}/?token=${opts.token}`;
@@ -101,34 +114,46 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
   opened.catch(() => {});
 
   const sendOn = (c: WsClient, frame: unknown): void => { c.send(JSON.stringify(frame)); };
-  const reply = (c: WsClient, id: string, a: Answer<Cmd>): void => {
+  // The main thread's answers go back through the relay, as main.ts posts them to ui.html.
+  const reply = (relay: Relay, id: string | undefined, a: Answer<Cmd>): void => {
     if (a === HANG) return;
-    if (isFailure(a)) sendOn(c, { id, ok: false, error: a.failure });
-    else sendOn(c, { id, ok: true, result: a });
+    if (isFailure(a)) relay.fromMain({ type: "bridge-result", ...(id !== undefined ? { id } : {}), ok: false, result: undefined, error: a.failure });
+    else relay.fromMain({ type: "bridge-result", ...(id !== undefined ? { id } : {}), ok: true, result: a });
   };
-  const answer = (c: WsClient, cmd: CommandFrame): void => {
+  const answer = (c: WsClient, relay: Relay, cmd: string, args: unknown, id: string | undefined): void => {
     const ctx: CommandCtx = {
-      id: cmd.id,
+      id: id ?? "",
       progress: (tick) => sendOn(c, { type: "progress", ...tick } satisfies ProgressFrame),
       send: (frame) => sendOn(c, frame),
     };
-    // handlers[cmd.cmd] is the handler OF cmd.cmd, but TS cannot correlate the key with its args/reply types.
-    const h = handlers[cmd.cmd] as Handler<Cmd> | undefined;
+    const failed = (e: unknown): void => reply(relay, id, fail(e instanceof Error ? e.message : String(e)));
+    // handlers[cmd] is the handler OF cmd, but TS cannot correlate the key with its args/reply types (nor is a
+    // wire `cmd` known to be a Cmd: one that is not has no handler).
+    const h = Object.prototype.hasOwnProperty.call(handlers, cmd) ? (handlers[cmd as Cmd] as Handler<Cmd> | undefined) : undefined;
     if (!h) {
-      if (opts.unhandled !== HANG) sendOn(c, { id: cmd.id, ok: false, error: `fake plugin has no ${cmd.cmd}` });
+      if (opts.unhandled !== HANG) failed(`fake plugin has no ${cmd}`);
       return;
     }
     // A handler that throws answers ok:false with its message, as the real plugin answers a collector that throws.
-    const failed = (e: unknown): void => sendOn(c, { id: cmd.id, ok: false, error: e instanceof Error ? e.message : String(e) });
     let a: ReturnType<Handler<Cmd>>;
-    try { a = h(cmd.args, ctx); } catch (e) { failed(e); return; }
+    // The handler reads the args the bridge sent: a CommandFrame's, typed by its command (commands.ts).
+    try { a = h(args as Commands[Cmd]["args"], ctx); } catch (e) { failed(e); return; }
     // A plain answer goes out in the same tick the command arrived in, as a hand-written fake's did.
-    if (a instanceof Promise) a.then((v) => reply(c, cmd.id, v), failed);
-    else reply(c, cmd.id, a);
+    if (a instanceof Promise) a.then((v) => reply(relay, id, v), failed);
+    else reply(relay, id, a);
+  };
+  // The main thread, as far as the bridge can tell: who it is, the commands it answers, the cancels it is sent.
+  const hello = opts.hello;
+  const mainThread = (c: WsClient, relay: Relay, m: UIToMain): void => {
+    if (m.type === "get-identity") { if (hello !== false && hello !== undefined) relay.fromMain({ type: "identity", identity: identityOf(hello) }); }
+    else if (m.type === "bridge") answer(c, relay, m.cmd, m.args, m.id);
+    else if (m.type === "cancel" && m.id !== undefined) cancels.push(m.id);
   };
 
   const dial = (): WsClient => {
     const c = new WsClient(url, { ...(origin !== null ? { origin } : {}), ...(opts.headers ? { headers: opts.headers } : {}), ...(opts.raw ? { raw: true } : {}) });
+    const relay: Relay = createRelay({ toSocket: (f) => sendOn(c, f), toMain: (m) => mainThread(c, relay, m) });
+    relays.set(c, relay);
     // Without redial, a socket that never opens settles `opened`: a dial error, a refused handshake (the raw client
     // reports it as `unexpected-response`, then closes, with no `error`), or any close before open.
     let wasOpen = false;
@@ -137,16 +162,16 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
     c.on("close", (code: number) => { if (!opts.redial && !wasOpen) rejectOpened(new Error(`closed before it opened (code ${code})`)); });
     c.on("open", () => {
       wasOpen = true;
-      if (opts.hello !== false && opts.hello !== undefined) sendOn(c, { type: "hello", ...opts.hello } satisfies HelloFrame);
+      relay.socketOpened(); // the main thread answers get-identity: the hello
       resolveOpened();
     });
+    c.on("close", () => relay.socketClosed());
     c.on("message", (raw: RawData) => {
+      const text = String(raw);
       let v: unknown;
-      try { v = JSON.parse(String(raw)) as unknown; } catch { return; }
-      if (!isBridgeFrame(v)) return;
-      frames.push({ frame: v, at: Date.now() });
-      if (isCancel(v)) { cancels.push(v.id); return; }
-      answer(c, v);
+      try { v = JSON.parse(text) as unknown; } catch { v = undefined; }
+      if (isBridgeFrame(v)) frames.push({ frame: v, at: Date.now() });
+      relay.fromSocket(text);
     });
     if (opts.redial) {
       const { everyMs } = opts.redial;
@@ -155,6 +180,7 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
     return c;
   };
 
+  const relays = new WeakMap<WsClient, Relay>();
   // null until the first dial (a redialling plugin may start late)
   let ws: WsClient | null = null;
   if (opts.redial?.startAfterMs) setTimeout(() => { if (!stopped) ws = dial(); }, opts.redial.startAfterMs);
@@ -170,7 +196,8 @@ export function fakePlugin(port: number, opts: FakePluginOptions): FakePlugin {
     frames,
     commands: (cmd) => frames.map((f) => f.frame).filter((f): f is CommandFrame => !isCancel(f) && (cmd === undefined || f.cmd === cmd)),
     cancels,
-    hello: (h) => sendOn(current(), { type: "hello", ...h } satisfies HelloFrame),
+    // A later identity is announced the way the plugin announces any: the main thread's identity, through the relay.
+    hello: (h) => { relays.get(current())?.fromMain({ type: "identity", identity: identityOf(h) }); },
     progress: (tick) => sendOn(current(), { type: "progress", ...tick } satisfies ProgressFrame),
     send: (frame) => sendOn(current(), frame),
     close: (code, reason) => current().close(code, reason),

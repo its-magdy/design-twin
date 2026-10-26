@@ -32,8 +32,9 @@ import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
 import * as daemon from "./daemon.ts";
 import type { DaemonStatusView } from "./daemon.ts";
-import { readSnapshotInfo } from "./snapshot-meta.ts";
-import { readDesignSystemStamp, readExportIndex } from "./export-reader.ts";
+import { snapshotInfoOf } from "./snapshot-meta.ts";
+import { readExportFreshness } from "./export-reader.ts";
+import type { ExportFreshness } from "./export-reader.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
@@ -287,43 +288,31 @@ function checkPlugin(r: PluginProbe, waitSec?: number): Check {
 
 const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
 
-// Every screen row already carries its `sourceFile` and `exportedAt` (write-out.ts stamps both; a screen pulled before
-// that field existed simply has no `sourceFile`, which is told apart from a real value rather than defaulting to the
-// design system's). Reading the rows means this never has to guess by opening each screen file, or fall back to
-// whichever document snapshot-meta happened to pick first — which would attribute the whole export to the wrong Figma
-// file. The rows are export-reader.ts's: every page index on disk, each screen once by the writer's identity (a screen
-// re-filed under a renamed page's dir is one screen, not two), and every index or manifest that is there but unusable
-// named, so the caller can say so instead of quietly counting nothing.
-function exportSourceCounts(exportDir: string, now: number): { parts: string[]; newestOverall: number | null; problems: string[] } {
-  const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
-  const ix = readExportIndex(exportDir);
-  const ds = readDesignSystemStamp(exportDir);
-  const problems = [...ix.problems, ...ds.problems].map((p) => `${p.file} ${p.error}`);
-  for (const row of ix.rows) {
-    const key = row.sourceFile || "";
-    let ats = screensByFile.get(key);
-    if (!ats) { ats = []; screensByFile.set(key, ats); }
-    ats.push(ix.exportedAtOf(row));
-  }
-  const designSystem = ds.stamp?.file ? { file: ds.stamp.file, exportedAt: ds.stamp.exportedAt } : null;
-
+// The headline is read off export-reader.ts readExportFreshness: every screen row grouped by its own stamped
+// `sourceFile` (write-out.ts stamps it; a screen pulled before that field existed has none, told apart from a real value
+// rather than defaulting to the design system's), plus the design system's stamp — never whichever single document
+// snapshot-meta picks, which would attribute the whole export to the wrong Figma file. The rows are every page index on
+// disk, each screen once by the writer's identity (a screen re-filed under a renamed page's dir is one screen, not two),
+// and every index or manifest that is there but unusable is named, so the caller can say so instead of quietly counting
+// nothing.
+function exportSourceCounts(fresh: ExportFreshness, now: number): { parts: string[]; newestOverall: number | null; problems: string[] } {
   const parts: string[] = [];
   let newestOverall: number | null = null;
-  // String(): Date.parse coerces its argument exactly so — an absent stamp parses as NaN.
   const noteNewest = (iso: string | undefined) => { const t = Date.parse(String(iso)); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
-  for (const [file, ats] of screensByFile) {
-    if (!file) continue;
-    const newest = ats.reduce((a, b) => (Date.parse(String(b)) > Date.parse(String(a || 0)) ? b : a), ats[0]);
-    noteNewest(newest);
-    parts.push(`${ats.length} screen(s) from '${file}' (newest ${ageStr(now - Date.parse(String(newest)))} ago)`);
+  const ago = (iso: string | undefined) => (iso ? `${ageStr(now - Date.parse(iso))} ago` : "no stamp");
+  for (const g of fresh.screens) {
+    if (g.sourceFile === null) continue;
+    noteNewest(g.newestAt);
+    parts.push(`${g.count} screen(s) from '${g.sourceFile}' (newest ${ago(g.newestAt)})`);
   }
-  const unstamped = (screensByFile.get("") || []).length;
+  const unstamped = fresh.screens.find((g) => g.sourceFile === null)?.count ?? 0;
   if (unstamped) parts.push(`${unstamped} screen(s) (source not recorded — pulled by an older bridge; re-pull to stamp it)`);
-  if (designSystem) {
-    noteNewest(designSystem.exportedAt);
-    parts.push(`design system from '${designSystem.file}' (${ageStr(now - Date.parse(String(designSystem.exportedAt)))} ago)`);
+  const ds = fresh.designSystem?.stamp;
+  if (ds?.file) {
+    noteNewest(ds.exportedAt);
+    parts.push(`design system from '${ds.file}' (${ago(ds.exportedAt)})`);
   }
-  return { parts, newestOverall, problems };
+  return { parts, newestOverall, problems: fresh.problems.map((p) => `${p.file} ${p.error}`) };
 }
 
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
@@ -353,7 +342,8 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
     }
 
     // Either a SnapshotInfo or a SnapshotParseError (only the latter carries `error`).
-    const snap = readSnapshotInfo(ex.dir);
+    const fresh = readExportFreshness(ex.dir);
+    const snap = snapshotInfoOf(fresh);
     // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
     // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.ts checks all three; naming only
     // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
@@ -368,7 +358,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
       // with 5 Sample App screens and 1 Acme Kit design system, attributing every screen to the
       // wrong file. Falls back to the single-file line when nothing has per-source data yet (an
       // export entirely from before this field existed, or a bare design-system-only pull).
-      const counts = exportSourceCounts(ex.dir, now);
+      const counts = exportSourceCounts(fresh, now);
       if (counts.parts.length) {
         const detail = counts.parts.join(" + ");
         const stale = counts.newestOverall !== null && now - counts.newestOverall > STALE_MS;

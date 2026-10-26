@@ -99,7 +99,7 @@ jobs:
         run: |
           bun figma-plugin/build.ts
           bun claude-plugin/build-scripts.ts
-          git diff --exit-code -- figma-plugin/code.js claude-plugin/scripts
+          git diff --exit-code -- figma-plugin/code.js figma-plugin/ui.html claude-plugin/scripts
 
       # The bridge ships its TypeScript as is (no build): smoke the CLI the way a linked `dtwin` starts it.
       - name: Bridge CLI runs
