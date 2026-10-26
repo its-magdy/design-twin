@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-build.ts
-import fs18 from "node:fs";
-import path17 from "node:path";
+import fs19 from "node:fs";
+import path18 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/errmsg.ts
@@ -160,7 +160,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path18, ancestors, under, beneath) {
+  (function go(node, parentHidden, path19, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -174,7 +174,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path18,
+      path: path19,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -189,7 +189,7 @@ function walk(root, fn, prune, opts) {
     if (!kids.length) return;
     const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path18 ? path18 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path19 ? path19 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkWithHidden(root, fn, opts) {
@@ -1942,7 +1942,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path18, message) => errors.push({ path: path18, message });
+  const err = (path19, message) => errors.push({ path: path19, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -2151,8 +2151,8 @@ function memberRefs(codeToken) {
     const member = part.slice(dot + 1);
     if (dot <= 0 || !IDENT.test(member) || /(^|[^\w])\d+\.\w+$/.test(part)) continue;
     if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
-    const path18 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
-    const containers = [...path18.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
+    const path19 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
+    const containers = [...path19.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
     if (containers.length) out.push({ member, containers });
   }
   return out;
@@ -3354,6 +3354,10 @@ function readHookInput(opts) {
   });
 }
 
+// design-to-code/session-claim.ts
+import fs18 from "node:fs";
+import path17 from "node:path";
+
 // design-to-code/shell-words.ts
 function simpleCommands(src, opts = {}) {
   const ps = opts.powershell === true;
@@ -3467,6 +3471,144 @@ function dropHeredocBodies(cmd) {
   return kept.join("\n");
 }
 
+// design-to-code/session-claim.ts
+var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
+var BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
+function sessionClaim({ payload, cwd, open, all, bad }) {
+  if (!open.length && !bad.length) return { kind: "claimed", plans: [], unreadable: [] };
+  const agent = typeof payload.agent_transcript_path === "string" && !!payload.agent_transcript_path;
+  const file = payload.agent_transcript_path || (payload.agent_id ? null : payload.transcript_path);
+  if (!file || typeof file !== "string") return { kind: "unscoped", plans: [...open] };
+  let scan;
+  try {
+    scan = scanTranscript(file, !agent);
+  } catch {
+    return { kind: "unscoped", plans: [...open] };
+  }
+  const wrote = (rel) => scan.writes.some((w) => sameFile2(w, rel, cwd));
+  const relOf2 = (file2) => path17.relative(cwd, path17.resolve(file2));
+  const listers = /* @__PURE__ */ new Map();
+  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
+  const owns = (p) => wrote(relOf2(p.file)) || open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && wrote(f));
+  const unreadable = bad.filter((b) => wrote(relOf2(b.file)) && !closedStatusOf(b));
+  const known = all.length ? all : open;
+  if (known.some(owns) || unreadable.length || !open.length) return { kind: "claimed", plans: open.filter(owns), unreadable };
+  const builder = payload.hook_event_name === "SubagentStop" && typeof payload.agent_type === "string" && BUILDER_AGENT.test(payload.agent_type);
+  return { kind: "none", sendBack: builder && scan.toolUses > 0 && !scan.sentBack };
+}
+function closedStatusOf(b) {
+  const life = lifecycleOf(readJsonOrNull(b.file, anyJson));
+  return life === "pending" ? null : life;
+}
+function scanTranscript(file, ownOnly) {
+  const scan = { writes: [], toolUses: 0, sentBack: false };
+  forEachLine(file, (line) => {
+    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && isHookFeedback(line)) scan.sentBack = true;
+    if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
+  });
+  return scan;
+}
+function isHookFeedback(line) {
+  let v = null;
+  try {
+    const parsed = JSON.parse(line);
+    v = parsed;
+  } catch {
+    return false;
+  }
+  if (!isJsonObject(v) || !isJsonObject(v.message) || v.message.role !== "user") return false;
+  const c = v.message.content;
+  return typeof c === "string" || Array.isArray(c) && !c.some((item) => isJsonObject(item) && item.type === "tool_result");
+}
+var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+function lineActions(line, ownOnly, out) {
+  if (!line.trim()) return 0;
+  let v = null;
+  try {
+    const parsed = JSON.parse(line);
+    v = parsed;
+  } catch {
+    return 0;
+  }
+  if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return 0;
+  let uses = 0;
+  for (const item of v.message.content) {
+    if (!isJsonObject(item) || item.type !== "tool_use") continue;
+    uses++;
+    if (typeof item.name !== "string" || !isJsonObject(item.input)) continue;
+    const inp = item.input;
+    const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
+    if (WRITE_TOOLS.has(item.name)) {
+      for (const k of ["file_path", "notebook_path"]) {
+        const f = inp[k];
+        if (typeof f === "string") out.push({ path: f, base });
+      }
+    } else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
+  }
+  return uses;
+}
+var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
+var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
+var LINE_CHUNK = 1 << 20;
+function forEachLine(file, onLine) {
+  const fd = fs18.openSync(file, "r");
+  try {
+    const buf = Buffer.allocUnsafe(LINE_CHUNK);
+    let carry = [];
+    for (; ; ) {
+      const n = fs18.readSync(fd, buf, 0, LINE_CHUNK, null);
+      if (n === 0) break;
+      const cut = buf.subarray(0, n).lastIndexOf(10);
+      if (cut < 0) {
+        carry.push(Buffer.from(buf.subarray(0, n)));
+        continue;
+      }
+      const head = buf.subarray(0, cut);
+      const text = (carry.length ? Buffer.concat([...carry, head]) : head).toString("utf8");
+      for (const line of text.split("\n")) onLine(line);
+      carry = cut + 1 < n ? [Buffer.from(buf.subarray(cut + 1, n))] : [];
+    }
+    onLine(Buffer.concat(carry).toString("utf8"));
+  } finally {
+    fs18.closeSync(fd);
+  }
+}
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
+var CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
+var isAbsPath = (p) => /^(?:[A-Za-z]:)?[\\/]/.test(p);
+function planSkeletonOuts(cmd, powershell = false) {
+  const out = [];
+  const text = powershell ? cmd : dropHeredocBodies(cmd);
+  const nested = (powershell ? /\(/ : /[(`]/).test(text);
+  let dir = "";
+  const under = (d, p) => d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p;
+  for (const all of simpleCommands(text, { powershell })) {
+    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
+    const head = words[0] ?? "";
+    if (CHANGE_DIR.test(head)) {
+      const to = /^pop/i.test(head) ? void 0 : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
+      dir = nested || to === void 0 || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
+      continue;
+    }
+    if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
+    words.forEach((w, k) => {
+      const eq = /^--out=(.+)$/.exec(w);
+      const target = w === "--out" ? words[k + 1] : eq?.[1];
+      if (target) out.push(dir === null ? target : under(dir, target));
+    });
+  }
+  return out;
+}
+function sameFile2(w, rel, cwd) {
+  const c = w.path.trim().replace(/\\/g, "/");
+  if (!c) return false;
+  const want = path17.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path17.posix.normalize(c).toLowerCase().endsWith("/" + path17.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path17.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
+}
+
 // design-to-code/verify-build.ts
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;
 var STDIN_WAIT_MS = () => {
@@ -3494,13 +3636,13 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs18.statSync(file).mtimeMs > cutoff;
+    return now - fs19.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function findPlans(cwd) {
-  return nodeArtefacts(cwd, { planDir: path17.join(cwd, PLAN_DIR) }).plans();
+  return nodeArtefacts(cwd, { planDir: path18.join(cwd, PLAN_DIR) }).plans();
 }
 function isOpen(p, cwd) {
   return !isStale2(p.file) && planStatus(cwd).open(p.plan);
@@ -3556,7 +3698,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path17.join(cwd, MAP_FILE), path17.join(cwd, LEGACY_MAP_FILE)]) {
+  for (const f of [path18.join(cwd, MAP_FILE), path18.join(cwd, LEGACY_MAP_FILE)]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -3583,7 +3725,7 @@ function checkVerification(plan, cwd) {
     if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
     const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
     if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs18.existsSync(path17.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs19.existsSync(path18.join(cwd, String(a))));
     if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
     return [];
@@ -3625,12 +3767,12 @@ function recordedShadowWarnings(plan) {
   return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
 }
 var json = (x) => siblingFile(x, "reportMd", "report");
-var slash2 = (x) => x.split(path17.sep).join("/").split("\\").join("/");
+var slash2 = (x) => x.split(path18.sep).join("/").split("\\").join("/");
 function recordedReportRel(plan, cwd) {
   const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
   if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
   const named = rec.report.trim();
-  return json(slash2(cwd === void 0 ? named : path17.relative(cwd, path17.resolve(cwd, named))).replace(/^\.\//, ""));
+  return json(slash2(cwd === void 0 ? named : path18.relative(cwd, path18.resolve(cwd, named))).replace(/^\.\//, ""));
 }
 var measuredMs = (r) => {
   const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
@@ -3648,13 +3790,13 @@ function a11yReportOf(named, reports, ctx = {}) {
   const want = slash2(named.trim());
   const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
   if (ctx.cwd !== void 0) {
-    rels.add(json(slash2(path17.relative(ctx.cwd, path17.resolve(ctx.cwd, named.trim())))));
-    if (ctx.planFile !== void 0) rels.add(json(slash2(path17.relative(ctx.cwd, path17.resolve(path17.dirname(path17.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+    rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(path18.dirname(path18.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
   }
   const exact = reports.find((r) => rels.has(r.rel));
   if (exact) return { ref: exact };
-  const base = json(path17.posix.basename(want));
-  const byBase = reports.filter((r) => path17.posix.basename(r.rel) === base);
+  const base = json(path18.posix.basename(want));
+  const byBase = reports.filter((r) => path18.posix.basename(r.rel) === base);
   if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
   return { ref: null, missing: want };
 }
@@ -3747,7 +3889,7 @@ function profileOf(plan, cwd) {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path17.join(cwd, TARGET_FILE), isJsonObject);
+  const doc = readJsonOrNull(path18.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
@@ -3830,7 +3972,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed2 = plan.files || [];
-  const absent = listed2.filter((f) => !fs18.existsSync(path17.join(cwd, f)));
+  const absent = listed2.filter((f) => !fs19.existsSync(path18.join(cwd, f)));
   if (!listed2.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -3838,12 +3980,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs18.statSync(path17.join(cwd, rel)).isFile();
+      return fs19.statSync(path18.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs18.readFileSync(path17.join(cwd, rel), "utf8") });
+  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs19.readFileSync(path18.join(cwd, rel), "utf8") });
   const code = codeOf(byFile);
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -3924,7 +4066,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     if (exp.staleFile) {
-      const now = path17.relative(cwd, exp.file).split(path17.sep).join("/");
+      const now = path18.relative(cwd, exp.file).split(path18.sep).join("/");
       warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
     }
     const cov = anchorCoverage(plan, exp.doc);
@@ -3969,7 +4111,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp, planFile) {
-  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path17.resolve(cwd, plan.file) : null, screenName: plan.screenName || exp && exp.layerName || null };
+  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path18.resolve(cwd, plan.file) : null, screenName: plan.screenName || exp && exp.layerName || null };
   const v = judgeGate(screenAudit(cwd, screen), plan.auditGate);
   if (v.status === "clear") return [];
   if (v.status === "unchecked") return [`${v.auditFile} ${v.error} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
@@ -3989,155 +4131,9 @@ function auditGateWarnings(plan, cwd, exp, planFile) {
 function legacySetWarnings(plan, planFile, reports) {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = setBaseOf(path17.posix.basename(r.rel), "report") ?? path17.posix.basename(r.rel);
+    const set = setBaseOf(path18.posix.basename(r.rel), "report") ?? path18.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
-}
-var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-var BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
-function lineActions(line, ownOnly, out) {
-  if (!line.trim()) return 0;
-  let v = null;
-  try {
-    const parsed = JSON.parse(line);
-    v = parsed;
-  } catch {
-    return 0;
-  }
-  if (!isJsonObject(v) || ownOnly && v.isSidechain === true || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return 0;
-  let uses = 0;
-  for (const item of v.message.content) {
-    if (!isJsonObject(item) || item.type !== "tool_use") continue;
-    uses++;
-    if (typeof item.name !== "string" || !isJsonObject(item.input)) continue;
-    const inp = item.input;
-    const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
-    if (WRITE_TOOLS.has(item.name)) {
-      for (const k of ["file_path", "notebook_path"]) {
-        const f = inp[k];
-        if (typeof f === "string") out.push({ path: f, base });
-      }
-    } else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
-  }
-  return uses;
-}
-var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
-var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
-var LINE_CHUNK = 1 << 20;
-function forEachLine(file, onLine, chunk = LINE_CHUNK) {
-  const fd = fs18.openSync(file, "r");
-  try {
-    const buf = Buffer.allocUnsafe(chunk);
-    let carry = [];
-    for (; ; ) {
-      const n = fs18.readSync(fd, buf, 0, chunk, null);
-      if (n === 0) break;
-      const cut = buf.subarray(0, n).lastIndexOf(10);
-      if (cut < 0) {
-        carry.push(Buffer.from(buf.subarray(0, n)));
-        continue;
-      }
-      const head = buf.subarray(0, cut);
-      const text = (carry.length ? Buffer.concat([...carry, head]) : head).toString("utf8");
-      for (const line of text.split("\n")) onLine(line);
-      carry = cut + 1 < n ? [Buffer.from(buf.subarray(cut + 1, n))] : [];
-    }
-    onLine(Buffer.concat(carry).toString("utf8"));
-  } finally {
-    fs18.closeSync(fd);
-  }
-}
-var NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
-function isHookFeedback(line) {
-  let v = null;
-  try {
-    const parsed = JSON.parse(line);
-    v = parsed;
-  } catch {
-    return false;
-  }
-  if (!isJsonObject(v) || !isJsonObject(v.message) || v.message.role !== "user") return false;
-  const c = v.message.content;
-  return typeof c === "string" || Array.isArray(c) && !c.some((item) => isJsonObject(item) && item.type === "tool_result");
-}
-function scanTranscript(file, ownOnly) {
-  const scan = { writes: [], toolUses: 0, sentBack: false };
-  forEachLine(file, (line) => {
-    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && isHookFeedback(line)) scan.sentBack = true;
-    if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
-  });
-  return scan;
-}
-function transcriptActions(file, ownOnly) {
-  return scanTranscript(file, ownOnly).writes;
-}
-var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
-var CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
-var isAbsPath = (p) => /^(?:[A-Za-z]:)?[\\/]/.test(p);
-function planSkeletonOuts(cmd, powershell = false) {
-  const out = [];
-  const text = powershell ? cmd : dropHeredocBodies(cmd);
-  const nested = (powershell ? /\(/ : /[(`]/).test(text);
-  let dir = "";
-  const under = (d, p) => d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p;
-  for (const all of simpleCommands(text, { powershell })) {
-    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
-    const head = words[0] ?? "";
-    if (CHANGE_DIR.test(head)) {
-      const to = /^pop/i.test(head) ? void 0 : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
-      dir = nested || to === void 0 || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
-      continue;
-    }
-    if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
-    words.forEach((w, k) => {
-      const eq = /^--out=(.+)$/.exec(w);
-      const target = w === "--out" ? words[k + 1] : eq?.[1];
-      if (target) out.push(dir === null ? target : under(dir, target));
-    });
-  }
-  return out;
-}
-function sameFile2(w, rel, cwd) {
-  const c = w.path.trim().replace(/\\/g, "/");
-  if (!c) return false;
-  const want = path17.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path17.posix.normalize(c).toLowerCase().endsWith("/" + path17.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path17.resolve(w.base || cwd, c).replace(/\\/g, "/");
-  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
-}
-function ownPlans(open, input, all, cwd) {
-  const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
-  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
-  let scan;
-  try {
-    scan = scanTranscript(file, !agent);
-  } catch {
-    return { plans: open, scope: "unscoped" };
-  }
-  const writes = scan.writes;
-  const listers = /* @__PURE__ */ new Map();
-  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
-  const owns = (p) => {
-    const planRel = path17.relative(cwd, path17.resolve(p.file));
-    if (writes.some((w) => sameFile2(w, planRel, cwd))) return true;
-    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile2(w, f, cwd)));
-  };
-  const known = all && all.length ? all : open;
-  if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
-  return { plans: open.filter(owns), scope: "named", scan };
-}
-function ownBadPlans(bad, scan, cwd) {
-  if (!scan) return [];
-  return bad.filter((b) => {
-    const rel = path17.relative(cwd, path17.resolve(b.file));
-    return scan.writes.some((w) => sameFile2(w, rel, cwd)) && !closedStatusOf(b);
-  });
-}
-function closedStatusOf(b) {
-  const life = lifecycleOf(readJsonOrNull(b.file, anyJson));
-  return life === "pending" ? null : life;
 }
 var USAGE = [
   `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
@@ -4182,13 +4178,13 @@ var USAGE = [
 function checkAndRecord(p, cwd, graph, locate) {
   const exp = locateExport(p.plan, p.file, cwd, locate);
   const reports = locateReports(p.plan, p.file, cwd, exp, locate);
-  setPhase(`checking ${path17.basename(p.file)}`);
+  setPhase(`checking ${path18.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const cleared = storedComputed(plan);
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path17.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path18.basename(p.file)}`);
   const cached = graph ? graph().cached : void 0;
   const hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -4207,7 +4203,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs18.statSync(p.file);
+        const s = fs19.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -4218,7 +4214,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs18.utimesSync(p.file, was.times[0], was.times[1]);
+        fs19.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
@@ -4226,7 +4222,7 @@ function checkAndRecord(p, cwd, graph, locate) {
     const v = { ...plan.verification };
     delete v.hook;
     recorded = { ...plan, verification: v };
-    warnings.push(`the hook record was not written into ${path17.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
+    warnings.push(`the hook record was not written into ${path18.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file);
   const st = planStatus(cwd, { cached }).status(recorded, { planFile: p.file, export: exp, reports });
@@ -4246,10 +4242,10 @@ async function main(argv) {
   const statusMode = !!flags.status, json2 = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path17.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path18.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     const show = (f) => {
-      const r = path17.relative(process.cwd(), f);
+      const r = path18.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
     for (const b of bad) {
@@ -4270,10 +4266,10 @@ async function main(argv) {
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read2 = planArgs.map((f) => readPlan(path17.resolve(f)));
+    const read2 = planArgs.map((f) => readPlan(path18.resolve(f)));
     const bad = read2.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path17.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path18.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read2.filter(isPlanFile);
@@ -4303,7 +4299,7 @@ async function main(argv) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path17.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path18.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -4315,25 +4311,23 @@ async function main(argv) {
     hookCwd = cwd;
     hookPlans = plans;
     const open = plans.filter((p) => isOpen(p, cwd));
-    if (!open.length && !bad.length) return 0;
-    const own = ownPlans(open, input, plans, cwd);
-    const badOwn = ownBadPlans(bad, own.scan, cwd);
+    const claim2 = sessionClaim({ payload: input, cwd, open, all: plans, bad });
+    const unreadable = claim2.kind === "claimed" ? claim2.unreadable : [];
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path17.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
-    for (const b of badOwn) {
-      const rel = path17.relative(cwd, b.file);
-      blockedOut.push(`# ${path17.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
+    for (const b of bad) if (!unreadable.includes(b)) say(`verify-build: warning: ${path18.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of unreadable) {
+      const rel = path18.relative(cwd, b.file);
+      blockedOut.push(`# ${path18.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
-    if (!open.length && !badOwn.length) return 0;
-    if (own.scope === "none-named" && !badOwn.length) {
+    if (claim2.kind === "none") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
-      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type) && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
-        const names = open.map((p) => path17.relative(cwd, p.file).replace(/\\/g, "/"));
-        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
+      if (claim2.sendBack) {
+        const names = open.map((p) => path18.relative(cwd, p.file).replace(/\\/g, "/"));
+        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${String(input.agent_type)}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
     }
-    for (const p of own.plans) all.push({ p, cwd });
+    for (const p of claim2.plans) all.push({ p, cwd });
   }
   const lines = [];
   const warned = /* @__PURE__ */ new Map();
@@ -4341,7 +4335,7 @@ async function main(argv) {
   const locate = locateCache();
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => planGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)), locate);
-    const name = path17.basename(p.file);
+    const name = path18.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) {
@@ -4379,16 +4373,11 @@ export {
   checkPlan,
   deviationConflicts,
   deviationWarnings,
-  forEachLine,
   isStale2 as isStale,
   legacySetWarnings,
   main,
-  mayHoldToolUse,
-  ownPlans,
-  planSkeletonOuts,
   recordedReportWarnings,
   recordedShadowWarnings,
-  transcriptActions,
   validatePlanHeader,
   verificationContradictions,
   verificationWarnings
