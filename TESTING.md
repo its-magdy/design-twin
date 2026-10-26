@@ -79,7 +79,10 @@ bun test/plan-skeleton.test.ts        # expect: all checks pass, exit 0 — the 
                                        # from the export (tokens, visible instances, anchors, hidden roots, --out merge,
                                        # --seed-from) and the visibility rule verify-build.js walks with
 bun test/ui.test.ts                   # expect: all checks pass, exit 0 — the plugin window's script against a fake
-                                       # DOM + WebSocket: connection states, theming, the ids/ports it depends on
+                                       # DOM + WebSocket: connection states, theming, the ids/ports it depends on,
+                                       # the relay wired in, and that the committed ui.html is what its sources build to
+bun test/plugin-relay.test.ts         # expect: all checks pass, exit 0 — the plugin's half of the bridge protocol
+                                       # (figma-plugin/src/relay.ts), each translation main thread <-> socket on its own
 bun test/cross-check.test.ts          # expect: all checks pass, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,

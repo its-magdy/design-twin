@@ -76,8 +76,8 @@ try {
     fs.mkdirSync(dir);
     const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, {
       exportNode: (_a, ctx) => {
-        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
-        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
+        ctx.progress({ phase: "queued" });
+        ctx.progress({ phase: "queued" });
         ctx.progress({ phase: "start" });
         return nodeReply();
       },
@@ -109,7 +109,7 @@ try {
     };
     const plugin = dialPlugin({ instanceId: "fig-a", file: "Sample App", fileKey: "KEYA" }, {
       exportNode: async (_a, ctx) => {
-        ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" });
+        ctx.progress({ phase: "queued" });
         await sleep(60);
         ctx.progress({ phase: "start" });
         ctx.progress({ phase: "page", page: { index: 1, of: 1, name: "Private Page Name" }, nodes: 3 });
@@ -217,7 +217,7 @@ try {
       let up = false;
       for (let i = 0; i < 60 && !up; i++) { await sleep(250); up = /"pid"/.test((await dtwin(dir, ["status"])).stdout); }
       check("the daemon came up on 8789", up);
-      const a = dialPlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA"), exportNode: (_a, ctx) => { ctx.progress({ phase: "queued", source: "bridge", label: "exportNode" }); return nodeReply(); } });
+      const a = dialPlugin({ instanceId: "fig-a", file: "App Alpha", fileKey: "KEYA" }, { whoami: () => whoamiReply("fig-a", "App Alpha", "KEYA"), exportNode: (_a, ctx) => { ctx.progress({ phase: "queued" }); return nodeReply(); } });
       await a.opened;
       const b = dialPlugin({ instanceId: "fig-b", file: "App Bravo", fileKey: "KEYB" }, { whoami: () => whoamiReply("fig-b", "App Bravo", "KEYB") });
       await b.opened;

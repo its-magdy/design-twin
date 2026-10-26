@@ -41,7 +41,7 @@ export const NAMED_CLIENT_WAIT_MS = 15000;
 // fire at once — or, re-armed, spin. Every wait or guard built from a caller's number stays within it.
 export const MAX_TIMER_MS = 2147483647;
 
-// How often an open plugin window redials a bridge it has lost or not found yet: figma-plugin ui.html
+// How often an open plugin window redials a bridge it has lost or not found yet: figma-plugin ui.template.html
 // REDIAL_MS (scheduleReconnect's `ms || REDIAL_MS`; test/ui.test.ts pins the two together), one port of
 // the three per attempt (connect() walks BRIDGE_PORTS on every failed dial), so a window that keeps
 // missing comes back to the same port every 3 s.
