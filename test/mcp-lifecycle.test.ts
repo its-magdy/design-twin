@@ -1,5 +1,6 @@
-// The MCP server's lifecycle (stdin EOF, signals) and the MCP half of the outDir pre-check
-// and the .prev kept on a full spill.
+// The MCP server as a real process: two smoke tests of its lifecycle (stdin EOF with an export in flight; stdout gone while
+// serving another process, then SIGTERM — the rules are test/client-presence.test.ts's and test/bridge-holder.test.ts's,
+// in process), the serve() handle over a real socket, and the MCP half of the outDir pre-check and the .prev kept on a full spill.
 //   bun test/mcp-lifecycle.test.ts
 // Boots the REAL bridge/src/figma-mcp.ts as a subprocess and speaks MCP's stdio JSON-RPC to it by hand
 // (an SDK client cannot destroy its own stdout pipe or end stdin without the SIGTERM that follows), with
@@ -25,6 +26,8 @@ import { startMcp } from "./children.ts";
 import { fakePlugin as dialPlugin, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { ok, report } from "./assert.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { thisHost } from "../bridge/src/settings.ts";
+import { addressAt } from "./bridge-settings.ts";
 import { fakeClock } from "./fake-clock.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Cmd, Commands, FullExportReply, ScreenReply } from "../bridge/src/commands.ts";
@@ -72,6 +75,7 @@ function sockReq(sock: string, frame: object, ms = 3000): Promise<Record<string,
     });
   });
 }
+
 /** A raw socket that sends one frame and stays open (a forwarded request in flight). */
 function openRaw(sock: string, frame: object): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -124,7 +128,7 @@ function startServer(opts: { env?: Record<string, string>; tmp?: string; cwd?: s
   p.stdout?.on("error", () => { /* destroyed on purpose */ });
   const s: Server = {
     p, dir, cwd,
-    sock: daemon.sockPath(8789, { env: {}, tmpdir: tmp, token }),
+    sock: daemon.sockPath(daemon.daemonAddress({ ...thisHost(), port: 8789, token, tmpdir: tmp })),
     token,
     err: m.stderr,
     exit: m.exit,
@@ -247,7 +251,7 @@ void (async () => {
     await daemonSection("idle shutdown on a quiet socket", async () => {
       const f = fakeBridge();
       const clock = fakeClock();
-      const h = await daemon.serve(f.b, { port: 19793, idleMs: 0, signals: false, crashHandlers: false, clock });
+      const h = await daemon.serve(f.b, addressAt(19793), { idleMs: 0, signals: false, crashHandlers: false, clock });
       const before = h.activity().frames;
       const alive = await daemon.probe(h.sock);
       ok("activity().frames is 0 before anything used the socket, 1 after one probe, nothing in flight", before === 0 && alive && h.activity().frames === 1 && h.activity().inFlight === 0);
@@ -265,54 +269,12 @@ void (async () => {
 
     // ============================================================ the MCP server after its client goes away
     console.log("\nfigma-mcp — after the MCP client goes away:");
-    await section("stdin EOF, owner, socket never used", async () => {
-      // owner, socket never used → exits at once.
-      const s = startServer();
-      if (await up(s)) {
-        const t0 = Date.now();
-        s.p.stdin?.end();
-        await until(() => s.exit() !== null, 5000);
-        const e = s.exit();
-        ok(`owner, shared socket never used → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
-        // A pipe (Windows) has no file to be gone: there the log alone says it.
-        ok("…the socket file is gone, and the log says why",
-          (process.platform === "win32" || !fs.existsSync(s.sock)) && /no other dtwin command or session used the shared bridge/.test(s.err()));
-      } else ok("server came up", false);
-    });
-    await daemonSection("stdin EOF, socket used by another process", async () => {
-      // owner, another process used the socket, FIGMA_DAEMON_IDLE_MIN=1 → keeps serving.
-      const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "1" } });
-      if (await up(s)) {
-        const st0 = await sockReq(s.sock, { cmd: "__status" });
-        ok("while the client is here, the served socket has no idle window (idleMs null)", rec(st0?.result).idleMs === null);
-        s.p.stdin?.end();
-        await sleep(2000);
-        ok("socket used by another process → stdin EOF → still alive at +2 s", s.exit() === null);
-        const st = rec((await sockReq(s.sock, { cmd: "__status" }))?.result);
-        ok(`…__status answers with idleMs 60000 (FIGMA_DAEMON_IDLE_MIN=1) (got ${String(st.idleMs)})`, st.idleMs === 60000);
-        ok("…and stderr says it is still serving, and for how long", /still serving it, shutting down after 1 min without one \(FIGMA_DAEMON_IDLE_MIN\)/.test(s.err()));
-        const t0 = Date.now();
-        await sockReq(s.sock, { cmd: "__shutdown" });
-        await until(() => s.exit() !== null, 5000);
-        const e = s.exit();
-        ok(`…then __shutdown (dtwin stop) → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0 && !fs.existsSync(s.sock));
-      } else ok("server came up", false);
-    });
-    await daemonSection("stdin EOF, short idle window idles out", async () => {
-      // as above, a 1.2 s window → idles out on its own.
-      const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "0.02" } });
-      if (await up(s)) {
-        await sockReq(s.sock, { cmd: "__ping" });
-        const t0 = Date.now();
-        s.p.stdin?.end();
-        await until(() => s.exit() !== null, 6000);
-        const e = s.exit();
-        ok(`FIGMA_DAEMON_IDLE_MIN=0.02 (1.2 s) → idles out and exits 0 within 6 s of stdin EOF (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
-        ok("…the socket file is gone, and the log names the idle shutdown", !fs.existsSync(s.sock) && /idle for 1s — shutting down/.test(s.err()));
-      } else ok("server came up", false);
-    });
+    // Two smoke tests of the real process. Which event decides that the client has gone, the abort every call carries
+    // and the exit timing are test/client-presence.test.ts's (in process, fake streams and signals); whether the process
+    // then exits or serves other sessions on and idles out is test/bridge-holder.test.ts's (clientLeft). What only the
+    // process shows is the wiring: the transport's stdin ending reaches the holder, the plugin gets its cancel frame,
+    // and the process exits 0 with the socket gone.
     await section("stdin EOF with an export in flight", async () => {
-      // an MCP export in flight when stdin ends → the plugin gets its cancel frame before the exit.
       const s = startServer();
       if (await up(s) && await initialize(s)) {
         const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
@@ -320,160 +282,59 @@ void (async () => {
         void s.call("figma_export_url", { url: "9:1" });
         await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
         const sent = cmdFrames(pl, "exportNode")[0]?.id;
+        const t0 = Date.now();
         s.p.stdin?.end();
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
         const cancel = cancelFor(pl, sent);
-        ok("an export in flight when stdin ends → exit code 0", !!e && e.code === 0);
+        ok(`an export in flight when stdin ends → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
         ok("…and the plugin received {type:\"cancel\", id} for it BEFORE the process exited",
           typeof sent === "string" && !!cancel && !!e && cancel.at <= e.at);
+        // A pipe (Windows) has no file to be gone: there the log alone says it.
+        ok("…the socket file is gone, and the log says why",
+          (process.platform === "win32" || !fs.existsSync(s.sock)) && /the MCP client went away \(stdin closed\) and no other dtwin command or session used the shared bridge/.test(s.err()));
         pl.close();
       } else ok("server came up", false);
     });
-    await daemonSection("SIGTERM while serving another process", async () => {
-      // SIGTERM while owning and serving others — another process's export in flight on the
-      // shared socket → exit 0, socket file gone, and the plugin is told to stop THAT export (only the
-      // daemon's shutdown sends this one: the request is not this server's own call).
+    // The other half only the process shows (POSIX: on Windows child.kill ends the process outright, and the raw socket
+    // frames are POSIX's): Bun reports a write to a closed stdout as an 'error' event, which the presence catches — the
+    // process serving another session survives it — and SIGTERM runs the handler instead of the default death: exit 0,
+    // a cancel frame for the other process's forwarded export before it, the socket file gone.
+    await daemonSection("stdout gone while serving another process, then SIGTERM", async () => {
       const s = startServer();
-      if (await up(s)) {
+      if (await up(s) && await initialize(s)) {
         const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
         pl.hang = true;
-        const other = await openRaw(s.sock, { cmd: "exportNode", args: { nodeId: "9:1" }, timeoutMs: 20000 });
+        // Another process's export, forwarded through the shared socket and left in flight: the socket is in use.
+        const other = await openRaw(s.sock, { cmd: "exportNode", args: { nodeId: "9:2" }, timeoutMs: 20000 });
         other.on("error", () => { /* the server went away */ });
-        await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.id;
-        s.p.kill("SIGTERM");
-        await until(() => s.exit() !== null, 5000);
-        const e = s.exit();
-        const cancel = cancelFor(pl, sent);
-        ok(`SIGTERM while owning → exit code 0, not a signal death (got code ${String(e?.code)}, signal ${String(e?.signal)})`, !!e && e.code === 0 && e.signal === null);
-        ok("…the socket file is gone, and the log names the signal", !fs.existsSync(s.sock) && /SIGTERM — closing the bridge and exiting/.test(s.err()));
-        ok("…and the plugin received the cancel frame for the OTHER process's forwarded export before the exit",
-          typeof sent === "string" && !!cancel && !!e && cancel.at <= e.at);
-        other.destroy();
-        pl.close();
-      } else ok("server came up", false);
-    });
-    // Windows: child.kill("SIGINT" | "SIGTERM") ends the process outright (Node: "the process will always be
-    // killed forcefully and abruptly"), so no handler of its own runs to be checked.
-    if (process.platform === "win32") console.log("  (skipped: SIGINT then SIGTERM stop sequence — on Windows a signal sent with child.kill terminates the process outright, so its handler cannot run)");
-    else await section("SIGINT then SIGTERM stop sequence", async () => {
-      // Claude Code's stop sequence: SIGINT, SIGTERM 100 ms later — with a read in flight.
-      const s = startServer();
-      if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
-        pl.hang = true;
-        void s.call("figma_export_url", { url: "9:1" });
-        await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const sent = cmdFrames(pl, "exportNode")[0]?.id;
-        const t0 = Date.now();
-        s.p.kill("SIGINT");
-        await sleep(100);
-        if (s.exit() === null) s.p.kill("SIGTERM");
-        await until(() => s.exit() !== null, 3000);
-        const e = s.exit();
-        const cancel = cancelFor(pl, sent);
-        // The child exits on its own ~150 ms timer; < 2000 ms proves that timer (not leave()'s 3 s backstop)
-        // ended it without being a load-sensitive bound — "once" and "cancel first" are checked below.
-        ok(`SIGINT then SIGTERM 100 ms apart → exit code 0 on the signal handler's own timer, not the 3 s backstop (${e ? e.at - t0 : "-"} ms)`,
-          !!e && e.code === 0 && e.signal === null && e.at - t0 < 2000);
-        ok("…the handler ran once (one shutdown line, none for the second signal)",
-          (s.err().match(/— closing the bridge and exiting/g) ?? []).length === 1 && /SIGINT — closing the bridge/.test(s.err()));
-        ok("…and the plugin received the cancel frame for the read in flight before the exit",
-          typeof sent === "string" && !!cancel && !!e && cancel.at <= e.at);
-        ok("…socket file gone", !fs.existsSync(s.sock));
-        pl.close();
-      } else ok("server came up", false);
-    });
-    await daemonSection("stdin EOF, routed through a daemon", async () => {
-      // routed through a daemon (not holding the bridge) → exits at once (the via path).
-      const f = fakeBridge();
-      const fake = await daemon.serve(f.b, { port: 8789, idleMs: 0, signals: false, crashHandlers: false }); // a socket name only
-      const s = startServer({ tmp: OWN_TMP });
-      if (await up(s, false)) {
-        ok("fixture: the server routes through the test's daemon", /Sharing the bridge already running at/.test(s.err()));
-        const t0 = Date.now();
-        s.p.stdin?.end();
-        await until(() => s.exit() !== null, 5000);
-        const e = s.exit();
-        ok(`routed via a daemon → stdin EOF → exit code 0 within 5 s (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0);
-        ok("…and the daemon it routed through is untouched", f.closes() === 0 && (await daemon.probe(fake.sock)));
-      } else ok("server came up", false);
-      fake.shutdown();
-    });
-    await daemonSection("stdout gone, then stdin EOF", async () => {
-      // the parent is gone for real: its stdout read end destroyed, then stdin ended, with an
-      // export in flight. The aborted call's result goes to a dead pipe (EPIPE) — the orphan serving
-      // others must survive it.
-      const s = startServer();
-      if (await up(s) && await initialize(s)) {
-        const pl = await fakePlugin(s.wsPort() ?? 0, s.token);
-        pl.hang = true;
-        await sockReq(s.sock, { cmd: "__status" }); // another process uses the shared bridge
-        // With a progressToken, so every plugin tick becomes a notifications/progress write to stdout.
+        // This session's own export, with a progressToken: every plugin tick becomes a notifications/progress write.
         void s.rpc("tools/call", { name: "figma_export_url", arguments: { url: "9:1" }, _meta: { progressToken: "life-7" } });
-        await until(() => cmdFrames(pl, "exportNode").length > 0, 5000);
-        const reqId = cmdFrames(pl, "exportNode")[0]?.id;
+        await until(() => cmdFrames(pl, "exportNode").length >= 2, 5000);
+        const frames = cmdFrames(pl, "exportNode");
+        const forwarded = frames.find((f) => JSON.stringify(f.args).includes("9:2"))?.id;
+        const own = frames.find((f) => JSON.stringify(f.args).includes("9:1"))?.id;
+        // The client is killed: its read end of our stdout closes, and the ticks reach stdout before stdin's end.
         s.p.stdout?.destroy();
-        // the client is killed — both pipes break, but the plugin's progress ticks reach stdout BEFORE
-        // stdin's end is seen. The first such write hits EPIPE; with no stdout 'error' listener yet, that
-        // would be an uncaught exception that kills the orphan.
         let n = 0;
-        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.fake.progress({ ...(reqId !== undefined ? { requestId: reqId } : {}), phase: "walk", nodes: ++n }); } catch { /* gone */ } } }, 5);
+        const ticks = setInterval(() => { for (let k = 0; k < 5; k++) { try { pl.fake.progress({ ...(own !== undefined ? { requestId: own } : {}), phase: "walk", nodes: ++n }); } catch { /* gone */ } } }, 5);
         await until(() => s.exit() !== null || /went away \(stdout closed\)/.test(s.err()), 3000);
         await sleep(100);
         clearInterval(ticks);
-        ok(`progress ticks after stdout is gone (stdin still open; ${n} sent) → alive, and the closed stdout counts as the client going away`,
-          s.exit() === null && /the MCP client went away \(stdout closed\); other dtwin commands\/sessions use this shared bridge/.test(s.err()));
-        s.p.stdin?.end();
-        await sleep(2000);
-        ok("stdout gone + stdin EOF with an export in flight → still alive at +2 s", s.exit() === null);
-        ok("…no EPIPE / uncaught exception on stderr", !/EPIPE|uncaught exception/i.test(s.err()));
-        const st = await sockReq(s.sock, { cmd: "__status" });
-        ok("…and __status still answers on the shared socket", st !== null && st.ok === true && rec(st.result).daemon === true);
-        await sockReq(s.sock, { cmd: "__shutdown" });
-        await until(() => s.exit() !== null, 5000);
-        ok("…and dtwin stop then ends it (exit 0)", s.exit()?.code === 0);
-        pl.close();
-      } else ok("server came up", false);
-    });
-    await daemonSection("stdin EOF after a quiet socket", async () => {
-      // used, but quiet for longer than the window when the client goes → exits at once and says
-      // so; it never logs "still serving" first.
-      const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: "0.01" } }); // 600 ms
-      if (await up(s)) {
-        await sockReq(s.sock, { cmd: "__ping" });
-        await sleep(900);
-        const t0 = Date.now();
-        s.p.stdin?.end();
+        ok(`progress ticks after stdout is gone (${n} sent) → alive, the closed stdout is the client going away, and no EPIPE / uncaught exception`,
+          s.exit() === null && /the MCP client went away \(stdout closed\); other dtwin commands\/sessions use this shared bridge/.test(s.err()) &&
+          !/EPIPE|uncaught exception/i.test(s.err()));
+        s.p.kill("SIGTERM");
         await until(() => s.exit() !== null, 5000);
         const e = s.exit();
-        ok(`socket used, then quiet past the window (0.6 s) → stdin EOF → exit 0 at once (${e ? e.at - t0 : "-"} ms)`, !!e && e.code === 0 && e.at - t0 < 3000);
-        ok("…the log says why (none in the last 1s), and never says \"still serving\"",
-          /used this shared bridge \(1 request\(s\)\), but none in the last 1s \(FIGMA_DAEMON_IDLE_MIN\) — closing it and exiting/.test(s.err()) && !/still serving/.test(s.err()));
+        const cancel = cancelFor(pl, forwarded);
+        ok(`…then SIGTERM → exit code 0, not a signal death (got code ${String(e?.code)}, signal ${String(e?.signal)})`, !!e && e.code === 0 && e.signal === null);
+        ok("…the plugin received the cancel frame for the OTHER process's forwarded export before the exit",
+          typeof forwarded === "string" && !!cancel && !!e && cancel.at <= e.at);
+        ok("…the socket file is gone, and the log names the signal", !fs.existsSync(s.sock) && /SIGTERM — closing the bridge and exiting/.test(s.err()));
+        other.destroy();
+        pl.close();
       } else ok("server came up", false);
-    });
-    await daemonSection("idle window off or unparsable", async () => {
-      // the idle window is off: FIGMA_DAEMON_IDLE_MIN=0 is named as such; an unparsable value is
-      // quoted as what it is, not reported as "=0".
-      const runs = await Promise.all(["0", "soon"].map(async (v) => {
-        const s = startServer({ env: { FIGMA_DAEMON_IDLE_MIN: v } });
-        if (!(await up(s))) return { v, s, ok: false };
-        await sockReq(s.sock, { cmd: "__ping" });
-        s.p.stdin?.end();
-        await until(() => /still serving it/.test(s.err()) || s.exit() !== null, 5000);
-        await sockReq(s.sock, { cmd: "__shutdown" });
-        await until(() => s.exit() !== null, 5000);
-        return { v, s, ok: true };
-      }));
-      const [zero, soon] = runs;
-      ok("servers came up", !!zero && !!soon && zero.ok && soon.ok);
-      if (zero && soon) {
-        ok("FIGMA_DAEMON_IDLE_MIN=0 → \"never shuts down on its own (FIGMA_DAEMON_IDLE_MIN=0)\"",
-          /never shuts down on its own \(FIGMA_DAEMON_IDLE_MIN=0\)/.test(zero.s.err()));
-        ok("FIGMA_DAEMON_IDLE_MIN=soon → the raw value is quoted as not a number of minutes (not \"=0\")",
-          /never shuts down on its own \(FIGMA_DAEMON_IDLE_MIN="soon" is not a number of minutes above 0/.test(soon.s.err()) && !/FIGMA_DAEMON_IDLE_MIN=0\)/.test(soon.s.err()));
-      }
     });
     await section("empty outDir with FIGMA_EXPORT_DIR outside the project", async () => {
       // `outDir: ""` is not a named outDir: with FIGMA_EXPORT_DIR outside the project, an inline-sized
