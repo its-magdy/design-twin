@@ -137,7 +137,8 @@ for (const [command, want, tool] of [
   ["node plan-skeleton.js s.json v.json ds --out design/plan/a.json --seed-from design/plan/b.json", claims("design/plan/a.json")],
   ['node "C:\\p\\scripts\\plan-skeleton.js" s v ds --out="design\\plan\\a.json"', claims("design/plan/a.json")],
   ["cd app/ && cd design; node plan-skeleton.mjs s v ds --out plan/a.json", claims("app/design/plan/a.json")],
-  ["cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json", claims("/x/plan/a.json", "b.json")],
+  // (a drive-less absolute dir is resolved against the current drive on Windows, so the plan placed there is another drive's)
+  ...(process.platform === "win32" ? [] : [["cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json", claims("/x/plan/a.json", "b.json")]]),
   // a cd inside a subshell or a substitution does not move the commands after it: on such a line a cd only makes the dir unknown
   ["(cd sub && make); node plan-skeleton.js s v ds --out design/plan/a.json", claims("design/plan/a.json")],
   ["x=$(cd sub && pwd); node plan-skeleton.js s v ds --out design/plan/a.json", claims("design/plan/a.json")],
