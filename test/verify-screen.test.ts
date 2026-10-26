@@ -15,10 +15,9 @@ import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare, tokenFor } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { normColor, normWeight, normFamily, lineHeightPx, fontWeightOf, FIELDS } from "../design-to-code/verify-shared.ts";
-import { planCodeFiles } from "../design-to-code/content-hash.ts";
 import { audit } from "../design-to-code/audit.ts";
 import type { ExpectInput } from "../design-to-code/verify-expect.ts";
-import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured, VerifyReport } from "../design-to-code/types.ts";
+import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured } from "../design-to-code/types.ts";
 import { malformed, must, readFixture, screenExport } from "./fixtures.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { NodeInput } from "./fixtures.ts";
@@ -1067,29 +1066,19 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   put("design/plan/Orders__1_1.json", planA);
   put("design/plan/Orders.json", { nodeId: "1:1", files: ["src/Orders.tsx"] });
   const amb = run("--compare", exp, meas, "--record-plan");
-  okOuter("two plans of the frame's node, no --plan → exit 2 naming both, NO report written",
-    amb.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Orders\.json, design\/plan\/Orders__1_1\.json\) — one node, one plan: keep one, or pass --plan/m.test(amb.stderr) && !fs.existsSync(report));
+  okOuter("two plans of the frame's node, no --plan → exit 2, NO report written", amb.status === 2 && !fs.existsSync(report));
   okOuter("--record-plan outside --compare → exit 2", run("--expect", "x.json", "--record-plan").status === 2);
   fs.rmSync(path.join(cwd, "design/plan/Orders.json"));
   const rec = run("--compare", exp, meas, "--record-plan");
-  const rep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
-  // recordPlan: until it lands the step-0 stub throws — the report is still written and the error is named
-  okOuter("the one plan: report written, then recordPlan is called (recorded, or the stub's error with exit 1)",
-    !!rep && (/recorded design\/verify\/Orders__1_1\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
+  // which plan, its code hashes and its input notes: compare-run.test.ts
+  okOuter("the one plan: report written, then recorded in the plan (or the record's error with exit 1)",
+    fs.existsSync(report) && (/recorded design\/verify\/Orders__1_1\.report\.json in design\/plan\/Orders__1_1\.json/.test(rec.stderr)
       || (rec.status === 1 && /error {2}--record-plan: .* — design\/verify\/Orders__1_1\.report\.json is written; design\/plan\/Orders__1_1\.json was not updated/.test(rec.stderr))));
-  okOuter("[shared-shell] the report hashes planCodeFiles(plan) (files[] + mapped modules)",
-    !!rep && JSON.stringify(Object.keys(rep.inputs?.code?.files ?? {})) === JSON.stringify(planCodeFiles(planA)));
-  okOuter("a plan whose mapModules are all project files → no 'not hashed' input note", !!rep && !(rep.probe?.inputNotes || []).some((n) => /mapModule path\(s\) not hashed/.test(n)));
-  // an alias / package mapModule is named once in the report's input notes (beside the code hashes)
-  put("design/plan/Orders__1_1.json", { ...planA, anchors: { "1:2": { mapModule: "@/components/Shell" } }, components: [{ name: "Badge", mapModule: "@acme/ui" }] });
-  run("--compare", exp, meas);
-  const rep2 = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
-  const hits = (rep2?.probe?.inputNotes || []).filter((n) => /^design\/plan\/Orders__1_1\.json: mapModule path\(s\) not hashed with this plan's code: @\/components\/Shell, @acme\/ui — /.test(n));
-  okOuter(`an alias/package mapModule → ONE input note in the report naming them (got ${hits.length})`, hits.length === 1);
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
 // ---------- [plans] a frame's plans are found by its node id only; several are a data error ----------
+// (which plan --compare uses, its code hashes and notes: compare-run.test.ts; here the exit codes, and --accept)
 (() => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-plans-"));
   const run = (...a: string[]) => verifyScreen([...a], { cwd });
@@ -1099,30 +1088,17 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const expSha = crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, exp))).digest("hex");
   const meas = put("design/verify/Bins__1_1.measured.json", measured([{ nodeId: "2:1", styles: { fontSize: 20, fontFamily: "Inter", text: "Bins" } }], { expectationSha256: expSha }));
   const report = path.join(cwd, "design/verify/Bins__1_1.report.json");
-  const repOf = (): VerifyReport | null => (fs.existsSync(report) ? readFixture(report, isVerifyReport) : null);
-  const codeOf = (): string => { const c = repOf()?.inputs?.code; return c ? `${c.plan} ${Object.keys(c.files).join(",")}` : "none"; };
   put("src/A.tsx", "export {}\n");
   put("src/B.tsx", "export {}\n");
-  // a plan whose nodeId names another node (its name carries this frame's id: nodeId wins), and a plan that names no node
-  put("design/plan/Bins__1_1.json", { nodeId: "9:9", files: ["src/A.tsx"] });
-  put("design/plan/Bins.json", { screen: "Bins__1_1", files: ["src/A.tsx"] });
-  const none = run("--compare", exp, meas);
-  okOuter(`[plans] a plan's nodeId wins over the id its name carries; a plan named for the frame's set but with no node id describes it not — the note names it (add "nodeId") (got ${codeOf()}: ${none.stderr.split("\n").filter((l) => /plan/.test(l)).join(" | ")})`,
-    codeOf() === "none" && /^note {2}no plan in design\/plan\/ describes this frame \(design\/plan\/Bins\.json names no node — add "nodeId"\)/m.test(none.stderr));
   // two plans of node 1:1: one by its nodeId, one by the id its name carries
-  fs.rmSync(path.join(cwd, "design/plan/Bins.json"));
   put("design/plan/Bins__1_1.json", { files: ["src/A.tsx"] });
   put("design/plan/Crates_bins.json", { nodeId: "1:1", files: ["src/B.tsx"] });
-  fs.rmSync(report);
   const two = run("--compare", exp, meas);
-  okOuter(`[plans] two plans of the node at --compare → exit 2 naming both, no report written (got ${two.status}: ${two.stderr.trim()})`,
-    two.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\) — one node, one plan: keep one, or pass --plan/m.test(two.stderr) && !fs.existsSync(report));
+  okOuter(`[plans] two plans of the node at --compare → exit 2, no report written (got ${two.status})`, two.status === 2 && !fs.existsSync(report));
   const flag = run("--compare", exp, meas, "--plan", "design/plan/Crates_bins.json");
-  okOuter(`[plans] --plan wins over them: the report is written with that plan's code hashes, and a note names the other (got ${codeOf()})`,
-    (flag.status === 0 || flag.status === 1) && codeOf() === "design/plan/Crates_bins.json src/B.tsx"
-    && /^note {2}using design\/plan\/Crates_bins\.json \(--plan\); design\/plan\/ also describes node 1:1 in design\/plan\/Bins__1_1\.json$/m.test(flag.stderr));
+  okOuter(`[plans] --plan wins over them: the report is written (got ${flag.status})`, (flag.status === 0 || flag.status === 1) && fs.existsSync(report));
   // --accept with no --plan and no plan recorded in the report: the two plans of its node are a data error too
-  const rep = repOf();
+  const rep = fs.existsSync(report) ? readFixture(report, isVerifyReport) : null;
   if (rep) { const { inputs, ...rest } = rep; fs.writeFileSync(report, JSON.stringify({ ...rest, inputs: { exportContentSha256: inputs?.exportContentSha256 } }, null, 2)); }
   const acc = run("--accept", "design/verify/Bins__1_1.report.json", "--node", "2:1", "--field", "font-size", "--reason", "kept", "--by", "owner");
   okOuter(`[plans] --accept: two plans of the report's node → exit 2 naming both (got ${acc.status}: ${acc.stderr.trim()})`,
@@ -1138,29 +1114,17 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   okOuter(`[plans] --accept on a set whose expectation and report name different nodes → refused, no plan written (got ${clash.status}: ${clash.stderr.trim()})`,
     clash.status === 1 && /the set Bins__1_1 names no node/.test(clash.stderr) && fs.readFileSync(path.join(cwd, "design/plan/Bins__1_1.json"), "utf8") === planBefore);
   put("design/plan/Crates_bins.json", { nodeId: "1:1", files: ["src/B.tsx"] });
-  // the plan --expect merged interactions from (outside design/plan/) is used at --compare: the code hashes are ITS files
+  // the plan --expect merged interactions from wins at --compare over two plans of the node; gone, the two are refused
   const mine = { nodeId: "1:1", interactions: [], files: ["src/A.tsx"] };
   put("scratch/mine.json", mine);
   put(exp, buildExpectation(docs, { plan: { file: "scratch/mine.json", plan: mine } }));
   put(meas, measured([{ nodeId: "2:1", styles: { fontSize: 20, fontFamily: "Inter", text: "Bins" } }], { expectationSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, exp))).digest("hex") }));
   const rec = run("--compare", exp, meas);
-  okOuter(`[plans] the recorded plan wins at --compare over two plans of the node (a note), and the code hashes come from it (got ${rec.status}, ${codeOf()})`,
-    (rec.status === 0 || rec.status === 1) && codeOf() === "scratch/mine.json src/A.tsx" && /note {2}using scratch\/mine\.json \(the plan --expect merged interactions from\); 2 plans in design\/plan\/ describe this frame now/.test(rec.stderr));
-  const recRep = repOf();
-  okOuter("[plans] …its waivers bind (report.inputs.waivers names it) and the note is a report input note",
-    recRep?.inputs?.waivers?.plan === "scratch/mine.json" && (recRep.probe?.inputNotes ?? []).some((n) => n.startsWith("using scratch/mine.json (the plan --expect merged interactions from)")));
-  // the recorded plan gone, two plans of the node and no --plan: a data error before anything is compared or written
+  okOuter(`[plans] the recorded plan wins over two plans of the node → compared (got ${rec.status})`, rec.status === 0 || rec.status === 1);
   fs.rmSync(path.join(cwd, "scratch/mine.json"));
   const repBefore = fs.readFileSync(report, "utf8");
   const goneTwo = run("--compare", exp, meas);
-  okOuter(`[plans] the recorded plan gone + two plans of the node → exit 2 naming both, the report untouched (got ${goneTwo.status}: ${goneTwo.stderr.trim()})`,
-    goneTwo.status === 2 && /^error {2}node 1:1 has 2 plans \(design\/plan\/Bins__1_1\.json, design\/plan\/Crates_bins\.json\)/m.test(goneTwo.stderr) && fs.readFileSync(report, "utf8") === repBefore);
-  // an expectation naming two plans (no --expect writes one): refused the same way
-  const expDoc2 = readFixture(path.join(cwd, exp), isVerifyExpectation);
-  put(exp, { ...expDoc2, planPlaceholders: { plan: "scratch/other.json", sha256: "0".repeat(64), nodeIds: [], dropped: [] } });
-  const twoPlans = run("--compare", exp, meas);
-  okOuter(`[plans] an expectation whose interactions and placeholder rows name different plans → exit 2, both named, the report untouched (got ${twoPlans.status}: ${twoPlans.stderr.trim()})`,
-    twoPlans.status === 2 && /names two plans — interactions from scratch\/mine\.json, placeholder rows from scratch\/other\.json/.test(twoPlans.stderr) && fs.readFileSync(report, "utf8") === repBefore);
+  okOuter(`[plans] the recorded plan gone + two plans of the node → exit 2, the report untouched (got ${goneTwo.status})`, goneTwo.status === 2 && fs.readFileSync(report, "utf8") === repBefore);
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
@@ -1178,8 +1142,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // named for the id only (not the expectation's stem), and no nodeId header: only the id in its name ties it to the frame
   put("design/plan/Chip_copy__I5_2_30_7.json", { files: ["src/Chip.tsx"] });
   const r = run("--compare", exp, meas, "--record-plan");
-  okOuter(`the plan whose name carries the instance sublayer's id describes the frame (exit ${r.status}: ${r.stderr.split("\n").filter((l) => /record-plan|plan/.test(l)).slice(0, 2).join(" | ")})`,
-    !/no plan in design\/plan\/ describes this frame/.test(r.stderr) && /design\/plan\/Chip_copy__I5_2_30_7\.json/.test(r.stderr));
+  // (that plan is the one recorded into: compare-run.test.ts) — not the "no plan" exit 2
+  okOuter(`the plan whose name carries the instance sublayer's id describes the frame (exit ${r.status})`, r.status === 0 || r.status === 1);
   fs.rmSync(cwd, { recursive: true, force: true });
 })();
 
