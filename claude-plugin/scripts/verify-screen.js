@@ -2361,12 +2361,16 @@ function readExportIndex(exportRoot) {
     }
   }
   const rootStamp = rootDoc?.exportedAt || void 0;
+  const label = (v) => typeof v === "string" && v ? v : void 0;
+  const rootLabel = rootDoc ? label(rootDoc.file) ?? label(rootDoc.sourceFile) : void 0;
   return {
     root,
     indexed: rootDoc !== null,
     rootProblem: rootProblem && rootProblem.error,
     problems,
     rows,
+    rootExportedAt: rootStamp,
+    rootSourceFile: rootLabel,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)
@@ -2394,14 +2398,16 @@ function readDesignSystemStamp(root) {
   const problems = [];
   const manifestFile = designSystemManifestFile(root);
   const manifest = readDesignSystemManifest(root);
-  if ("doc" in manifest) return { stamp: stampOf2(manifest.doc), problems };
+  if ("doc" in manifest && manifest.doc.exportedAt) return { stamp: stampOf2(manifest.doc), from: manifestFile, problems };
   const mp = problemOf(root, manifestFile, manifest);
   if (mp) problems.push(mp);
   const tokensFile = path13.join(root, DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES.TOKENS);
   const tokens = readJson(tokensFile, isStampedPart);
   const tp = problemOf(root, tokensFile, tokens);
   if (tp) problems.push(tp);
-  return { stamp: "doc" in tokens ? stampOf2(tokens.doc) : null, problems };
+  if ("doc" in tokens && tokens.doc.exportedAt) return { stamp: stampOf2(tokens.doc), from: tokensFile, problems };
+  if ("doc" in manifest) return { stamp: stampOf2(manifest.doc), from: manifestFile, problems };
+  return "doc" in tokens ? { stamp: stampOf2(tokens.doc), from: tokensFile, problems } : { stamp: null, from: null, problems };
 }
 
 // design-to-code/map-util.ts

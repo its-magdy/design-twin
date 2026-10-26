@@ -9,7 +9,7 @@
 //
 // The tell is unambiguous and needs no filename sniffing: a manifest has a `files` pointer map and
 // lacks the payload key the caller needs.
-// Split out from the exiting wrapper so the decision itself is testable without a subprocess.
+// The decision is a value (manifestProblem): a CLI prints it and exits (readSplitFile), an in-process caller gets it back (loadSplitFile).
 import fs from "node:fs";
 import type { DesignSystemManifest } from "./types.ts";
 import { isJsonObject } from "./types.ts";
@@ -33,18 +33,13 @@ function manifestProblem(doc: unknown, givenPath: string, payloadKey: string, wa
   );
 }
 
-function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, wantFile: string): void {
-  const problem = manifestProblem(doc, givenPath, payloadKey, wantFile);
-  if (problem !== null) { console.error(`error  ${problem}`); exitCli(2); }
-}
-
 // The second half of the same "never hand back a confusing failure" job: a raw
 // `fs.readFileSync` on a path the user typed dies with an ENOENT stack trace whose top frame is a
 // line number inside THIS repo, which reads like the tool crashed rather than like the file is
 // simply not there. A `--node`/single-screen pull legitimately produces no `design/design-system/`
 // at all, so "that file does not exist" is a NORMAL outcome of a normal workflow and deserves a
 // sentence, not a stack. `hint` says what to do about it.
-// Returns the parsed JSON as `unknown`: callers narrow (isManifest/assertNotManifest, a type guard)
+// Returns the parsed JSON as `unknown`: callers narrow (isManifest/manifestProblem, a type guard)
 // before reading fields — or use readDocFile, which checks a doc-guards.ts guard as it reads.
 function readJsonFile(file: string, what: string, hint?: string): unknown {
   return readDocFile(file, what, anyJson, hint);
@@ -101,4 +96,4 @@ const NO_DESIGN_SYSTEM_HINT =
   "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
   "       write design/export/design-system/. Run `dtwin pull --design-system` to create it.";
 
-export { assertNotManifest, manifestProblem, isManifest, readJsonFile, readDocFile, loadDocFile, readOptionalDoc, readSplitFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT };
+export { manifestProblem, isManifest, readJsonFile, readDocFile, loadDocFile, readOptionalDoc, readSplitFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT };

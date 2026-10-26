@@ -169,29 +169,32 @@ void (async () => {
       }
     }
 
-    // design_get_component follows design-system.json's files.componentsLocal pointer: a wrong-shaped
-    // manifest is a tool error that says so (not "Cannot read properties of null" / a path.join
-    // TypeError), and a pointer that leaves the server's directory is refused before anything is read.
+    // design_get_component / design_drift_lint read the export's component catalog through export-reader.ts
+    // readComponentCatalog (test/export-reader.test.ts checks pre-split, split, missing pointer and pointer-outside-
+    // the-export). Here only the wiring: the reader's refusal is the tool error, an older export's inline
+    // components[] is read as `dtwin seed` reads it, and an exportDir outside the server's directory is refused.
     {
       const dsx = path.join(CWD, "dsx");
       fs.mkdirSync(dsx, { recursive: true });
-      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-outside-"));
-      fs.writeFileSync(path.join(outside, "components.local.json"), JSON.stringify({ components: [{ key: "k1", id: "1:1", name: "Btn" }] }));
-      const get = async (manifest: string) => {
+      const get = async (manifest: string, exportDir = "dsx") => {
         fs.writeFileSync(path.join(dsx, "design-system.json"), manifest);
-        const r = await client.callTool({ name: "design_get_component", arguments: { handle: "Btn", exportDir: "dsx" } });
+        const r = await client.callTool({ name: "design_get_component", arguments: { handle: "Btn", exportDir } });
         return { isError: r.isError === true, text: firstText(r) };
       };
       const nul = await get("null");
-      const num = await get(JSON.stringify({ files: { componentsLocal: 5 } }));
-      const esc = await get(JSON.stringify({ files: { componentsLocal: path.relative(dsx, path.join(outside, "components.local.json")) } }));
+      ok("design_get_component: the reader's refusal is the tool error", nul.isError && /is not a design-system manifest/.test(nul.text));
+      const inline = await get(JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-old", id: "1:1", name: "Btn" }] }));
+      ok(`design_get_component: an older export's inline components[] resolves (got ${inline.text.slice(0, 160)})`, !inline.isError && /"k-old"/.test(inline.text));
+      fs.writeFileSync(path.join(CWD, "old-map.json"), JSON.stringify({ version: 1, components: { "k-old": { figma: { key: "k-old", name: "Btn" }, code: { module: "src/ui/Btn.tsx", export: "Btn" } } } }));
+      const lint = await client.callTool({ name: "design_drift_lint", arguments: { map: "old-map.json", exportDir: "dsx" } });
+      ok(`design_drift_lint: an older export's inline components[] is linted (got ${firstText(lint).slice(0, 160)})`, lint.isError !== true && /"ok":\s*true/.test(firstText(lint)));
       fs.writeFileSync(path.join(dsx, "components.local.json"), JSON.stringify({ components: [{ key: "k1", id: "1:1", name: "Btn" }] }));
       const good = await get(JSON.stringify({ files: { componentsLocal: "components.local.json" } }));
-      ok("design_get_component: a null / non-string-pointer manifest is a tool error naming it as not a manifest",
-        nul.isError && /is not a design-system manifest/.test(nul.text) && num.isError && /is not a design-system manifest/.test(num.text) && /componentsLocal/.test(num.text));
-      ok("design_get_component: a componentsLocal pointer that leaves the server directory is refused",
-        esc.isError && /files\.componentsLocal must stay inside the directory this server was started in/.test(esc.text));
-      ok("design_get_component: a valid manifest still resolves (control)", !good.isError && /"k1"/.test(good.text));
+      ok("design_get_component: a split export resolves through its pointer (control)", !good.isError && /"k1"/.test(good.text));
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-outside-"));
+      const esc = await client.callTool({ name: "design_get_component", arguments: { handle: "Btn", exportDir: outside } });
+      ok("design_get_component: an exportDir outside the server directory is refused",
+        esc.isError === true && /exportDir must stay inside the directory this server was started in/.test(firstText(esc)));
     }
 
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
