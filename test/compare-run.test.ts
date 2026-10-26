@@ -250,9 +250,10 @@ console.log("paths — read under the root, as the filesystem resolves them, and
   fs.mkdirSync(path.join(p.root, "real-data", "nested"), { recursive: true });
   fs.symlinkSync(path.join(p.root, "real-data", "nested"), path.join(p.root, "shortcut"));
   p.put("real-data/m.json", measure());
-  // `shortcut/../m.json` goes through the link: real-data/m.json — never collapsed to <root>/m.json
+  // `shortcut/../m.json` goes through the link: real-data/m.json — never collapsed to <root>/m.json. POSIX only: Windows
+  // itself resolves ".." lexically, before any link (the CLI read <root>/m.json there before as after)
   const viaLink = gatherCompareRun(p.expFile, "shortcut/../m.json", {}, p.root);
-  check(`[paths] a relative path through a symlink and ".." is read as the filesystem resolves it (got ${viaLink.ok ? "ok" : viaLink.message})`, viaLink.ok);
+  if (process.platform !== "win32") check(`[paths] a relative path through a symlink and ".." is read as the filesystem resolves it (got ${viaLink.ok ? "ok" : viaLink.message})`, viaLink.ok);
   // the cwd is not the root: a relative --out naming an existing directory under the root is that directory
   fs.mkdirSync(path.join(p.root, "custom-out"));
   const out = gatherCompareRun(p.expFile, "real-data/m.json", { out: "custom-out" }, p.root);
