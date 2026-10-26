@@ -62,6 +62,7 @@ import type { Holder } from "./bridge-holder.ts";
 import { readSettings } from "./settings.ts";
 import * as daemon from "./daemon.ts";
 import { exitFlushed, installQueuedConsole } from "./stdio.ts";
+import { clientPresence, processIO } from "./client-presence.ts";
 // The holder, made on first use from the settings this process was started with (startServer reads them first and
 // exits on a bad port; a suite that loads this module in process has set its environment before the first call).
 let holder: Holder | null = null;
@@ -182,7 +183,7 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   let settled = false;
   const pending: Promise<void>[] = [];
   const onTick: OnTick = (t) => {
-    if (settled || extra.signal.aborted || clientGone.signal.aborted) return;
+    if (settled || extra.signal.aborted || presence.gone.aborted) return;
     const parts = [t.phase ?? "export"];
     if (t.page) parts.push(`page ${t.page.index} of ${t.page.of}${t.page.name ? ` (${t.page.name})` : ""}`);
     if (t.nodes !== null) parts.push(`${t.nodes} nodes`);
@@ -200,82 +201,11 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   }
 }
 
-// The signal every bridge request of a tool call carries. The SDK aborts `extra.signal` when the client
-// sends notifications/cancelled for that call; but its stdio transport never notices stdin ENDING (it
-// listens for data/error only), so a client that exits mid-export would leave the plugin walking for
-// nobody. `clientGone` is that half: startServer() aborts it on stdin end/close, which aborts every call in flight.
-const clientGone = new AbortController();
-// The client has gone: stdin ended/closed, or a write to stdout found the client's read end closed.
-// When the client is killed both pipes break at once, and a progress tick can reach stdout before stdin's
-// 'end' is handled — whichever is seen first decides; the rest are no-ops (the holder's clientLeft runs once).
-//
-// What happens then is the holder's (bridge-holder.ts clientLeft): exit now unless other processes use the bridge
-// this one shares, in which case it keeps serving them and idles out like `dtwin serve` (FIGMA_DAEMON_IDLE_MIN).
-// This deliberately departs from the MCP stdio binding's "Servers SHOULD exit promptly when their standard
-// input is closed" (spec revision 2026-07-28, the stdio transport): the process is by then the shared daemon
-// other sessions and commands route through, and exiting would cut them off mid-use. The window is how it
-// still goes away on its own once they stop.
-function clientWentAway(how: string): void {
-  // stdout is guarded from startup (startServer()); this call is the belt for any path that runs earlier.
-  guardStdio();
-  if (!clientGone.signal.aborted) clientGone.abort(new Error(`the MCP client went away (${how}) — request abandoned`));
-  session().clientLeft(how);
-}
-function watchStdin(): void {
-  process.stdin.once("end", () => clientWentAway("stdin closed"));
-  process.stdin.once("close", () => clientWentAway("stdin closed"));
-}
-
-// Leave: the holder lets go of what this process holds (cancel frames go to the plugin for every request still in
-// flight — server-core's close() sends them before it closes the sockets); once it has (`released`, wired in
-// startServer), the loop drains to exit 0, with a backstop for any handle that keeps it open (an unref'd timer never
-// holds the loop, but fires if something else does). The holder releases once: stdin EOF, a signal and the idle
-// shutdown can race.
-function leave(msg: string): void {
-  guardStdio();
-  session().release(msg);
-}
-function onReleased(): void {
-  process.exitCode = 0;
-  setTimeout(() => exitFlushed(0, 1000), 3000).unref();
-}
-
-// Once the client has gone, its end of our stdout (and maybe stderr) is closed, and the next write —
-// the result of a call the abort just settled, a progress notification — raises EPIPE as an 'error'
-// event. The SDK's StdioServerTransport has no stdout 'error' listener, so that event is an uncaught
-// exception and would kill the process that may now be serving other sessions. Installed at STARTUP
-// (startServer()), not when the client is seen to go: a killed client breaks both pipes at once, and a progress
-// tick written before stdin's 'end' is handled must not be the thing that kills the orphan. A stdout
-// error IS the client going away (EPIPE: its read end is closed; ERR_STREAM_DESTROYED: a write after that);
-// a stderr one is swallowed — there is nobody left to tell.
-let stdioGuarded = false;
-function guardStdio(): void {
-  if (stdioGuarded) return;
-  stdioGuarded = true;
-  process.stdout.on("error", (e: Error) => {
-    const code = "code" in e ? e.code : undefined;
-    clientWentAway(code === "EPIPE" || code === "ERR_STREAM_DESTROYED" ? "stdout closed" : `stdout failed: ${String(code ?? e.message)}`);
-  });
-  process.stderr.on("error", () => { /* the client is gone */ });
-}
-
-// SIGTERM / SIGINT / SIGHUP end this process — even while it serves other sessions (a signal is an
-// explicit request). The runtime's default handler would kill it outright: no 'exit' event (so the daemon
-// socket file stays behind) and no cancel frame for a read in flight. Claude Code ends a stdio server
-// with SIGINT, then SIGTERM ~100 ms later, then SIGKILL ~400 ms after that (secondary
-// source), so this runs once, cancels and unlinks synchronously, gives the cancel frames ~150 ms to reach
-// the plugin, and exits 0 well inside that window.
-let signalled = false;
-function onSignal(sig: NodeJS.Signals): void {
-  if (signalled) return;
-  signalled = true;
-  guardStdio();
-  if (!clientGone.signal.aborted) clientGone.abort(new Error(`${sig} — request abandoned`));
-  leave(`${sig} — closing the bridge and exiting`);
-  // exitFlushed: the log lines above reach stderr first; capped well inside the ~500 ms before SIGKILL
-  setTimeout(() => exitFlushed(0, 200), 150);
-}
-const callSignal = (extra: ToolExtra | undefined): AbortSignal => (extra ? AbortSignal.any([extra.signal, clientGone.signal]) : clientGone.signal);
+// Whether the MCP client is still there (client-presence.ts): stdin ending or closing, a write to stdout finding it
+// gone, or a signal — whichever comes first — aborts `presence.gone`, which every tool call's bridge requests carry
+// beside the SDK's own per-call signal; what the process does then is the bridge holder's decision (clientLeft).
+const presence = clientPresence(processIO(), () => session());
+const callSignal = (extra: ToolExtra | undefined): AbortSignal => (extra ? AbortSignal.any([extra.signal, presence.gone]) : presence.gone);
 
 /** The two writeShape arguments every export tool reads — what Zod parses them to, not a restatement. */
 type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
@@ -1012,17 +942,16 @@ async function startServer() {
     return;
   }
   daemon.installCrashHandlers(wlog, () => { session().release(); });
-  session().released.then(onReleased, onReleased);
-  // Before anything can write to stdout (guardStdio says why it cannot wait for the client to go).
-  guardStdio();
+  // Before anything can write to stdout (client-presence.ts says why its stdout guard cannot wait for the client to go):
+  // the stdio guards, the signal handlers, and the exit once the holder has let go.
+  presence.start();
   // console.* through the streams' queue (Bun drops a direct console write that meets a full pipe) — and ALL of it to
   // stderr: stdout carries the JSON-RPC the transport writes and nothing else.
   installQueuedConsole({ logTo: "stderr" });
-  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => onSignal(sig));
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  watchStdin();
+  presence.watchStdin();
   // Resolve the bridge up front, so a port problem is reported at startup — but only REPORTED: the
   // stdio session stays up, every tool call retries the resolution, and a held port comes back as that
   // call's error (the port may be free by then). Exiting here killed the whole MCP server.
