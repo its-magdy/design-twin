@@ -56,10 +56,10 @@ import { colorKey } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { recordedReport } from "./report-freshness.ts";
 import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
-import { anyJson, readJsonOrNull } from "../bridge/src/read-json.ts";
+import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isCodeConnectMap } from "./map-validate-core.ts";
 import type {
-  IrNodeType, Plan, PlanAnchor, PlanHookRecord, PlanLifecycle,
+  IrNodeType, Plan, PlanAnchor, PlanHookRecord,
   PlanStoredStatus, PlanTokenRow, ScreenDoc,
 } from "./types.ts";
 import { getOrInit } from "./map-util.ts";
@@ -77,7 +77,7 @@ import { exitFlushed, runCli } from "./proc.ts";
 import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE } from "../bridge/src/project-layout.ts";
 import { parseSetName, setBaseOf, siblingFile } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
-import { dropHeredocBodies, simpleCommands } from "./shell-words.ts";
+import { closedStatusOf, NO_CLAIM_MARK, sessionClaim } from "./session-claim.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
 
 // ================================================================ input / timeouts
@@ -766,200 +766,6 @@ function legacySetWarnings(plan: Plan, planFile: string | undefined, reports: Re
   });
 }
 
-// ================================================================ fan-out scoping
-
-// Several screens build in parallel (one screen-builder each), and every one lands here when it
-// stops. Narrow to the plans the stopping agent's own transcript claims (OWNERSHIP below; a subagent's own
-// transcript when the payload names one, else the session's). A transcript that claims NO plan checks
-// NOTHING: build-screen's Stop hook is skill-scoped, so it also fires in an orchestrator session
-// that loaded the skill and built nothing itself — it must not block that session on a plan another
-// agent is still filling. A transcript that claims only plans the hook already closed narrows to
-// nothing too: agent A, finished, is not blocked on agent B's half-built plan. `scope: "unscoped"` means
-// the payload carried no readable transcript at all (a hand-piped `{"cwd": …}`): every open plan is checked.
-export type PlanScope = "unscoped" | "none-named" | "named";
-// OWNERSHIP. A plan is this session's when the session's OWN tool calls (message.content[] tool_use
-// items; for the session transcript, not a subagent's sidechain entries) either
-//   (a) WRITE the plan; or
-//   (b) WRITE a file that exactly ONE open plan lists in files[] — a builder or fixer editing that
-//       screen's code. A file several plans list (a shared component) claims none of them.
-// "Write" = a structured write only: a Write/Edit/MultiEdit/NotebookEdit of the path, or a Bash/PowerShell call that runs
-// the plan-skeleton script with `--out <path>` (build-screen's step 2, the call that creates the plan — see
-// planSkeletonOuts). Any other shell command (a redirect, `sed -i`, `cp`/`mv`, a script writing through fs) is
-// not read: a command's targets can only be guessed, and a guess misses as much as it finds. The builder's own
-// transcript is the owner's identity because nothing else is per-agent: Claude Code hands a subagent's Bash
-// only the session id (CLAUDE_CODE_SESSION_ID), which parallel builders share, so a plan cannot carry its
-// owner; the agent id is in the hook payload alone. Not prose, not an Agent/Task prompt (an orchestrator
-// naming the plan a subagent should fill), not a tool_result (a subagent's report). Relative paths resolve
-// against the transcript entry's own `cwd`, else the payload's. Separators are normalised; a Windows drive
-// path from another machine matches by its project-relative tail.
-// Nothing claimed → nothing checked, by design: the screen-builder's SubagentStop still gates delegated builds,
-// and every builder's transcript holds its plan-skeleton call and the Write/Edit calls of its own code.
-const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-/** The builder agent hooks.json gates: the plugin-scoped name, or the bare one (the agent copied into a project's .claude/agents/). */
-const BUILDER_AGENT = /^(designtwin:)?screen-builder$/;
-/** A path the session wrote, and the directory it was relative to (the entry's `cwd`, when recorded). */
-export interface WrittenPath { path: string; base: string | null }
-// The paths one transcript line's tool_use items write, appended to `out`; returns how many tool_use items it holds.
-function lineActions(line: string, ownOnly: boolean, out: WrittenPath[]): number {
-  if (!line.trim()) return 0;
-  let v: unknown = null;
-  try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { return 0; }
-  if (!isJsonObject(v) || (ownOnly && v.isSidechain === true) || !isJsonObject(v.message) || !Array.isArray(v.message.content)) return 0;
-  let uses = 0;
-  for (const item of v.message.content) {
-    if (!isJsonObject(item) || item.type !== "tool_use") continue;
-    uses++;
-    if (typeof item.name !== "string" || !isJsonObject(item.input)) continue;
-    const inp = item.input;
-    const base = typeof v.cwd === "string" && v.cwd ? v.cwd : null;
-    if (WRITE_TOOLS.has(item.name)) { for (const k of ["file_path", "notebook_path"]) { const f = inp[k]; if (typeof f === "string") out.push({ path: f, base }); } }
-    else if (SHELL_TOOLS.has(item.name) && typeof inp.command === "string") for (const f of planSkeletonOuts(inp.command, item.name === "PowerShell")) out.push({ path: f, base });
-  }
-  return uses;
-}
-
-// A transcript is tens of MB, mostly tool_result text, and only a line holding a tool_use item can claim a
-// plan. Such a line holds the JSON string "tool_use": written plainly by Claude Code, or (by another JSON
-// writer) with some of its letters as \uXXXX escapes, which the second test admits. A line passing neither
-// cannot hold `type: "tool_use"`, so it is skipped without JSON.parse.
-const TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:_|\\u005f)(?:u|\\u0075)(?:s|\\u0073)(?:e|\\u0065)"/i;
-const mayHoldToolUse = (line: string): boolean => line.includes('"tool_use"') || (line.includes("\\u") && TOOL_USE_ESCAPED.test(line));
-
-// The file's lines exactly as readFileSync(file, "utf8").split("\n") gives them, read `chunk` bytes at a time
-// so a large transcript is never held whole. A chunk is decoded only up to its last newline byte (0x0A never
-// occurs inside a multi-byte UTF-8 sequence), so every decoded piece starts and ends on a character boundary.
-const LINE_CHUNK = 1 << 20;
-function forEachLine(file: string, onLine: (line: string) => void, chunk = LINE_CHUNK): void {
-  const fd = fs.openSync(file, "r");
-  try {
-    const buf = Buffer.allocUnsafe(chunk);
-    let carry: Buffer[] = [];
-    for (;;) {
-      const n = fs.readSync(fd, buf, 0, chunk, null);
-      if (n === 0) break;
-      const cut = buf.subarray(0, n).lastIndexOf(0x0a);
-      if (cut < 0) { carry.push(Buffer.from(buf.subarray(0, n))); continue; }
-      const head = buf.subarray(0, cut);
-      const text = (carry.length ? Buffer.concat([...carry, head]) : head).toString("utf8");
-      for (const line of text.split("\n")) onLine(line);
-      carry = cut + 1 < n ? [Buffer.from(buf.subarray(cut + 1, n))] : [];
-    }
-    onLine(Buffer.concat(carry).toString("utf8"));
-  } finally { fs.closeSync(fd); }
-}
-
-/** What a transcript tells the hook: the paths its tool calls write, how many tool calls it holds, and whether it
- *  already holds the no-claim instruction (NO_CLAIM_MARK) — the builder was sent back once before. */
-export interface TranscriptScan { writes: WrittenPath[]; toolUses: number; sentBack: boolean }
-// The no-claim block's reason holds this phrase; Claude Code delivers it to the builder as a user-role entry that is
-// not a tool_result. The phrase in any other entry (the builder's own tool_use, its text, a tool_result of it reading
-// this script's source) is not that delivery.
-const NO_CLAIM_MARK = "are stopping without claiming a plan, so your build has NOT been checked";
-function isHookFeedback(line: string): boolean {
-  let v: unknown = null;
-  try { const parsed: unknown = JSON.parse(line); v = parsed; } catch { return false; }
-  if (!isJsonObject(v) || !isJsonObject(v.message) || v.message.role !== "user") return false;
-  const c = v.message.content;
-  return typeof c === "string" || (Array.isArray(c) && !c.some((item) => isJsonObject(item) && item.type === "tool_result"));
-}
-function scanTranscript(file: string, ownOnly: boolean): TranscriptScan {
-  const scan: TranscriptScan = { writes: [], toolUses: 0, sentBack: false };
-  forEachLine(file, (line) => {
-    if (!scan.sentBack && line.includes(NO_CLAIM_MARK) && isHookFeedback(line)) scan.sentBack = true;
-    if (mayHoldToolUse(line)) scan.toolUses += lineActions(line, ownOnly, scan.writes);
-  });
-  return scan;
-}
-function transcriptActions(file: string, ownOnly: boolean): WrittenPath[] {
-  return scanTranscript(file, ownOnly).writes;
-}
-
-// The plan files a shell command (the Bash tool's, or the PowerShell tool's — on by default on Windows without Git
-// Bash, same `command` input) creates through plan-skeleton (see OWNERSHIP): the `--out <path>` / `--out=<path>`
-// of each simple command with a word naming the plan-skeleton script (`plan-skeleton.js`, `.ts`, …) — run directly,
-// through node/npx/tsx or PowerShell's `&`, or merely named (`echo plan-skeleton.js --out x` counts too: a miss would
-// leave a plan unchecked, a false claim only checks one). A directory change earlier in the same command line (cd,
-// pushd, chdir, `builtin cd`, PowerShell's Set-Location/sl/Push-Location) is followed, so a relative `--out` after it
-// resolves under that dir. After one it cannot follow — no target, `-`, `~…`, a `$` expansion, popd, or any cd on a
-// line with a `( … )` subshell or a `$( … )`/backtick substitution (simpleCommands flattens those, so a cd inside one
-// cannot be told from one outside it) — a relative `--out` is tried against the entry's cwd, the likeliest root:
-// a false claim needs that exact plan to exist. Heredoc bodies are data, not commands. A PowerShell command is split
-// with PowerShell's quoting (a backslash is a plain character, a backtick an escape).
-const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
-const PLAN_SKELETON = /^plan-skeleton(\.[cm]?[jt]s)?$/i;
-const CHANGE_DIR = /^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i;
-const isAbsPath = (p: string): boolean => /^(?:[A-Za-z]:)?[\\/]/.test(p);
-function planSkeletonOuts(cmd: string, powershell = false): string[] {
-  const out: string[] = [];
-  const text = powershell ? cmd : dropHeredocBodies(cmd);
-  const nested = (powershell ? /\(/ : /[(`]/).test(text);
-  let dir: string | null = ""; // "" = the transcript entry's cwd; null = a directory this cannot follow
-  const under = (d: string, p: string): string => (d && !isAbsPath(p) ? `${d.replace(/[\\/]+$/, "")}/${p}` : p);
-  for (const all of simpleCommands(text, { powershell })) {
-    const words = all[0] === "builtin" || all[0] === "command" ? all.slice(1) : all;
-    const head = words[0] ?? "";
-    if (CHANGE_DIR.test(head)) {
-      const to = /^pop/i.test(head) ? undefined : words.slice(1).find((w) => w === "-" || !w.startsWith("-"));
-      dir = nested || to === undefined || to === "-" || /^~|\$|`/.test(to) ? null : isAbsPath(to) ? to : dir === null ? null : under(dir, to);
-      continue;
-    }
-    if (!words.some((w) => PLAN_SKELETON.test(w.split(/[\\/]/).pop() ?? ""))) continue;
-    words.forEach((w, k) => {
-      const eq = /^--out=(.+)$/.exec(w);
-      const target = w === "--out" ? words[k + 1] : eq?.[1];
-      if (target) out.push(dir === null ? target : under(dir, target));
-    });
-  }
-  return out;
-}
-
-// Does a path the session wrote name `rel` (project-relative) under `cwd`?
-function sameFile(w: WrittenPath, rel: string, cwd: string): boolean {
-  const c = w.path.trim().replace(/\\/g, "/");
-  if (!c) return false;
-  const want = path.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path.posix.normalize(c).toLowerCase().endsWith("/" + path.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path.resolve(w.base || cwd, c).replace(/\\/g, "/");
-  return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
-}
-
-function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined, cwd: string): { plans: PlanFile[]; scope: PlanScope; scan?: TranscriptScan } {
-  const agent = typeof input.agent_transcript_path === "string" && !!input.agent_transcript_path;
-  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  // (a non-string path would have thrown in openSync and been caught the same way)
-  if (!file || typeof file !== "string") return { plans: open, scope: "unscoped" };
-  let scan: TranscriptScan;
-  // the session transcript may carry a subagent's sidechain entries: those are not this session's actions
-  try { scan = scanTranscript(file, !agent); } catch { return { plans: open, scope: "unscoped" }; }
-  const writes = scan.writes;
-  // rule (b): a written file claims the ONE open plan that lists it; a file two or more open plans list claims none
-  const listers = new Map<string, number>();
-  for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
-  const owns = (p: PlanFile): boolean => {
-    const planRel = path.relative(cwd, path.resolve(p.file));
-    if (writes.some((w) => sameFile(w, planRel, cwd))) return true;
-    return open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && writes.some((w) => sameFile(w, f, cwd)));
-  };
-  const known = all && all.length ? all : open;
-  if (!known.some(owns)) return { plans: [], scope: "none-named", scan };
-  return { plans: open.filter(owns), scope: "named", scan };
-}
-
-// The unreadable plans (findPlans' `bad`) the session's own Write/Edit or plan-skeleton --out wrote: its claim on a plan
-// it broke, which is reported to it as a block rather than as a warning nobody reads. A plan whose raw JSON is an object
-// with a closed status ("abandoned", "awaiting-user") is given up on, and stays a warning: the status is read from the
-// raw JSON because parsePlan, which fails on such a plan, never gets as far as the status.
-function ownBadPlans(bad: readonly BadPlan[], scan: TranscriptScan | undefined, cwd: string): BadPlan[] {
-  if (!scan) return [];
-  return bad.filter((b) => { const rel = path.relative(cwd, path.resolve(b.file)); return scan.writes.some((w) => sameFile(w, rel, cwd)) && !closedStatusOf(b); });
-}
-
-// The closed status ("abandoned", "awaiting-user") the raw JSON of an unreadable plan holds, or null when it holds none.
-function closedStatusOf(b: BadPlan): PlanLifecycle | null {
-  const life = lifecycleOf(readJsonOrNull(b.file, anyJson));
-  return life === "pending" ? null : life;
-}
-
 // ================================================================ CLI
 
 const USAGE = [
@@ -1131,35 +937,26 @@ async function main(argv: string[]): Promise<number> {
     const { plans, bad } = findPlans(cwd);
     hookCwd = cwd; hookPlans = plans;
     const open = plans.filter((p) => isOpen(p, cwd));
-    if (!open.length && !bad.length) return 0; // fast path
-    const own = ownPlans(open, input, plans, cwd);
+    const claim = sessionClaim({ payload: input, cwd, open, all: plans, bad });
     // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently. One this session
     // wrote is its claim, and blocks: a warning on a stop that passes reaches no one (stderr on exit 0 is discarded).
-    const badOwn = ownBadPlans(bad, own.scan, cwd);
+    const unreadable = claim.kind === "claimed" ? claim.unreadable : [];
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!badOwn.includes(b)) say(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; ${fixIt}`);
-    for (const b of badOwn) {
+    for (const b of bad) if (!unreadable.includes(b)) say(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; ${fixIt}`);
+    for (const b of unreadable) {
       const rel = path.relative(cwd, b.file);
       blockedOut.push(`# ${path.basename(b.file)}`, `  - ${rel} ${b.error} — you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. `
         + `A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
-    if (!open.length && !badOwn.length) return 0;
-    // An agent that claims none of the open plans checks nothing — unless it broke a plan of its own (blocked above).
-    if (own.scope === "none-named" && !badOwn.length) {
+    if (claim.kind === "none") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) — nothing checked (${open.length} open ` +
         `plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
-      // An orchestrator claiming nothing is normal; a screen-builder claiming nothing is a build the gate never saw. Its
-      // tool calls name no plan of their own, so no other reader of them (the main session's Stop, a ledger) could claim
-      // one either: only the builder knows which plan it built. So its SubagentStop blocks ONCE, and the reason — which
-      // Claude Code delivers to the subagent as its next instruction — has it check its plan by hand and name the plan in
-      // its report. Its next stop carries stop_hook_active and returns above, so this never loops; a transcript that
-      // already holds this reason is not asked again whatever the payload says. An agent with no tool call at all is not
-      // a build — an internal agent (prompt suggestions, a side question) reports the session's own agent_type under
-      // `claude --agent` — so it is not sent back.
-      if (input.hook_event_name === "SubagentStop" && typeof input.agent_type === "string" && BUILDER_AGENT.test(input.agent_type)
-        && own.scan && own.scan.toolUses > 0 && !own.scan.sentBack) {
+      // A screen-builder sent back (session-claim.ts SEND BACK): the reason — which Claude Code delivers to the subagent as
+      // its next instruction — has it check its plan by hand and name the plan in its report. Its next stop carries
+      // stop_hook_active and returns above, so this never loops.
+      if (claim.sendBack) {
         const names = open.map((p) => path.relative(cwd, p.file).replace(/\\/g, "/"));
-        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${input.agent_type}) ${NO_CLAIM_MARK}. `
+        console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${String(input.agent_type)}) ${NO_CLAIM_MARK}. `
           + `Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. `
           + "A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); "
           + "shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run "
@@ -1168,7 +965,7 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
-    for (const p of own.plans) all.push({ p, cwd });
+    for (const p of claim.plans) all.push({ p, cwd });
   }
 
   const lines: string[] = [];
@@ -1207,7 +1004,7 @@ async function main(argv: string[]): Promise<number> {
 export {
   checkPlan, anchorCoverage, validatePlanHeader, auditGateWarnings, legacySetWarnings, deviationWarnings, deviationConflicts,
   verificationWarnings, recordedReportWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings,
-  isStale, ownPlans, forEachLine, mayHoldToolUse, transcriptActions, planSkeletonOuts, main,
+  isStale, main,
 };
 
 if (import.meta.main) {

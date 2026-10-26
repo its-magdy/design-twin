@@ -50,7 +50,6 @@ function project(files: Record<string, string>, plan: unknown, map?: unknown) {
 const runHook = (root: string, stdin?: object) => runSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }) });
 // A transcript line as Claude Code writes it: one JSON object per line, tool calls as message.content[] tool_use items.
 const toolUse = (name: string, input: object, sidechain = false) => JSON.stringify({ type: "assistant", isSidechain: sidechain, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_x", name, input }] } });
-const toolResult = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_x", content: text }] } });
 const planOf = (root: string): Plan => readFixture(path.join(root, "design", "plan", "login.json"), isPlan);
 // One row of `verify-build --status --json` (the CLI prints {plan, status, why, reasons, reports}).
 const isStatusRows = (x: unknown): x is StatusRow[] => Array.isArray(x) && x.every((r) => isJsonObject(r) && typeof r.plan === "string" && typeof r.status === "string" && Array.isArray(r.reasons));
@@ -495,65 +494,6 @@ check("fan-out: an agent is judged on the plan ITS transcript claims, not a sibl
   const r = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: mine });
   const sib = readFixture(sibling, isPlan);
   return unscoped === 0 && untouched && r.status === 0 && hookOf(root).result === "pass" && sib.status === "pending" && !sib.verification?.hook;
-})());
-check("fan-out: the session transcript is never used to scope a SUBAGENT's stop", (() => {
-  const root = project({ "a.tsx": "text-brand-600", "b.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
-  fs.writeFileSync(path.join(root, "design", "plan", "settings.json"), JSON.stringify(SIBLING));
-  const main = path.join(root, "main.jsonl");
-  fs.writeFileSync(main, toolUse("Edit", { file_path: "design/plan/login.json", old_string: "a", new_string: "b" }));
-  return runHook(root, { cwd: root, agent_id: "a1", transcript_path: main }).status === 2 && runHook(root, { cwd: root, transcript_path: main }).status === 0;
-})());
-// The Stop hook reads a transcript of tens of MB line by line, and JSON.parses only the lines that can hold a
-// tool_use item. Both halves must lose nothing the whole-file read and parse-every-line would have used.
-check("transcript lines: forEachLine yields exactly readFileSync(…, \"utf8\").split(\"\\n\") — at any chunk size, across multi-byte characters, invalid bytes, CRLF, a BOM, a missing last newline and lines longer than the chunk", (() => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-lines-"));
-  const bodies: Buffer[] = [
-    Buffer.alloc(0), Buffer.from("\n"), Buffer.from("\n\n"), Buffer.from("one"), Buffer.from("one\n"),
-    Buffer.from("\uFEFF{\"a\":1}\r\n{\"b\":\"é中😀\"}\n" + "x".repeat(50) + "\nlast"),
-    Buffer.concat([Buffer.from("ok\n"), Buffer.from([0xe4, 0xb8, 0x0a, 0x80, 0x41, 0x0a, 0xf0, 0x9f]), Buffer.from("\ntail")]),
-  ];
-  return bodies.every((body, n) => {
-    const f = path.join(root, `t${n}.jsonl`);
-    fs.writeFileSync(f, body);
-    const want = fs.readFileSync(f, "utf8").split("\n");
-    return [1, 2, 3, 5, 7, 64, 1 << 20].every((chunk) => {
-      const got: string[] = [];
-      verifyBuild.forEachLine(f, (l) => got.push(l), chunk);
-      return got.length === want.length && got.every((l, i) => l === want[i]);
-    });
-  });
-})());
-const carriesToolUse = (line: string): boolean => {
-  try { const v: unknown = JSON.parse(line); return isJsonObject(v) && isJsonObject(v.message) && Array.isArray(v.message.content) && v.message.content.some((i) => isJsonObject(i) && i.type === "tool_use"); } catch { return false; }
-};
-// Lines as Claude Code writes them (toolUse/toolResult above, plus the other entry types a session transcript holds),
-// and the same tool_use lines re-escaped the way another JSON writer may spell them.
-const escapeAll = (s: string): string => s.replace(/"tool_use"/g, () => '"' + [..."tool_use"].map((c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()).join("") + '"');
-const TRANSCRIPT_LINES = [
-  toolUse("Write", { file_path: "design/plan/login.json", content: "{}" }),
-  toolUse("Bash", { command: "echo {} > design/plan/login.json" }, true),
-  JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "next" }, { type: "tool_use", id: "t2", name: "Edit", input: { file_path: "a.tsx", old_string: "a", new_string: "b" } }] } }),
-  toolResult("wrote design/plan/login.json \u001b[32mok\u001b[0m"),
-  JSON.stringify({ type: "user", message: { role: "user", content: "build the login screen" } }),
-  JSON.stringify({ type: "attachment", attachment: { kind: "file", text: "x" } }),
-  JSON.stringify({ type: "system", subtype: "info", content: "compacted" }),
-  "",
-  "not json",
-];
-const ESCAPED_LINES = TRANSCRIPT_LINES.filter(carriesToolUse).flatMap((l) => [escapeAll(l), l.replace('"tool_use"', '"tool\\u005fuse"'), l.replace('"tool_use"', '"\\u0074ool_us\\u0065"')]);
-check("transcript filter: every line that holds a tool_use item passes it — Claude Code's plain spelling and any \\u-escaped one", (() => {
-  const users = [...TRANSCRIPT_LINES, ...ESCAPED_LINES].filter(carriesToolUse);
-  return users.length === 3 + ESCAPED_LINES.length && users.every((l) => verifyBuild.mayHoldToolUse(l));
-})());
-check("transcript filter: a line that holds no tool_use item is skipped unparsed — a tool_result (even one with \\u escapes in its text), a prompt, an attachment, a system entry, a blank or non-JSON line",
-  TRANSCRIPT_LINES.filter((l) => !carriesToolUse(l)).length === 6 && TRANSCRIPT_LINES.filter((l) => !carriesToolUse(l)).every((l) => !verifyBuild.mayHoldToolUse(l)));
-check("transcript filter: a Write spelled with \\u escapes still claims its plan (ownPlans reads the file through the filter)", (() => {
-  const root = project({ "a.tsx": "x" }, { status: "pending", files: ["a.tsx"], verification: STATIC });
-  const t = path.join(root, "t.jsonl");
-  fs.writeFileSync(t, escapeAll(toolUse("Write", { file_path: path.join(root, "design", "plan", "login.json"), content: "{}" })) + "\n" + toolResult("ok"));
-  const plan = { file: path.join(root, "design", "plan", "login.json"), plan: planOf(root) };
-  const all = verifyBuild.transcriptActions(t, true);
-  return all.length === 1 && verifyBuild.ownPlans([plan], { cwd: root, transcript_path: t }, [plan], root).scope === "named";
 })());
 // The project graph reads every plan's files once per hook run; checkPlan and the recorded hashes take their bytes
 // from it, except for a file the run itself has rewritten since (a plan another plan lists).
@@ -1074,13 +1014,6 @@ console.log("field-test fixes:");
     const r = runHook(root, { cwd: root, transcript_path: t });
     return r.status === 0 && !planOf(root).verification?.hook && !/BLOCKED|raw colour/.test(r.stderr) && r.stderr.trim().split("\n").length <= 1;
   })());
-  check("the screen-builder's SubagentStop still finds its plan through agent_transcript_path (and blocks on it)", (() => {
-    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
-    const t = path.join(root, "agent.jsonl");
-    fs.writeFileSync(t, toolUse("Bash", { command: "node plan-skeleton.js … --out design/plan/login.json" }));
-    const r = runHook(root, { cwd: root, agent_id: "b1", agent_transcript_path: t, transcript_path: path.join(root, "orchestrator.jsonl") });
-    return r.status === 2 && hookOf(root).result === "blocked";
-  })());
 
   // two tokens that share a hex, each defined in the theme, neither used as a literal.
   const surface: PlanTokenRow = { figmaName: "Surface/Page", value: "#1d1d1f", kind: "color", codeToken: "surface-page", verdict: "exact" };
@@ -1177,15 +1110,6 @@ console.log("field-test fixes:");
   check("…not when a project .css (not in files[]) declares both", !has(tok({ "src/theme.css": "@theme {\n  --color-surface-base: #111111;\n  --color-on-surface-base: #222222;\n}" }), /declared nowhere/));
   check("a declaration under node_modules/ or design/ does not count", has(tok({ "src/theme.css": "@theme { --color-surface-base: #111111; }", "node_modules/x/a.css": ":root { --color-on-surface-base: #222222; }", "design/notes.css": ":root { --color-on-surface-base: #222222; }" }), /declared nowhere.*'text-on-surface-base'/));
 
-  check("an orchestrator whose only mentions are an Agent prompt and a subagent's report: nothing checked", (() => {
-    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
-    const t = path.join(root, "orchestrator.jsonl");
-    fs.writeFileSync(t, [toolUse("Agent", { subagent_type: "screen-builder", prompt: "Build Screen A; its plan is design/plan/login.json" }),
-      toolResult("done — wrote design/plan/login.json"), JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "design/plan/login.json is next" }] } }),
-      toolUse("Write", { file_path: "design/plan/login.json" }, true)].join("\n"));
-    const r = runHook(root, { cwd: root, transcript_path: t });
-    return r.status === 0 && !planOf(root).verification?.hook;
-  })());
   check("a builder transcript with a Write to the plan: checked", (() => {
     const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
     const t = path.join(root, "builder.jsonl");
@@ -1252,94 +1176,6 @@ console.log("field-test fixes:");
   check("a project with a tailwind.config.* is not checked (Tailwind v3 colours live there)",
     !has(problems({ "src/A.tsx": "<p />", "tailwind.config.js": "module.exports = {}" }, { files: ["src/A.tsx"], tokens: [{ figmaName: "Brand/Main", value: "#123456", kind: "color", codeToken: "bg-brand", verdict: "exact" }], verification: STATIC }), /declared nowhere/));
   {
-    const hookWith = (lines: string[] | ((root: string) => string[]), files?: string[]) => {
-      const root = project({ "a.tsx": "#5B5FC7", "src/Other.tsx": "" }, { ...BLOCKING, files: files || BLOCKING.files });
-      const t = path.join(root, "t.jsonl");
-      fs.writeFileSync(t, (typeof lines === "function" ? lines(root) : lines).join("\n"));
-      return { r: runHook(root, { cwd: root, transcript_path: t }), root };
-    };
-    check("a Bash heredoc whose notes mention the plan does not make it this session's", (() => {
-      const { r, root } = hookWith([toolUse("Bash", { command: "cat > notes/handoff.md <<'EOF'\nScreen A: design/plan/login.json is still being filled\nEOF" })]);
-      return r.status === 0 && !planOf(root).verification?.hook;
-    })());
-    check("an Edit of a file listed in the plan's files[] makes it this session's", (() => {
-      const { r, root } = hookWith([toolUse("Edit", { file_path: "a.tsx", old_string: "x", new_string: "y" })]);
-      return r.status === 2 && hookOf(root).result === "blocked";
-    })());
-    check("a Windows-style path to the plan is matched", (() => {
-      // On Windows the hook matches the project's own drive-letter path (a different root's is another checkout's plan);
-      // elsewhere a drive-letter path is matched by its tail.
-      const { r } = hookWith((root) => [toolUse("Write", { file_path: process.platform === "win32" ? path.join(root, "design", "plan", "login.json") : "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
-      return r.status === 2;
-    })());
-    check("a builder that only ran plan-skeleton --out on the plan owns it", (() => {
-      const { r } = hookWith([toolUse("Bash", { command: "node \"/opt/plugin/scripts/plan-skeleton.js\" design/export/pages/P/ScreenA__1_2.json --out design/plan/login.json" })]);
-      return r.status === 2;
-    })());
-    check("…while `echo design/plan/login.json` alone does not", hookWith([toolUse("Bash", { command: "echo design/plan/login.json && ls design/plan" })]).r.status === 0);
-  }
-  {
-    // Five open plans; each would BLOCK if checked. login.json alone lists src/OnlyX.tsx; all five list src/Shared.tsx.
-    const five = (lines: (root: string) => string[]) => {
-      const root = project({ "a.tsx": "#5B5FC7", "src/OnlyX.tsx": "", "src/Shared.tsx": "", "a.json": "{}" }, { ...BLOCKING, files: ["a.tsx", "src/OnlyX.tsx", "src/Shared.tsx"] });
-      for (let i = 1; i < 5; i++) addPlan(root, `screen-${i}`, { ...BLOCKING, files: ["a.tsx", "src/Shared.tsx"] });
-      fs.writeFileSync(path.join(root, "design", "plan", "login.json"), JSON.stringify({ ...BLOCKING, files: ["b.tsx", "src/OnlyX.tsx", "src/Shared.tsx"] }));
-      fs.writeFileSync(path.join(root, "b.tsx"), "#5B5FC7");
-      const t = path.join(root, "t.jsonl");
-      fs.writeFileSync(t, lines(root).join("\n"));
-      const r = runHook(root, { cwd: root, transcript_path: t });
-      const checked = ["login", "screen-1", "screen-2", "screen-3", "screen-4"].filter((n) => !!planAt(root, n).verification?.hook);
-      return { status: r.status, checked };
-    };
-    const onlyLogin = (x: { status: number | null; checked: string[] }) => x.status === 2 && x.checked.join() === "login";
-    check("an Edit of a file five plans share claims none of them: nothing checked", (() => {
-      const x = five(() => [toolUse("Edit", { file_path: "src/Shared.tsx", old_string: "a", new_string: "b" })]);
-      return x.status === 0 && x.checked.length === 0;
-    })());
-    check("an Edit of a file only one plan lists claims that plan alone", onlyLogin(five(() => [toolUse("Edit", { file_path: "src/OnlyX.tsx", old_string: "a", new_string: "b" })])));
-    // Only structured writes claim: a shell command's targets are not guessed, so none of these claims a plan —
-    // a builder's own transcript still holds its plan-skeleton --out call and the Write/Edit calls of its code.
-    const none = (x: { status: number | null; checked: string[] }) => x.status === 0 && x.checked.length === 0;
-    for (const command of [
-      "jq '.route = \"/a\"' design/plan/login.json > /tmp/t && mv /tmp/t design/plan/login.json", "cp a.json design/plan/login.json",
-      "sed -i '' 's/a/b/' design/plan/login.json", "python3 -c \"import json; json.dump({}, open('design/plan/login.json','w'))\"",
-      "echo {} > design/plan/login.json", "cat a.json | tee design/plan/login.json", "node -e \"require('fs').writeFileSync('design/plan/login.json','{}')\"",
-      "perl -pi -e 's/a/b/' design/plan/login.json", "curl -s -o design/plan/login.json https://example.test/plan", "node scripts/other.js --out design/plan/login.json",
-      "cat > src/OnlyX.tsx <<E\nexport const X = 1;\nE", "sed -i '' 's/a/b/' src/OnlyX.tsx",
-      "node plan-skeleton.js a.json a.vars.json ds > design/plan/login.json",
-      "cat > notes.md <<'EOF'\nnode plan-skeleton.js a.json a.vars.json ds --out design/plan/login.json\nEOF",
-    ]) check(`a shell write is not read: \`${command.split("\n")[0]}\` claims no plan`, none(five(() => [toolUse("Bash", { command })])));
-    const SKEL = "node \"/opt/plugin/scripts/plan-skeleton.js\" a.json a.vars.json design/export/design-system";
-    check("plan-skeleton `--out=<plan>` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: `${SKEL} --out=design/plan/login.json` })])));
-    check("plan-skeleton run through `npx tsx …/plan-skeleton.ts --out <plan>` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "npx tsx design-to-code/plan-skeleton.ts a.json a.vars.json ds --out design/plan/login.json" })])));
-    check("`--seed-from <sibling plan>` on plan-skeleton claims only the --out plan, not the sibling it seeds from", onlyLogin(five(() => [toolUse("Bash", { command: `${SKEL} --out design/plan/login.json --seed-from design/plan/screen-1.json --seed-from design/plan/screen-2.json` })])));
-    check("`cd design && plan-skeleton … --out plan/<x>.json` follows the cd", onlyLogin(five(() => [toolUse("Bash", { command: `cd design && ${SKEL} --out plan/login.json` })])));
-    check("`cd /elsewhere && plan-skeleton … --out design/plan/<x>.json` is another tree's plan: claims none", none(five(() => [toolUse("Bash", { command: `cd /elsewhere && ${SKEL} --out design/plan/login.json` })])));
-    check("after a cd it cannot follow (`cd -`, `cd \"$ROOT\"`, `cd ~/proj`, `cd $(git rev-parse …)`), a relative --out is tried against the entry's cwd; an absolute one still claims",
-      ["cd -", "cd \"$ROOT\"", "cd ~/proj", "cd $(git rev-parse --show-toplevel)"].every((cd) => onlyLogin(five(() => [toolUse("Bash", { command: `${cd} && ${SKEL} --out design/plan/login.json` })])))
-      && onlyLogin(five((root) => [toolUse("Bash", { command: `cd ~ && ${SKEL} --out "${path.join(root, "design", "plan", "login.json")}"` })])));
-    check("the PowerShell tool's command is read like Bash's: `& node \"C:\\…\\plan-skeleton.js\" … --out <plan>` claims, a PowerShell redirect does not",
-      onlyLogin(five(() => [toolUse("PowerShell", { command: "& node \"C:\\work\\plugin\\scripts\\plan-skeleton.js\" a.json a.vars.json ds --out design/plan/login.json" })]))
-      && onlyLogin(five(() => [toolUse("PowerShell", { command: "Set-Location design; & node \"C:\\work\\plugin\\scripts\\plan-skeleton.js\" a.json a.vars.json ds --out plan\\login.json" })]))
-      && none(five(() => [toolUse("PowerShell", { command: "'{}' | Out-File design/plan/login.json" })])));
-    check("a MultiEdit of the plan, and a NotebookEdit of a file only it lists, claim it",
-      onlyLogin(five(() => [toolUse("MultiEdit", { file_path: "design/plan/login.json", edits: [] })])) && onlyLogin(five(() => [toolUse("NotebookEdit", { notebook_path: "src/OnlyX.tsx", new_source: "x" })])));
-    check("a relative path resolves against the transcript entry's own cwd", onlyLogin(five((root) => [JSON.stringify({ type: "assistant", cwd: path.join(root, "design"), message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Write", input: { file_path: "plan/login.json", content: "{}" } }] } })])));
-  }
-  check("parallel builders: each SubagentStop checks only the plan its own builder created — B seeding from A's half-built plan, or sed-ing it, is not blocked on it", (() => {
-    // both plans would BLOCK if checked: a.tsx and b.tsx each hold the raw brand colour
-    const root = project({ "a.tsx": "#5B5FC7", "b.tsx": "#5B5FC7" }, { ...BLOCKING, files: ["a.tsx"] });
-    addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
-    const skel = (plan: string, extra = "") => toolUse("Bash", { command: `node "/opt/plugin/scripts/plan-skeleton.js" a.json a.vars.json ds --out design/plan/${plan}.json${extra}` });
-    const a = path.join(root, "agent-a.jsonl"), b = path.join(root, "agent-b.jsonl");
-    fs.writeFileSync(a, [skel("login"), toolUse("Write", { file_path: "a.tsx", content: "x" })].join("\n"));
-    fs.writeFileSync(b, [skel("settings", " --seed-from design/plan/login.json"), toolUse("Bash", { command: "sed -i '' 's/x/y/' design/plan/login.json" }), toolUse("Write", { file_path: "b.tsx", content: "x" })].join("\n"));
-    const rb = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b", agent_type: "designtwin:screen-builder", agent_transcript_path: b, transcript_path: path.join(root, "main.jsonl") });
-    const bOnly = !planAt(root, "login").verification?.hook && planAt(root, "settings").verification?.hook?.result === "blocked" && /settings\.json/.test(rb.stdout) && !/login\.json/.test(rb.stdout);
-    const ra = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "a", agent_type: "designtwin:screen-builder", agent_transcript_path: a, transcript_path: path.join(root, "main.jsonl") });
-    return rb.status === 0 && bOnly && ra.status === 0 && planAt(root, "login").verification?.hook?.result === "blocked" && /"decision":"block"/.test(ra.stdout);
-  })());
-  {
     // A screen-builder that claims no plan is sent back ONCE ({decision:"block"} on stdout, exit 0) to check its plan by
     // hand and name it; no plan is touched; its next stop (stop_hook_active) passes untouched, so it never loops.
     const noClaim = (payload: object) => {
@@ -1366,8 +1202,6 @@ console.log("field-test fixes:");
       const { r, untouched } = noClaim({ hook_event_name: "SubagentStop", agent_type: "designtwin:screen-builder", stop_hook_active: true });
       return r.status === 0 && untouched && r.stdout.trim() === "" && r.stderr.trim() === "";
     })());
-    check("…no block or message for another agent, for the skill's Stop in an orchestrator session, or for a hand-piped payload",
-      [{ hook_event_name: "SubagentStop", agent_type: "Explore" }, { hook_event_name: "Stop" }, {}].every((p) => { const { r, untouched } = noClaim(p); return r.status === 0 && untouched && r.stdout.trim() === ""; }));
     check("…and a screen-builder whose transcript claims its plan is checked as before, not sent back", (() => {
       const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
       addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
@@ -1390,42 +1224,6 @@ console.log("field-test fixes:");
       const out: unknown = JSON.parse(r.stdout.trim() || "null");
       return { root, r, out, untouched: !planOf(root).verification?.hook && !planAt(root, "settings").verification?.hook };
     };
-    const SED = toolUse("Bash", { command: "sed -i '' 's/a/b/' design/plan/login.json" });
-    const feedback = JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: `Stop hook feedback:\n${sentBack("designtwin:screen-builder")}` } });
-    check("…a builder whose transcript already holds the no-claim request is not asked again, even with stop_hook_active false — exit 0, no stdout, nothing written", (() => {
-      const { r, untouched } = builderStop(() => [SED, feedback, SED]);
-      return r.status === 0 && untouched && r.stdout.trim() === "";
-    })());
-    check("…but the request's text inside a tool_result (the builder reading this script) does not count as asked: it is still sent back", (() => {
-      const read = JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: sentBack("designtwin:screen-builder") }] } });
-      const { out } = builderStop(() => [SED, read]);
-      return isJsonObject(out) && out.decision === "block" && out.reason === sentBack("designtwin:screen-builder");
-    })());
-    check("…the request's text inside the builder's own tool_use input (it greps for the message) or assistant text does not count as asked either", (() => {
-      const mark = sentBack("designtwin:screen-builder");
-      const grep = toolUse("Bash", { command: `grep -rn "${mark}" .`, description: mark }, true);
-      const said = JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: mark }] } });
-      const { out } = builderStop(() => [SED, grep, said]);
-      return isJsonObject(out) && out.decision === "block" && out.reason === mark;
-    })());
-    check("…an agent transcript with no tool call (an internal agent under `claude --agent`) is not sent back — exit 0, no stdout", (() => {
-      const text = JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "a suggestion" }] } });
-      const { r, untouched } = builderStop(() => [text]);
-      return r.status === 0 && untouched && r.stdout.trim() === "";
-    })());
-    check("…a builder that claims only a CLOSED plan (abandoned) stays silent — exit 0, no stdout, nothing written", (() => {
-      const { r, untouched, root } = builderStop(() => [toolUse("Edit", { file_path: "design/plan/done.json", old_string: "a", new_string: "b" })], (root) => addPlan(root, "done", { ...BLOCKING, status: "abandoned" }));
-      return r.status === 0 && untouched && r.stdout.trim() === "" && !planAt(root, "done").verification?.hook;
-    })());
-    check("…a builder's SubagentStop with no agent_transcript_path checks every open plan, as before", (() => {
-      const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
-      addPlan(root, "settings", { ...BLOCKING, files: ["b.tsx"] });
-      fs.writeFileSync(path.join(root, "b.tsx"), "#5B5FC7");
-      const r = runHook(root, { cwd: root, hook_event_name: "SubagentStop", agent_id: "b1", agent_type: "designtwin:screen-builder", transcript_path: path.join(root, "main.jsonl") });
-      const out: unknown = JSON.parse(r.stdout.trim() || "null");
-      return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && !/without claiming/.test(out.reason)
-        && planOf(root).verification?.hook?.result === "blocked" && planAt(root, "settings").verification?.hook?.result === "blocked";
-    })());
     const BROKEN = JSON.stringify({ status: "pending", tokens: "none" });
     // the plan is named as the OS spells the path (path.relative), so the expectation is built the same way
     // a subagent cannot ask the user, so its item has it report the question back; the main session's asks the user
@@ -1453,18 +1251,6 @@ console.log("field-test fixes:");
         return r.status === 0 && r.stdout.trim() === "" && r.stderr.includes("broken.json is not a valid plan: `tokens` must be an array — it was NOT checked; fix it");
       })());
     }
-    check("…but with a status that is not closed (or JSON that does not parse) it still blocks", (() => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-open-"));
-      fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
-      const t = path.join(root, "main.jsonl");
-      fs.writeFileSync(t, toolUse("Write", { file_path: path.join(root, "design", "plan", "broken.json"), content: "{}" }));
-      return ["{not json", JSON.stringify({ status: "done", tokens: "none" }), JSON.stringify(["abandoned"])].every((text) => {
-        fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), text);
-        const r = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
-        const out: unknown = JSON.parse(r.stdout.trim() || "null");
-        return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("you wrote this plan and it cannot be read");
-      });
-    })());
     check("--status names an unreadable plan whose raw JSON says a closed status as skipped, not as 'cannot read plan'; an open one stays unreadable", (() => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-status-closed-"));
       fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
@@ -1487,47 +1273,7 @@ console.log("field-test fixes:");
       return r.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes("# login.json\n") && out.reason.includes(`# broken.json\n  - ${brokenItem}`)
         && out.reason.includes(`${FAILED}\n(a plan that will not be finished: set its status to "abandoned", or move it out of design/plan/; a build paused on a question for the user: "awaiting-user", ${ASK_USER}):\n\n#`);
     })());
-    check("…and so does the main session's Stop, with no other open plan; an unreadable plan nobody wrote stays a warning (exit 0, no stdout)", (() => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-broken-"));
-      fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
-      fs.writeFileSync(path.join(root, "design", "plan", "broken.json"), BROKEN);
-      const t = path.join(root, "main.jsonl");
-      fs.writeFileSync(t, toolUse("Edit", { file_path: path.join(root, "design", "plan", "broken.json"), old_string: "a", new_string: "b" }));
-      const mine = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
-      const out: unknown = JSON.parse(mine.stdout.trim() || "null");
-      fs.writeFileSync(t, toolUse("Edit", { file_path: "src/x.tsx", old_string: "a", new_string: "b" }));
-      const other = runHook(root, { cwd: root, hook_event_name: "Stop", transcript_path: t });
-      return mine.status === 0 && isJsonObject(out) && out.decision === "block" && typeof out.reason === "string" && out.reason.includes(brokenItem)
-        && other.status === 0 && other.stdout.trim() === "" && other.stderr.includes("broken.json is not a valid plan: `tokens` must be an array — it was NOT checked; fix it");
-    })());
   }
-  check("planSkeletonOuts: the --out of a plan-skeleton call only, past a followed cd, heredoc bodies dropped", (() => {
-    const o = verifyBuild.planSkeletonOuts;
-    const eq = (got: string[], want: string[]) => JSON.stringify(got) === JSON.stringify(want);
-    return eq(o("node plan-skeleton.js s.json v.json ds --out design/plan/a.json --seed-from design/plan/b.json"), ["design/plan/a.json"])
-      && eq(o("node \"C:\\p\\scripts\\plan-skeleton.js\" s v ds --out=\"design\\plan\\a.json\""), ["design\\plan\\a.json"])
-      && eq(o("cd app/ && cd design; node plan-skeleton.mjs s v ds --out plan/a.json"), ["app/design/plan/a.json"])
-      && eq(o("cd /x && node plan-skeleton.js s v ds --out plan/a.json && cd && node plan-skeleton.js s v ds --out b.json"), ["/x/plan/a.json", "b.json"])
-      // a cd inside a subshell or a substitution does not move the commands after it: on such a line a cd only makes the dir unknown
-      && eq(o("(cd sub && make); node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      && eq(o("x=$(cd sub && pwd); node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      && eq(o("x=`cd sub; pwd`; node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      // pushd, chdir, `builtin cd` and PowerShell's Set-Location move like cd; popd leaves the dir unknown
-      && eq(o("pushd design && node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
-      && eq(o("builtin cd design && node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
-      && eq(o("Set-Location -Path design; node plan-skeleton.js s v ds --out plan/a.json"), ["design/plan/a.json"])
-      && eq(o("pushd sub && popd && node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      && eq(o("pushd sub && popd +1 && node plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      // PowerShell quoting: unquoted backslash paths stay whole, a backtick escapes (here a space in a path)
-      && eq(o("Set-Location design\\sub; & node C:\\My` Plugin\\plan-skeleton.js s v ds --out plan\\a.json", true), ["design\\sub/plan\\a.json"])
-      && eq(o("& node C:\\p\\plan-skeleton.js s v ds --out plan\\my` a.json", true), ["plan\\my a.json"])
-      && eq(o("node C:\\p\\plan-skeleton.js s v ds --out plan\\a.json"), [])
-      // a `<<<word` here-string is not a heredoc: the next line is a command
-      && eq(o("grep x <<<bar\nnode plan-skeleton.js s v ds --out design/plan/a.json"), ["design/plan/a.json"])
-      && eq(o("node plan-skeleton.js s v ds > design/plan/a.json"), [])
-      && eq(o("node other.js --out design/plan/a.json"), [])
-      && eq(o("cat > run.sh <<'EOF'\nnode plan-skeleton.js s v ds --out design/plan/a.json\nEOF\nnode plan-skeleton.js s v ds --out design/plan/c.json"), ["design/plan/c.json"]);
-  })());
   check("the not-imported warning tells the builder to list a shared layout above the screen", has(shellProject(false), /list that layout file in this plan's files\[\] too/));
   {
     const c = (codeToken: string): PlanTokenRow => ({ figmaName: "Brand/" + codeToken, value: "#123456", kind: "color", codeToken, verdict: "exact" });
