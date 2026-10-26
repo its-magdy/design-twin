@@ -32,8 +32,9 @@ request; CI runs the same suites, split across several runners.
 
 ## Rules the checks enforce
 
-- **Committed build output stays in sync.** `figma-plugin/code.js` and `claude-plugin/scripts/*.js` are committed.
-  After changing `figma-plugin/src`, `bridge/src` or `design-to-code`, run `bun run build` and commit the result;
+- **Committed build output stays in sync.** `figma-plugin/code.js`, `figma-plugin/ui.html` and `claude-plugin/scripts/*.js`
+  are committed. After changing `figma-plugin/src`, `figma-plugin/ui.template.html`, `bridge/src` or `design-to-code`,
+  run `bun run build` and commit the result;
   CI fails on any difference.
 - **No real names.** Fixtures, docs and comments use invented file, company and layer names; a test guards this.
   Never paste a real client design, a token or an export from a private file into an issue or a fixture.

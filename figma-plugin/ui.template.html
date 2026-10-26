@@ -1,0 +1,563 @@
+<style>
+  /* Colors come from Figma's own theme variables (injected because main.ts passes themeColors:true),
+     so the window follows the user's light/dark setting. Every var() carries the old light-theme
+     literal as its fallback — if the variables are ever absent the UI still renders, just light. */
+  body { font: 13px -apple-system, sans-serif; margin: 0; padding: 14px;
+         color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  #status { margin-bottom: 12px; color: var(--figma-color-text-secondary, #555); min-height: 18px; }
+  #status.err { color: var(--figma-color-text-danger, #c0362c); }
+  button { display: block; width: 100%; margin: 6px 0; padding: 8px; border: 1px solid var(--figma-color-border-strong, #ccc);
+           border-radius: 6px; background: var(--figma-color-bg, #fff); color: var(--figma-color-text, #222);
+           cursor: pointer; font-size: 13px; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:not(:disabled):hover { background: var(--figma-color-bg-hover, #f4f4f4); }
+  .primary { background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #fff);
+             border-color: var(--figma-color-bg-brand, #0d99ff); font-weight: 600; }
+  .primary:not(:disabled):hover { background: var(--figma-color-bg-brand-hover, #0a86e0); }
+  /* Keyboard focus must be visible in both themes — the browser default ring is near-invisible on the
+     dark background. */
+  button:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--figma-color-border-selected, #0d99ff); outline-offset: 1px; }
+  .sep { height: 1px; background: var(--figma-color-border, #eee); margin: 12px 0; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--figma-color-text-tertiary, #999); margin: 4px 0; }
+  label.label { display: block; }
+  .hint { margin-top: 12px; font-size: 11px; color: var(--figma-color-text-tertiary, #999); line-height: 1.45; }
+  .hint code, #bridge code { font-size: 11px; color: var(--figma-color-text-secondary, #555); }
+  .row { display: flex; gap: 6px; }
+  .row button { margin: 6px 0; }
+  input { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid var(--figma-color-border-strong, #ccc); border-radius: 6px;
+          font-size: 13px; color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  input::placeholder { color: var(--figma-color-text-tertiary, #999); }
+  /* The connection section is collapsed by default: exporting by hand needs none of it, and a designer
+     who never opens a terminal should not be greeted by "bridge token". Its one-line state stays
+     visible in the summary either way. */
+  details#connect > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+                              font-size: 12px; color: var(--figma-color-text-secondary, #555); padding: 2px 0; border-radius: 4px; }
+  details#connect > summary::-webkit-details-marker { display: none; }
+  details#connect > summary::before { content: "▸"; font-size: 10px; color: var(--figma-color-text-tertiary, #999); }
+  details#connect[open] > summary::before { content: "▾"; }
+  #pill { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 9px;
+          background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-tertiary, #888); }
+  #pill.on { background: var(--figma-color-bg-success-tertiary, #e7f7ec); color: var(--figma-color-text-success, #1a7f3c); }
+  #pill.bad { background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12); }
+  #bridge { font-size: 11px; margin-top: 10px; padding: 6px 8px; border-radius: 6px; line-height: 1.45;
+            background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-secondary, #888); }
+  #bridge.on { background: var(--figma-color-bg-success-tertiary, #e7f7ec); color: var(--figma-color-text-success, #1a7f3c); }
+  #bridge.bad { background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12); }
+  /* `button { display: block }` above beats a bare [hidden], so the hide rule has to win explicitly —
+     otherwise the Cancel button is permanently visible. */
+  [hidden] { display: none !important; }
+  /* A PERSISTENT failure notice, deliberately not the #status line: status is overwritten by the very
+     next selection change or export, and "the browser delivered 0 of your 400 files" is precisely the
+     message that must still be on screen when you come back to the window. */
+  #banner { margin-bottom: 12px; padding: 8px; border: 1px solid var(--figma-color-border-danger, #f0b4ae); border-radius: 6px;
+            background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12);
+            font-size: 12px; line-height: 1.4; }
+  #progress { height: 6px; margin-bottom: 12px; border-radius: 3px; background: var(--figma-color-bg-tertiary, #eee); overflow: hidden; }
+  #bar { height: 100%; width: 0; background: var(--figma-color-bg-brand, #0d99ff); }
+  /* Phases with no page count (the design-system catalog, per-asset ticks inside one huge frame) still
+     have to look ALIVE — a bar frozen at 0% reads as a hang. */
+  #progress.indet #bar { width: 30%; animation: indet 1.2s linear infinite; }
+  @keyframes indet { from { margin-left: -30%; } to { margin-left: 100%; } }
+  #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
+</style>
+
+<!-- role=status / role=alert: a screen-reader user otherwise never hears that a long export finished
+     or that a download batch failed. -->
+<div id="status" role="status" aria-live="polite">Loading…</div>
+<div id="banner" role="alert" hidden></div>
+<div id="progress" hidden><div id="bar"></div></div>
+
+<div class="label">Export</div>
+<button id="run-sel" disabled>Export current selection</button>
+<button id="run-full" class="primary">Export design system + all page frames</button>
+<div class="hint" style="margin-top:6px">The full export walks every page — on a large file it can take several minutes. You can cancel it.</div>
+<!-- Shown only while a run is walking the file — INCLUDING one a CLI/MCP client started, which the
+     designer never clicked for and would otherwise have no way to stop. -->
+<button id="cancel" hidden>Cancel export</button>
+
+<div class="sep"></div>
+<div class="label">Downloads</div>
+<div id="downloads"></div>
+<button id="layers" disabled>Download layers (<span id="lcount">0</span>)</button>
+<button id="assets" disabled>Download assets (<span id="acount">0</span>)</button>
+
+<div class="hint">Save the downloads into your project's <code>design/</code> folder (assets into <code>design/assets/</code>).</div>
+
+<div class="sep"></div>
+<!-- Optional. Closed by default; opened automatically only when it needs the user (a rejected token). -->
+<details id="connect">
+  <summary>Connect to Claude Code (optional) <span id="pill">not set up</span></summary>
+  <label class="label" for="token" style="margin-top: 10px">Bridge token</label>
+  <div class="row">
+    <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="paste the token here" />
+    <button id="save-token" style="flex: 0 0 60px">Save</button>
+  </div>
+  <div id="bridge" role="status" aria-live="polite">Not set up.</div>
+  <div class="hint">Lets the <code>dtwin</code> command line or the Design Twin MCP server pull this file directly, instead of you downloading it. It runs on your own computer only (localhost) — nothing is sent over the internet. Get the token by running <code>dtwin token show</code> in a terminal — or ask whoever set this up to send it to you. You paste it once.</div>
+</details>
+
+<script>
+/*@relay*/
+  // Everything is wrapped so a single init error can NEVER leave the UI silently frozen:
+  //  - window.onerror surfaces any uncaught error as visible text in #status (no DevTools needed).
+  //  - window.onmessage is registered immediately (catches early messages from code.js).
+  //  - DOM-dependent wiring (button handlers, get-token) runs on DOMContentLoaded, never before the
+  //    elements exist — the classic "script ran before the buttons" freeze.
+  (function () {
+    // The ports the bridge may listen on, in the order we try them. This list is NOT free-form: a
+    // published plugin can only open sockets to ports named in manifest.json's `allowedDomains`, and
+    // match patterns take no port wildcard, so every port here must also be listed there (and vice
+    // versa). Adding a fourth port means shipping a new plugin VERSION through review — which is why
+    // FIGMA_BRIDGE_PORT can no longer be an arbitrary number; see bridge/server-core.js.
+    var BRIDGE_PORTS = [8787, 8788, 8789];
+    var portIdx = 0; // which one the NEXT connect() attempt uses; advances on every failure
+    var assetsState = [];
+    var layerFilesState = [];
+    // A batch runs for items.length * 200ms — 80s for 400 assets — with the button still on screen.
+    // Two clicks used to start two interleaved batches writing the same status line and doubling the
+    // download rate back into the throttle the staggering exists to clear. One at a time.
+    var batchRunning = false;
+    var ws = null;
+    var bridgeToken = "";
+    var busy = false;        // an export is in flight — block a second run (the main thread serializes too)
+    var lastSelCount = 0;    // last-known selection count, so we restore run-sel state after a run ends
+    // The run currently walking the file ({source,label}), or null. Driven by run-begin/run-end from
+    // the main thread rather than by our own button clicks, so a BRIDGE-triggered export — which no
+    // one clicked here — puts the window into exactly the same visible state.
+    var running = null;
+    var cancelSent = false;  // we asked to stop; don't let progress frames overwrite "Cancelling…"
+    // The bridge protocol's plugin half (figma-plugin/src/relay.ts, bundled in above by build.ts): it turns
+    // main-thread messages into socket frames and socket frames into main-thread messages. This window only
+    // hands it the socket (a frame for a socket that is not open is dropped) and the main thread.
+    var relay = DesignTwinRelay.createRelay({
+      toSocket: function (frame) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(frame)); },
+      toMain: function (msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
+    });
+
+    function $(id) { return document.getElementById(id); }
+    // A batch button is enabled exactly when it has files AND no batch is running. DERIVED from that
+    // state every time, never snapshotted-and-restored: a saved `disabled` flag goes stale the moment
+    // a new export lands mid-batch, and restoring it would re-disable a button that now has files (or
+    // enable one that no longer does). Same reason the manifest derives `skipped` instead of counting.
+    function syncBatchButtons() {
+      var lb = $("layers"); if (lb) lb.disabled = batchRunning || layerFilesState.length === 0;
+      var ab = $("assets"); if (ab) ab.disabled = batchRunning || assetsState.length === 0;
+    }
+    // Thrown value -> message string. Byte-for-byte the body of bridge/errmsg.js, restated here only
+    // because a sandboxed iframe cannot import the bundle — one copy in this file, not one per catch.
+    function errText(e) { return typeof e === "string" ? e : String((e && e.message) || e); }
+    function setStatus(text, isErr) {
+      var s = $("status");
+      if (!s) return;
+      s.textContent = text;
+      s.className = isErr ? "err" : "";
+    }
+    function setBusy(b) {
+      busy = b;
+      var rf = $("run-full"); if (rf) rf.disabled = b;
+      var rs = $("run-sel"); if (rs) rs.disabled = b || lastSelCount === 0;
+    }
+    // A persistent red notice. Pass "" to clear it — only a NEW export or a new batch does that, never
+    // an ordinary status update.
+    function setBanner(text) {
+      var b = $("banner");
+      if (!b) return;
+      b.textContent = text || "";
+      b.hidden = !text;
+    }
+    // 1204 -> "1,204". A node count is the main number on the progress line and unseparated six-digit
+    // counts are unreadable at a glance.
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+    // `frac` null => indeterminate (a phase with no page count). The bar is never hidden mid-run, so
+    // "no page info yet" must still look like motion rather than a stall.
+    function setProgress(frac) {
+      var p = $("progress"), bar = $("bar");
+      if (!p || !bar) return;
+      if (frac == null) { p.className = "indet"; bar.style.width = ""; }
+      else { p.className = ""; bar.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%"; }
+    }
+    function runBegin(info) {
+      running = info;
+      cancelSent = false;
+      var c = $("cancel"); if (c) { c.hidden = false; c.disabled = false; c.textContent = "Cancel export"; }
+      var p = $("progress"); if (p) p.hidden = false;
+      setProgress(null);
+      setBusy(true);
+      setStatus(info.source === "bridge"
+        ? "Export in progress — requested over the bridge (" + info.label + ")…"
+        : "Exporting…");
+    }
+    // Tear the run chrome down. Deliberately does NOT clear `cancelSent`: the main thread sends
+    // run-end BEFORE the error that the cancellation produced, and both need to know it was a cancel.
+    function runEnd() {
+      running = null;
+      var c = $("cancel"); if (c) c.hidden = true;
+      var p = $("progress"); if (p) { p.hidden = true; p.className = ""; }
+      setBusy(false);
+    }
+
+    // Any uncaught UI-script error becomes visible text in the plugin window.
+    window.onerror = function (msg, src, line) {
+      setStatus("UI error: " + msg + (line ? " (line " + line + ")" : ""), true);
+      return false;
+    };
+
+    function b64ToBytes(b64) {
+      var bin = atob(b64 || "");
+      var arr = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr;
+    }
+    function dl(name, blob) {
+      var a = document.createElement("a");
+      var url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = name;
+      a.click();
+      // Release the blob once the browser has started the download — otherwise every export leaks
+      // the (multi-MB) object URL for the plugin window's lifetime.
+      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    }
+    function send(type) {
+      setStatus("Exporting…");
+      parent.postMessage({ pluginMessage: { type: type } }, "*");
+    }
+
+    // ---- messages FROM the Figma main thread (code.js). Registered immediately. ----
+    window.onmessage = function (e) {
+      var m = e.data && e.data.pluginMessage;
+      if (!m) return;
+      relay.fromMain(m); // what the bridge must hear of it (hello, replies, a bridge run's progress); the DOM's below
+
+      if (m.type === "selection") {
+        lastSelCount = m.count;
+        var rs = $("run-sel");
+        if (rs && !busy) rs.disabled = m.count === 0;
+        // Figma fires selectionchange freely while an export runs (and collectNode selects the node it
+        // exported), so without this guard a selection event wipes the progress line mid-walk.
+        if (running) return;
+        setStatus(
+          m.count === 0
+            ? "Select a frame for single-screen export, or use the blue button for the whole page."
+            : m.count + " selected" + (m.name ? ' — "' + m.name + '"' : "") + "."
+        );
+        return;
+      }
+      // ---- run lifecycle + progress (both manual and bridge-triggered runs) ----
+      if (m.type === "run-begin") {
+        runBegin(m);
+        return;
+      }
+      if (m.type === "run-end") {
+        var wasCancelled = cancelSent;
+        runEnd();
+        // Bridge-triggered runs never produce a `files`/`error` message here, so this is the ONLY
+        // place a designer learns their cancel took effect on one.
+        if (wasCancelled) setStatus("Export cancelled — nothing was delivered.", true);
+        // `abandoned` is set only when the run died because the BRIDGE gave up on the request that
+        // asked for it (its caller timed out, stalled out, or disconnected) — no one here clicked
+        // anything, so the button's sentence would be a lie. The designer's own cancel wins if both.
+        else if (m.abandoned) setStatus("Export cancelled — the caller went away.", true);
+        return;
+      }
+      if (m.type === "progress") {
+        // `queued`: a bridge run waiting behind the run that is executing (state.ts scheduleRun). It
+        // has not begun, so it is relayed (relay.ts) and nothing here changes — the window keeps showing
+        // the run that IS walking the file, or stays idle. A `start` here is a scene read that waited
+        // and has now begun: not a run of the window's own (no run-begin), so likewise relayed only.
+        if (m.phase === "queued" || m.phase === "start") return;
+        if (!running) runBegin(m); // a frame that outran its run-begin — never show progress with no chrome
+        if (cancelSent) return;    // "Cancelling…" must not be overwritten by in-flight frames
+        var pg = m.page;
+        setProgress(pg && pg.of ? pg.index / pg.of : null);
+        var bits = [];
+        if (typeof m.nodes === "number" && m.nodes) bits.push(fmt(m.nodes) + " nodes");
+        if (typeof m.assets === "number" && m.assets) bits.push(fmt(m.assets) + " assets");
+        var detail = bits.length ? " (" + bits.join(", ") + ")" : "";
+        var who = m.source === "bridge" ? " [bridge: " + m.label + "]" : "";
+        var line;
+        if (m.phase === "design-system") line = "Building the design system" + (pg ? " — page " + pg.index + " of " + pg.of + ", " + pg.name : "") + detail + "…";
+        else if (pg) line = "Exporting page " + pg.index + " of " + pg.of + " — " + pg.name + detail + "…";
+        else line = "Exporting" + detail + "…";
+        setStatus(line + who);
+        return;
+      }
+      if (m.type === "cancel-ack") {
+        // Refused (nothing was running) — say so and put the window back, rather than leaving a
+        // "Cancelling…" that will never resolve.
+        if (!m.accepted) { cancelSent = false; runEnd(); setStatus("Nothing to cancel — the export had already finished."); }
+        return;
+      }
+      if (m.type === "error") {
+        var errWasCancel = cancelSent;
+        runEnd();
+        setStatus(errWasCancel ? "Export cancelled — nothing was delivered." : m.message, true);
+        return;
+      }
+      if (m.type === "files") {
+        runEnd();
+        setBanner(""); // a fresh successful export clears the previous batch's failure notice
+        // The warnings COUNT, surfaced next to the summary. The list itself is in the export's own
+        // manifest; showing only `summary` meant a run with 40 unexported icons read as a clean one.
+        setStatus("Ready: " + m.summary
+          + (m.warnings ? " — " + fmt(m.warnings) + " warning" + (m.warnings === 1 ? "" : "s") + ", see manifest.warnings in the export" : ""));
+        var wrap = $("downloads");
+        if (wrap) {
+          wrap.innerHTML = "";
+          m.files.forEach(function (f) {
+            var row = document.createElement("div");
+            row.className = "row";
+            var d = document.createElement("button");
+            d.textContent = "Download " + f.name;
+            d.onclick = function () { dl(f.name, new Blob([f.content], { type: "application/json" })); };
+            row.appendChild(d);
+            if (f.copyable) {
+              var c = document.createElement("button");
+              c.textContent = "Copy";
+              c.style.flex = "0 0 70px";
+              c.onclick = function () { navigator.clipboard.writeText(f.content); };
+              row.appendChild(c);
+            }
+            wrap.appendChild(row);
+          });
+        }
+        assetsState = m.assets || [];
+        var ac = $("acount"); if (ac) ac.textContent = assetsState.length;
+        layerFilesState = m.layerFiles || [];
+        var lc = $("lcount"); if (lc) lc.textContent = layerFilesState.length;
+        syncBatchButtons();
+        return;
+      }
+      if (m.type === "token") {
+        bridgeToken = m.token || "";
+        var t = $("token"); if (t) t.value = bridgeToken;
+        connect();
+        return;
+      }
+      if (m.type === "identity") {
+        // The main thread answered "who am I" — relay.ts has sent it to the bridge as the `hello`.
+        var idn = m.identity || {};
+        if (idn.file) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");
+        return;
+      }
+    };
+
+    // ---- the localhost bridge (WebSocket client) ----
+    // One connection state, shown twice: a short `pill` in the (usually collapsed) section header and
+    // a full sentence inside it. `kind` is "on" | "bad" | "" (neutral). "bad" is reserved for states
+    // the USER has to fix — a bridge that simply isn't running right now is neutral, not an error:
+    // one-shot `dtwin` commands start and stop a bridge on every run, so "nothing listening" is the
+    // normal resting state between pulls.
+    function setBridge(kind, pill, text) {
+      var el = $("bridge"), p = $("pill");
+      if (el) { el.className = kind; el.textContent = text; }
+      if (p) { p.className = kind; p.textContent = pill; }
+    }
+    // Application close code the bridge uses for "the handshake was fine but the TOKEN is wrong"
+    // (bridge/server-core.js). A browser WebSocket can never read an HTTP 401 — a refused handshake is
+    // an opaque 1006, identical to "nothing is listening" — so the bridge admits a plugin with a bad
+    // token just long enough to say so with a code we CAN read.
+    var CLOSE_BAD_TOKEN = 4401;
+    var everOpened = false;   // has ANY socket opened since the token was last saved?
+    var failsSinceOpen = 0;   // consecutive failed attempts; >= ports.length means "tried them all"
+    // The last answer was "wrong token". Held until a socket opens or a new token is saved, so the
+    // background retry cannot replace the one instruction the user needs with "connecting…".
+    var tokenRejected = false;
+    // Reconnect discipline. Every handler below is guarded by `s === ws` so only the CURRENT socket
+    // can drive state, and reconnects go through a single shared timer. Without both, each retired
+    // socket kept its own live reconnect chain: saving the token closed a socket AND called connect()
+    // immediately, then a redial later the closed socket's onclose connected again — so sockets multiplied
+    // with every save (and with every stale-socket terminate() from the bridge).
+    var reconnectTimer = null;
+    // The redial delay, one port per attempt, so a window that keeps missing walks all of BRIDGE_PORTS
+    // in 3 s. A one-shot dtwin command opens its bridge at any moment and waits for this, so it is short;
+    // a refused dial to localhost costs next to nothing. The bridge reads it as timeouts.ts
+    // PLUGIN_REDIAL_MS (its settle window is built from it) — change both together.
+    var REDIAL_MS = 1000;
+    function scheduleReconnect(ms) {
+      if (reconnectTimer) return; // one pending reconnect at a time, ever
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, ms || REDIAL_MS);
+    }
+    // Nothing answered. Which sentence depends on history: a bridge that WAS here and went away is the
+    // ordinary end of a one-shot `dtwin` pull; one that was never found (after every allowed port has
+    // been tried) more likely was never started.
+    function showOffline() {
+      if (everOpened) {
+        setBridge("", "waiting", "Disconnected — the last dtwin command finished, or Claude Code closed. Nothing to do: this reconnects by itself the next time one starts.");
+      } else if (failsSinceOpen >= BRIDGE_PORTS.length) {
+        setBridge("", "not running", "No bridge found on this computer (tried ports " + BRIDGE_PORTS.join(", ") + "). Start one — run a dtwin command such as  dtwin --serve  in a terminal, or open Claude Code in a project with the Design Twin MCP server enabled. This keeps retrying.");
+      }
+    }
+    function dropSocket() {
+      if (!ws) return;
+      var old = ws;
+      ws = null;
+      old.onopen = old.onclose = old.onerror = old.onmessage = null; // retire it silently
+      try { old.close(); } catch (e) {}
+    }
+    function connect() {
+      if (!bridgeToken) { setBridge("", "not set up", "Not set up. Paste the bridge token above and press Save."); return; }
+      if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // already CONNECTING/OPEN
+      // Try each allowed port in turn rather than only 8787. A bridge that lost the race for 8787 to
+      // some unrelated local process is otherwise invisible to the plugin, and the user has no way to
+      // point it elsewhere — the manifest, not a setting, decides what we may dial.
+      var port = BRIDGE_PORTS[portIdx % BRIDGE_PORTS.length];
+      portIdx++;
+      var s;
+      try {
+        s = new WebSocket("ws://localhost:" + port + "/?token=" + encodeURIComponent(bridgeToken));
+      } catch (e) { failsSinceOpen++; showOffline(); scheduleReconnect(); return; }
+      ws = s;
+      if (!tokenRejected && !everOpened && failsSinceOpen < BRIDGE_PORTS.length) setBridge("", "connecting…", "Looking for the bridge on this computer…");
+      s.onopen = function () {
+        if (s !== ws) return;
+        // Stick to whatever answered: the next reconnect should retry the LIVE bridge's port first,
+        // not resume walking the ladder past it.
+        portIdx = BRIDGE_PORTS.indexOf(port);
+        everOpened = true;
+        tokenRejected = false;
+        failsSinceOpen = 0;
+        setBridge("on", "connected", "Connected to the bridge on this computer (localhost:" + port + ").");
+        relay.socketOpened(); // asks the main thread who this file is; its answer goes out as the `hello`
+      };
+      s.onclose = function (ev) {
+        if (s !== ws) return;
+        ws = null;
+        // Every bridge run is abandoned (relay.ts) — also on CLOSE_BAD_TOKEN: nothing can collect the result
+        // there either. Not on onerror — it closes the socket, and this handler follows.
+        relay.socketClosed();
+        if (ev && ev.code === CLOSE_BAD_TOKEN) {
+          // A bridge IS there — stay on its port instead of walking on to the next one — and this is
+          // the one state only the user can fix, so open the section and say exactly what to do. Retry
+          // slowly: the same token will be refused again until it is re-pasted (Save reconnects at once).
+          portIdx = BRIDGE_PORTS.indexOf(port);
+          failsSinceOpen = 0;
+          tokenRejected = true;
+          setBridge("bad", "token rejected", "The bridge is running, but it rejected this token — it was probably replaced (dtwin --rotate-token) or this is a different computer's token. Run  dtwin --show-token  in a terminal, paste the result above and press Save.");
+          var d = $("connect"); if (d) d.open = true;
+          scheduleReconnect(15000);
+          return;
+        }
+        tokenRejected = false; // that bridge is gone; whatever answers next gets a fresh diagnosis
+        failsSinceOpen++;
+        showOffline();
+        scheduleReconnect();
+      };
+      s.onerror = function () { try { s.close(); } catch (e) {} };
+      s.onmessage = function (ev) {
+        if (s !== ws) return;
+        relay.fromSocket(ev.data); // a command or a cancel, for the main thread (relay.ts)
+      };
+    }
+
+    // ---- DOM-dependent wiring — runs only once the elements exist ----
+    function init() {
+      try {
+        var rs = $("run-sel"); if (rs) rs.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-selection"); };
+        var rf = $("run-full"); if (rf) rf.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-full"); };
+        var cb = $("cancel"); if (cb) cb.onclick = function () {
+          if (!running || cancelSent) return;
+          cancelSent = true;
+          cb.disabled = true;
+          cb.textContent = "Cancelling…";
+          // Honest about the latency: the walk only aborts at its safe points (each node, between
+          // pages and top-level frames, at each asset export), so the last exportAsync still finishes.
+          setStatus("Cancelling — the export stops at its next safe point…");
+          parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
+        };
+        var st = $("save-token"); if (st) st.onclick = function () {
+          var t = $("token"); bridgeToken = (t && t.value ? t.value : "").trim();
+          parent.postMessage({ pluginMessage: { type: "set-token", token: bridgeToken } }, "*");
+          dropSocket(); // retires handlers first, so the old socket can't schedule its own reconnect
+          if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // a pending 15s bad-token retry must not delay this
+          everOpened = false; failsSinceOpen = 0; tokenRejected = false;
+          connect();
+        };
+        // Source images keep their ORIGINAL container format (png/jpg/webp/gif, detected from magic
+        // bytes in assets.ts), so the MIME must follow a.format rather than always claiming PNG.
+        var MIME = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+        // Chromium (which Figma desktop embeds) throttles programmatic downloads to ~10 PER SECOND —
+        // a rate limit, not a total cap — and silently drops what exceeds it, so a `forEach(dl)` over a
+        // real export's dozens of layers or hundreds of assets delivered the first handful and looked
+        // like it delivered them all. 200ms spacing puts us at 5/s, comfortably under. Stagger them and
+        // report the actual count, so "done" means done. `label` names the batch in the status line;
+        // `make` builds each Blob lazily, one at a time, instead of materialising every asset's bytes
+        // up front.
+        // NOT fixed by pacing: Chrome's per-site "Automatic downloads" permission can block multi-file
+        // downloads outright at any rate. A blocked anchor click does not throw, so `failed` stays empty
+        // and the batch would otherwise announce a full delivery of zero files — the silent truncation
+        // this file refuses everywhere else. We cannot detect it, so the completion line names it.
+        // Re-entry is refused, and BOTH batch buttons go disabled for the duration (syncBatchButtons
+        // reads `batchRunning`) so it is visible why.
+        function dlBatch(items, label, name, make) {
+          if (!items.length) return;
+          if (batchRunning) { setStatus("A download batch is already running — wait for it to finish.", true); return; }
+          batchRunning = true;
+          setBanner(""); // this attempt's outcome replaces the last one's, never stacks on it
+          syncBatchButtons();
+          var done = function () {
+            batchRunning = false;
+            syncBatchButtons();
+          };
+          var i = 0;
+          var failed = [];
+          setStatus("Downloading " + items.length + " " + label + "… 0/" + items.length);
+          (function step() {
+            if (i >= items.length) {
+              done();
+              // Report the WHOLE outcome. Aborting the batch on the first failure — as this did —
+              // threw away every remaining item over one bad blob, and a partial delivery that
+              // announces itself as finished is the silent-truncation this file avoids everywhere
+              // else. One bad asset should cost you that asset, not the other 399.
+              var delivered = items.length - failed.length;
+              if (!failed.length) {
+                setStatus("Downloaded " + items.length + " " + label + " — if fewer arrived, allow “Automatic downloads” for figma.com and retry.");
+              } else if (delivered === 0) {
+                // ZERO delivered is a different event from "3 of 400 failed": nothing landed on disk,
+                // and the cause is almost always Chrome's per-site "Automatic downloads" permission
+                // rather than the blobs themselves. It gets the persistent banner — a status line here
+                // is gone the moment the next selection change or export writes over it, which is how
+                // this failed silently before.
+                setBanner("Downloaded 0 of " + items.length + " " + label + " — nothing was saved. "
+                  + "Allow “Automatic downloads” for figma.com in your browser/desktop-app settings, then click the button again. "
+                  + "First failure: " + failed[0]);
+                setStatus("Download failed — see the notice above.", true);
+              } else {
+                setBanner("Downloaded " + delivered + " of " + items.length + " " + label + " — " + failed.length + " failed: " + failed.join(", "));
+                setStatus("Downloaded " + delivered + "/" + items.length + " " + label + " — see the notice above.", true);
+              }
+              return;
+            }
+            var it = items[i++];
+            try { dl(name(it), make(it)); } catch (e) { failed.push(name(it) + " (" + errText(e) + ")"); }
+            setStatus("Downloading " + items.length + " " + label + "… " + i + "/" + items.length + (failed.length ? " (" + failed.length + " failed)" : ""));
+            setTimeout(step, 200); // ~200ms is the spacing that reliably clears Chromium's throttle
+          })();
+        }
+        var lb = $("layers"); if (lb) lb.onclick = function () {
+          dlBatch(layerFilesState, "layer file(s)", function (f) { return f.name; }, function (f) {
+            return new Blob([f.content], { type: "application/json" });
+          });
+        };
+        var as = $("assets"); if (as) as.onclick = function () {
+          // a.file is the name the plugin already wrote into the tree's `asset` path — use it verbatim
+          // rather than re-deriving the convention (this copy had already drifted: it sanitised the id
+          // but not the format).
+          dlBatch(assetsState, "asset(s)", function (a) { return a.file; }, function (a) {
+            var type = MIME[a.format] || "application/octet-stream";
+            return a.text != null ? new Blob([a.text], { type: type }) : new Blob([b64ToBytes(a.base64)], { type: type });
+          });
+        };
+        // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.
+        parent.postMessage({ pluginMessage: { type: "get-token" } }, "*");
+        setStatus("Ready — select a frame, or use the blue button.");
+      } catch (e) {
+        setStatus("UI init error: " + errText(e), true);
+      }
+    }
+
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+  })();
+</script>

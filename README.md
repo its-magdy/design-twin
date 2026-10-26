@@ -83,7 +83,7 @@ from the registry (the linked `dtwin` gets them from its shebang, `#!/usr/bin/en
 In Figma desktop, go to **Plugins → Development → Import plugin from manifest…** and pick
 `design-twin/figma-plugin/manifest.json`.
 
-`code.js` is committed pre-built, so there is nothing to build. After pulling a new version of this
+`code.js` and `ui.html` are committed pre-built, so there is nothing to build. After pulling a new version of this
 repo, import the manifest again, or new permissions (such as library reads) quietly return nothing.
 
 ### 3. Install the Claude Code plugin
@@ -298,7 +298,7 @@ bun test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
 Every other `test/*.test.ts` suite runs the same way. `bun run test` runs every suite in order (serially, output live) and ends with a summary — one row per suite, exit 1 if any failed, no suite is skipped after a failure; `bun test/run-suites.ts <name>…` runs a subset. `bun run test:fast` skips four of the slow browser (probe e2e) suites — about 3 minutes instead of ~20 — and says so loudly at the end; run `bun run test` before committing (a bare `bun test` is Bun's own test runner, pointed by `bunfig.toml` at `test/spawn-stress/` only), CI's other matrix legs run them. `DT_E2E_POOL=<n>` sets how many probes the browser suites run at once. `TESTING.md`
-lists each suite and the live-Figma checks (the run-suites summary is the authority for check counts). The plugin's `code.js` and
+lists each suite and the live-Figma checks (the run-suites summary is the authority for check counts). The plugin's `code.js` and `ui.html` and
 `claude-plugin/scripts/` are committed build output (the bridge has none: it runs and ships as TypeScript). After
 editing their sources, rebuild them:
 
@@ -306,8 +306,8 @@ editing their sources, rebuild them:
 bun run build
 ```
 
-That runs each workspace's own build — esbuild → `figma-plugin/code.js` for the plugin (the bridge has nothing to
-build) — and then `bun claude-plugin/build-scripts.ts` to re-bundle
+That runs each workspace's own build — esbuild → `figma-plugin/code.js` and `figma-plugin/ui.html` for the plugin
+(the bridge has nothing to build) — and then `bun claude-plugin/build-scripts.ts` to re-bundle
 `claude-plugin/scripts/`.
 
 CI fails if the committed build output doesn't match what the sources produce.

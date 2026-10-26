@@ -8,8 +8,11 @@ import vm from "node:vm";
 import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
 import { PLUGIN_REDIAL_MS } from "../bridge/src/timeouts.ts";
+import { UI_HTML, renderUiHtml } from "../figma-plugin/build-options.ts";
 
-const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
+// The window as build.ts makes it from the current ui.template.html + src/relay.ts, so a stale committed ui.html
+// cannot pass here; the freshness check below fails on one instead.
+const html = await renderUiHtml();
 const scriptMatch = must(/<script>([\s\S]*)<\/script>/.exec(html), "<script> in ui.html");
 const script = must(scriptMatch[1], "<script> capture group in ui.html");
 const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8")) as { networkAccess: { allowedDomains: string[] } };
@@ -22,13 +25,13 @@ interface FakeEl {
 }
 interface FakeSocket {
   url: string; readyState: number;
-  onopen?: () => void; onclose?: (e: { code: number }) => void;
+  onopen?: () => void; onclose?: (e: { code: number }) => void; onmessage?: (e: { data: string }) => void;
   /** every frame the script sent on this socket, as sent (JSON text) */
   sent: string[];
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string }
+interface PluginMsg { type: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
@@ -41,7 +44,7 @@ function boot() {
     url: string; readyState = 0;
     sent: string[] = [];
     // assigned by the script under test; `declare` keeps them off the instance until it does
-    declare onopen?: () => void; declare onclose?: (e: { code: number }) => void;
+    declare onopen?: () => void; declare onclose?: (e: { code: number }) => void; declare onmessage?: (e: { data: string }) => void;
     constructor(url: string) { this.url = url; sockets.push(this); }
     close() { this.readyState = 3; }
     send(d: string) { this.sent.push(d); }
@@ -63,6 +66,12 @@ function boot() {
 }
 const openIt = (s: FakeSocket) => { s.readyState = 1; s.onopen?.(); };
 const closeIt = (s: FakeSocket, code: number) => { s.readyState = 3; s.onclose?.({ code }); };
+
+console.log("build output:");
+check("figma-plugin/ui.html is what ui.template.html + src/relay.ts build to (else run `bun figma-plugin/build.ts`)",
+  fs.existsSync(UI_HTML) && fs.readFileSync(UI_HTML, "utf8") === html);
+check("the relay is bundled into the window's one script, which stays sloppy-mode as it always ran",
+  /var DesignTwinRelay = /.test(script) && !/^\s*"use strict"/.test(script));
 
 console.log("markup the script depends on:");
 const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge"];
@@ -184,6 +193,40 @@ check("run-begin of a bridge run with a requestId → the `start` frame carries 
   w.msg({ type: "progress", phase: "queued", source: "bridge", label: "exportNode", requestId: "rB-2" });
   w.msg({ type: "run-begin", source: "bridge", label: "exportNode", requestId: "rA-1" });
   return progressFrames(s).join("|") === '{"type":"progress","phase":"queued","requestId":"rB-2"}|{"type":"progress","phase":"start","requestId":"rA-1"}';
+})());
+
+console.log("the bridge relay, wired into the window (each translation: test/plugin-relay.test.ts):");
+check("socket open → get-identity to the main thread; its identity answer → the hello on the socket", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
+  const asked = w.posted.some((p) => p.type === "get-identity");
+  w.msg({ type: "identity", identity: { instanceId: "i-1", file: "F", page: "P", fileKey: "K", fileKeyAvailable: true, pluginVersion: "0.1.0" } });
+  return asked && s.sent.join("|") === '{"type":"hello","instanceId":"i-1","file":"F","fileKey":"K","page":"P","pluginVersion":"0.1.0"}'
+    && w.el("bridge").textContent.includes('"F"');
+})());
+check("a command frame → posted as {type:bridge}; its bridge-result → the reply frame on the socket", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
+  s.onmessage?.({ data: JSON.stringify({ id: "r-1", cmd: "ping", args: {} }) });
+  const fwd = w.posted.find((p) => p.type === "bridge");
+  w.msg({ type: "bridge-result", id: "r-1", ok: true, result: { pong: true } });
+  return fwd?.id === "r-1" && s.sent.join("|") === '{"id":"r-1","ok":true,"result":{"pong":true}}';
+})());
+check("a socket cancel {id} → a main-thread cancel of that id; an id-less one → nothing", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); openIt(s);
+  s.onmessage?.({ data: JSON.stringify({ type: "cancel", id: "r-2" }) });
+  s.onmessage?.({ data: JSON.stringify({ type: "cancel" }) });
+  const cancels = w.posted.filter((p) => p.type === "cancel");
+  return cancels.length === 1 && cancels[0]?.id === "r-2";
+})());
+check("socket close (and a 4401 close) → cancel scope:bridge to the main thread", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); openIt(w.last()); closeIt(w.last(), 1006);
+  const w2 = boot(); w2.msg({ type: "token", token: "t" }); closeIt(w2.last(), 4401);
+  const scoped = (x: typeof w) => x.posted.filter((p) => p.type === "cancel" && p.scope === "bridge").length === 1;
+  return scoped(w) && scoped(w2);
+})());
+check("a frame for a socket that is not open is dropped, not thrown", (() => {
+  const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); // still CONNECTING
+  w.msg({ type: "bridge-result", id: "r-3", ok: true, result: 1 });
+  return s.sent.length === 0 && w.el("status").className !== "err";
 })());
 
 report();

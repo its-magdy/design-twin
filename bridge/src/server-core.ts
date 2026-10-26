@@ -163,36 +163,13 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // Origin/Host failures are still refused outright at the HTTP layer.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
 
-// ---- the plugin <-> bridge protocol on the wire: the JSON each side sends. The plugin's side is
-// figma-plugin/ui.html (plain JS, so these types are its contract, not its source); the test suites'
-// fake plugin (test/fake-plugin.ts) sends and reads exactly these.
-
-/** bridge -> plugin: run one command; the plugin answers with a ReplyFrame carrying the same id. */
-export interface CommandFrame<C extends Cmd = Cmd> { id: string; cmd: C; args: Commands[C]["args"] }
-/** bridge -> plugin: the bridge gave up on request `id` (timed out, stalled out, or its caller left). */
-export interface CancelFrame { type: "cancel"; id: string }
-export type BridgeFrame = CommandFrame | CancelFrame;
-/** plugin -> bridge: who this plugin is, sent on every socket open. ui.html sends null for what it does not
- *  know; a plugin older than version reporting omits pluginVersion. */
-export interface HelloFrame {
-  type: "hello";
-  instanceId?: string | null; file?: string | null; fileKey?: string | null; page?: string | null; pluginVersion?: string | null;
-}
-/** plugin -> bridge: an unsolicited progress tick (figma-plugin/src/progress.ts), for the run serving `requestId`. */
-export interface ProgressFrame {
-  type: "progress";
-  requestId?: string | null; phase?: string; page?: { index: number; of: number; name?: string | null } | null;
-  nodes?: number | null; assets?: number | null;
-  /** a `queued` frame: who the waiting run is for */
-  source?: "ui" | "bridge"; label?: string;
-}
-/** plugin -> bridge: the answer to command `id`. */
-export type ReplyFrame = { [C in Cmd]: { id: string; ok: true; result: Commands[C]["reply"] } }[Cmd] | { id: string; ok: false; error: string };
-export type PluginWireFrame = HelloFrame | ProgressFrame | ReplyFrame;
+// ---- the plugin <-> bridge protocol on the wire: plugin-frames.ts, the one module both sides type against.
+export type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame, ReplyFrame } from "./plugin-frames.ts";
+import type { BridgeFrame } from "./plugin-frames.ts";
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
-/** A plugin progress tick as ui.html relays it: `{type:"progress", phase, page, nodes, assets}` — the
+/** A plugin progress tick as the plugin's relay (figma-plugin/src/relay.ts) sends it: `{type:"progress", phase, page, nodes, assets}` — the
  *  counters figma-plugin/src/progress.ts emits, each absent when the phase has none. Read defensively:
  *  it is foreign JSON, and only a human-readable progress message is ever built from it. */
 export interface ProgressTick {
@@ -202,7 +179,7 @@ export interface ProgressTick {
   assets: number | null;
 }
 
-/** One frame from the plugin (figma-plugin/ui.html), after parsePluginFrame: a `hello` identity
+/** One frame from the plugin (its relay, figma-plugin/src/relay.ts), after parsePluginFrame: a `hello` identity
  *  announcement, an unsolicited `progress` tick, or the reply to one command (`{id, ok, result, error}`).
  *  Anything else — a non-object, a reply whose id is not a string — is dropped (null). */
 type PluginFrame =
