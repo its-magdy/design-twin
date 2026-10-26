@@ -51,11 +51,10 @@ import { visibility } from "./visible-tree.ts";
 import { screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
 import { judgeGate, screenAudit } from "./audit-gate.ts";
-import { isJsonObject, isPassingVerdict } from "./types.ts";
+import { isJsonObject } from "./types.ts";
 import { colorKey } from "./color.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
-import { recordedReport } from "./report-freshness.ts";
-import { isRecordV2Shaped, isVerificationRecord } from "./doc-guards.ts";
+import { verificationEvidence } from "./verification-evidence.ts";
 import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import { isCodeConnectMap } from "./map-validate-core.ts";
 import type {
@@ -66,7 +65,7 @@ import { getOrInit } from "./map-util.ts";
 import { arbitraryPx, codeOf, colorLiterals, declaredCustomProps, kindsCompatible, literalUses, moduleImported, projectGraph } from "./code-scanner.ts";
 import type { FileText, ProjectGraph } from "./code-scanner.ts";
 import { requiredCustomProps } from "./token-naming.ts";
-import { parsePlanText, recordedEdits, updatePlan, verificationFacts } from "./plan-record.ts";
+import { parsePlanText, recordedEdits, updatePlan } from "./plan-record.ts";
 import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "./plan-status.ts";
 import type { StatusResult } from "./plan-status.ts";
 import { locateCache, locateExport, locateReports, type LocateCache } from "./verify-locate.ts";
@@ -75,7 +74,7 @@ import type { BadPlan, PlanFile } from "./node-artefacts.ts";
 import type { ExportHit, ReportRef } from "./verify-locate.ts";
 import { exitFlushed, runCli } from "./proc.ts";
 import { LEGACY_MAP_FILE, MAP_FILE, PLAN_DIR, TARGET_FILE } from "../bridge/src/project-layout.ts";
-import { parseSetName, setBaseOf, siblingFile } from "./verify-sets.ts";
+import { parseSetName, setBaseOf } from "./verify-sets.ts";
 import { readHookInput as readHookPayload } from "./hook-input.ts";
 import { closedStatusOf, NO_CLAIM_MARK, sessionClaim } from "./session-claim.ts";
 import type { HookPayload, HookRead } from "./hook-input.ts";
@@ -206,223 +205,6 @@ function loadMapKeys(cwd: string): Map<string, { name: string; module: string }>
     return keys;
   }
   return new Map();
-}
-
-// What the plan says about how the build was checked — mode … a11y read from verification.recorded@2 when there is
-// one, else from verification's top level (a hand-written or native plan, a recorded@1 one): verificationFacts.
-// Every message names the block it read. A warning, never a block.
-function checkVerification(plan: Plan, cwd: string): string[] {
-  const f = verificationFacts(plan.verification);
-  const at = f.at;
-  if (f.mode === undefined) {
-    return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or " +
-      "{mode:\"static-only\", reason} if the project genuinely has no way to render"];
-  }
-  if (f.mode === "rendered") {
-    // An agent may write artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
-    const shape = (x: unknown): string => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
-    // (both shape errors in one round: a plan can have both as objects, and this is only a warning)
-    const wrongShape: string[] = [];
-    if (f.artifacts !== undefined && !Array.isArray(f.artifacts))
-      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} — e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
-    if (f.deltas !== undefined && !Array.isArray(f.deltas))
-      wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
-    if (wrongShape.length) return f.deltas === undefined ? [...wrongShape, `${at}.deltas is missing — list the residual differences against the reference ([] if none were found)`] : wrongShape;
-    const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
-    if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty — list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs.existsSync(path.join(cwd, String(a))));
-    if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} — render the screen, or record mode "static-only" with the reason`];
-    if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing — list the residual differences against the reference ([] if none were found)`];
-    return [];
-  }
-  if (f.mode === "static-only") {
-    if (f.reason) return [];
-    return [at === "verification.recorded"
-      ? "verification.recorded.mode is \"static-only\" with no `reason` — the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator…) in the measured file's `reason`, then re-run --compare --record-plan"
-      : "verification.mode is \"static-only\" with no `reason` — say what was checked for and not found (dev server, Playwright, simulator…)"];
-  }
-  return [`${at}.mode must be "rendered" or "static-only", got ${JSON.stringify(f.mode)}`];
-}
-
-// Missing evidence worth having (a warning, never a block).
-function verificationWarnings(plan: Plan): string[] {
-  const v = plan.verification;
-  const f = verificationFacts(v);
-  if (!v || f.mode !== "rendered") return [];
-  const out: string[] = [];
-  const c = v.coverage;
-  if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
-    out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered " +
-      "(references/verify.md, \"Beyond the ideal frame\")");
-  if (!f.a11y) out.push(f.at === "verification.recorded"
-    ? "verification.recorded has no a11y — the recorded report's behaviour/a11y checks did not run; re-run the probe with them and --compare --record-plan, or say in the report that accessibility was not checked"
-    : "verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) — " +
-      "`verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
-  return out;
-}
-
-// plan.verification.recorded is what `--compare --record-plan` wrote from ONE report (its sha256 names that report's
-// text). When the report file has since been rewritten (another --compare without --record-plan, a hand edit), the
-// record is older than the verdict it summarises. A warning — the report is the verdict either way; plan-status.ts reads the record's
-// mode/reason for a plan with no report (static-only), and blocks on a hand edit of it (recordedEdits).
-// (The report is read only when it is a regular file: a record naming a FIFO or a device must not hang the hook.)
-// A record naming a report that is not on disk at all (renamed or deleted) cannot be compared with it, so a hand edit of
-// the record would go unseen (recordedEdits): that is a warning of its own.
-function recordedReportWarnings(plan: Plan, cwd: string): string[] {
-  const r = recordedReport(plan, cwd);
-  if (r.kind === "missing") {
-    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) — the record cannot be checked against its report: run verify-screen --migrate for a ` +
-      "legacy-named verify set, else re-run verify-screen --compare --record-plan"];
-  }
-  return r.kind === "rewritten" ? [`plan.verification records an older run of ${r.report} — re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`] : [];
-}
-
-// Beside a recorded block (the record), the record's own keys at verification's top level — and a hand-written
-// headline/verdict — are read by nothing: say so, once. The tool keys only beside a recorded@2, and only the ones it
-// holds (one it lacks is read from the top level — verificationFacts; beside a recorded@1 they are all still the
-// record's); the hand verdicts beside either.
-const SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"] as const;
-const HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"] as const;
-function recordedShadowWarnings(plan: Plan): string[] {
-  const v = plan.verification;
-  const rec: unknown = v && typeof v === "object" ? v.recorded : undefined;
-  if (!v || !isJsonObject(rec)) return [];
-  const v2 = isRecordV2Shaped(rec);
-  if (v2 && !isVerificationRecord(rec)) return []; // (an edited record blocks; its message comes first)
-  const top = Object.keys(v);
-  const keys = [...(v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== undefined) : []), ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
-  return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored — verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); ` +
-    "remove " + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
-}
-
-// What the report's behaviour/a11y section says — WARNINGS only, never a block (not the fidelity verdict).
-// (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
-// (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
-// (report.json or its .md), else the plan's own report (newestOwn).
-// The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
-// fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
-// them. "Not found" only when nothing matches, so a real disagreement is never hidden behind a path spelling.
-// The plan's own report is chosen by CONTENT, never by a clock (a `touch` or a fresh clone reorders mtimes — the
-// freshness rule of plan-status.ts): the report verification.recorded.report names (the one its record was written from),
-// else, among the reports for the plan's own screen (matched by name, as locateReports ranks; all of them when none is),
-// the latest measuredAt — none is the oldest — with mtime only breaking a tie.
-const json = (x: string): string => siblingFile(x, "reportMd", "report");
-const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
-// verification.recorded.report in ReportRef.rel's spelling (read as recordedReportWarnings reads it: project-relative or absolute)
-function recordedReportRel(plan: Plan, cwd: string | undefined): string | null {
-  const rec: unknown = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : undefined;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
-  const named = rec.report.trim();
-  return json(slash(cwd === undefined ? named : path.relative(cwd, path.resolve(cwd, named))).replace(/^\.\//, ""));
-}
-const measuredMs = (r: ReportRef): number => {
-  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
-  return Number.isNaN(t) ? -Infinity : t;
-};
-const newestOwn = (reports: ReportRef[], recordedRel: string | null = null): ReportRef | null => {
-  const recorded = recordedRel === null ? undefined : reports.find((r) => r.rel === recordedRel);
-  if (recorded) return recorded;
-  const own = reports.filter((r) => r.matchedBy === "name");
-  const later = (r: ReportRef, best: ReportRef): boolean => measuredMs(r) > measuredMs(best) || (measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs);
-  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || later(r, best) ? r : best), null);
-};
-function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string; recordedRel?: string | null } = {}): { ref: ReportRef | null; missing?: string } {
-  if (named === undefined || !named.trim()) return { ref: newestOwn(reports, ctx.recordedRel) };
-  const want = slash(named.trim());
-  const rels = new Set<string>([json(want.replace(/^\.\//, ""))]);
-  if (ctx.cwd !== undefined) {
-    rels.add(json(slash(path.relative(ctx.cwd, path.resolve(ctx.cwd, named.trim()))))); // absolute, or relative to the project
-    if (ctx.planFile !== undefined) rels.add(json(slash(path.relative(ctx.cwd, path.resolve(path.dirname(path.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
-  }
-  const exact = reports.find((r) => rels.has(r.rel));
-  if (exact) return { ref: exact };
-  const base = json(path.posix.basename(want));
-  const byBase = reports.filter((r) => path.posix.basename(r.rel) === base);
-  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
-  return { ref: null, missing: want };
-}
-// ONE report speaks for the run — the one verification.a11y.report names, else the plan's own (newestOwn); its fail count is of
-// failed elements ("+N more" rows count N), so it says "failures". A re-run of a set overwrites its report, so a run's
-// older rounds are gone. Every OTHER report file locateReports matched (design/verify/ is flat, so
-// another file is another set — a variant <Layer>__<id>.<slug> (a narrow width, a dark theme), or a legacy-named one)
-// warns on its own failures: one warning per other report file, so no FAIL is silenced; the disagreement and "did not run"
-// warnings stay with the one report above.
-function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, ctx: { cwd?: string; planFile?: string } = {}): string[] {
-  const out: string[] = [];
-  const all = reports || [];
-  const f = verificationFacts(plan.verification);
-  const a11y = f.a11y;
-  const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
-  const recordedRel = recordedReportRel(plan, ctx.cwd);
-  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, { ...ctx, recordedRel });
-  if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran))
-    out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
-  const r = target.ref ?? newestOwn(all, recordedRel);
-  const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
-  const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
-    const ids = [...new Set(failed)];
-    return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable ` +
-      `accessibility failure is never waived: fix it or raise a designer question`;
-  };
-  // Every other report file (not the one speaking for the run)
-  const others = all.filter((x) => x !== r);
-  const otherFails = others.flatMap((x) => (x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []));
-  const b = r ? r.behaviour : null;
-  if (!r || !b) return [...out, ...otherFails];
-  if (!b.ran) {
-    // a measured file the shipped probe did not write (hand-written, non-web — the probe is web only) never has a
-    // block: no warning every Stop. "--behaviour off" is the probe's own switch, so it always warns.
-    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
-    out.push(b.why === "--behaviour off"
-      ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) — a switch for the probe's own tests only; re-run the probe without it before claiming accessibility`
-      : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — re-run the shipped probe, or say in the report that accessibility was not checked`);
-    return [...out, ...otherFails];
-  }
-  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
-  if (recorded !== undefined && target.missing === undefined && recorded !== b.fail)
-    out.push(`${f.a11yAt}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — ` +
-      (f.a11yAt === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
-  return [...out, ...otherFails];
-}
-
-// The verification block contradicting itself in adjacent keys (a11y and deltas as verificationFacts reads them).
-// A hand verdict is checked against the reports only in a plan with no `recorded`: beside one it is ignored
-// (recordedShadowWarnings).
-const A11Y = /\b(a11y|axe|accessib)/i;
-function verificationContradictions(plan: Plan, reports: ReportRef[] | null | undefined): string[] {
-  const v = plan.verification;
-  if (!v || typeof v !== "object") return [];
-  const f = verificationFacts(v);
-  const out: string[] = [];
-  const notChecked = (v.coverage && Array.isArray(v.coverage.notChecked)) ? v.coverage.notChecked : [];
-  const what = (e: string | { what?: string; why?: string } | null | undefined): string => String(e && typeof e === "object" ? e.what || "" : e || "");
-  const rendered = (v.coverage && Array.isArray(v.coverage.rendered)) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
-  if (f.a11y && typeof f.a11y === "object" && f.a11y.violations !== undefined) {
-    const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`${f.a11yAt === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says ` +
-      `"${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
-  }
-  for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
-  const rec: unknown = v.recorded;
-  for (const r of reports || []) {
-    // --record-plan writes only the OPEN high/medium deltas — [] beside a report of lows is that record, not a gap
-    const recordedHere = isJsonObject(rec) && rec.report === r.rel;
-    if (!recordedHere && Array.isArray(f.deltas) && !f.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
-      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — ` + (f.at === "verification.recorded"
-        ? `the record is of another report; if ${r.rel} is this build's, record it (${scriptCmd("verify-screen")} --compare --record-plan)`
-        : "copy them (or the ones you judged real, with why) into the plan"));
-    if (rec !== undefined) continue;
-    for (const k of ["verifyScreenVerdict", "verdict"] as const) {
-      const claimed = v[k];
-      const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict))
-        out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
-      // accepted deviations are not a plain pass: the plan must not summarise them away
-      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations")
-        out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" — say the accepted deviations, not a plain pass`);
-    }
-  }
-  return out;
 }
 
 // A deviation is only reviewable when it says WHICH node, WHICH field, what was designed,
@@ -709,13 +491,11 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   warnings.push(...undeclaredColourTokens(live, graph()));
 
   blocking.push(...recordedEdits(plan, cwd));
-  warnings.push(...checkVerification(plan, cwd));
-  warnings.push(...verificationWarnings(plan));
-  warnings.push(...recordedReportWarnings(plan, cwd));
-  warnings.push(...recordedShadowWarnings(plan));
   const reports = o.reports || locateReports(plan, file, cwd, exp);
-  warnings.push(...verificationContradictions(plan, reports));
-  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
+  // what the verification block says, and the reports against it (verification-evidence.ts) — warnings only
+  const evidence = verificationEvidence(plan, reports, { cwd, planFile: file });
+  warnings.push(...evidence.shapeWarnings());
+  warnings.push(...evidence.behaviourWarnings());
   warnings.push(...legacySetWarnings(plan, file, reports));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
@@ -1003,7 +783,6 @@ async function main(argv: string[]): Promise<number> {
 // names are token-naming.ts's; the locate / record / status functions are imported from their own modules.
 export {
   checkPlan, anchorCoverage, validatePlanHeader, auditGateWarnings, legacySetWarnings, deviationWarnings, deviationConflicts,
-  verificationWarnings, recordedReportWarnings, recordedShadowWarnings, verificationContradictions, behaviourWarnings,
   isStale, main,
 };
 

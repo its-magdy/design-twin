@@ -135,6 +135,19 @@ console.log("\n--apply renames the set and the plan's recorded paths together:")
   check(`a second run has nothing to do (exit ${again.status}) and changes nothing`, again.status === 0 && /nothing to migrate/.test(again.stderr) && JSON.stringify(p.ls()) === JSON.stringify(ls));
   fs.rmSync(p.root, { recursive: true, force: true });
 }
+{
+  // a record naming its report by the .md (recorded.report and a11y.report alike) is the same report: no hand edit, so the
+  // set is renamed like any other (it was skipped as hand-edited while the .md's bytes were hashed against the .json's sha)
+  const p = project();
+  const plan0 = p.plan(), rec0 = recOf(plan0);
+  const MD = "design/verify/Crates.report.md";
+  p.put(REL, { ...plan0, verification: { ...plan0.verification, recorded: { ...rec0, report: MD, ...(rec0.a11y ? { a11y: { ...rec0.a11y, report: MD } } : {}) } } });
+  const { r } = run(p, true);
+  const after = p.plan(), rec = recOf(after);
+  check(`a record spelling its report as the .md: renamed, not skipped; still no hand edit after (got ${JSON.stringify(r.steps.map((s) => s.kind === "skip" ? s.why[0] : s.kind))}, ${rec.report})`,
+    r.steps.length === 1 && r.steps[0]?.kind === "rename" && recordedEdits(after, p.root).length === 0 && /^design\/verify\/Crates__80_1\.report\.(md|json)$/.test(rec.report));
+  fs.rmSync(p.root, { recursive: true, force: true });
+}
 
 console.log("\nthe live status moves with the set; the hook's record is re-stamped only when it held the older formula:");
 {

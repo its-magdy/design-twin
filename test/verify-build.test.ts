@@ -13,7 +13,8 @@ import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-binding.ts";
 import { build, seamViolations, ENTRIES } from "../claude-plugin/build-scripts.ts";
-import { checkPlan, isStale, validatePlanHeader, anchorCoverage, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
+import { checkPlan, isStale, validatePlanHeader, anchorCoverage, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
+import { verificationEvidence } from "../design-to-code/verification-evidence.ts";
 import type { CheckPlanResult } from "../design-to-code/verify-build.ts";
 import { moduleImported, projectGraph } from "../design-to-code/code-scanner.ts";
 import { locateCache, locateExport, locateReports } from "../design-to-code/verify-locate.ts";
@@ -62,6 +63,9 @@ const split = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) 
 const problems = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => { const r = split(files, plan, map); return [...r.blocking, ...r.warnings.filter((w) => !AMBIENT.test(w))]; };
 const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => split(files, plan, map).blocking;
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
+// The verification block's warnings as the hook gets them (verification-evidence.ts), and the contradictions among them.
+const shapeWarnings = (plan: Plan, refs: ReportRef[] = []): string[] => verificationEvidence(plan, refs, { cwd: os.tmpdir() }).shapeWarnings();
+const verificationContradictions = (plan: Plan, refs: ReportRef[]): string[] => shapeWarnings(plan, refs).filter((w) => /contradicts itself|deltas is \[\] but|cannot overrule|say the accepted deviations/.test(w));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
 const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, measuredAt: null, mtimeMs: 0, inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false, ...r });
 const statusOf = (root: string) => planStatus(root).status(planOf(root), { planFile: path.join(root, "design", "plan", "login.json") }).status;
@@ -1356,9 +1360,7 @@ check("an unknown option is refused, not swallowed as a file path", runSync(proc
 // ---------------------------------------------------------------- report.behaviour → hook WARNINGS, never a block
 console.log("behaviour/a11y in the Stop hook (warnings only):");
 {
-  // looked up by name: a verify-build without it fails these checks cleanly instead of failing to import
-  const vb: Record<string, unknown> = { ...verifyBuild };
-  const bw = (plan: Plan, refs: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): string[] | null => (typeof vb.behaviourWarnings === "function" ? verifyBuild.behaviourWarnings(plan, refs, ctx) : null);
+  const bw = (plan: Plan, refs: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): string[] => verificationEvidence(plan, refs, { cwd: ctx.cwd ?? os.tmpdir(), planFile: ctx.planFile }).behaviourWarnings();
   const beh = (fail: number, failed: string[], ran = true, why: string | null = null): ReportRef["behaviour"] => ({ ran, why, fail, warn: 1, failed });
   const R = "design/verify/login.report.json";
   const twoFail = [reportRef({ rel: R, behaviour: beh(2, ["dialog.focus-return", "keyboard.reachable"]) })];
@@ -1441,7 +1443,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     const shared = (recordedReport: string): Plan => ({ verification: { mode: "rendered", a11y: { violations: 99, report: "Crates.report.json" }, recorded: rec1(recordedReport) } });
     check("a11y.report a basename two reports share → the recorded one among them speaks", against(bw(shared(X.rel), [Y, X])) === X.rel && against(bw(shared(Y.rel), [X, Y])) === Y.rel);
   }
-  check("[behaviour] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
+  check("[behaviour] the a11y-missing warning says to copy report.behaviour.summary", shapeWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
   // ONE behaviour warning for the run — the plan's own report (or the one a11y.report names) — with its
   // count's singular/plural. design/verify/ is flat (locateReports reads only it), so a re-run with the same --out
   // overwrites its report and every other matched file is another --out: each warns on its own failures, never "not run"
@@ -1593,7 +1595,7 @@ console.log("behaviour/a11y in the Stop hook (warnings only):");
     }
     fs.rmSync(root, { recursive: true, force: true });
   }
-  check("the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
+  check("the a11y-missing warning names `report` among the fields to copy", shapeWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
 
   // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook
   const exp = buildExpectation([{ doc: screenExport([{ type: "FRAME", id: "80:1", name: "Crates", box: { x: 0, y: 0, w: 1280, h: 800 }, fills: [{ type: "solid", color: "#ffffff" }] }],

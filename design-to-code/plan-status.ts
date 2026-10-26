@@ -14,7 +14,8 @@ import path from "node:path";
 import { PLAN_DIR } from "../bridge/src/project-layout.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { fileHashes, hookHashOf, planCodeFiles } from "./content-hash.ts";
-import { recordedEdits, verificationFacts } from "./plan-record.ts";
+import { recordedEdits } from "./plan-record.ts";
+import { verificationEvidence } from "./verification-evidence.ts";
 import { WAIVERS_CHANGED, reportFreshness, staleText } from "./report-freshness.ts";
 import type { CachedBytes } from "./report-freshness.ts";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
@@ -137,9 +138,10 @@ export function planStatus(root: string, o: { cached?: CachedBytes | undefined; 
 
   // What the verify report(s) say about the plan, on their own: failed | unverified | static-only | verified |
   // verified-with-deviations, never with empty reasons. A stale passing report (report-freshness judge) reads as
-  // unverified, with its first reason.
+  // unverified, with its first reason. The plan's verification facts and own report are verification-evidence.ts's.
   function reportVerdict(plan: Plan, exp: ExportHit | null, found: ReportRef[]): { status: PlanComputedStatus; reasons: string[] } {
-    const f = verificationFacts(plan.verification);
+    const ev = verificationEvidence(plan, found, { cwd: root });
+    const f = ev.facts;
     if (!found.length) {
       if (f.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${f.reason || "no reason recorded"})`] };
       return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ — run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
@@ -162,7 +164,9 @@ export function planStatus(root: string, o: { cached?: CachedBytes | undefined; 
       const stale = fresh.judge(r.rel, r.inputs, { plan, exportDoc: exp ? exp.doc : null })[0];
       if (stale !== undefined) return { status: "unverified", reasons: [staleText(r.rel, stale)] };
     }
-    const head = found.map((r) => r.inputs.code && r.inputs.code.gitHead).find(Boolean);
+    // every report judges the status; the commit named is the own report's (verification-evidence.ts OWN REPORT), else
+    // the first that recorded one
+    const head = [ev.own, ...found].map((r) => r && r.inputs.code && r.inputs.code.gitHead).find(Boolean);
     const withDeviations = found.filter((r) => r.verdict === "pass-with-deviations");
     const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
     return { status: withDeviations.length ? "verified-with-deviations" : "verified",

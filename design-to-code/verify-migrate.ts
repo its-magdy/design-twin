@@ -65,7 +65,7 @@ import { nodeIdFromStem, safe } from "../bridge/src/pages-layout.ts";
 import { PLAN_DIR, VERIFY_DIR, findExportDir, listPlans } from "../bridge/src/project-layout.ts";
 import { hookHashOf, planHash } from "./content-hash.ts";
 import { formatPlan, parsePlanText, recordedEditFacts, recordedEdits, updatePlan } from "./plan-record.ts";
-import { reportRecordNames } from "./report-freshness.ts";
+import { reportRecordNames } from "./verification-evidence.ts";
 import { canonical, planLockFile } from "./run-cache.ts";
 import { resolveScreen } from "./resolve-screen-core.ts";
 import { hasExportIndex } from "../bridge/src/export-reader.ts";
@@ -267,7 +267,7 @@ function readPlans(planDir: string, cwd: string): PlanText[] {
 
 /** The verify file a plan's path names, as its file name in the verify dir; null for any other path. Read as verify-build
  *  reads that field: verification.a11y.report project-relative or absolute, relative to the plan file, or a bare file
- *  name (a11yReportOf); every other field project-relative or absolute only (reportRecordNames, the artifact checks). */
+ *  name (verification-evidence.ts a11yReportOf); every other field project-relative or absolute only (reportRecordNames, the artifact checks). */
 function namedFile(ref: string, field: RefField, planFile: string, d: { cwd: string; verifyDir: string }): string | null {
   if (field !== "verification.a11y.report") { const abs = path.resolve(d.cwd, ref); return path.dirname(abs) === d.verifyDir ? path.basename(abs) : null; }
   for (const abs of [path.resolve(d.cwd, ref), path.resolve(path.dirname(planFile), ref)]) {
