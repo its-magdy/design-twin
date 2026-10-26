@@ -13,35 +13,9 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 import { activeRun } from "./run";
 
 // ---------------------------------------------------------------- what this module posts to the UI
-/** The page the walk is on: 1-based `index` of `of` pages walked. `pageId` is the identity (page names
- *  are not unique); absent only when a caller had no id to give. */
-export interface ProgressPage { index: number; of: number; name: string; pageId?: string }
-/** The running counters a progress frame carries (each phase reports the ones it has). */
-export interface ProgressCounters { nodes?: number; assets?: number; components?: number }
-/** `requestId` (a bridge run whose frame carried one) lets the bridge hand the `start` frame ui.html relays
- *  to THAT request only, not to every request pending on the connection. */
-export interface RunBeginMsg { type: "run-begin"; source: RunInfo["source"]; label: string; requestId?: string }
-/** `abandoned` is present (and `true`) only when the run THREW because the bridge request that asked
- *  for it was abandoned — the one case where the window has no other way to learn why a run ended (a
- *  bridge run's error goes to the socket, never to the window). Absent otherwise, so the designer's
- *  Cancel and every normal run still post exactly `{ type: "run-end" }`. */
-export interface RunEndMsg { type: "run-end"; abandoned?: true }
-export interface ProgressMsg extends ProgressCounters {
-  type: "progress";
-  phase: Phase;
-  source: RunInfo["source"];
-  label: string;
-  page?: ProgressPage;
-}
-/** A BRIDGE run accepted while another run is executing: it waits its turn (serializeRun, state.ts).
- *  ui.html relays it over the socket — the caller's first sign of life when the file is busy with an
- *  earlier export — and never opens the run chrome for it (the run has not begun). */
-export interface QueuedMsg { type: "progress"; phase: "queued"; source: "bridge"; label: string; requestId?: string }
-/** A bridge SCENE read that waited (state.ts scheduleRun) has begun. A bracketed run says so with run-begin, which
- *  ui.html turns into the same `start` frame for the bridge; a scene read is no run of the window's, so it posts this
- *  instead, which ui.html relays and shows nothing for. The bridge re-arms that request's budget on it. */
-export interface StartMsg { type: "progress"; phase: "start"; source: "bridge"; label: string; requestId?: string }
-export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg | QueuedMsg | StartMsg;
+// The posts' types are the UI <-> main-thread contract's (messages.ts), where the window's relay reads them too.
+import type { Phase, ProgressCounters, ProgressPost, RunSource } from "./messages.ts";
+export type { Phase, ProgressCounters, ProgressPage, ProgressPost, QueuedMsg, RunBeginMsg, RunEndMsg, ProgressMsg, StartMsg } from "./messages.ts";
 
 // ---------------------------------------------------------------- the cancellation error
 /** The message a cancelled run fails with. The BRIDGE sees this string VERBATIM: main.ts turns a
@@ -94,7 +68,7 @@ export function isAbandonment(e: unknown): boolean {
  *  file right now" instead of leaving the designer to guess why Figma went busy; `label` names the
  *  command/scope so two bridge clients aren't indistinguishable. */
 export interface RunInfo {
-  source: "ui" | "bridge";
+  source: RunSource;
   label: string;
   /** The id of the bridge frame that asked for this run — present only on bridge runs whose frame
    *  carried one. A `{ type: "cancel", id }` frame from the bridge is matched on it. */
@@ -180,7 +154,6 @@ export function checkCancelled(): void {
 }
 
 // ---------------------------------------------------------------- emission
-export type Phase = "pages" | "assets" | "design-system";
 
 /** Emit a throttled progress frame for the current phase. `extra` carries the running counters
  *  (`nodes`, `assets`) the UI renders next to the page name. */

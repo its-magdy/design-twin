@@ -591,6 +591,13 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[compare-out] --compare --out <dir> writes <dir>/<set>.report.json", fs.existsSync(path.join(cwd, "elsewhere", "Screen__5_6.report.json")));
   const cOther = run("--compare", expFile, measuredFile, "--out", "elsewhere/Other");
   ok("[compare-out] --compare --out <dir>/<another name> → exit 2, no report", cOther.status === 2 && /this set is Screen__5_6/.test(cOther.stderr) && !fs.existsSync(path.join(cwd, "elsewhere", "Other.report.json")));
+  // with no --out the set's files stay beside its expectation, as the probe's do (openVerifySet): an expectation outside
+  // design/verify is compared into its own directory, against the report there — never into the cwd's design/verify
+  fs.rmSync(path.join(vdir, "Screen__5_6.report.json"));
+  const cBeside = run("--compare", "elsewhere/Screen__5_6.expected.json", measuredFile);
+  const besideRep = readFixture(path.join(cwd, "elsewhere", "Screen__5_6.report.json"), isVerifyReport);
+  ok(`[compare-out] --compare with no --out on an expectation outside design/verify writes beside it and takes the report there as its baseline (got ${cBeside.status}, against ${String(besideRep.against?.report)})`,
+    !fs.existsSync(path.join(vdir, "Screen__5_6.report.json")) && besideRep.against?.report === path.join("elsewhere", "Screen__5_6.report.json"));
   // an expectation under a legacy name, or named for another node than its frame: refused before anything is compared
   fs.copyFileSync(expFile, path.join(vdir, "Nick.expected.json"));
   const cLegacy = run("--compare", path.join(vdir, "Nick.expected.json"), measuredFile);

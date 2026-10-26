@@ -1,3 +1,4 @@
+<!-- GENERATED from ui.template.html + src/relay.ts by build.ts — do not edit by hand. Run `bun run build`. -->
 <style>
   /* Colors come from Figma's own theme variables (injected because main.ts passes themeColors:true),
      so the window follows the user's light/dark setting. Every var() carries the old light-theme
@@ -98,6 +99,129 @@
 </details>
 
 <script>
+var DesignTwinRelay = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // src/relay.ts
+  var relay_exports = {};
+  __export(relay_exports, {
+    createRelay: () => createRelay,
+    helloFrame: () => helloFrame,
+    mainMessageFor: () => mainMessageFor,
+    progressFrame: () => progressFrame,
+    replyFrame: () => replyFrame
+  });
+
+  // ../bridge/src/json-util.ts
+  function isRecord(x) {
+    return typeof x === "object" && x !== null && !Array.isArray(x);
+  }
+  function ifDefined(key, v) {
+    const o = {};
+    if (v !== void 0) o[key] = v;
+    return o;
+  }
+
+  // src/relay.ts
+  var idStr = (idn, k) => {
+    const v = idn[k];
+    return typeof v === "string" && v ? v : null;
+  };
+  function helloFrame(identity) {
+    const idn = isRecord(identity) ? identity : {};
+    return {
+      type: "hello",
+      instanceId: idStr(idn, "instanceId"),
+      file: idStr(idn, "file"),
+      // Only a readable key: a plugin without the private API reports fileKeyAvailable:false (and fileKey null).
+      fileKey: idn.fileKeyAvailable === true ? idStr(idn, "fileKey") : null,
+      page: idStr(idn, "page"),
+      // The plugin's build version (build-options.ts), so the bridge can tell a stale plugin from a reloaded one.
+      pluginVersion: idStr(idn, "pluginVersion")
+    };
+  }
+  function replyFrame(m) {
+    var _a;
+    if (m.id === void 0) return null;
+    return m.ok ? { id: m.id, ok: true, result: m.result } : { id: m.id, ok: false, error: (_a = m.error) != null ? _a : "" };
+  }
+  function progressFrame(m) {
+    if (m.type === "run-begin") return m.source === "bridge" ? { type: "progress", phase: "start", ...ifDefined("requestId", m.requestId) } : null;
+    if (m.type !== "progress" || m.source !== "bridge") return null;
+    return {
+      type: "progress",
+      phase: m.phase,
+      ..."requestId" in m ? ifDefined("requestId", m.requestId) : {},
+      ..."page" in m ? ifDefined("page", m.page) : {},
+      ..."nodes" in m ? ifDefined("nodes", m.nodes) : {},
+      ..."assets" in m ? ifDefined("assets", m.assets) : {}
+    };
+  }
+  function mainMessageFor(data) {
+    let f;
+    try {
+      f = JSON.parse(String(data));
+    } catch {
+      return null;
+    }
+    if (!isRecord(f)) return null;
+    if (f.type === "cancel" && f.cmd === void 0) return typeof f.id === "string" ? { type: "cancel", id: f.id } : null;
+    return { type: "bridge", ...ifDefined("id", typeof f.id === "string" ? f.id : void 0), cmd: typeof f.cmd === "string" ? f.cmd : String(f.cmd), args: f.args };
+  }
+  function createRelay(ports) {
+    return {
+      fromMain(m) {
+        if (m.type === "identity") {
+          ports.toSocket(helloFrame(m.identity));
+          return;
+        }
+        if (m.type === "bridge-result") {
+          const r = replyFrame(m);
+          if (r) ports.toSocket(r);
+          return;
+        }
+        if (m.type === "run-begin" || m.type === "progress") {
+          const p = progressFrame(m);
+          if (p) ports.toSocket(p);
+        }
+      },
+      fromSocket(data) {
+        const msg = mainMessageFor(data);
+        if (msg) ports.toMain(msg);
+      },
+      // Announce which FILE this is on every open, reconnects included: the bridge accepts several plugin instances
+      // at once (one per open file) and routes by identity. Only the main thread can read it (figma.* lives there).
+      // Never cached: if Figma restarts the plugin runtime the instanceId changes, and re-reading it on each open is
+      // what keeps the bridge's listing honest.
+      socketOpened() {
+        ports.toMain({ type: "get-identity" });
+      },
+      // The socket that asked for any bridge work is gone, and a reply carrying an id nobody on the next bridge
+      // knows is dropped — so finishing a bridge run is pure waste that queues every later command behind it.
+      // Abandon them all (UI-started runs are untouched).
+      socketClosed() {
+        ports.toMain({ type: "cancel", scope: "bridge" });
+      }
+    };
+  }
+  return __toCommonJS(relay_exports);
+})();
   // Everything is wrapped so a single init error can NEVER leave the UI silently frozen:
   //  - window.onerror surfaces any uncaught error as visible text in #status (no DevTools needed).
   //  - window.onmessage is registered immediately (catches early messages from code.js).
@@ -126,6 +250,13 @@
     // one clicked here — puts the window into exactly the same visible state.
     var running = null;
     var cancelSent = false;  // we asked to stop; don't let progress frames overwrite "Cancelling…"
+    // The bridge protocol's plugin half (figma-plugin/src/relay.ts, bundled in above by build.ts): it turns
+    // main-thread messages into socket frames and socket frames into main-thread messages. This window only
+    // hands it the socket (a frame for a socket that is not open is dropped) and the main thread.
+    var relay = DesignTwinRelay.createRelay({
+      toSocket: function (frame) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(frame)); },
+      toMain: function (msg) { parent.postMessage({ pluginMessage: msg }, "*"); }
+    });
 
     function $(id) { return document.getElementById(id); }
     // A batch button is enabled exactly when it has files AND no batch is running. DERIVED from that
@@ -220,6 +351,7 @@
     window.onmessage = function (e) {
       var m = e.data && e.data.pluginMessage;
       if (!m) return;
+      relay.fromMain(m); // what the bridge must hear of it (hello, replies, a bridge run's progress); the DOM's below
 
       if (m.type === "selection") {
         lastSelCount = m.count;
@@ -237,18 +369,6 @@
       }
       // ---- run lifecycle + progress (both manual and bridge-triggered runs) ----
       if (m.type === "run-begin") {
-        // A bridge run has really started: tell the bridge at once, as a progress frame (the one kind
-        // every bridge already reads as life). Until the walk's first asset/page tick — a cold page
-        // load plus a long serialize can take a minute — this is the caller's only sign that the run
-        // began, and without it the one-shot CLI's stall check read a working export as silence. A UI
-        // run sends nothing: no bridge caller is waiting on it.
-        // `requestId` (when the run's bridge frame carried one) lets the bridge deliver this to THAT request
-        // only; an id-less frame (an older plugin) still reaches every request pending on the connection.
-        if (m.source === "bridge" && ws && ws.readyState === 1) {
-          var startFrame = { type: "progress", phase: "start" };
-          if (typeof m.requestId === "string") startFrame.requestId = m.requestId;
-          ws.send(JSON.stringify(startFrame));
-        }
         runBegin(m);
         return;
       }
@@ -265,20 +385,8 @@
         return;
       }
       if (m.type === "progress") {
-        // Relay a bridge-triggered run's progress over the socket too (not just onto this DOM) — the
-        // ONLY sign of life the bridge/CLI side has during a long export otherwise, since exportAsync
-        // itself is one long await with no intermediate reply. bridge/server-core.js's request()
-        // reads this to tell a genuinely slow-but-working export apart from a truly stalled connection
-        // (findings 202/213 measured 300s/908s of silence for work finding 220 proved takes 7.5-8.8s
-        // once a daemon keeps the plugin warm). Throttled the same as the DOM update (progress() on
-        // the sandbox side already throttles to one frame per ~250ms), so this costs nothing extra.
-        if (m.source === "bridge" && ws && ws.readyState === 1) {
-          var tickFrame = { type: "progress", phase: m.phase, page: m.page, nodes: m.nodes, assets: m.assets };
-          if (typeof m.requestId === "string") tickFrame.requestId = m.requestId; // a `queued` frame names its run
-          ws.send(JSON.stringify(tickFrame));
-        }
         // `queued`: a bridge run waiting behind the run that is executing (state.ts scheduleRun). It
-        // has not begun, so it is relayed (above) and nothing here changes — the window keeps showing
+        // has not begun, so it is relayed (relay.ts) and nothing here changes — the window keeps showing
         // the run that IS walking the file, or stays idle. A `start` here is a scene read that waited
         // and has now begun: not a run of the window's own (no run-begin), so likewise relayed only.
         if (m.phase === "queued" || m.phase === "start") return;
@@ -351,31 +459,9 @@
         return;
       }
       if (m.type === "identity") {
-        // The main thread answered "who am I". Forward it to the bridge as an unsolicited `hello` so
-        // the bridge can tell this file apart from any OTHER Figma file connected at the same time.
-        // Sent on every socket open (see onopen), never cached: if Figma restarts the plugin runtime
-        // the instanceId changes, and re-deriving it each time is what keeps the bridge's listing
-        // honest without any session-token machinery.
+        // The main thread answered "who am I" — relay.ts has sent it to the bridge as the `hello`.
         var idn = m.identity || {};
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({
-            type: "hello",
-            instanceId: idn.instanceId || null,
-            file: idn.file || null,
-            fileKey: idn.fileKeyAvailable ? idn.fileKey : null,
-            page: idn.page || null,
-            // Finding 327: the plugin's own build version (baked in at build time — see build.ts),
-            // so the bridge can tell a stale plugin apart from a freshly reloaded one.
-            pluginVersion: idn.pluginVersion || null
-          }));
-        }
         if (idn.file) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");
-        return;
-      }
-      if (m.type === "bridge-result") {
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ id: m.id, ok: m.ok, result: m.result, error: m.error }));
-        }
         return;
       }
     };
@@ -456,21 +542,14 @@
         tokenRejected = false;
         failsSinceOpen = 0;
         setBridge("on", "connected", "Connected to the bridge on this computer (localhost:" + port + ").");
-        // Announce which FILE this is, every time the socket opens — including each reconnect. The
-        // bridge accepts several plugin instances at once (one per open Figma file) and routes
-        // commands by identity, so a connection that never says who it is can only be addressed by
-        // its raw connection id.
-        parent.postMessage({ pluginMessage: { type: "get-identity" } }, "*");
+        relay.socketOpened(); // asks the main thread who this file is; its answer goes out as the `hello`
       };
       s.onclose = function (ev) {
         if (s !== ws) return;
         ws = null;
-        // The socket that asked for any bridge work is gone. We reconnect to whatever bridge answers
-        // next, and a reply carrying an id nobody there knows is dropped — so finishing a bridge run
-        // is pure waste that queues every later command behind it. Abandon them all (UI-started runs
-        // are untouched). Also on CLOSE_BAD_TOKEN: nothing can collect the result there either. Not
-        // on onerror — it closes the socket, and this handler follows.
-        parent.postMessage({ pluginMessage: { type: "cancel", scope: "bridge" } }, "*");
+        // Every bridge run is abandoned (relay.ts) — also on CLOSE_BAD_TOKEN: nothing can collect the result
+        // there either. Not on onerror — it closes the socket, and this handler follows.
+        relay.socketClosed();
         if (ev && ev.code === CLOSE_BAD_TOKEN) {
           // A bridge IS there — stay on its port instead of walking on to the next one — and this is
           // the one state only the user can fix, so open the section and say exactly what to do. Retry
@@ -491,18 +570,7 @@
       s.onerror = function () { try { s.close(); } catch (e) {} };
       s.onmessage = function (ev) {
         if (s !== ws) return;
-        var cmd;
-        try { cmd = JSON.parse(ev.data); } catch (e) { return; }
-        // `{ type: "cancel", id }` with no `cmd`: the bridge gave up on request <id> (its caller timed
-        // out, stalled out, or went away). Forwarded to the main thread, which aborts that run if it
-        // is executing or drops it if it is still queued. Anything else keeps today's path.
-        // A cancel frame with no string id is DROPPED, never forwarded: an id-less `cancel` is the
-        // designer's button to the main thread, and the bridge must not be able to press it.
-        if (cmd && cmd.type === "cancel" && cmd.cmd === undefined) {
-          if (typeof cmd.id === "string") parent.postMessage({ pluginMessage: { type: "cancel", id: cmd.id } }, "*");
-          return;
-        }
-        parent.postMessage({ pluginMessage: { type: "bridge", id: cmd.id, cmd: cmd.cmd, args: cmd.args } }, "*");
+        relay.fromSocket(ev.data); // a command or a cancel, for the main thread (relay.ts)
       };
     }
 

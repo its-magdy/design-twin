@@ -1320,6 +1320,15 @@ function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
+function openVerifySet(expectedFile, frameNodeId, out) {
+  const dir = path9.dirname(expectedFile);
+  const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
+  if (problem !== null) return { error: problem };
+  const name = setNameOfFile(expectedFile);
+  const ob = outBaseOf(out, name, dir);
+  if ("error" in ob) return ob;
+  return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
+}
 var NAMING_KINDS = ["expected", "report", "measured"];
 var namedBy = (f) => {
   for (const k of NAMING_KINDS) if (f.endsWith(SET_FILE[k])) return f.slice(0, -SET_FILE[k].length);
@@ -2545,12 +2554,16 @@ function readExportIndex(exportRoot) {
     }
   }
   const rootStamp = rootDoc?.exportedAt || void 0;
+  const label = (v) => typeof v === "string" && v ? v : void 0;
+  const rootLabel = rootDoc ? label(rootDoc.file) ?? label(rootDoc.sourceFile) : void 0;
   return {
     root,
     indexed: rootDoc !== null,
     rootProblem: rootProblem && rootProblem.error,
     problems,
     rows,
+    rootExportedAt: rootStamp,
+    rootSourceFile: rootLabel,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)
@@ -2578,14 +2591,16 @@ function readDesignSystemStamp(root) {
   const problems = [];
   const manifestFile = designSystemManifestFile(root);
   const manifest = readDesignSystemManifest(root);
-  if ("doc" in manifest) return { stamp: stampOf2(manifest.doc), problems };
+  if ("doc" in manifest && manifest.doc.exportedAt) return { stamp: stampOf2(manifest.doc), from: manifestFile, problems };
   const mp = problemOf(root, manifestFile, manifest);
   if (mp) problems.push(mp);
   const tokensFile = path14.join(root, DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES.TOKENS);
   const tokens = readJson(tokensFile, isStampedPart);
   const tp = problemOf(root, tokensFile, tokens);
   if (tp) problems.push(tp);
-  return { stamp: "doc" in tokens ? stampOf2(tokens.doc) : null, problems };
+  if ("doc" in tokens && tokens.doc.exportedAt) return { stamp: stampOf2(tokens.doc), from: tokensFile, problems };
+  if ("doc" in manifest) return { stamp: stampOf2(manifest.doc), from: manifestFile, problems };
+  return "doc" in tokens ? { stamp: stampOf2(tokens.doc), from: tokensFile, problems } : { stamp: null, from: null, problems };
 }
 
 // design-to-code/map-util.ts
@@ -8513,13 +8528,13 @@ function main(argv) {
       Replacing one that differs keeps the old bytes as
       <Layer>__<id>.expected.prev.json (one generation) and says why: the export changed, or verify-screen did (same export
       content). It notes a last run of <Layer>__<id> that failed, was blocked or never finished (its files are partial).
-  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out design/verify]
+  ${scriptCmd("verify-screen")} --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] [--plan <plan.json>] [--record-plan] [--out <dir>]
       writes <Layer>__<id>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares
       two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
       (a JSON array, or {interactions:[\u2026], components:[\u2026], inferred:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail};
       components[] rows {setName|nodeId, present} are merged with measured.json's; inferred[] rows {nodeId?, state, built, why?}
       \u2014 what the build does that the design never drew \u2014 are listed under 'Inferred, not designed', never graded).
-      --out is the verify directory (default design/verify); the report takes the expectation's set name. A legacy-named
+      --out is the verify directory (default: the expectation's own, as verify-probe's); the report takes the expectation's set name. A legacy-named
       expectation, or one named for another node than its frame, is refused (exit 2: verify-screen --migrate / re-run --expect).
       Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes
       measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.
@@ -8883,20 +8898,13 @@ function compareMain(files, flags, USAGE) {
     extra = list;
     if (comps.length) extraComponents = comps;
   }
-  const setName = setNameOfFile(expFile);
-  const setProblem = expectationSetProblem(expFile, expectation.frame && expectation.frame.nodeId, path21.dirname(expFile));
-  if (setProblem !== null) {
-    console.error(`error  ${setProblem}`);
+  const set = openVerifySet(expFile, expectation.frame && expectation.frame.nodeId, out);
+  if ("error" in set) {
+    console.error(`error  ${set.error}`);
     return 2;
   }
-  const ob = outBaseOf(out, setName, VERIFY_DIR);
-  if ("error" in ob) {
-    console.error(`error  ${ob.error}`);
-    return 2;
-  }
-  if (ob.deprecated) console.error(`note  --out ${out} names the set: pass the directory ${ob.dir}`);
-  const compareBase = ob.base;
-  const statusBase = statusBaseOf(expFile);
+  for (const n of set.notes) console.error(`note  ${n}`);
+  const { name: setName, outBase: compareBase, statusBase } = set;
   const found = readStatusAt(statusBase);
   const statusOpt = { status: found ? { file: found.file === statusFile(statusBase) ? path21.basename(found.file) : `${path21.basename(found.file)} (live, ${found.file})`, status: found.status, screen: setName } : null };
   const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;

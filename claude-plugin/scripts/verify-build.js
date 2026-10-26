@@ -3176,12 +3176,16 @@ function readExportIndex(exportRoot) {
     }
   }
   const rootStamp = rootDoc?.exportedAt || void 0;
+  const label = (v) => typeof v === "string" && v ? v : void 0;
+  const rootLabel = rootDoc ? label(rootDoc.file) ?? label(rootDoc.sourceFile) : void 0;
   return {
     root,
     indexed: rootDoc !== null,
     rootProblem: rootProblem && rootProblem.error,
     problems,
     rows,
+    rootExportedAt: rootStamp,
+    rootSourceFile: rootLabel,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)

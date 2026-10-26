@@ -1023,7 +1023,17 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   })());
   check("[shape-get-component-cli] get-component CLI: the same, as `error  …` exit 2", (() => {
     const r = run("get-component.ts", [badCat, "K"]);
-    return r.status === 2 && /^error {2}'bad-catalog\.json' is not a component catalog/m.test(r.stderr);
+    return r.status === 2 && /^error {2}component catalog: 'bad-catalog\.json' is not a component catalog/m.test(r.stderr);
+  })());
+  // design_get_component runs getComponent in-process: handed the slim manifest it must come back as a thrown
+  // sentence (the tool error), never end the server's process.
+  const slim = put("slim-manifest.json", { files: { componentsLocal: "design-system/components.local.json" } });
+  check("[shape-get-component-manifest] getComponent: the manifest throws its own explanation in-process, no exit", (() => {
+    try { getComponent(path.join(cwd, slim), "K"); return false; } catch (e) { return e instanceof Error && /is the design-system MANIFEST/.test(e.message) && /design-system\/components\.local\.json/.test(e.message); }
+  })());
+  check("[shape-get-component-manifest-cli] get-component CLI: the same, as `error  …` exit 2", (() => {
+    const r = run("get-component.ts", [slim, "K"]);
+    return r.status === 2 && /^error {2}'slim-manifest\.json' is the design-system MANIFEST/m.test(r.stderr);
   })());
   // parseArgs (node:util): a value-taking flag never swallows the next flag as its value.
   check("[args] tokens: `--native --package x` is '--native needs a value', not a platform named '--package'", (() => {

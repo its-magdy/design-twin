@@ -132,10 +132,12 @@ console.log("parity — the CLI and the MCP tool give one answer:");
   // drift 1: a file that is not a component catalog — the CLI refused it (exit 2), the tool linted it as "no catalog".
   const p = project("parity-not-catalog");
   const cli = viaCli(p, { map: p.rel(p.map), catalog: p.rel(p.notCatalog) });
-  put(path.join(p.root, "design", "export", "design-system.json"), { files: { componentsLocal: "../../not-a-catalog.json" } });
-  const tool = await viaMcp(p, { map: p.map, catalog: p.notCatalog });
+  // the tool reads the catalog the export's manifest points at, and a pointer never leaves the export (export-reader.ts)
+  const inExport = put(path.join(p.root, "design", "export", "design-system", "not-a-catalog.json"), { components: "nope" });
+  put(path.join(p.root, "design", "export", "design-system.json"), { files: { componentsLocal: "design-system/not-a-catalog.json" } });
+  const tool = await viaMcp(p, { map: p.map, catalog: inExport });
   check(`a non-catalog file is refused by both, naming it (cli ${cli.outcome} · mcp ${tool.outcome}: ${firstLine(tool.text)})`,
-    cli.outcome === "refused" && tool.outcome === "refused" && /'[^']*not-a-catalog\.json' is not a component catalog/.test(tool.text));
+    cli.outcome === "refused" && tool.outcome === "refused" && /not-a-catalog\.json'? is not a component catalog/.test(tool.text));
 }
 {
   // drift 2: a discovered catalog that is there but unreadable — the CLI warned, the tool dropped it silently.
