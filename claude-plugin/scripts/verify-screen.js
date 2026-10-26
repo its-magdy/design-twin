@@ -1671,17 +1671,18 @@ function statusBaseOf(expectedFile) {
 var TRAILING_SEP = path10.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var endsInSep = (p) => TRAILING_SEP.test(p);
 var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
-function outBaseOf(out, setName, defaultDir) {
+var underRoot = (p, root) => root === void 0 || path10.isAbsolute(p) ? p : `${root}${path10.sep}${p}`;
+function outBaseOf(out, setName, defaultDir, root) {
   if (out === void 0) return { base: path10.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
   let st = null;
   try {
-    st = fs10.statSync(out);
+    st = fs10.statSync(underRoot(out, root));
   } catch {
   }
   if (st?.isDirectory()) return { base: path10.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (endsInSep(out) || path10.resolve(out) === path10.resolve(VERIFY_DIR)) return { base: path10.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (endsInSep(out) || path10.resolve(root ?? "", out) === path10.resolve(root ?? "", VERIFY_DIR)) return { base: path10.join(out, setName), dir: trimSep(out), deprecated: false };
   if (path10.basename(out) === setName) return { base: out, dir: path10.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
 }
@@ -1692,12 +1693,12 @@ function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
-function openVerifySet(expectedFile, frameNodeId, out) {
+function openVerifySet(expectedFile, frameNodeId, out, root) {
   const dir = path10.dirname(expectedFile);
   const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
   if (problem !== null) return { error: problem };
   const name = setNameOfFile(expectedFile);
-  const ob = outBaseOf(out, name, dir);
+  const ob = outBaseOf(out, name, dir, root);
   if ("error" in ob) return ob;
   return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
 }
@@ -3398,11 +3399,11 @@ function screenExportOf(doc) {
 import fs16 from "node:fs";
 import path17 from "node:path";
 function migratedArtifact(listed3, o) {
-  const at = (p) => path17.resolve(o.root, p);
+  const at = (p) => underRoot(p, o.root);
   const st = o.status;
   if (fs16.existsSync(at(listed3)) || st === null || st === "v1" || st.screen === o.setName) return null;
   if (o.measuredRun === void 0 || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
-  if (at(path17.dirname(listed3)) !== path17.resolve(o.verifyDir)) return null;
+  if (path17.resolve(o.root, path17.dirname(listed3)) !== path17.resolve(o.verifyDir)) return null;
   const base = path17.basename(listed3);
   if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
   const old = st.screen.toLowerCase();
@@ -3426,7 +3427,7 @@ function gatherCompareRun(expFile, measuredFile, flags, root) {
     notes.push(n);
   };
   const refuse = (message) => ({ ok: false, message, notes });
-  const at = (p) => path17.resolve(root, p);
+  const at = (p) => underRoot(p, root);
   const sha = (file) => sha256Hex(fs16.readFileSync(file));
   const e = loadDocFile(expFile, "expectation", isVerifyExpectation, void 0, at(expFile));
   if ("error" in e) return refuse(`error  ${e.error}`);
@@ -3446,7 +3447,7 @@ function gatherCompareRun(expFile, measuredFile, flags, root) {
   const evidence = flags.interactions !== void 0 && flags.interactions !== "" ? interactionsOf(flags.interactions, at(flags.interactions)) : null;
   if (evidence && "error" in evidence) return refuse(evidence.error);
   const frameId = expectation.frame && expectation.frame.nodeId;
-  const set = openVerifySet(expFile, frameId, flags.out);
+  const set = openVerifySet(expFile, frameId, flags.out, root);
   if ("error" in set) return refuse(`error  ${set.error}`);
   for (const n of set.notes) note(n);
   const { name: setName, outBase, statusBase } = set;

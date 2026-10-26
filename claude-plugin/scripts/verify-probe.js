@@ -6232,17 +6232,18 @@ function statusBaseOf(expectedFile) {
 var TRAILING_SEP = path9.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 var endsInSep = (p) => TRAILING_SEP.test(p);
 var trimSep = (p) => p.replace(TRAILING_SEP, "") || p;
-function outBaseOf(out, setName, defaultDir) {
+var underRoot = (p, root) => root === void 0 || path9.isAbsolute(p) ? p : `${root}${path9.sep}${p}`;
+function outBaseOf(out, setName, defaultDir, root) {
   if (out === void 0) return { base: path9.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
   let st = null;
   try {
-    st = fs7.statSync(out);
+    st = fs7.statSync(underRoot(out, root));
   } catch {
   }
   if (st?.isDirectory()) return { base: path9.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file \u2014 ${why}` };
-  if (endsInSep(out) || path9.resolve(out) === path9.resolve(VERIFY_DIR)) return { base: path9.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (endsInSep(out) || path9.resolve(root ?? "", out) === path9.resolve(root ?? "", VERIFY_DIR)) return { base: path9.join(out, setName), dir: trimSep(out), deprecated: false };
   if (path9.basename(out) === setName) return { base: out, dir: path9.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") \u2014 ${why}` };
 }
@@ -6253,12 +6254,12 @@ function expectationSetProblem(expectedFile, frameNodeId, verifyDir) {
   if (frameNodeId !== void 0 && p.nodeId !== frameNodeId) return `${expectedFile} is named for node ${p.nodeId}, its frame is ${frameNodeId} \u2014 re-run --expect for the frame (it names the set)`;
   return null;
 }
-function openVerifySet(expectedFile, frameNodeId, out) {
+function openVerifySet(expectedFile, frameNodeId, out, root) {
   const dir = path9.dirname(expectedFile);
   const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
   if (problem !== null) return { error: problem };
   const name = setNameOfFile(expectedFile);
-  const ob = outBaseOf(out, name, dir);
+  const ob = outBaseOf(out, name, dir, root);
   if ("error" in ob) return ob;
   return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
 }

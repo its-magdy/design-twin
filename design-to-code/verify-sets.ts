@@ -147,24 +147,27 @@ const TRAILING_SEP = path.sep === "\\" ? /[\\/]+$/ : /\/+$/;
 export const endsInSep = (p: string): boolean => TRAILING_SEP.test(p);
 /** `p` without its trailing separators (TRAILING_SEP), or `p` itself when nothing else is left (a root). */
 export const trimSep = (p: string): string => p.replace(TRAILING_SEP, "") || p;
+/** `p` read under `root`: an absolute path as it is; a relative one prefixed with root and NOT normalised — `link/../x`
+ *  goes through the link as the filesystem does (path.resolve would collapse it to `x`). Without a root, `p` itself. */
+export const underRoot = (p: string, root?: string): string => (root === undefined || path.isAbsolute(p) ? p : `${root}${path.sep}${p}`);
 
 /** Where a set's files go for `--out`: the base `<dir>/<set>`, its dir, and whether --out was the older spelling (the base
  *  itself, `<dir>/<set>`) — or why --out names no place for this set. */
 export type OutBase = { base: string; dir: string; deprecated: boolean } | { error: string };
 /**
- * `--out` read as the verify directory. In order: none → `<defaultDir>/<set>`; an existing directory → `<out>/<set>`; an
+ * `--out` read as the verify directory (looked for under `root`, default the cwd; the paths returned as spelt). In order: none → `<defaultDir>/<set>`; an existing directory → `<out>/<set>`; an
  * existing file → refused; a path ending in a separator (endsInSep: "/", and "\" on Windows) or the project's verify dir
  * (design/verify) → that directory (the writer creates it); a path whose basename is the set's name, exact case → the base itself (the older spelling,
  * `deprecated`); anything else → refused: a basename that is not the set's would name a second set for one node.
  */
-export function outBaseOf(out: string | undefined, setName: string, defaultDir: string): OutBase {
+export function outBaseOf(out: string | undefined, setName: string, defaultDir: string, root?: string): OutBase {
   if (out === undefined) return { base: path.join(defaultDir, setName), dir: defaultDir, deprecated: false };
   const why = `--out takes the verify directory; this set is ${setName}`;
   let st: fs.Stats | null = null;
-  try { st = fs.statSync(out); } catch { /* not there */ }
+  try { st = fs.statSync(underRoot(out, root)); } catch { /* not there */ }
   if (st?.isDirectory()) return { base: path.join(out, setName), dir: out, deprecated: false };
   if (st) return { error: `--out ${out} is a file — ${why}` };
-  if (endsInSep(out) || path.resolve(out) === path.resolve(VERIFY_DIR)) return { base: path.join(out, setName), dir: trimSep(out), deprecated: false };
+  if (endsInSep(out) || path.resolve(root ?? "", out) === path.resolve(root ?? "", VERIFY_DIR)) return { base: path.join(out, setName), dir: trimSep(out), deprecated: false };
   if (path.basename(out) === setName) return { base: out, dir: path.dirname(out), deprecated: true };
   return { error: `--out ${out} is not a directory (a new one ends in "/") — ${why}` };
 }
@@ -185,13 +188,13 @@ export type OpenedSet = { name: string; outBase: string; statusBase: string; not
 /** The set `expectedFile` names, for a run that writes its files (verify-screen --compare, verify-probe): a legacy name or
  *  one of another node than the frame (`frameNodeId`) is refused (expectationSetProblem); `--out` is read by outBaseOf
  *  with ONE default, the expectation's own directory — so the set's report, measured file and status all stay together
- *  wherever the cwd is. */
-export function openVerifySet(expectedFile: string, frameNodeId: string | undefined, out: string | undefined): OpenedSet {
+ *  wherever the cwd is. A relative --out is looked for under `root` (default: the cwd). */
+export function openVerifySet(expectedFile: string, frameNodeId: string | undefined, out: string | undefined, root?: string): OpenedSet {
   const dir = path.dirname(expectedFile);
   const problem = expectationSetProblem(expectedFile, frameNodeId, dir);
   if (problem !== null) return { error: problem };
   const name = setNameOfFile(expectedFile);
-  const ob = outBaseOf(out, name, dir);
+  const ob = outBaseOf(out, name, dir, root);
   if ("error" in ob) return ob;
   return { name, outBase: ob.base, statusBase: statusBaseOf(expectedFile), notes: ob.deprecated ? [`--out ${out ?? ""} names the set: pass the directory ${ob.dir}`] : [] };
 }

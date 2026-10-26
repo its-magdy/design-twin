@@ -29,7 +29,7 @@ import type { CompareOptions } from "./verify-compare.ts";
 import type { Expectation } from "./verify-shared.ts";
 import { readStatusAt, statusFile } from "./verify-run.ts";
 import type { VerifyStatusV2 } from "./verify-run.ts";
-import { openVerifySet, setFile, verifySets } from "./verify-sets.ts";
+import { openVerifySet, setFile, underRoot, verifySets } from "./verify-sets.ts";
 
 /** --compare's flags, as parsed. */
 export interface CompareRunFlags { out?: string | undefined; interactions?: string | undefined; against?: string | undefined; plan?: string | undefined; recordPlan?: boolean | undefined }
@@ -58,11 +58,11 @@ export interface CompareRunRefusal { ok: false; message: string; notes: string[]
  *  listed file was in the set's own dir and carries the old name's prefix (`<old>.` / `<old>-`); the renamed file exists.
  *  Never a screenshot of another set, never one that is not on disk. `listed` is project-relative (under `root`). */
 export function migratedArtifact(listed: string, o: { root: string; setName: string; verifyDir: string; status: VerifyStatusV2 | "v1" | null; measuredRun: string | undefined; measuredSha: string }): string | null {
-  const at = (p: string): string => path.resolve(o.root, p);
+  const at = (p: string): string => underRoot(p, o.root);
   const st = o.status;
   if (fs.existsSync(at(listed)) || st === null || st === "v1" || st.screen === o.setName) return null;
   if (o.measuredRun === undefined || st.runId !== o.measuredRun || st.measuredSha256 !== o.measuredSha) return null;
-  if (at(path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
+  if (path.resolve(o.root, path.dirname(listed)) !== path.resolve(o.verifyDir)) return null;
   const base = path.basename(listed);
   if (!base.startsWith(st.screen + ".") && !base.startsWith(st.screen + "-")) return null;
   // in any case: on a case-insensitive disk `garden.*` are `Garden.*` — a live set under the old name in another case owns them
@@ -93,7 +93,7 @@ export function gatherCompareRun(expFile: string, measuredFile: string, flags: C
   const notes: string[] = [];
   const note = (n: string): void => { notes.push(n); };
   const refuse = (message: string): CompareRunRefusal => ({ ok: false, message, notes });
-  const at = (p: string): string => path.resolve(root, p);
+  const at = (p: string): string => underRoot(p, root);
   const sha = (file: string): string => sha256Hex(fs.readFileSync(file));
 
   const e = loadDocFile(expFile, "expectation", isVerifyExpectation, undefined, at(expFile));
@@ -116,7 +116,7 @@ export function gatherCompareRun(expFile: string, measuredFile: string, flags: C
   // to the expectation's own directory, as the probe's does (openVerifySet): the report and its implicit --against
   // baseline are the set's, beside the measured file and the status the probe wrote
   const frameId = expectation.frame && expectation.frame.nodeId;
-  const set = openVerifySet(expFile, frameId, flags.out);
+  const set = openVerifySet(expFile, frameId, flags.out, root);
   if ("error" in set) return refuse(`error  ${set.error}`);
   for (const n of set.notes) note(n);
   const { name: setName, outBase, statusBase } = set;
