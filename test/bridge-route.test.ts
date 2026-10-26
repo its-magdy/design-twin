@@ -13,7 +13,7 @@ import path from "node:path";
 import { fakePlugin, HANG, type FakePlugin, type Handlers } from "./fake-plugin.ts";
 import { check, report } from "./assert.ts";
 import { screenReply } from "./fixtures.ts";
-import { settingsAt } from "./bridge-settings.ts";
+import { addressAt, settingsAt } from "./bridge-settings.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ProgressTick } from "../bridge/src/server-core.ts";
 import type { Route, RoutePolicy } from "../bridge/src/route.ts";
@@ -74,10 +74,11 @@ async function daemonRig(): Promise<Rig> {
   const { b, port } = await bridge();
   const name = sockPort++;
   // The token named on both ends, so on Windows the pipe is named from it and never the user's saved one.
-  const h = await daemon.serve(servedBridge(b), { port: name, idleMs: 0, signals: false, crashHandlers: false, token: DAEMON_TOKEN });
-  const conn = await daemon.connect(name, { token: DAEMON_TOKEN });
+  const at = addressAt(name, DAEMON_TOKEN);
+  const h = await daemon.serve(servedBridge(b), at, { idleMs: 0, signals: false, crashHandlers: false });
+  const conn = await daemon.connect(at);
   if (!conn) throw new Error("daemon.connect() returned null right after serve()");
-  const up = daemonUpstream(conn, () => daemon.status(name, { token: DAEMON_TOKEN }));
+  const up = daemonUpstream(conn, () => daemon.status(at));
   return { name: "daemon", port, route: (policy) => createRoute(async () => up, policy), stop: () => h.shutdown() };
 }
 

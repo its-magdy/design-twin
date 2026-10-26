@@ -20,6 +20,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { check, report } from "./assert.ts";
 import { manifest, screenReply, clientRow, node, variable } from "./fixtures.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { addressAt } from "./bridge-settings.ts";
 import * as W from "../bridge/src/write-out.ts";
 import type { Cmd, Commands, ScreenshotReply } from "../bridge/src/commands.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
@@ -205,7 +206,7 @@ const fake: DaemonBridge = {
 for (const k of ["FIGMA_BRIDGE_TOKEN_FILE", "DTWIN_PORT", "FIGMA_EXPORT_DIR", "MAX_MCP_OUTPUT_TOKENS"]) delete process.env[k];
 process.env.FIGMA_BRIDGE_PORT = String(PORT);
 process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
-const served = await daemon.serve(fake, { port: PORT, idleMs: 0, signals: false, token: TOKEN });
+const served = await daemon.serve(fake, addressAt(PORT, TOKEN), { idleMs: 0, signals: false });
 
 // ---------------------------------------------------------------- figma-mcp.ts, in process
 console.log("\nfigma-mcp.ts loaded as a module starts nothing:");
