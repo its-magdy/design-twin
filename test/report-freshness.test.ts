@@ -1,6 +1,6 @@
 // test/report-freshness.test.ts — what a verify report was computed against (stamped at --compare), and whether it still
 // holds (design-to-code/report-freshness.ts): fresh, or stale with typed reasons; a measured file bound to its expectation
-// and run; a plan's record against its report. Temp projects and a fake git, at the module's interface.
+// and run. Temp projects and a fake git, at the module's interface.
 // Run with:  bun test/report-freshness.test.ts
 import fs from "node:fs";
 import os from "node:os";
@@ -8,7 +8,7 @@ import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256 } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-binding.ts";
-import { bindMeasured, codeChanged, measuredText, recordedReport, reportFreshness, reportInputs, stampEvidence, staleText } from "../design-to-code/report-freshness.ts";
+import { bindMeasured, codeChanged, measuredText, reportFreshness, reportInputs, stampEvidence, staleText } from "../design-to-code/report-freshness.ts";
 import type { Git, StaleReason } from "../design-to-code/report-freshness.ts";
 import type { Plan } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -139,24 +139,6 @@ console.log("bindMeasured — a measured file is tied to the expectation on disk
     && measuredText({ kind: "other-run", measuredRun: "r0", run: "r1" }) === "the measured file was taken in run r0, not run r1"
     && measuredText({ kind: "other-measured", recorded: F, now: M }) === "its run names a different measured file (sha ffffffffffff…, this one mmmmmmmmmmmm…)"
     && measuredText({ kind: "other-measured", recorded: F, now: M }, "Plots.status.json") === "Plots.status.json names a different measured file (sha ffffffffffff…, this one mmmmmmmmmmmm…)");
-}
-
-// ---------------------------------------------------------------- recordedReport
-console.log("recordedReport — a plan's verification.recorded against the report it names:");
-{
-  const p = project();
-  const text = JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "pass" }, null, 2) + "\n";
-  p.put("design/verify/Plots__1_1.report.json", text);
-  const rec = (report: string, reportSha256: string): { verification: { recorded: { report: string; reportSha256: string } } } => ({ verification: { recorded: { report, reportSha256 } } });
-  check("[record] no record: none", recordedReport({}, p.root).kind === "none");
-  check("[record] the report it names, unchanged: names it, parsed", (() => { const r = recordedReport(rec("design/verify/Plots__1_1.report.json", sha256Hex(text)), p.root); return r.kind === "names" && r.doc.verdict === "pass"; })());
-  check("[record] the report rewritten since: rewritten", recordedReport(rec("design/verify/Plots__1_1.report.json", "0".repeat(64)), p.root).kind === "rewritten");
-  check("[record] the report gone: missing", recordedReport(rec("design/verify/Gone.report.json", sha256Hex(text)), p.root).kind === "missing");
-  p.put("design/verify/Fifo.report.json", "not json");
-  check("[record] the bytes the sha names, but no verify report: not-a-report", recordedReport(rec("design/verify/Fifo.report.json", sha256Hex("not json")), p.root).kind === "not-a-report");
-  fs.mkdirSync(path.join(p.root, "design/verify/Dir.report.json"));
-  check("[record] not a regular file (a directory, a FIFO): unreadable, never read", recordedReport(rec("design/verify/Dir.report.json", sha256Hex(text)), p.root).kind === "unreadable");
-  p.done();
 }
 
 report();

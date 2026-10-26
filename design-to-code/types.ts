@@ -567,7 +567,7 @@ export interface InferredRow {
 /** A plan's verification block. `recorded` is the tool's (--compare --record-plan writes it whole), `hook` is
  *  verify-build's, everything else is the agent's. Readers take mode … a11y from a recorded@2 block and fall back to
  *  the top-level keys below only without one (a hand-written or native plan, a recorded@1 plan): beside a recorded@2
- *  those keys — and a hand headline/verdict — are ignored, with a warning (plan-record.ts verificationFacts). */
+ *  those keys — and a hand headline/verdict — are ignored, with a warning (verification-evidence.ts verificationFacts). */
 export interface PlanVerification {
   /** the fallback for a plan with no recorded@2 — as are reason, renderer, artifacts, deltas and a11y */
   mode?: "rendered" | "static-only" | (string & {});

@@ -2,8 +2,8 @@
 
 
 // design-to-code/verify-build.ts
-import fs19 from "node:fs";
-import path18 from "node:path";
+import fs20 from "node:fs";
+import path19 from "node:path";
 import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/errmsg.ts
@@ -160,7 +160,7 @@ function memo(fn) {
 }
 function walk(root, fn, prune, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path19, ancestors, under, beneath) {
+  (function go(node, parentHidden, path20, ancestors, under, beneath) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
     if (hidden && prune) return;
@@ -174,7 +174,7 @@ function walk(root, fn, prune, opts) {
     fn(node, {
       hidden,
       parentHidden: !!parentHidden,
-      path: path19,
+      path: path20,
       parent: parentFrame ? parentFrame.node : null,
       depth: ancestors.length,
       ancestors,
@@ -189,7 +189,7 @@ function walk(root, fn, prune, opts) {
     if (!kids.length) return;
     const inside2 = memo(() => paintOver(backdrop(), node));
     const chain = [...ancestors, frame];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path19 ? path19 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path20 ? path20 + " > " : "") + pathOf(kid, i), chain, inside2, memo(() => beneathOf(node, kids, i)));
   })(root, false, root ? pathOf(root, 0) : "", [], () => NOTHING, () => []);
 }
 function walkWithHidden(root, fn, opts) {
@@ -1779,75 +1779,51 @@ function judgeGate(audit, gate) {
   return { status: "covered", auditFile, legacy: legacy2 };
 }
 
-// design-to-code/report-freshness.ts
+// design-to-code/verification-evidence.ts
 import fs11 from "node:fs";
 import path11 from "node:path";
-
-// design-to-code/plan-binding.ts
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical({ descopes, waivers }));
-}
-
-// design-to-code/report-freshness.ts
-var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
-var systemGit = {
-  head(cwd) {
-    try {
-      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
-      const h = r.status === 0 && r.stdout.trim();
-      return h && OBJECT_ID_LINE.test(h) ? h : null;
-    } catch {
-      return null;
-    }
-  },
-  dirty(cwd) {
-    try {
-      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
-      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
-    } catch {
-      return null;
-    }
+var TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
+function verificationFacts(v) {
+  const top = v && typeof v === "object" ? v : {};
+  const rec = top.recorded;
+  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
+    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
   }
-};
-var str = (x) => typeof x === "string" && x ? x : null;
-function reportInputs(report) {
-  const i = isJsonObject(report.inputs) ? report.inputs : {};
-  const code = isJsonObject(i.code) && isJsonObject(i.code.files) ? i.code : null;
-  const files = {};
-  if (code && isJsonObject(code.files)) for (const [k, v] of Object.entries(code.files)) files[k] = typeof v === "string" ? v : null;
+  const r = rec;
+  const has = (k) => r[k] !== void 0;
+  const str2 = (x) => typeof x === "string" ? x : void 0;
+  const num = (x) => typeof x === "number" ? x : void 0;
+  const a = r.a11y;
+  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str2(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str2(a.report)) } : void 0;
   return {
-    exportContentSha256: str(i.exportContentSha256),
-    expectationSha256: str(i.expectationSha256),
-    code: code ? { ...typeof code.plan === "string" ? { plan: code.plan } : {}, files, ...code.gitHead === null || typeof code.gitHead === "string" ? { gitHead: code.gitHead } : {} } : null,
-    waiversSha256: isJsonObject(i.waivers) ? str(i.waivers.sha256) : null
+    at: "verification.recorded",
+    a11yAt: has("a11y") ? "verification.recorded" : "verification",
+    record: isVerificationRecord(r) ? r : null,
+    mode: has("mode") ? str2(r.mode) : top.mode,
+    reason: has("reason") ? str2(r.reason) : top.reason,
+    renderer: has("renderer") ? str2(r.renderer) : top.renderer,
+    artifacts: has("artifacts") ? r.artifacts : top.artifacts,
+    deltas: has("deltas") ? r.deltas : top.deltas,
+    a11y: has("a11y") ? a11y : top.a11y
   };
 }
-var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
-function staleText(rel, r) {
-  switch (r.kind) {
-    case "no-export-sha":
-      return `${rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`;
-    case "no-export":
-      return `cannot find this plan's screen export to compare with ${rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`;
-    case "export-changed":
-      return `the design changed since ${rel} was computed (export content sha256 ${r.was.slice(0, 12)}\u2026 \u2192 ${r.now.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`;
-    case "expectation-changed":
-      return `${rel} was computed against a different ${r.expectation} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`;
-    case "no-code":
-      return `${rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`;
-    case "code-changed":
-      return `${rel} measured different code \u2014 changed since: ${r.files.slice(0, 6).join(", ")}${r.files.length > 6 ? `, +${r.files.length - 6} more` : ""} \u2014 re-run --compare`;
-    case "waivers-changed":
-      return `${rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`;
-  }
+var slash2 = (x) => x.split(path11.sep).join("/").split("\\").join("/");
+var asJson = (x) => siblingFile(x, "reportMd", "report");
+function recordedRel(report, cwd) {
+  if (typeof report !== "string" || !report.trim()) return null;
+  return asJson(slash2(path11.relative(cwd, path11.resolve(cwd, report.trim()))));
 }
+var recordedName = (plan) => {
+  const v = plan.verification;
+  const rec = isJsonObject(v) ? v.recorded : void 0;
+  return isJsonObject(rec) ? rec.report : void 0;
+};
 function recordedReport(plan, cwd) {
   const v = plan.verification;
   const rec = isJsonObject(v) ? v.recorded : void 0;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return { kind: "none" };
-  return reportNamed(rec.report, rec.reportSha256, cwd);
+  const rel = recordedRel(recordedName(plan), cwd);
+  if (!isJsonObject(rec) || rel === null) return { kind: "none" };
+  return reportNamed(rel, rec.reportSha256, cwd);
 }
 function reportNamed(report, sha, cwd) {
   if (!fs11.existsSync(path11.resolve(cwd, report))) return { kind: "missing", report };
@@ -1863,53 +1839,168 @@ function reportNamed(report, sha, cwd) {
   return isVerifyReport(parsed) ? { kind: "names", report, doc: parsed } : { kind: "not-a-report", report };
 }
 function reportRecordNames(report, reportSha256, cwd) {
-  if (typeof report !== "string" || !report) return null;
-  const r = reportNamed(report, reportSha256, cwd);
+  const rel = recordedRel(report, cwd);
+  if (rel === null) return null;
+  const r = reportNamed(rel, reportSha256, cwd);
   return r.kind === "names" ? r.doc : null;
 }
-function reportFreshness(root, o = {}) {
-  const git = o.git ?? systemGit;
-  const NO_WAIVERS = waiversHash(null);
-  const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged = (inputs, plan) => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
-  function expectationChanged(rel, inputs) {
-    const want = inputs.expectationSha256;
-    if (!want) return null;
-    const expRel = siblingFile(rel, "report", "expected");
-    try {
-      return sha256Hex(fs11.readFileSync(path11.resolve(root, expRel))) !== want ? expRel : null;
-    } catch {
-      return null;
+var measuredMs = (r) => {
+  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
+  return Number.isNaN(t) ? -Infinity : t;
+};
+function ownAmong(reports, recorded) {
+  const named = recorded === null ? void 0 : reports.find((r) => r.rel === recorded);
+  if (named) return named;
+  const own = reports.filter((r) => r.matchedBy === "name");
+  const later = (r, best) => measuredMs(r) > measuredMs(best) || measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs;
+  return (own.length ? own : reports).reduce((best, r) => !best || later(r, best) ? r : best, null);
+}
+function verificationEvidence(plan, located, ctx) {
+  const facts = verificationFacts(plan.verification);
+  const recorded = recordedRel(recordedName(plan), ctx.cwd);
+  const recordedRef = recorded === null ? null : located.find((r) => r.rel === recorded) ?? null;
+  const own = ownAmong(located, recorded);
+  return {
+    facts,
+    recorded,
+    recordedRef,
+    located,
+    own,
+    shapeWarnings: () => [
+      ...checkVerification(facts, ctx.cwd),
+      ...missingEvidence(plan, facts),
+      ...recordWarnings(plan, located, ctx.cwd),
+      ...recordedShadowWarnings(plan),
+      ...contradictions(plan, facts, located, recorded)
+    ],
+    behaviourWarnings: () => behaviourWarnings(facts, located, own, recorded, ctx)
+  };
+}
+function checkVerification(f, cwd) {
+  const at = f.at;
+  if (f.mode === void 0) {
+    return ['no `verification.mode` in the plan \u2014 record how the build was checked: {mode:"rendered", renderer, artifacts:[\u2026], deltas:[\u2026]} after rendering and comparing (references/verify.md), or {mode:"static-only", reason} if the project genuinely has no way to render'];
+  }
+  if (f.mode === "rendered") {
+    const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
+    const wrongShape = [];
+    if (f.artifacts !== void 0 && !Array.isArray(f.artifacts))
+      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
+    if (f.deltas !== void 0 && !Array.isArray(f.deltas))
+      wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
+    if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
+    const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
+    if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
+    const missing = artifacts.filter((a) => !fs11.existsSync(path11.join(cwd, String(a))));
+    if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
+    if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
+    return [];
+  }
+  if (f.mode === "static-only") {
+    if (f.reason) return [];
+    return [at === "verification.recorded" ? 'verification.recorded.mode is "static-only" with no `reason` \u2014 the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator\u2026) in the measured file\'s `reason`, then re-run --compare --record-plan' : 'verification.mode is "static-only" with no `reason` \u2014 say what was checked for and not found (dev server, Playwright, simulator\u2026)'];
+  }
+  return [`${at}.mode must be "rendered" or "static-only", got ${JSON.stringify(f.mode)}`];
+}
+function missingEvidence(plan, f) {
+  const v = plan.verification;
+  if (!v || f.mode !== "rendered") return [];
+  const out = [];
+  const c = v.coverage;
+  if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
+    out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
+  if (!f.a11y) out.push(f.at === "verification.recorded" ? "verification.recorded has no a11y \u2014 the recorded report's behaviour/a11y checks did not run; re-run the probe with them and --compare --record-plan, or say in the report that accessibility was not checked" : "verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
+  return out;
+}
+function recordWarnings(plan, located, cwd) {
+  const r = recordedReport(plan, cwd);
+  if (r.kind === "missing") {
+    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
+  }
+  const out = [];
+  if (r.kind === "rewritten") out.push(`plan.verification records an older run of ${r.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`);
+  if ((r.kind === "names" || r.kind === "rewritten") && !located.some((x) => x.rel === r.report))
+    out.push(`plan.verification.recorded names ${r.report}, which is not a verify report found for this plan in design/verify/ (${located.length ? `found: ${located.map((x) => x.rel).join(", ")}` : "none found"}) \u2014 the status and the a11y check read the reports found; re-run ${scriptCmd("verify-screen")} --compare --record-plan for this plan's screen`);
+  return out;
+}
+var HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"];
+function recordedShadowWarnings(plan) {
+  const v = plan.verification;
+  const rec = v && typeof v === "object" ? v.recorded : void 0;
+  if (!v || !isJsonObject(rec)) return [];
+  const v2 = isRecordV2Shaped(rec);
+  if (v2 && !isVerificationRecord(rec)) return [];
+  const top = Object.keys(v);
+  const keys = [...v2 ? TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
+  return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
+}
+var A11Y = /\b(a11y|axe|accessib)/i;
+function contradictions(plan, f, located, recorded) {
+  const v = plan.verification;
+  if (!v || typeof v !== "object") return [];
+  const out = [];
+  const notChecked = v.coverage && Array.isArray(v.coverage.notChecked) ? v.coverage.notChecked : [];
+  const what = (e) => String(e && typeof e === "object" ? e.what || "" : e || "");
+  const rendered = v.coverage && Array.isArray(v.coverage.rendered) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
+  if (f.a11y && typeof f.a11y === "object" && f.a11y.violations !== void 0) {
+    const nc = notChecked.find((e) => A11Y.test(what(e)));
+    if (nc) out.push(`verification contradicts itself: \`${f.a11yAt === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
+  }
+  for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
+  const rec = v.recorded;
+  for (const r of located) {
+    const recordedHere = r.rel === recorded;
+    if (!recordedHere && Array.isArray(f.deltas) && !f.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
+      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 ` + (f.at === "verification.recorded" ? `the record is of another report; if ${r.rel} is this build's, record it (${scriptCmd("verify-screen")} --compare --record-plan)` : "copy them (or the ones you judged real, with why) into the plan"));
+    if (rec !== void 0) continue;
+    for (const k of ["verifyScreenVerdict", "verdict"]) {
+      const claimed = v[k];
+      const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict))
+        out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations")
+        out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
     }
   }
-  return {
-    stamp(p) {
-      return p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {};
-    },
-    judge(rel, inputs, now) {
-      const out = [];
-      const exp = expectationChanged(rel, inputs);
-      if (!inputs.exportContentSha256) {
-        if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
-        out.push({ kind: "no-export-sha" });
-        return out;
-      }
-      const nowSha = now.exportDoc ? exportContentSha256(now.exportDoc) : null;
-      if (nowSha === null) return [{ kind: "no-export" }];
-      if (inputs.exportContentSha256 !== nowSha) out.push({ kind: "export-changed", was: inputs.exportContentSha256, now: nowSha });
-      if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
-      const measured = inputs.code ? inputs.code.files : null;
-      if (!measured) out.push({ kind: "no-code" });
-      else {
-        const h = codeNow(now.plan);
-        const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
-        if (differ.length) out.push({ kind: "code-changed", files: differ });
-      }
-      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
-      return out;
-    },
-    waiversChanged
+  return out;
+}
+function a11yReportOf(named, located, own, recorded, ctx) {
+  if (named === void 0 || !named.trim()) return { ref: own };
+  const want = slash2(named.trim());
+  const rels = /* @__PURE__ */ new Set([asJson(want.replace(/^\.\//, "")), recordedRel(named, ctx.cwd) ?? ""]);
+  if (ctx.planFile !== void 0) rels.add(asJson(slash2(path11.relative(ctx.cwd, path11.resolve(path11.dirname(path11.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  const exact = located.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = asJson(path11.posix.basename(want));
+  const byBase = located.filter((r) => path11.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : ownAmong(byBase, recorded) };
+  return { ref: null, missing: want };
+}
+function behaviourWarnings(f, located, own, recorded, ctx) {
+  const out = [];
+  const a11y = f.a11y;
+  const copied = a11y && typeof a11y === "object" ? a11y.violations : void 0;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, located, own, recorded, ctx);
+  if (copied !== void 0 && target.missing !== void 0 && located.some((r2) => r2.behaviour && r2.behaviour.ran))
+    out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+  const r = target.ref ?? own;
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref, fail, failed) => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y \u2014 ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) \u2014 not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
   };
+  const otherFails = located.filter((x) => x !== r).flatMap((x) => x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []);
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off" ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) \u2014 a switch for the probe's own tests only; re-run the probe without it before claiming accessibility` : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (copied !== void 0 && target.missing === void 0 && copied !== b.fail)
+    out.push(`${f.a11yAt}.a11y records ${JSON.stringify(copied)} ${copied === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 ` + (f.a11yAt === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
+  return [...out, ...otherFails];
 }
 
 // design-to-code/map-validate-core.ts
@@ -1942,7 +2033,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path19, message) => errors.push({ path: path19, message });
+  const err = (path20, message) => errors.push({ path: path20, message });
   if (!isRecord(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -2151,8 +2242,8 @@ function memberRefs(codeToken) {
     const member = part.slice(dot + 1);
     if (dot <= 0 || !IDENT.test(member) || /(^|[^\w])\d+\.\w+$/.test(part)) continue;
     if (STYLE_PROPERTY.test(alnumKey(member.toLowerCase().replace(KEY_TAG, "")))) continue;
-    const path19 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
-    const containers = [...path19.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
+    const path20 = part.slice(0, dot).replace(/\([^()]*\)/g, "()");
+    const containers = [...path20.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]).filter((n) => n.length >= 3 && /[A-Z]/.test(n));
     if (containers.length) out.push({ member, containers });
   }
   return out;
@@ -2777,36 +2868,12 @@ function recordFacts(report, reportAt) {
     ...ran && b ? { a11y: { tool, violations: count(b.summary && b.summary.fail), warnings: count(b.summary && b.summary.warn), report: reportAt } } : {}
   };
 }
-function verificationFacts(v) {
-  const top = v && typeof v === "object" ? v : {};
-  const rec = top.recorded;
-  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
-    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
-  }
-  const r = rec;
-  const has = (k) => r[k] !== void 0;
-  const str2 = (x) => typeof x === "string" ? x : void 0;
-  const num = (x) => typeof x === "number" ? x : void 0;
-  const a = r.a11y;
-  const a11y = isJsonObject(a) ? { ...ifDefined("tool", str2(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str2(a.report)) } : void 0;
-  return {
-    at: "verification.recorded",
-    a11yAt: has("a11y") ? "verification.recorded" : "verification",
-    record: isVerificationRecord(r) ? r : null,
-    mode: has("mode") ? str2(r.mode) : top.mode,
-    reason: has("reason") ? str2(r.reason) : top.reason,
-    renderer: has("renderer") ? str2(r.renderer) : top.renderer,
-    artifacts: has("artifacts") ? r.artifacts : top.artifacts,
-    deltas: has("deltas") ? r.deltas : top.deltas,
-    a11y: has("a11y") ? a11y : top.a11y
-  };
-}
 var COUNT_KEYS = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 var RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"];
 function recordedV1Edits(rec, cwd) {
   const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
   if (!report || typeof rec.report !== "string") return [];
-  const said = recordFacts(report, rec.report);
+  const said = recordFacts(report, recordedRel(rec.report, cwd) ?? rec.report);
   const edited = [];
   for (const k of ["verdict", "headline", "behaviourHeadline"]) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
   const counts = rec.counts;
@@ -2844,8 +2911,10 @@ function recordedEditFacts(plan, cwd) {
   if (!edited.length && isVerificationRecord(rec)) {
     const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
     if (report) {
-      const said = recordFacts(report, rec.report);
-      for (const k of RECORD_FACT_KEYS) if (rec[k] === void 0 !== (said[k] === void 0) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+      const said = recordFacts(report, recordedRel(rec.report, cwd) ?? rec.report);
+      const a = rec.a11y;
+      const held = a && typeof a.report === "string" ? { ...rec, a11y: { ...a, report: recordedRel(a.report, cwd) ?? a.report } } : rec;
+      for (const k of RECORD_FACT_KEYS) if (held[k] === void 0 !== (said[k] === void 0) || canonical(held[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
@@ -2859,15 +2928,124 @@ function recordedEditFacts(plan, cwd) {
 }
 
 // design-to-code/plan-status.ts
-import path16 from "node:path";
+import path17 from "node:path";
 
-// design-to-code/verify-locate.ts
-import fs16 from "node:fs";
-import path15 from "node:path";
-
-// bridge/src/export-reader.ts
+// design-to-code/report-freshness.ts
 import fs15 from "node:fs";
 import path14 from "node:path";
+
+// design-to-code/plan-binding.ts
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+
+// design-to-code/report-freshness.ts
+var OBJECT_ID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\s*$/;
+var systemGit = {
+  head(cwd) {
+    try {
+      const r = runSync("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 2e3, expect: OBJECT_ID_LINE });
+      const h = r.status === 0 && r.stdout.trim();
+      return h && OBJECT_ID_LINE.test(h) ? h : null;
+    } catch {
+      return null;
+    }
+  },
+  dirty(cwd) {
+    try {
+      const r = runSync("git", ["status", "--porcelain=v2", "--branch", "--", ".", ":(exclude)design"], { cwd, timeoutMs: 5e3, expect: /^# branch\.oid /m });
+      return r.status === 0 && !r.lost ? r.stdout.split("\n").some((l) => l !== "" && !l.startsWith("#")) : null;
+    } catch {
+      return null;
+    }
+  }
+};
+var str = (x) => typeof x === "string" && x ? x : null;
+function reportInputs(report) {
+  const i = isJsonObject(report.inputs) ? report.inputs : {};
+  const code = isJsonObject(i.code) && isJsonObject(i.code.files) ? i.code : null;
+  const files = {};
+  if (code && isJsonObject(code.files)) for (const [k, v] of Object.entries(code.files)) files[k] = typeof v === "string" ? v : null;
+  return {
+    exportContentSha256: str(i.exportContentSha256),
+    expectationSha256: str(i.expectationSha256),
+    code: code ? { ...typeof code.plan === "string" ? { plan: code.plan } : {}, files, ...code.gitHead === null || typeof code.gitHead === "string" ? { gitHead: code.gitHead } : {} } : null,
+    waiversSha256: isJsonObject(i.waivers) ? str(i.waivers.sha256) : null
+  };
+}
+var WAIVERS_CHANGED = "waivers changed since the last compare \u2014 re-run --compare (with --plan <plan.json> when several plans describe the frame)";
+function staleText(rel, r) {
+  switch (r.kind) {
+    case "no-export-sha":
+      return `${rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run ${scriptCmd("verify-screen")} --expect and --compare`;
+    case "no-export":
+      return `cannot find this plan's screen export to compare with ${rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`;
+    case "export-changed":
+      return `the design changed since ${rel} was computed (export content sha256 ${r.was.slice(0, 12)}\u2026 \u2192 ${r.now.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`;
+    case "expectation-changed":
+      return `${rel} was computed against a different ${r.expectation} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`;
+    case "no-code":
+      return `${rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`;
+    case "code-changed":
+      return `${rel} measured different code \u2014 changed since: ${r.files.slice(0, 6).join(", ")}${r.files.length > 6 ? `, +${r.files.length - 6} more` : ""} \u2014 re-run --compare`;
+    case "waivers-changed":
+      return `${rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`;
+  }
+}
+function reportFreshness(root, o = {}) {
+  const git = o.git ?? systemGit;
+  const NO_WAIVERS = waiversHash(null);
+  const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
+  const waiversChanged = (inputs, plan) => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
+  function expectationChanged(rel, inputs) {
+    const want = inputs.expectationSha256;
+    if (!want) return null;
+    const expRel = siblingFile(rel, "report", "expected");
+    try {
+      return sha256Hex(fs15.readFileSync(path14.resolve(root, expRel))) !== want ? expRel : null;
+    } catch {
+      return null;
+    }
+  }
+  return {
+    stamp(p) {
+      return p.plan.files ? { code: { plan: p.file, files: codeNow(p.plan), gitHead: git.head(root) } } : {};
+    },
+    judge(rel, inputs, now) {
+      const out = [];
+      const exp = expectationChanged(rel, inputs);
+      if (!inputs.exportContentSha256) {
+        if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
+        out.push({ kind: "no-export-sha" });
+        return out;
+      }
+      const nowSha = now.exportDoc ? exportContentSha256(now.exportDoc) : null;
+      if (nowSha === null) return [{ kind: "no-export" }];
+      if (inputs.exportContentSha256 !== nowSha) out.push({ kind: "export-changed", was: inputs.exportContentSha256, now: nowSha });
+      if (exp !== null) out.push({ kind: "expectation-changed", expectation: exp });
+      const measured = inputs.code ? inputs.code.files : null;
+      if (!measured) out.push({ kind: "no-code" });
+      else {
+        const h = codeNow(now.plan);
+        const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
+        if (differ.length) out.push({ kind: "code-changed", files: differ });
+      }
+      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      return out;
+    },
+    waiversChanged
+  };
+}
+
+// design-to-code/verify-locate.ts
+import fs17 from "node:fs";
+import path16 from "node:path";
+
+// bridge/src/export-reader.ts
+import fs16 from "node:fs";
+import path15 from "node:path";
 
 // bridge/src/design-system-layout.ts
 var TOKENS = "tokens.json";
@@ -2890,11 +3068,11 @@ var DESIGN_SYSTEM_FILE_NAMES = [TOKENS, ...STYLE_KINDS.map((row) => row.file), C
 var PAGES = "pages";
 var INDEX = "index.json";
 function resolveInside(base, rel, within = base) {
-  const root = path14.resolve(within), file = path14.resolve(base, ...rel.split("/"));
-  return file.startsWith(root + path14.sep) ? file : null;
+  const root = path15.resolve(within), file = path15.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path15.sep) ? file : null;
 }
-var inside = (root, rel) => typeof rel === "string" && rel && !path14.isAbsolute(rel) ? resolveInside(root, rel) : null;
-var relOf = (root, file) => path14.relative(root, file).split(path14.sep).join("/");
+var inside = (root, rel) => typeof rel === "string" && rel && !path15.isAbsolute(rel) ? resolveInside(root, rel) : null;
+var relOf = (root, file) => path15.relative(root, file).split(path15.sep).join("/");
 var problemOf = (root, file, read2) => "error" in read2 && !read2.missing ? { file: relOf(root, file), error: read2.error } : null;
 var optStr3 = (x) => x === void 0 || typeof x === "string";
 var isIndexRowLike = (x) => isRecord(x) && typeof x.id === "string" && typeof x.name === "string";
@@ -2907,17 +3085,17 @@ var isPageIndex = /* @__PURE__ */ Object.assign(
   (x) => isRecord(x) && isRowList(x.layers),
   { expected: "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}" }
 );
-var rootIndexFile = (exportRoot) => path14.join(exportRoot, PAGES, INDEX);
+var rootIndexFile = (exportRoot) => path15.join(exportRoot, PAGES, INDEX);
 function pageIndexFiles(root, pageDirs) {
   const files = [];
   const add = (f) => {
-    if (f !== null && !files.includes(path14.resolve(f))) files.push(path14.resolve(f));
+    if (f !== null && !files.includes(path15.resolve(f))) files.push(path15.resolve(f));
   };
-  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path14.join(root, PAGES, dir, INDEX) : null;
+  const ofDir = (dir) => dir && !/[\\/]/.test(dir) && dir !== ".." && dir !== "." ? path15.join(root, PAGES, dir, INDEX) : null;
   for (const pd of pageDirs) add(pd.index ? inside(root, pd.index) : ofDir(pd.dir));
   let dirs = [];
   try {
-    dirs = fs15.readdirSync(path14.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    dirs = fs16.readdirSync(path15.join(root, PAGES), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   } catch {
   }
   for (const d of dirs) add(ofDir(d));
@@ -2941,7 +3119,7 @@ function readExportIndex(exportRoot) {
     if (t === void 0) {
       const f = inside(root, row.file);
       try {
-        t = f === null ? -1 : fs15.statSync(f).mtimeMs;
+        t = f === null ? -1 : fs16.statSync(f).mtimeMs;
       } catch {
         t = -1;
       }
@@ -3012,8 +3190,8 @@ function readExportIndex(exportRoot) {
 
 // design-to-code/verify-locate.ts
 function exportDirOf(cwd) {
-  const e = path15.join(cwd, EXPORT_DIR);
-  return fs16.existsSync(path15.join(e, "pages")) ? e : path15.join(cwd, DESIGN_DIR);
+  const e = path16.join(cwd, EXPORT_DIR);
+  return fs17.existsSync(path16.join(e, "pages")) ? e : path16.join(cwd, DESIGN_DIR);
 }
 var locateCache = () => ({ reports: /* @__PURE__ */ new Map(), indexes: /* @__PURE__ */ new Map() });
 function exportIndexOf(exportDir, cache) {
@@ -3026,7 +3204,7 @@ function exportIndexOf(exportDir, cache) {
   return ix;
 }
 var docNodeId = (doc) => screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id || null;
-var sameFile = (a, b) => path15.resolve(a) === path15.resolve(b) || canonical2(a) === canonical2(b);
+var sameFile = (a, b) => path16.resolve(a) === path16.resolve(b) || canonical2(a) === canonical2(b);
 function sourceOf(doc) {
   const exp = screenExportOf(doc);
   const file = exp ? exp.sourceFile : isLayerFile(doc) ? doc.sourceFile : void 0;
@@ -3048,7 +3226,7 @@ function locateExport(plan, planFile, cwd, cache) {
   const exportDir = exportDirOf(cwd);
   const tryFile = (rel) => {
     if (!rel) return null;
-    for (const f of [path15.resolve(cwd, rel), path15.resolve(exportDir, rel)]) {
+    for (const f of [path16.resolve(cwd, rel), path16.resolve(exportDir, rel)]) {
       const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
@@ -3109,21 +3287,21 @@ function behaviourRef(x) {
   return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function reportEntries(dir) {
-  if (!fs16.existsSync(dir)) return null;
+  if (!fs17.existsSync(dir)) return null;
   const out = [];
-  for (const f of fs16.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
-    const abs = path15.join(dir, f);
+  for (const f of fs17.readdirSync(dir).filter((x) => setBaseOf(x, "report") !== null).sort()) {
+    const abs = path16.join(dir, f);
     const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = setBaseOf(f, "report") ?? f;
-    if (!fs16.existsSync(setFile(path15.join(dir, stem), "expected")) && fs16.existsSync(setFile(path15.join(dir, stem), "retired"))) continue;
+    if (!fs17.existsSync(setFile(path16.join(dir, stem), "expected")) && fs17.existsSync(setFile(path16.join(dir, stem), "retired"))) continue;
     out.push({ f, abs, stem, r, facts: null, mtimeMs: null });
   }
   return out;
 }
-var factsOf = (dir, x) => x.facts ??= setFactsOf(readJsonOrNull(setFile(path15.join(dir, x.stem), "expected"), isJsonObject), x.r);
+var factsOf = (dir, x) => x.facts ??= setFactsOf(readJsonOrNull(setFile(path16.join(dir, x.stem), "expected"), isJsonObject), x.r);
 function locateReports(plan, planFile, cwd, exp, cache) {
-  const dir = path15.join(cwd, VERIFY_DIR);
+  const dir = path16.join(cwd, VERIFY_DIR);
   let entries = cache ? cache.reports.get(dir) : void 0;
   if (entries === void 0) {
     entries = reportEntries(dir);
@@ -3132,9 +3310,9 @@ function locateReports(plan, planFile, cwd, exp, cache) {
   if (entries === null) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd, cache) : exp;
   const stems = new Set([
-    plan.file ? path15.basename(String(plan.file)).replace(/\.json$/i, "") : null,
-    e ? path15.basename(e.file).replace(/\.json$/i, "") : null,
-    planFile ? path15.basename(planFile, ".json") : null,
+    plan.file ? path16.basename(String(plan.file)).replace(/\.json$/i, "") : null,
+    e ? path16.basename(e.file).replace(/\.json$/i, "") : null,
+    planFile ? path16.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null
   ].filter((s) => !!s));
   const nodeId = planNode(plan, planFile);
@@ -3150,12 +3328,12 @@ function locateReports(plan, planFile, cwd, exp, cache) {
     if (x.mtimeMs === null) {
       x.mtimeMs = 0;
       try {
-        x.mtimeMs = fs16.statSync(abs).mtimeMs;
+        x.mtimeMs = fs17.statSync(abs).mtimeMs;
       } catch {
       }
     }
     out.push({
-      rel: path15.relative(cwd, abs).split(path15.sep).join("/"),
+      rel: path16.relative(cwd, abs).split(path16.sep).join("/"),
       matchedBy: by,
       schema: r.schema || null,
       verdict: r.verdict || null,
@@ -3186,8 +3364,8 @@ function storedComputed(doc) {
   return s !== null && COMPUTED_STORED.has(s.trim().toLowerCase()) ? s : null;
 }
 function rootOfPlan(file, fallback) {
-  const dir = path16.dirname(path16.resolve(file));
-  if (dir.endsWith(path16.sep + PLAN_DIR)) return path16.dirname(path16.dirname(dir));
+  const dir = path17.dirname(path17.resolve(file));
+  if (dir.endsWith(path17.sep + PLAN_DIR)) return path17.dirname(path17.dirname(dir));
   return fallback || process.cwd();
 }
 var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
@@ -3227,7 +3405,8 @@ function planStatus(root, o = {}) {
   };
   const reports = (plan, planFile, exp) => locateReports(plan, planFile, root, exp, o.locate);
   function reportVerdict(plan, exp, found) {
-    const f = verificationFacts(plan.verification);
+    const ev = verificationEvidence(plan, found, { cwd: root });
+    const f = ev.facts;
     if (!found.length) {
       if (f.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${f.reason || "no reason recorded"})`] };
       return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
@@ -3244,7 +3423,7 @@ function planStatus(root, o = {}) {
       const stale = fresh.judge(r.rel, r.inputs, { plan, exportDoc: exp ? exp.doc : null })[0];
       if (stale !== void 0) return { status: "unverified", reasons: [staleText(r.rel, stale)] };
     }
-    const head = found.map((r) => r.inputs.code && r.inputs.code.gitHead).find(Boolean);
+    const head = [ev.own, ...found].map((r) => r && r.inputs.code && r.inputs.code.gitHead).find(Boolean);
     const withDeviations = found.filter((r) => r.verdict === "pass-with-deviations");
     const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations \u2014 accepted deltas / descoped interactions are listed in the report)` : "says pass";
     return {
@@ -3298,7 +3477,7 @@ function planStatus(root, o = {}) {
 }
 
 // design-to-code/hook-input.ts
-import fs17 from "node:fs";
+import fs18 from "node:fs";
 function parseHookPayload(raw) {
   if (!raw.trim()) return {};
   try {
@@ -3312,13 +3491,13 @@ function readHookInput(opts) {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs17.fstatSync(0);
+    st = fs18.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parseHookPayload(fs17.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parseHookPayload(fs18.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -3355,8 +3534,8 @@ function readHookInput(opts) {
 }
 
 // design-to-code/session-claim.ts
-import fs18 from "node:fs";
-import path17 from "node:path";
+import fs19 from "node:fs";
+import path18 from "node:path";
 
 // design-to-code/shell-words.ts
 function simpleCommands(src, opts = {}) {
@@ -3486,7 +3665,7 @@ function sessionClaim({ payload, cwd, open, all, bad }) {
     return { kind: "unscoped", plans: [...open] };
   }
   const wrote = (rel) => scan.writes.some((w) => sameFile2(w, rel, cwd));
-  const relOf2 = (file2) => path17.relative(cwd, path17.resolve(file2));
+  const relOf2 = (file2) => path18.relative(cwd, path18.resolve(file2));
   const listers = /* @__PURE__ */ new Map();
   for (const p of open) for (const f of new Set(p.plan.files || [])) listers.set(f, (listers.get(f) || 0) + 1);
   const owns = (p) => wrote(relOf2(p.file)) || open.includes(p) && (p.plan.files || []).some((f) => listers.get(f) === 1 && wrote(f));
@@ -3551,12 +3730,12 @@ var TOOL_USE_ESCAPED = /"(?:t|\\u0074)(?:o|\\u006f)(?:o|\\u006f)(?:l|\\u006c)(?:
 var mayHoldToolUse = (line) => line.includes('"tool_use"') || line.includes("\\u") && TOOL_USE_ESCAPED.test(line);
 var LINE_CHUNK = 1 << 20;
 function forEachLine(file, onLine) {
-  const fd = fs18.openSync(file, "r");
+  const fd = fs19.openSync(file, "r");
   try {
     const buf = Buffer.allocUnsafe(LINE_CHUNK);
     let carry = [];
     for (; ; ) {
-      const n = fs18.readSync(fd, buf, 0, LINE_CHUNK, null);
+      const n = fs19.readSync(fd, buf, 0, LINE_CHUNK, null);
       if (n === 0) break;
       const cut = buf.subarray(0, n).lastIndexOf(10);
       if (cut < 0) {
@@ -3570,7 +3749,7 @@ function forEachLine(file, onLine) {
     }
     onLine(Buffer.concat(carry).toString("utf8"));
   } finally {
-    fs18.closeSync(fd);
+    fs19.closeSync(fd);
   }
 }
 var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
@@ -3603,9 +3782,9 @@ function planSkeletonOuts(cmd, powershell = false) {
 function sameFile2(w, rel, cwd) {
   const c = w.path.trim().replace(/\\/g, "/");
   if (!c) return false;
-  const want = path17.resolve(cwd, rel).replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path17.posix.normalize(c).toLowerCase().endsWith("/" + path17.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
-  const got = path17.resolve(w.base || cwd, c).replace(/\\/g, "/");
+  const want = path18.resolve(cwd, rel).replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(c) && !/^[A-Za-z]:\//.test(want)) return path18.posix.normalize(c).toLowerCase().endsWith("/" + path18.posix.normalize(rel.replace(/\\/g, "/")).toLowerCase());
+  const got = path18.resolve(w.base || cwd, c).replace(/\\/g, "/");
   return /^[A-Za-z]:\//.test(want) ? got.toLowerCase() === want.toLowerCase() : got === want;
 }
 
@@ -3636,13 +3815,13 @@ function isStale2(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs19.statSync(file).mtimeMs > cutoff;
+    return now - fs20.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function findPlans(cwd) {
-  return nodeArtefacts(cwd, { planDir: path18.join(cwd, PLAN_DIR) }).plans();
+  return nodeArtefacts(cwd, { planDir: path19.join(cwd, PLAN_DIR) }).plans();
 }
 function isOpen(p, cwd) {
   return !isStale2(p.file) && planStatus(cwd).open(p.plan);
@@ -3698,7 +3877,7 @@ var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
 var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
 var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function loadMapKeys(cwd) {
-  for (const f of [path18.join(cwd, MAP_FILE), path18.join(cwd, LEGACY_MAP_FILE)]) {
+  for (const f of [path19.join(cwd, MAP_FILE), path19.join(cwd, LEGACY_MAP_FILE)]) {
     const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = /* @__PURE__ */ new Map();
@@ -3708,158 +3887,6 @@ function loadMapKeys(cwd) {
     return keys;
   }
   return /* @__PURE__ */ new Map();
-}
-function checkVerification(plan, cwd) {
-  const f = verificationFacts(plan.verification);
-  const at = f.at;
-  if (f.mode === void 0) {
-    return ['no `verification.mode` in the plan \u2014 record how the build was checked: {mode:"rendered", renderer, artifacts:[\u2026], deltas:[\u2026]} after rendering and comparing (references/verify.md), or {mode:"static-only", reason} if the project genuinely has no way to render'];
-  }
-  if (f.mode === "rendered") {
-    const shape = (x) => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
-    const wrongShape = [];
-    if (f.artifacts !== void 0 && !Array.isArray(f.artifacts))
-      wrongShape.push(`${at}.artifacts must be an array of paths, got ${shape(f.artifacts)} \u2014 e.g. ["design/verify/<Layer>__<id>.png", "design/verify/<Layer>__<id>.report.json"]`);
-    if (f.deltas !== void 0 && !Array.isArray(f.deltas))
-      wrongShape.push(`${at}.deltas must be an array of the residual differences, got ${shape(f.deltas)} \u2014 the counts live in the report; list each difference ([] if none were found)`);
-    if (wrongShape.length) return f.deltas === void 0 ? [...wrongShape, `${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`] : wrongShape;
-    const artifacts = Array.isArray(f.artifacts) ? f.artifacts : [];
-    if (!artifacts.length) return [`${at}.mode is "rendered" but \`artifacts\` is empty \u2014 list the screenshot(s)/report the render produced`];
-    const missing = artifacts.filter((a) => !fs19.existsSync(path18.join(cwd, String(a))));
-    if (missing.length) return [`${at} artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
-    if (!Array.isArray(f.deltas)) return [`${at}.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)`];
-    return [];
-  }
-  if (f.mode === "static-only") {
-    if (f.reason) return [];
-    return [at === "verification.recorded" ? 'verification.recorded.mode is "static-only" with no `reason` \u2014 the measured file gave none: put what was checked for and not found (dev server, Playwright, simulator\u2026) in the measured file\'s `reason`, then re-run --compare --record-plan' : 'verification.mode is "static-only" with no `reason` \u2014 say what was checked for and not found (dev server, Playwright, simulator\u2026)'];
-  }
-  return [`${at}.mode must be "rendered" or "static-only", got ${JSON.stringify(f.mode)}`];
-}
-function verificationWarnings(plan) {
-  const v = plan.verification;
-  const f = verificationFacts(v);
-  if (!v || f.mode !== "rendered") return [];
-  const out = [];
-  const c = v.coverage;
-  if (!c || !Array.isArray(c.rendered) || !c.rendered.length)
-    out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
-  if (!f.a11y) out.push(f.at === "verification.recorded" ? "verification.recorded has no a11y \u2014 the recorded report's behaviour/a11y checks did not run; re-run the probe with them and --compare --record-plan, or say in the report that accessibility was not checked" : "verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
-  return out;
-}
-function recordedReportWarnings(plan, cwd) {
-  const r = recordedReport(plan, cwd);
-  if (r.kind === "missing") {
-    return [`plan.verification.recorded names ${r.report}, which is not on disk (renamed or deleted) \u2014 the record cannot be checked against its report: run verify-screen --migrate for a legacy-named verify set, else re-run verify-screen --compare --record-plan`];
-  }
-  return r.kind === "rewritten" ? [`plan.verification records an older run of ${r.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`] : [];
-}
-var SHADOWED_TOOL_KEYS = ["mode", "reason", "renderer", "artifacts", "deltas", "a11y"];
-var HAND_VERDICT_KEYS = ["headline", "verdict", "verifyScreenVerdict"];
-function recordedShadowWarnings(plan) {
-  const v = plan.verification;
-  const rec = v && typeof v === "object" ? v.recorded : void 0;
-  if (!v || !isJsonObject(rec)) return [];
-  const v2 = isRecordV2Shaped(rec);
-  if (v2 && !isVerificationRecord(rec)) return [];
-  const top = Object.keys(v);
-  const keys = [...v2 ? SHADOWED_TOOL_KEYS.filter((k) => top.includes(k) && rec[k] !== void 0) : [], ...HAND_VERDICT_KEYS.filter((k) => top.includes(k))];
-  return keys.length ? [`verification.${keys.join(", verification.")} ${keys.length > 1 ? "are" : "is"} ignored \u2014 verification.recorded is the record (${scriptCmd("verify-screen")} --compare --record-plan writes it); remove ` + (keys.length > 1 ? "them" : "it") + " from the top level: a residual goes in deviations[] (with the why), anything else in notes"] : [];
-}
-var json = (x) => siblingFile(x, "reportMd", "report");
-var slash2 = (x) => x.split(path18.sep).join("/").split("\\").join("/");
-function recordedReportRel(plan, cwd) {
-  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report.trim()) return null;
-  const named = rec.report.trim();
-  return json(slash2(cwd === void 0 ? named : path18.relative(cwd, path18.resolve(cwd, named))).replace(/^\.\//, ""));
-}
-var measuredMs = (r) => {
-  const t = r.measuredAt === null ? NaN : Date.parse(r.measuredAt);
-  return Number.isNaN(t) ? -Infinity : t;
-};
-var newestOwn = (reports, recordedRel = null) => {
-  const recorded = recordedRel === null ? void 0 : reports.find((r) => r.rel === recordedRel);
-  if (recorded) return recorded;
-  const own = reports.filter((r) => r.matchedBy === "name");
-  const later = (r, best) => measuredMs(r) > measuredMs(best) || measuredMs(r) === measuredMs(best) && r.mtimeMs > best.mtimeMs;
-  return (own.length ? own : reports).reduce((best, r) => !best || later(r, best) ? r : best, null);
-};
-function a11yReportOf(named, reports, ctx = {}) {
-  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports, ctx.recordedRel) };
-  const want = slash2(named.trim());
-  const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
-  if (ctx.cwd !== void 0) {
-    rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(ctx.cwd, named.trim())))));
-    if (ctx.planFile !== void 0) rels.add(json(slash2(path18.relative(ctx.cwd, path18.resolve(path18.dirname(path18.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
-  }
-  const exact = reports.find((r) => rels.has(r.rel));
-  if (exact) return { ref: exact };
-  const base = json(path18.posix.basename(want));
-  const byBase = reports.filter((r) => path18.posix.basename(r.rel) === base);
-  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase, ctx.recordedRel) };
-  return { ref: null, missing: want };
-}
-function behaviourWarnings(plan, reports, ctx = {}) {
-  const out = [];
-  const all = reports || [];
-  const f = verificationFacts(plan.verification);
-  const a11y = f.a11y;
-  const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
-  const recordedRel = recordedReportRel(plan, ctx.cwd);
-  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, { ...ctx, recordedRel });
-  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran))
-    out.push(`${f.a11yAt}.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
-  const r = target.ref ?? newestOwn(all, recordedRel);
-  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
-  const failWarning = (ref, fail, failed) => {
-    const ids = [...new Set(failed)];
-    return `${ref.rel}: behaviour/a11y \u2014 ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) \u2014 not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
-  };
-  const others = all.filter((x) => x !== r);
-  const otherFails = others.flatMap((x) => x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []);
-  const b = r ? r.behaviour : null;
-  if (!r || !b) return [...out, ...otherFails];
-  if (!b.ran) {
-    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
-    out.push(b.why === "--behaviour off" ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) \u2014 a switch for the probe's own tests only; re-run the probe without it before claiming accessibility` : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 re-run the shipped probe, or say in the report that accessibility was not checked`);
-    return [...out, ...otherFails];
-  }
-  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
-  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail)
-    out.push(`${f.a11yAt}.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 ` + (f.a11yAt === "verification.recorded" ? "re-run --compare --record-plan against that report" : "copy report.behaviour.summary"));
-  return [...out, ...otherFails];
-}
-var A11Y = /\b(a11y|axe|accessib)/i;
-function verificationContradictions(plan, reports) {
-  const v = plan.verification;
-  if (!v || typeof v !== "object") return [];
-  const f = verificationFacts(v);
-  const out = [];
-  const notChecked = v.coverage && Array.isArray(v.coverage.notChecked) ? v.coverage.notChecked : [];
-  const what = (e) => String(e && typeof e === "object" ? e.what || "" : e || "");
-  const rendered = v.coverage && Array.isArray(v.coverage.rendered) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
-  if (f.a11y && typeof f.a11y === "object" && f.a11y.violations !== void 0) {
-    const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`${f.a11yAt === "verification" ? "" : "recorded."}a11y\` records ${JSON.stringify(f.a11y.violations)} violation(s) from ${JSON.stringify(f.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} \u2014 keep the one that is true`);
-  }
-  for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
-  const rec = v.recorded;
-  for (const r of reports || []) {
-    const recordedHere = isJsonObject(rec) && rec.report === r.rel;
-    if (!recordedHere && Array.isArray(f.deltas) && !f.deltas.length && Array.isArray(r.deltas) && r.deltas.length)
-      out.push(`${f.at}.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 ` + (f.at === "verification.recorded" ? `the record is of another report; if ${r.rel} is this build's, record it (${scriptCmd("verify-screen")} --compare --record-plan)` : "copy them (or the ones you judged real, with why) into the plan"));
-    if (rec !== void 0) continue;
-    for (const k of ["verifyScreenVerdict", "verdict"]) {
-      const claimed = v[k];
-      const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict))
-        out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} \u2014 the report is the verdict; the plan cannot overrule it`);
-      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations")
-        out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" \u2014 say the accepted deviations, not a plain pass`);
-    }
-  }
-  return out;
 }
 var DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"];
 function deviationWarnings(plan) {
@@ -3889,7 +3916,7 @@ function profileOf(plan, cwd) {
   const t = plan.target;
   if (typeof t === "string" && t.trim()) return t.trim();
   if (t && typeof t === "object" && typeof t.profile === "string" && t.profile.trim()) return t.profile.trim();
-  const doc = readJsonOrNull(path18.join(cwd, TARGET_FILE), isJsonObject);
+  const doc = readJsonOrNull(path19.join(cwd, TARGET_FILE), isJsonObject);
   return doc && typeof doc.profile === "string" && doc.profile.trim() ? doc.profile.trim() : null;
 }
 var isWebProfile = (p) => !!p && /^web(-|$)/i.test(p);
@@ -3972,7 +3999,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed2 = plan.files || [];
-  const absent = listed2.filter((f) => !fs19.existsSync(path18.join(cwd, f)));
+  const absent = listed2.filter((f) => !fs20.existsSync(path19.join(cwd, f)));
   if (!listed2.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
   let built = null;
@@ -3980,12 +4007,12 @@ function checkPlan({ plan, file }, cwd, opts) {
   const g = graph();
   const isFileNow = (rel) => {
     try {
-      return fs19.statSync(path18.join(cwd, rel)).isFile();
+      return fs20.statSync(path19.join(cwd, rel)).isFile();
     } catch {
       return false;
     }
   };
-  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs19.readFileSync(path18.join(cwd, rel), "utf8") });
+  const byFile = listed2.filter(isFileNow).map((rel) => g.cached(rel) !== void 0 && g.byRel.get(rel) || { rel, text: fs20.readFileSync(path19.join(cwd, rel), "utf8") });
   const code = codeOf(byFile);
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -4066,7 +4093,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) \u2014 the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     if (exp.staleFile) {
-      const now = path18.relative(cwd, exp.file).split(path18.sep).join("/");
+      const now = path19.relative(cwd, exp.file).split(path19.sep).join("/");
       warnings.push(`plan.file names ${exp.staleFile}; the index files node ${String(exp.nodeId)} under ${now} \u2014 read ${now}; re-run plan-skeleton --out to refresh the header`);
     }
     const cov = anchorCoverage(plan, exp.doc);
@@ -4096,13 +4123,10 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   warnings.push(...undeclaredColourTokens(live, graph()));
   blocking.push(...recordedEdits(plan, cwd));
-  warnings.push(...checkVerification(plan, cwd));
-  warnings.push(...verificationWarnings(plan));
-  warnings.push(...recordedReportWarnings(plan, cwd));
-  warnings.push(...recordedShadowWarnings(plan));
   const reports = o.reports || locateReports(plan, file, cwd, exp);
-  warnings.push(...verificationContradictions(plan, reports));
-  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
+  const evidence = verificationEvidence(plan, reports, { cwd, planFile: file });
+  warnings.push(...evidence.shapeWarnings());
+  warnings.push(...evidence.behaviourWarnings());
   warnings.push(...legacySetWarnings(plan, file, reports));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
@@ -4111,7 +4135,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   return { blocking: [...new Set(blocking)], warnings: [...new Set(warnings)], ...tagCoverage ? { tagCoverage } : {} };
 }
 function auditGateWarnings(plan, cwd, exp, planFile) {
-  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path18.resolve(cwd, plan.file) : null, screenName: plan.screenName || exp && exp.layerName || null };
+  const screen = { nodeId: planNode(plan, planFile), screenFile: plan.file ? path19.resolve(cwd, plan.file) : null, screenName: plan.screenName || exp && exp.layerName || null };
   const v = judgeGate(screenAudit(cwd, screen), plan.auditGate);
   if (v.status === "clear") return [];
   if (v.status === "unchecked") return [`${v.auditFile} ${v.error} \u2014 the audit gate was NOT checked; re-run the audit script for this screen`];
@@ -4131,7 +4155,7 @@ function auditGateWarnings(plan, cwd, exp, planFile) {
 function legacySetWarnings(plan, planFile, reports) {
   const nodeId = planNode(plan, planFile);
   return reports.flatMap((r) => {
-    const set = setBaseOf(path18.posix.basename(r.rel), "report") ?? path18.posix.basename(r.rel);
+    const set = setBaseOf(path19.posix.basename(r.rel), "report") ?? path19.posix.basename(r.rel);
     return parseSetName(set) === null ? [`legacy-named verify set ${set} for ${nodeId ? `node ${nodeId}` : "this plan's screen"} \u2014 run verify-screen --migrate`] : [];
   });
 }
@@ -4178,13 +4202,13 @@ var USAGE = [
 function checkAndRecord(p, cwd, graph, locate) {
   const exp = locateExport(p.plan, p.file, cwd, locate);
   const reports = locateReports(p.plan, p.file, cwd, exp, locate);
-  setPhase(`checking ${path18.basename(p.file)}`);
+  setPhase(`checking ${path19.basename(p.file)}`);
   const { blocking, warnings, tagCoverage } = checkPlan(p, cwd, { export: exp, reports, ...graph ? { graph } : {} });
   const plan = p.plan;
   const cleared = storedComputed(plan);
   if (cleared) delete plan.status;
   if (!plan.verification) plan.verification = {};
-  setPhase(`hashing files[] of ${path18.basename(p.file)}`);
+  setPhase(`hashing files[] of ${path19.basename(p.file)}`);
   const cached = graph ? graph().cached : void 0;
   const hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -4203,7 +4227,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       if (raw === null) throw new Error("it no longer exists");
       const fresh = parsePlanText(raw, p.file);
       try {
-        const s = fs19.statSync(p.file);
+        const s = fs20.statSync(p.file);
         was.times = [s.atime, s.mtime];
       } catch {
         delete was.times;
@@ -4214,7 +4238,7 @@ function checkAndRecord(p, cwd, graph, locate) {
       return fresh;
     }, { afterWrite: () => {
       if (was.times) try {
-        fs19.utimesSync(p.file, was.times[0], was.times[1]);
+        fs20.utimesSync(p.file, was.times[0], was.times[1]);
       } catch {
       }
     } });
@@ -4222,7 +4246,7 @@ function checkAndRecord(p, cwd, graph, locate) {
     const v = { ...plan.verification };
     delete v.hook;
     recorded = { ...plan, verification: v };
-    warnings.push(`the hook record was not written into ${path18.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
+    warnings.push(`the hook record was not written into ${path19.basename(p.file)} (${errMsg(e)}) \u2014 the plan stays pending until a check is recorded`);
   }
   if (graph) graph().rewrote(p.file);
   const st = planStatus(cwd, { cached }).status(recorded, { planFile: p.file, export: exp, reports });
@@ -4239,13 +4263,13 @@ async function main(argv) {
     console.log(USAGE);
     return 0;
   }
-  const statusMode = !!flags.status, json2 = !!flags.json;
+  const statusMode = !!flags.status, json = !!flags.json;
   if (statusMode) {
     setPhase("computing plan status");
-    const found = planArgs.length ? planArgs.map((f) => readPlan(path18.resolve(f))) : null;
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path19.resolve(f))) : null;
     const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p) => !isPlanFile(p)) } : findPlans(process.cwd());
     const show = (f) => {
-      const r = path18.relative(process.cwd(), f);
+      const r = path19.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
     for (const b of bad) {
@@ -4258,7 +4282,7 @@ async function main(argv) {
       const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
       return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
     });
-    if (json2) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
+    if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
     return 0;
@@ -4266,10 +4290,10 @@ async function main(argv) {
   let input = {};
   let targets;
   if (planArgs.length) {
-    const read2 = planArgs.map((f) => readPlan(path18.resolve(f)));
+    const read2 = planArgs.map((f) => readPlan(path19.resolve(f)));
     const bad = read2.filter((p) => !isPlanFile(p));
     if (bad.length) {
-      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path18.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
+      console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path19.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`);
       return 1;
     }
     targets = read2.filter(isPlanFile);
@@ -4299,7 +4323,7 @@ async function main(argv) {
       const cwd = rootOfPlan(p.file);
       const life = lifecycleOf(p.plan);
       if (life !== "pending") {
-        console.error(`verify-build: ${path18.basename(p.file)} is "${life}" \u2014 not checked`);
+        console.error(`verify-build: ${path19.basename(p.file)} is "${life}" \u2014 not checked`);
         continue;
       }
       all.push({ p, cwd });
@@ -4314,15 +4338,15 @@ async function main(argv) {
     const claim2 = sessionClaim({ payload: input, cwd, open, all: plans, bad });
     const unreadable = claim2.kind === "claimed" ? claim2.unreadable : [];
     const fixIt = `fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`;
-    for (const b of bad) if (!unreadable.includes(b)) say(`verify-build: warning: ${path18.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
+    for (const b of bad) if (!unreadable.includes(b)) say(`verify-build: warning: ${path19.relative(cwd, b.file)} ${b.error} \u2014 it was NOT checked; ${fixIt}`);
     for (const b of unreadable) {
-      const rel = path18.relative(cwd, b.file);
-      blockedOut.push(`# ${path18.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
+      const rel = path19.relative(cwd, b.file);
+      blockedOut.push(`# ${path19.basename(b.file)}`, `  - ${rel} ${b.error} \u2014 you wrote this plan and it cannot be read, so it was NOT checked; ${fixIt}, then run ${scriptCmd("verify-build")} ${rel}. A plan you will not finish: set "status" to "abandoned" (or "awaiting-user", for a build paused on a question for the user, ${thenAsk}) in the file, which must be valid JSON, or move it out of design/plan/`);
     }
     if (claim2.kind === "none") {
       console.error(`verify-build: this session claimed no plan under design/plan/ (no Write/Edit or plan-skeleton --out of one, no Write/Edit of a file only one plan lists) \u2014 nothing checked (${open.length} open plan(s) belong to other sessions; check one by hand with ${scriptCmd("verify-build")} <plan.json>)`);
       if (claim2.sendBack) {
-        const names = open.map((p) => path18.relative(cwd, p.file).replace(/\\/g, "/"));
+        const names = open.map((p) => path19.relative(cwd, p.file).replace(/\\/g, "/"));
         console.log(JSON.stringify({ decision: "block", reason: `verify-build: you (${String(input.agent_type)}) ${NO_CLAIM_MARK}. Open plan(s): ${names.slice(0, 6).join(", ")}${names.length > 6 ? `, +${names.length - 6} more` : ""}. A builder's plan is the one it writes with Write/Edit or creates with plan-skeleton --out (or the one plan listing a file it writes with Write/Edit); shell edits (sed, cp, a redirect) are not read. Before you stop: if you built one of these plans, run ${scriptCmd("verify-build")} <that plan.json>, fix what it blocks on, and name the plan and its result in your report; if you built none of them, say so in your report. This is asked once: your next stop is not checked again.` }));
       }
       return 0;
@@ -4335,7 +4359,7 @@ async function main(argv) {
   const locate = locateCache();
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, () => getOrInit(graphs, cwd, () => planGraph(cwd, [], cwd === hookCwd ? hookPlans : void 0)), locate);
-    const name = path18.basename(p.file);
+    const name = path19.basename(p.file);
     if (res.cleared) say(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) getOrInit(warned, w, () => []).push(name);
     if (res.blocking.length) {
@@ -4369,16 +4393,11 @@ if (import.meta.main) {
 export {
   anchorCoverage,
   auditGateWarnings,
-  behaviourWarnings,
   checkPlan,
   deviationConflicts,
   deviationWarnings,
   isStale2 as isStale,
   legacySetWarnings,
   main,
-  recordedReportWarnings,
-  recordedShadowWarnings,
-  validatePlanHeader,
-  verificationContradictions,
-  verificationWarnings
+  validatePlanHeader
 };

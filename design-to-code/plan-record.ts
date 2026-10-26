@@ -15,7 +15,7 @@
 // the behaviour checks did not run, a hand reason the measured file did not give, a hand renderer the rendered report
 // did not give) stays, and is read from there; a renderer beside a static-only record or a reason beside a rendered one
 // no longer holds and is removed. verify-build reads each key from the record
-// first (verificationFacts, below). The file keeps its indentation, key order and line endings (updatePlan, below — the
+// first (verification-evidence.ts verificationFacts). The file keeps its indentation, key order and line endings (updatePlan, below — the
 // one plan writer, also used by --accept, plan-skeleton --out and the verify-build hook); it is written only when its bytes
 // change, and a re-record of the same report keeps the old `recorded.at`. verify-build's planHash leaves `verification` out, so recording never reopens a plan — and a hook
 // record still holding the older formula (which DID cover verification) is re-stamped with the current one in the
@@ -32,13 +32,13 @@ import { formatJsonLike, updateJsonLike } from "../bridge/src/json-file.ts";
 import { canonical, ifDefined } from "../bridge/src/json-util.ts";
 import type { UpdateJsonOpts } from "../bridge/src/json-file.ts";
 import { RECORD_KEYS, RECORD_V1_KEYS, isRecordV2Shaped, isVerificationRecord, isVerifyReport, parsePlan, recordProblems, recordV1HandKeys, recordV2OnlyKeys } from "./doc-guards.ts";
-import { reportRecordNames } from "./report-freshness.ts";
+import { recordedRel, reportRecordNames, verificationFacts } from "./verification-evidence.ts";
 import { siblingFile } from "./verify-sets.ts";
 import { hookHashOf, planHash } from "./content-hash.ts";
 import { PLAN_VERIFICATION_RECORD_SCHEMA, isJsonObject } from "./types.ts";
 import { planLockFile, planLockRefused } from "./run-cache.ts";
 import type {
-  JsonObject, JsonValue, Plan, PlanA11yRecord, PlanRecordCounts, PlanRecordedDelta, PlanVerification, PlanVerificationRecord, VerifyReport, VerifyReportV2,
+  JsonObject, Plan, PlanRecordCounts, PlanRecordedDelta, PlanVerification, PlanVerificationRecord, VerifyReport, VerifyReportV2,
 } from "./types.ts";
 
 export interface RecordPlanResult { written: boolean; notes: string[] }
@@ -107,35 +107,6 @@ function recordFacts(report: Omit<VerifyReport, "artifacts"> & { mode?: unknown;
   };
 }
 
-/** mode … a11y as every reader takes them. A recorded@2 block (doc-guards.ts isRecordV2Shaped; `record` is that block
- *  when it is the tool's shape) speaks for each key it holds — `at` "verification.recorded"; a key it lacks (a11y when
- *  the report's behaviour checks did not run, reason when the measured file gave none) is read from verification's top
- *  level, where the agent may have written it (`a11yAt` says where a11y came from). Without a recorded@2 — a
- *  hand-written or native plan, a recorded@1 one — every key is the top level's (`at` "verification"). */
-export interface VerificationFacts {
-  at: "verification.recorded" | "verification";
-  a11yAt: "verification.recorded" | "verification";
-  record: PlanVerificationRecord | null;
-  mode: PlanVerification["mode"]; reason: string | undefined; renderer: string | undefined;
-  artifacts: PlanVerification["artifacts"]; deltas: PlanVerification["deltas"]; a11y: PlanA11yRecord | undefined;
-}
-function verificationFacts(v: PlanVerification | null | undefined): VerificationFacts {
-  const top: PlanVerification = v && typeof v === "object" ? v : {};
-  const rec: unknown = top.recorded;
-  if (!isJsonObject(rec) || !isRecordV2Shaped(rec)) {
-    return { at: "verification", a11yAt: "verification", record: null, mode: top.mode, reason: top.reason, renderer: top.renderer, artifacts: top.artifacts, deltas: top.deltas, a11y: top.a11y };
-  }
-  const r: JsonObject = rec;
-  const has = (k: ToolKey): boolean => r[k] !== undefined;
-  const str = (x: JsonValue | undefined): string | undefined => (typeof x === "string" ? x : undefined);
-  const num = (x: JsonValue | undefined): number | undefined => (typeof x === "number" ? x : undefined);
-  const a = r.a11y;
-  const a11y: PlanA11yRecord | undefined = isJsonObject(a)
-    ? { ...ifDefined("tool", str(a.tool)), ...ifDefined("violations", num(a.violations)), ...ifDefined("warnings", num(a.warnings)), ...ifDefined("report", str(a.report)) } : undefined;
-  return { at: "verification.recorded", a11yAt: has("a11y") ? "verification.recorded" : "verification", record: isVerificationRecord(r) ? r : null,
-    mode: has("mode") ? str(r.mode) : top.mode, reason: has("reason") ? str(r.reason) : top.reason, renderer: has("renderer") ? str(r.renderer) : top.renderer,
-    artifacts: has("artifacts") ? r.artifacts : top.artifacts, deltas: has("deltas") ? r.deltas : top.deltas, a11y: has("a11y") ? a11y : top.a11y };
-}
 
 // `planFile` and `reportRel` are relative to `opts.cwd` (the project root, default process.cwd()) or absolute;
 // `report` is the object --compare wrote to `reportRel`. `opts.now` fixes `recorded.at` (tests). Throws when the plan
@@ -259,7 +230,7 @@ function recordPlan(planFile: string, report: VerifyReportV2, reportRel: string,
 export interface RecordedEdit { fact: string; advice: string }
 const COUNT_KEYS: ReadonlyArray<keyof PlanRecordCounts> = ["high", "medium", "low", "accepted", "notMeasured", "inferred"];
 const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "reason", "renderer", "deltas", "a11y"] as const;
-// (the report a record's reportSha256 still names: report-freshness.ts reportRecordNames)
+// (the report a record's reportSha256 still names: verification-evidence.ts reportRecordNames)
 // A recorded@1 block (the first record's keys only) whose reportSha256 still names the report on disk: its verdict,
 // headline, behaviourHeadline and counts that are not what that report says were edited by hand. The first writer took
 // each of them from the report as recordFacts does now — verdict and headline copied as they are (the headline is the
@@ -272,7 +243,7 @@ const RECORD_FACT_KEYS = ["verdict", "headline", "behaviourHeadline", "mode", "r
 function recordedV1Edits(rec: JsonObject, cwd: string): RecordedEdit[] {
   const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
   if (!report || typeof rec.report !== "string") return [];
-  const said = recordFacts(report, rec.report);
+  const said = recordFacts(report, recordedRel(rec.report, cwd) ?? rec.report);
   const edited: string[] = [];
   for (const k of ["verdict", "headline", "behaviourHeadline"] as const) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
   const counts = rec.counts;
@@ -308,10 +279,14 @@ function recordedEditFacts(plan: Plan, cwd: string): RecordedEdit[] {
   if (!edited.length && isVerificationRecord(rec)) {
     const report = reportRecordNames(rec.report, rec.reportSha256, cwd);
     if (report) {
-      const said = recordFacts(report, rec.report);
+      // a report's name is an identity, not text: the record's report and its a11y.report are both compared in the one
+      // spelling every reader matches them by (verification-evidence.ts recordedRel), so `.md` / `./…` / absolute is no edit
+      const said = recordFacts(report, recordedRel(rec.report, cwd) ?? rec.report);
+      const a = rec.a11y;
+      const held: PlanVerificationRecord = a && typeof a.report === "string" ? { ...rec, a11y: { ...a, report: recordedRel(a.report, cwd) ?? a.report } } : rec;
       // (canonical JSON both sides — keys sorted at every depth, so an editor that reorders keys edits nothing; a key one
       // side lacks differs from any value the other holds, null included)
-      for (const k of RECORD_FACT_KEYS) if ((rec[k] === undefined) !== (said[k] === undefined) || canonical(rec[k]) !== canonical(said[k])) edited.push(k);
+      for (const k of RECORD_FACT_KEYS) if ((held[k] === undefined) !== (said[k] === undefined) || canonical(held[k]) !== canonical(said[k])) edited.push(k);
       for (const k of COUNT_KEYS) if (rec.counts[k] !== said.counts[k]) edited.push(`counts.${k}`);
     }
   }
@@ -324,4 +299,4 @@ function recordedEditFacts(plan: Plan, cwd: string): RecordedEdit[] {
   return out;
 }
 
-export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, updatePlan, verificationFacts };
+export { COUNT_KEYS, RECORD_FACT_KEYS, formatPlan, parsePlanText, recordFacts, recordPlan, recordedEditFacts, recordedEdits, recordedV1Edits, reportFileText, updatePlan };

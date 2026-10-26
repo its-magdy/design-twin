@@ -2,7 +2,7 @@
 // (verify-screen --compare records it in report.inputs) and judges (plan-status.ts, a plan's status; verify-compare's SAME BUILD
 // SERVED note): a report is fresh, or stale with typed reasons, each worded once (staleText). It also binds a measured
 // file to its expectation and run (verify-compare's integrity reasons, verify-run's --phase measured/done refusals —
-// measuredText) and reads a plan's verification.recorded against the report it names (recordedReport).
+// measuredText). A plan's verification.recorded is read against the report it names in verification-evidence.ts.
 //
 // Freshness is decided by CONTENT, never by a clock: the export's content hash (timestamps stripped — a no-change re-pull
 // rewrites only exportedAt), the expectation file's sha256, each code file's content hash (never an mtime, which a `touch`
@@ -17,12 +17,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, fileHashes, planCodeFiles } from "./content-hash.ts";
-import { isVerifyReport } from "./doc-guards.ts";
 import { waiversHash } from "./plan-binding.ts";
 import { runSync } from "./proc.ts";
-import { readRegularFile } from "../bridge/src/read-json.ts";
 import { isJsonObject } from "./types.ts";
-import type { CodeInputs, Plan, VerifyReport } from "./types.ts";
+import type { CodeInputs, Plan } from "./types.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { siblingFile } from "./verify-sets.ts";
 
@@ -140,45 +138,6 @@ export function measuredText(r: MeasuredReason, subject = "its run"): string {
   }
 }
 
-// ---------------------------------------------------------------- a plan's record
-
-/** A plan's verification.recorded against the report it names: none recorded; the report not on disk; there but not a
- *  regular file (a record naming a FIFO or a device must not hang the hook: never read); its bytes no longer the ones
- *  the record's reportSha256 names (rewritten since — an older record); the bytes it names but no verify report; or the
- *  report it names, parsed. */
-export type RecordedReport =
-  | { kind: "none" }
-  | { kind: "missing"; report: string }
-  | { kind: "unreadable"; report: string }
-  | { kind: "rewritten"; report: string }
-  | { kind: "not-a-report"; report: string }
-  | { kind: "names"; report: string; doc: VerifyReport };
-export function recordedReport(plan: { verification?: unknown }, cwd: string): RecordedReport {
-  const v = plan.verification;
-  const rec = isJsonObject(v) ? v.recorded : undefined;
-  if (!isJsonObject(rec) || typeof rec.report !== "string" || !rec.report) return { kind: "none" };
-  return reportNamed(rec.report, rec.reportSha256, cwd);
-}
-/** The report file `report` as a record's sha256 `sha` names it (recordedReport's reading of one record). */
-export function reportNamed(report: string, sha: unknown, cwd: string): Exclude<RecordedReport, { kind: "none" }> {
-  if (!fs.existsSync(path.resolve(cwd, report))) return { kind: "missing", report };
-  const bytes = readRegularFile(path.resolve(cwd, report));
-  if (!bytes) return { kind: "unreadable", report };
-  if (typeof sha !== "string" || sha256Hex(bytes) !== sha) return { kind: "rewritten", report };
-  let parsed: unknown = null;
-  try { const x: unknown = JSON.parse(bytes.toString("utf8")); parsed = x; } catch { /* unparseable: no report */ }
-  return isVerifyReport(parsed) ? { kind: "names", report, doc: parsed } : { kind: "not-a-report", report };
-}
-
-/** The report a record's reportSha256 still names, parsed — null when there is none to compare with (not on disk, not a
- *  regular file, its bytes rewritten since, or not a verify report): reportNamed's `names`. */
-export function reportRecordNames(report: unknown, reportSha256: unknown, cwd: string): VerifyReport | null {
-  if (typeof report !== "string" || !report) return null;
-  const r = reportNamed(report, reportSha256, cwd);
-  return r.kind === "names" ? r.doc : null;
-}
-
-// ---------------------------------------------------------------- the module
 
 /** Bytes the caller already read this run (verify-build's project graph), else undefined: read from disk. */
 export type CachedBytes = (rel: string) => Uint8Array | undefined;

@@ -161,6 +161,28 @@ console.log("status — precedence over the lifecycle, the hook's state and the 
     ps.reports(base, p.planFile, exp).map((r) => r.rel).join() === REP);
   putReport(base, "pass-with-deviations");
   check("[6] every report passing, one pass-with-deviations → verified-with-deviations", at(hooked(p.root, base)).status === "verified-with-deviations");
+  {
+    // two passing, fresh reports: the own set (matched by name) and a variant set (matched by node id) whose file name sorts
+    // first — the status is judged over both, and the commit its reason names is the own report's (it was the first
+    // located report's: the variant's)
+    const VAR = "design/verify/Plots__1_1.narrow.report.json";
+    const putAt = (rel: string, head: string): void => {
+      const s = reportFreshness(p.root, { git: { head: () => head, dirty: () => null } }).stamp({ file: PLAN, plan: base });
+      p.put(rel, { schema: "designtwin/verify-report@2", screen: "Plots", verdict: "pass", headline: "PASS — 3/3", why: [],
+        inputs: { exportContentSha256: exportContentSha256(doc), ...s, waivers: { plan: PLAN, sha256: waiversHash(base) } } });
+    };
+    putAt(REP, "a".repeat(40));
+    putAt(VAR, "b".repeat(40));
+    const both = at(hooked(p.root, base));
+    check(`[own] two passing reports, a variant's sorting first → verified over both, naming the OWN report's commit (got ${both.reasons.join(" | ")})`,
+      both.status === "verified" && both.reports.map((r) => `${r.rel} ${r.matchedBy}`).join() === `${VAR} nodeId,${REP} name` && /— at git aaaaaaaaaaaa$/.test(both.reasons[0] ?? ""));
+    putAt(REP, "");
+    const noHead = at(hooked(p.root, base));
+    check(`[own] …the own report recorded no commit → the first located report that did is named (got ${noHead.reasons.join(" | ")})`,
+      noHead.status === "verified" && /— at git bbbbbbbbbbbb$/.test(noHead.reasons[0] ?? ""));
+    fs.rmSync(path.join(p.root, VAR));
+    putReport(base, "pass-with-deviations");
+  }
 
   const pend = at({ ...base, status: "verified" });
   check("[3] no hook record → pending, saying so and what the report says; a stored \"verified\" is ignored and noted",

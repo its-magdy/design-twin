@@ -9,11 +9,11 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { runSync } from "../design-to-code/proc.ts";
-import { recordPlan, recordedEdits, updatePlan, verificationFacts } from "../design-to-code/plan-record.ts";
+import { recordPlan, recordedEdits, updatePlan } from "../design-to-code/plan-record.ts";
+import { verificationEvidence, verificationFacts } from "../design-to-code/verification-evidence.ts";
 import { planLockFile } from "../design-to-code/run-cache.ts";
-import { checkPlan, verificationContradictions } from "../design-to-code/verify-build.ts";
+import { checkPlan } from "../design-to-code/verify-build.ts";
 import { planStatus } from "../design-to-code/plan-status.ts";
-import * as verifyBuild from "../design-to-code/verify-build.ts";
 import type { ReportRef } from "../design-to-code/verify-locate.ts";
 import { fileHashes, legacyPlanHash, planCodeFiles, planCodeSkipped, planHash } from "../design-to-code/content-hash.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
@@ -82,6 +82,9 @@ function project(): string {
 const runHook = (root: string) => runSync(process.execPath, [HOOK, REL], { cwd: root });
 const reindent = (root: string, n: number): void => { const f = path.join(root, REL); fs.writeFileSync(f, JSON.stringify(readFixture(f, isPlan), null, n) + "\n"); };
 const planOf = (root: string): Plan => readFixture(path.join(root, REL), isPlan);
+// The reader's warnings about the record against its report (verification-evidence.ts), and its contradictions.
+const recordWarnings = (plan: Plan, cwd: string): string[] => verificationEvidence(plan, [], { cwd }).shapeWarnings().filter((w) => w.startsWith("plan.verification"));
+const contradictions = (plan: Plan, refs: ReportRef[]): string[] => verificationEvidence(plan, refs, { cwd: os.tmpdir() }).shapeWarnings().filter((w) => /contradicts itself|deltas is \[\] but|cannot overrule|say the accepted deviations/.test(w));
 const statusOf = (root: string) => planStatus(root).status(planOf(root), { planFile: path.join(root, REL) });
 const openOf = (root: string): boolean => planStatus(root).open(planOf(root));
 
@@ -138,6 +141,16 @@ console.log("recordPlan:");
   const fresh = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root);
   check(`the recorded report → no block on the record, no recorded-sha / 'ignored' warning, and the record's deltas list what the report's open high/medium are (no 'copy them' warning) (got ${JSON.stringify(fresh.blocking)})`,
     !fresh.blocking.some((b) => /verification\.recorded/.test(b)) && !fresh.warnings.some((w) => /records an older run|deltas is \[\]|ignored — verification\.recorded/.test(w)));
+  // a report's name is an identity: the record (and its a11y.report) naming the same report as its .md, `./…` or an absolute
+  // path is no edit — the facts are compared with the report .json the sha256 names, a11y.report in the same spelling
+  check("the record's report (and a11y.report) re-spelt as the .md, ./… or an absolute path → still no block", (() => {
+    const p = planOf(root);
+    const r0 = must(isVerificationRecord(p.verification?.recorded) ? p.verification?.recorded : undefined, "recorded@2");
+    const spelt = (report: string, a11yReport: string): Plan => ({ ...p, verification: { ...p.verification, recorded: { ...r0, report, ...(r0.a11y ? { a11y: { ...r0.a11y, report: a11yReport } } : {}) } } });
+    const MD = "design/verify/Crates.report.md";
+    return [spelt(MD, REPORT), spelt(REPORT, MD), spelt(MD, MD), spelt(`./${REPORT}`, path.join(root, REPORT))].every((x) => recordedEdits(x, root).length === 0)
+      && recordedEdits(spelt(MD, "design/verify/Other.report.json"), root).some((b) => /verification\.recorded\.a11y is tool-owned and was edited/.test(b));
+  })());
   // the report is rewritten after the record (another --compare without --record-plan, or a hand edit)
   fs.writeFileSync(path.join(root, REPORT), JSON.stringify({ ...rep, headline: rep.headline + " (edited)" }, null, 2) + "\n");
   const w = checkPlan({ plan: planOf(root), file: path.join(root, REL) }, root).warnings;
@@ -145,7 +158,7 @@ console.log("recordPlan:");
     w.some((x) => x.startsWith(`plan.verification records an older run of ${REPORT} — re-run `) && x.endsWith("--compare --record-plan (the report is the verdict)")));
   check("…a missing report is no recorded-sha warning, but ONE 'not on disk' warning (the record cannot be checked against it)", (() => {
     fs.rmSync(path.join(root, REPORT));
-    const gone = verifyBuild.recordedReportWarnings(planOf(root), root);
+    const gone = recordWarnings(planOf(root), root);
     return gone.length === 1 && (gone[0] ?? "").startsWith(`plan.verification.recorded names ${REPORT}, which is not on disk (renamed or deleted)`) && !/older run/.test(gone[0] ?? "");
   })());
   check("the plan text before the record was not the plan text after (sanity)", beforeText !== text);
@@ -200,8 +213,8 @@ console.log("recordPlan:");
   const refRow: ReportRef = { rel: REPORT, matchedBy: "name", schema: "designtwin/verify-report@2", verdict: lowsOnly.verdict, headline: null, why: [], deltas: lowsOnly.deltas, measuredAt: null, mtimeMs: 0,
     inputs: { exportContentSha256: null, expectationSha256: null, code: null, waiversSha256: null }, behaviour: null, shippedProbe: false };
   check("a recorded plan with deltas [] beside its report's 2 lows → no 'verification.deltas is [] but … lists 2' contradiction",
-    verificationContradictions({ verification: { ...v } }, [refRow]).length === 0
-    && verificationContradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
+    contradictions({ verification: { ...v } }, [refRow]).length === 0
+    && contradictions({ verification: { mode: "rendered", deltas: [] } }, [refRow]).length === 1);
 }
 
 console.log("the record is replaced whole; a recorded@1 plan is migrated; a static-only run; one format-preserving plan writer:");
@@ -539,7 +552,7 @@ console.log("verify-build on the record: a hand edit of it blocks; its keys left
       write((_, rec) => { rec.report = target; rec.verdict = "pass"; });
       const t0 = Date.now();
       const p = planOf(root);
-      const out = [recordedEdits(p, root).length, verifyBuild.recordedReportWarnings(p, root).length, openOf(root) ? 1 : 0];
+      const out = [recordedEdits(p, root).length, recordWarnings(p, root).length, openOf(root) ? 1 : 0];
       check(`a record naming ${target === fifo ? "a FIFO" : target} → no report read, no hang (no edit block, no sha warning, still closed) in ${Date.now() - t0} ms`,
         JSON.stringify(out) === "[0,0,0]" && Date.now() - t0 < 5000);
     }
