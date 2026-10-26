@@ -6371,6 +6371,7 @@ function inRunCache(verifyDir, fn) {
     throw e;
   }
 }
+var EXIT_RUN_CACHE = 6;
 var lockFileOfStatus = (base) => lockFileOf(liveStatusFile(base));
 var stageDirOf = (base, runId) => path11.join(runCacheDir(path11.dirname(base)), "stage", runId);
 function newRunId() {
@@ -6518,6 +6519,140 @@ function publishStatus(base, doc) {
 function replacedNote(doc) {
   const r = doc.replaced;
   return r && doc.rev === 1 ? `note  run ${doc.runId} replaced run ${r.runId} (ended at ${r.phase}, ${r.at}) as the screen's last run \u2014 recorded as \`replaced\` in run ${doc.runId}'s status` : null;
+}
+var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
+function measuredRefusedWhy(by, runId, phase = "measured") {
+  if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`${phase}\` status write held it, so that write was not made`;
+  if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`${phase}\` status write was not made`;
+  return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
+}
+function probeAttemptLine(doc, exit) {
+  const note = probeAttemptNote(doc.probeFailures ?? 0, exit);
+  return doc.phase === "failed" ? `status run ${doc.runId} failed \u2014 ${note} (a retry is a new run: --new-run)` : `status run ${doc.runId} ${doc.phase} \u2014 ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
+}
+function probeAttemptUncounted(o) {
+  const why = o.by === "lost" ? "another writer took over the status lock while the probe held it" : o.by === "busy" ? "another status write held the status lock for the whole wait" : "the run cache refused the write";
+  const rerun = `${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId})`;
+  const head = `status run ${o.runId} not counted \u2014 this failed attempt (exit ${o.exit}) is not in the run's status (${why}). `;
+  if (o.by === "cache") {
+    return head + `Until the run cache takes writes (the warning above says how), no status write of this run is recorded \u2014 a verify-screen --status write that ends it would be refused the same way. ${rerun} once it does; if that attempt fails too, end the run failed (verify-screen --status \u2026 --phase failed --run ${o.runId}) whatever its own line says`;
+  }
+  return head + `${rerun}; if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed --run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
+}
+function joinRun(base, o) {
+  const log = o.log ?? ((line) => {
+    console.error(line);
+  });
+  const probe = o.by === "verify-probe";
+  const c = o.choice;
+  const own = c.run === "own";
+  const runId = c.run === "named" ? c.id : newRunId();
+  const exp = o.expectationSha256 !== void 0 ? { expectationSha256: o.expectationSha256 } : {};
+  let measuringRecorded = false, armed = false, stopped = false;
+  let lastRefusal = "cache";
+  const writer = () => ({ run: c.run, measuring: measuringRecorded });
+  const checked = (e) => {
+    log(probe ? `verify-probe: ${e.message}` : e.message);
+    return { kind: "over", refusal: e, exit: 2 };
+  };
+  const start = admitWrite(base, o.status !== void 0 ? o.status : readStatus(base), runId, writer());
+  if (start && "refused" in start) return checked(start.refused);
+  const disarm = () => {
+    armed = false;
+    o.stops?.disarm();
+  };
+  const overLine = (e) => !probe ? e.message : e instanceof RunEnded ? `verify-probe: ${e.message} \u2014 it ended while this probe ran; its status is left as it is` : e instanceof RunOpen ? `verify-probe: another run opened while this probe ran; nothing is written \u2014 ${e.message}` : e instanceof RunNotCurrent ? `verify-probe: another run opened while this probe ran \u2014 ${e.message}` : `verify-probe: ${e.message}`;
+  const abandoned = (d) => {
+    log(`note  run ${d.runId} \u2014 ${d.detail}`);
+  };
+  const put = (w, hooks = {}) => {
+    try {
+      const doc = writeStatus(base, { ...w, runId, by: o.by }, { ...hooks, writer: writer(), ...own ? { abandoned } : {} });
+      const note = replacedNote(doc);
+      if (note !== null) log(note);
+      return { kind: "ok", doc };
+    } catch (e) {
+      if (e instanceof RunEnded || e instanceof RunOpen || e instanceof RunNotCurrent || e instanceof RunReplaced) {
+        log(overLine(e));
+        disarm();
+        return { kind: "over", refusal: e, exit: 2 };
+      }
+      if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
+      lastRefusal = statusRefusalOf(e);
+      log(probe ? `warning  ${e.message}` : lastRefusal === "cache" ? e.message : `refused  ${e.message}`);
+      return { kind: "refused", why: lastRefusal, exit: lastRefusal === "cache" ? EXIT_RUN_CACHE : 1 };
+    }
+  };
+  const lastPhase = own ? "done" : "measured";
+  const participant = {
+    runId,
+    own,
+    get measuringRecorded() {
+      return measuringRecorded;
+    },
+    measuring(detail) {
+      const ownRun = c.run === "own" ? { ownRun: { ...thisProcess(), startedAt: (/* @__PURE__ */ new Date()).toISOString(), deadline: new Date(Date.now() + c.deadlineMs).toISOString() } } : {};
+      const r = put({ phase: "measuring", detail, ...exp, ...ownRun });
+      measuringRecorded = r.kind === "ok";
+      if (own && measuringRecorded && o.stops) {
+        armed = true;
+        o.stops.arm((d) => {
+          participant.stop(d);
+        });
+      }
+      return r;
+    },
+    write(w, hooks) {
+      return put(w, hooks);
+    },
+    finish(detail, files) {
+      let written = false;
+      const before = () => {
+        const r2 = files();
+        written = true;
+        return r2;
+      };
+      const publish = (d) => {
+        try {
+          publishStatus(base, d);
+        } catch (e) {
+          log(`warning  ${statusFile(base)}: ${firstLine(e)} \u2014 the durable status is not written (the live one says done)`);
+        }
+      };
+      const r = put({ phase: lastPhase, detail, ...exp }, { before, ...own ? { after: publish } : {} });
+      disarm();
+      if (r.kind !== "refused") return r;
+      if (!written) {
+        const now = admitWrite(base, readStatus(base), runId, writer());
+        if (now && "refused" in now) return checked(now.refused);
+        files();
+      }
+      return r;
+    },
+    fail(exit) {
+      if (exit !== 3 && exit !== 4 || own && !measuringRecorded) return null;
+      const r = put({ phase: own ? "failed" : "measuring", detail: `probe exit ${exit} \u2014 nothing written`, ...exp, ...own ? {} : { probeFailed: exit } });
+      if (own) disarm();
+      if (!own && r.kind === "ok" && r.doc.probeFailures !== void 0) log(probeAttemptLine(r.doc, exit));
+      else if (!own && r.kind === "refused") log(probeAttemptUncounted({ runId, exit, by: r.why, screen: path11.basename(base), verifyDir: path11.resolve(path11.dirname(base)) }));
+      return r;
+    },
+    stop(detail) {
+      if (!armed || stopped) return;
+      stopped = true;
+      try {
+        put({ phase: "failed", detail, ...exp });
+      } catch (e) {
+        log(`warning  run ${runId} is not ended: ${firstLine(e)}`);
+      }
+    },
+    unrecordedWarning(outBase) {
+      const outDir = path11.resolve(path11.dirname(outBase)), verifyDir = path11.resolve(path11.dirname(base));
+      const findable = outDir === verifyDir || !own && outDir === path11.resolve(stageDirOf(base, runId));
+      return `warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(lastRefusal, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${lastRefusal === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path11.basename(base))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${base}.measured.json (it reads the verify dir${own ? "" : " or the run's stage dir"})`);
+    }
+  };
+  return { kind: "joined", participant };
 }
 
 // design-to-code/verify-probe.ts
@@ -7495,25 +7630,6 @@ exit: 0 wrote \xB7 2 usage, or (--run) the run already ended / ended while the p
 var MAX_TIME_DEFAULT = 18e4;
 var MAX_TIME_LIMIT = 2147483647;
 var OWN_RUN_GRACE_MS = 12e4;
-var statusRefusalOf = (e) => e instanceof LockLost ? "lost" : e instanceof LockBusy ? "busy" : "cache";
-function measuredRefusedWhy(by, runId, phase = "measured") {
-  if (by === "lost") return `another writer took over the status lock of run ${runId} while the probe's \`${phase}\` status write held it, so that write was not made`;
-  if (by === "busy") return `another status write held the status lock of run ${runId} for the whole wait, so the probe's \`${phase}\` status write was not made`;
-  return `the run cache refused the probe's \`${phase}\` status write for run ${runId}`;
-}
-function probeAttemptLine(doc, exit) {
-  const note = probeAttemptNote(doc.probeFailures ?? 0, exit);
-  return doc.phase === "failed" ? `status run ${doc.runId} failed \u2014 ${note} (a retry is a new run: --new-run)` : `status run ${doc.runId} ${doc.phase} \u2014 ${note} (--run ${doc.runId}); the next failed attempt ends it failed`;
-}
-function probeAttemptUncounted(o) {
-  const why = o.by === "lost" ? "another writer took over the status lock while the probe held it" : o.by === "busy" ? "another status write held the status lock for the whole wait" : "the run cache refused the write";
-  const rerun = `${o.exit === 3 ? "Ask the user to make a renderer available, then re-run" : "Re-run"} the probe once in this run (--run ${o.runId})`;
-  const head = `status run ${o.runId} not counted \u2014 this failed attempt (exit ${o.exit}) is not in the run's status (${why}). `;
-  if (o.by === "cache") {
-    return head + `Until the run cache takes writes (the warning above says how), no status write of this run is recorded \u2014 a verify-screen --status write that ends it would be refused the same way. ${rerun} once it does; if that attempt fails too, end the run failed (verify-screen --status \u2026 --phase failed --run ${o.runId}) whatever its own line says`;
-  }
-  return head + `${rerun}; if that attempt fails too, whatever its own line says, end the run: ${scriptCmd("verify-screen")} --status ${shellArg(o.screen)} --phase failed --run ${o.runId} --detail ${shellArg(`probe exit ${o.exit} twice`)} --dir ${shellArg(o.verifyDir)}`;
-}
 var READY_NONE = "none";
 function readyOf(flag, frameId, taggingOff = false) {
   if (flag === READY_NONE) return { note: "ready  none (--ready none): the page is measured once it is quiet" };
@@ -7742,76 +7858,15 @@ ${USAGE}`);
     statusBase = statusBaseOf(f.expected);
   }
   const expSha = expBytes ? sha256Hex(expBytes) : void 0;
-  const runId = f.check || !statusBase ? void 0 : f.run ?? newRunId();
-  const ownRun = runId !== void 0 && f.run === void 0;
-  let measuringRecorded = false;
-  const writer = () => ({ run: ownRun ? "own" : "named", measuring: measuringRecorded });
-  const startStatus = runId === void 0 ? null : readStatus(statusBase);
-  const refusedAtStart = runId === void 0 ? null : admitWrite(statusBase, startStatus, runId, writer());
-  if (refusedAtStart && "refused" in refusedAtStart) {
-    console.error(`verify-probe: ${refusedAtStart.refused.message}`);
-    return 2;
-  }
-  const refusal = { by: "cache" };
-  const abandoned = (d) => {
-    console.error(`note  run ${d.runId} \u2014 ${d.detail}`);
-  };
-  const status = (w, hooks = {}) => {
-    try {
-      const doc = writeStatus(statusBase, w, { ...hooks, writer: writer(), ...ownRun ? { abandoned } : {} });
-      const note = replacedNote(doc);
-      if (note !== null) console.error(note);
-      return "ok";
-    } catch (e) {
-      if (e instanceof RunEnded) {
-        console.error(`verify-probe: ${e.message} \u2014 it ended while this probe ran; its status is left as it is`);
-        own.disarm();
-        return "over";
-      }
-      if (e instanceof RunOpen) {
-        console.error(`verify-probe: another run opened while this probe ran; nothing is written \u2014 ${e.message}`);
-        own.disarm();
-        return "over";
-      }
-      if (e instanceof RunNotCurrent) {
-        console.error(`verify-probe: another run opened while this probe ran \u2014 ${e.message}`);
-        own.disarm();
-        return "over";
-      }
-      if (e instanceof RunReplaced) {
-        console.error(`verify-probe: ${e.message}`);
-        own.disarm();
-        return "over";
-      }
-      if (!(e instanceof RunCacheUnwritable) && !(e instanceof LockBusy)) throw e;
-      console.error(`warning  ${e.message}`);
-      refusal.by = statusRefusalOf(e);
-      return "refused";
-    }
-  };
-  const ended = (code) => {
-    if (runId !== void 0 && (code === 3 || code === 4) && (!ownRun || measuringRecorded)) {
-      const w = {
-        runId,
-        phase: ownRun ? "failed" : "measuring",
-        by: "verify-probe",
-        detail: `probe exit ${code} \u2014 nothing written`,
-        ...expSha ? { expectationSha256: expSha } : {},
-        ...ownRun ? {} : { probeFailed: code }
-      };
-      const rec = {};
-      const wrote2 = status(w, { after: (d) => {
-        rec.doc = d;
-      } });
-      if (ownRun) own.disarm();
-      if (wrote2 === "over") return 2;
-      if (!ownRun) {
-        if (rec.doc?.probeFailures !== void 0) console.error(probeAttemptLine(rec.doc, code));
-        else if (wrote2 === "refused") console.error(probeAttemptUncounted({ runId, exit: code, by: refusal.by, screen: path12.basename(statusBase), verifyDir: path12.resolve(path12.dirname(statusBase)) }));
-      }
-    }
-    return code;
-  };
+  const joined = f.check || !statusBase ? null : joinRun(statusBase, {
+    by: "verify-probe",
+    choice: f.run !== void 0 ? { run: "named", id: f.run } : { run: "own", deadlineMs: maxTime + OWN_RUN_GRACE_MS },
+    ...expSha !== void 0 ? { expectationSha256: expSha } : {},
+    stops: own
+  });
+  if (joined?.kind === "over") return joined.exit;
+  const participant = joined?.participant ?? null;
+  const ended = (code) => participant?.fail(code)?.kind === "over" ? 2 : code;
   const browserPath = f["browser-path"];
   if (browserPath !== void 0) {
     const bad = browserPathError(browserPath);
@@ -7819,28 +7874,10 @@ ${USAGE}`);
   }
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
-  const measuring = runId !== void 0 ? status({
-    runId,
-    phase: "measuring",
-    by: "verify-probe",
-    detail: `verify-probe measuring ${f.url ?? ""}`,
-    ...expSha ? { expectationSha256: expSha } : {},
-    ...ownRun ? { ownRun: { ...thisProcess(), startedAt: (/* @__PURE__ */ new Date()).toISOString(), deadline: new Date(Date.now() + maxTime + OWN_RUN_GRACE_MS).toISOString() } } : {}
-  }) : "refused";
-  if (measuring === "over") return 2;
-  measuringRecorded = measuring === "ok";
-  if (ownRun) console.error(`run    ${runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
-  if (ownRun && measuringRecorded) {
-    const id = runId;
-    own.arm((detail) => {
-      try {
-        status({ runId: id, phase: "failed", by: "verify-probe", detail, ...expSha ? { expectationSha256: expSha } : {} });
-      } catch (e) {
-        console.error(`warning  run ${id} is not ended: ${firstLine(e)}`);
-      }
-    });
-  }
-  if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
+  const measuring = participant?.measuring(`verify-probe measuring ${f.url ?? ""}`);
+  if (measuring?.kind === "over") return measuring.exit;
+  if (participant?.own) console.error(`run    ${participant.runId} \u2014 this probe's own (no --run): it ends it, done with the files or failed on an exit 3/4`);
+  if (participant?.measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   if (readyPick) console.error(readyPick.note);
   const held = {};
   let timer;
@@ -8020,7 +8057,7 @@ ${USAGE}`);
   }
   if (typeof first === "number") return ended(first);
   const { run, identity, driven, driveNote, behaviour, forcedPng, prep, visualCap, captureMs } = first;
-  if (!expectation || !expBytes || !f.expected || !f.url || runId === void 0) return 2;
+  if (!expectation || !expBytes || !f.expected || !f.url || participant === null) return 2;
   const png = outBase + ".png";
   const r = run.result;
   const frameOut = (fr) => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
@@ -8046,14 +8083,13 @@ ${USAGE}`);
     components: r.components,
     tagsNotInExpectation: r.tagsNotInExpectation,
     ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
-    runId,
+    runId: participant.runId,
     build: { ...run.build, ...gitState(project) },
     ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
     page: r.page,
     ...driven ? { interactions: driven } : {},
     behaviour
   };
-  let written = false, statusRefused = false;
   const writeFiles = () => {
     try {
       if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
@@ -8073,35 +8109,10 @@ ${USAGE}`);
       console.error(`warning  ${forcedPath}: ${firstLine(e)} \u2014 the behaviour screenshot is not written`);
     }
     writeFileAtomic(setFile(outBase, "measured"), measuredText2);
-    written = true;
     return { measuredSha256: sha256Hex(measuredText2) };
   };
-  const lastPhase = ownRun ? "done" : "measured";
-  const publish = (d) => {
-    try {
-      publishStatus(statusBase, d);
-    } catch (e) {
-      console.error(`warning  ${statusFile(statusBase)}: ${firstLine(e)} \u2014 the durable status is not written (the live one says done)`);
-    }
-  };
-  const wrote = status({
-    runId,
-    phase: lastPhase,
-    by: "verify-probe",
-    detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
-    ...expSha ? { expectationSha256: expSha } : {}
-  }, { before: writeFiles, ...ownRun ? { after: publish } : {} });
-  own.disarm();
-  if (wrote === "over") return 2;
-  if (wrote === "refused") {
-    statusRefused = true;
-    const now = written ? null : admitWrite(statusBase, readStatus(statusBase), runId, writer());
-    if (now && "refused" in now) {
-      console.error(`verify-probe: ${now.refused.message}`);
-      return 2;
-    }
-    if (!written) writeFiles();
-  }
+  const wrote = participant.finish(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`, writeFiles);
+  if (wrote.kind === "over") return wrote.exit;
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 alias ${c.tagAlias} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
@@ -8115,11 +8126,7 @@ ${USAGE}`);
   console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}${browserPath !== void 0 ? ` (--browser-path ${browserPath})` : ""}`);
-  if (statusRefused) {
-    const outDir = path12.resolve(path12.dirname(outBase)), verifyDir = path12.resolve(path12.dirname(statusBase));
-    const findable = outDir === verifyDir || !ownRun && outDir === path12.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but ${measuredRefusedWhy(refusal.by, runId, lastPhase)}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it${refusal.by === "cache" ? ", from where the run cache takes writes," : ""} with: ${scriptCmd("verify-screen")} --status ${shellArg(path12.basename(statusBase))} --phase ${lastPhase} --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir${ownRun ? "" : " or the run's stage dir"})`));
-  }
+  if (wrote.kind === "refused") console.error(participant.unrecordedWarning(outBase));
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(setFile(outBase, "measured"))} --out ${shellArg(path12.dirname(outBase))}`);
   return 0;
 }
@@ -8152,12 +8159,9 @@ export {
   linkHref,
   loadFailureWhy,
   main,
-  measuredRefusedWhy,
   ownTagsOf,
   packageDirInProject,
   planTaggingOff,
-  probeAttemptLine,
-  probeAttemptUncounted,
   projectRequire,
   readyOf,
   refusingRoot,
@@ -8168,7 +8172,6 @@ export {
   screenTagsNow,
   screenTagsWhy,
   settleMiss,
-  statusRefusalOf,
   takesForScreen,
   untaggedRootNote,
   visibleOnly,
