@@ -1382,6 +1382,352 @@ await block("verify-probe own run alone:", async () => {
   if (taken.status !== 2) console.log(taken.stderr);
 });
 
+// ---------------------------------------------------------------- the run participant (joinRun)
+// Every status writer's protocol, in-process against a temp verify dir and the real status lock: joining a run (named, its
+// own, new), `measuring`, finishing with files written under the lock, failed attempts, the end on a stop, and what each
+// refusal means — what the probe's e2e suite used to check through a browser.
+console.log("the run participant — joinRun:");
+const NO_READONLY = process.platform === "win32" ? "mode bits do not make a directory read-only on Windows" : null;
+const EXP = "e".repeat(64);
+interface Joined { p: VR.RunParticipant | null; over: VR.RunOutcome | null; log: string[] }
+function joinAs(base: string, choice: VR.RunChoice, o: { by?: VR.StatusWriter; stops?: VR.StopHook } = {}): Joined {
+  const log: string[] = [];
+  const j = VR.joinRun(base, { by: o.by ?? "verify-probe", choice, expectationSha256: EXP, log: (l) => { log.push(l); }, ...(o.stops ? { stops: o.stops } : {}) });
+  return j.kind === "joined" ? { p: j.participant, over: null, log } : { p: null, over: j, log };
+}
+const named = (id: string): VR.RunChoice => ({ run: "named", id });
+const ownRun = (deadlineMs = 60_000): VR.RunChoice => ({ run: "own", deadlineMs });
+/** the probe's files: one measured file in `dir`, written on each call (counted); `during` runs inside the call first */
+function probeFiles(dir: string, during?: () => void): { write: () => { measuredSha256: string }; calls: () => number; file: string } {
+  let n = 0;
+  const file = path.join(dir, "Plots__1_1.measured.json");
+  return {
+    write: () => { during?.(); n++; const text = `{"n":${n}}\n`; fs.writeFileSync(file, text); return { measuredSha256: crypto.createHash("sha256").update(text).digest("hex") }; },
+    calls: () => n, file,
+  };
+}
+const v2 = (base: string): VR.VerifyStatusV2 | null => { const s = VR.readStatus(base); return s !== null && s !== "v1" ? s : null; };
+/** a stop hook that records how it is armed and disarmed */
+function stopHook(): VR.StopHook & { arms: number; disarms: number; fire(detail: string): void } {
+  let stop: ((detail: string) => void) | null = null;
+  const h = { arms: 0, disarms: 0, arm: (s: (detail: string) => void) => { stop = s; h.arms++; }, disarm: () => { h.disarms++; }, fire: (d: string) => { stop?.(d); } };
+  return h;
+}
+/** run `fn` with the run cache read-only (the sandbox's write scope), its mode put back after */
+function readOnlyCache<T>(live: string, fn: () => T): T {
+  fs.chmodSync(path.dirname(live), 0o555);
+  try { return fn(); } finally { fs.chmodSync(path.dirname(live), 0o755); }
+}
+
+await block("participant: an own run from measuring to done:", () => {
+  const { dir, base, live } = project();
+  const out = mk("dt-part-out-");
+  const stops = stopHook();
+  const j = joinAs(base, ownRun(), { stops });
+  const p = j.p;
+  if (p === null) { safe("joined", () => false); return; }
+  const t0 = Date.now();
+  const m = p.measuring("verify-probe measuring http://127.0.0.1:9/");
+  const s1 = readStatusFile(live);
+  safe("its own run: a new id; `measuring` rev 1 by verify-probe, ownRun {this pid, this host, startedAt, deadline = start + deadlineMs}, the expectation's sha; the stop hook armed once",
+    () => m.kind === "ok" && p.own && p.measuringRecorded && /^\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(p.runId) && s1?.runId === p.runId && s1.rev === 1 && s1.phase === "measuring"
+      && s1.by === "verify-probe" && s1.ownRun?.pid === process.pid && s1.ownRun.host === os.hostname() && Math.abs(Date.parse(s1.ownRun.deadline) - (t0 + 60_000)) < 5_000
+      && s1.expectationSha256 === EXP && stops.arms === 1);
+  const files = probeFiles(out);
+  const done = p.finish("measured 0 of 0 spec(s)", files.write);
+  const published = readStatusFile(VR.statusFile(base));
+  safe("finish → `done` rev 2 with the files' measured sha (written once, inside the write), published beside the expectation without ownRun; the stop hook disarmed",
+    () => done.kind === "ok" && done.doc.phase === "done" && done.doc.rev === 2 && done.doc.measuredSha256 === sha(files.file) && files.calls() === 1
+      && published?.runId === p.runId && published.phase === "done" && published.ownRun === undefined && stops.disarms >= 1 && fs.existsSync(path.join(dir, "Plots__1_1.status.json")));
+  const before = fs.readFileSync(live, "utf8");
+  stops.fire("probe stopped by SIGTERM — nothing written");
+  safe("…a stop after done writes nothing (the run is no longer armed); no line printed but the stop hook's", () => fs.readFileSync(live, "utf8") === before && j.log.length === 0);
+});
+
+await block("participant: own-run abandonment:", () => {
+  const { base, live } = project();
+  // a live own run (this pid runs, its deadline ahead): another own run is refused beside it
+  const x = joinAs(base, ownRun()).p;
+  x?.measuring("x");
+  const y = joinAs(base, ownRun());
+  safe("beside another probe's own run that is alive and inside its deadline → over at join (RunOpen, exit 2): 'verify-probe: run <x> of Plots__1_1 is a probe's own run …', nothing written",
+    () => x !== null && y.p === null && y.over?.kind === "over" && y.over.refusal instanceof VR.RunOpen && y.over.exit === 2
+      && y.log.length === 1 && (y.log[0] ?? "").startsWith(`verify-probe: run ${x.runId} of Plots__1_1 is a probe's own run (no --run), started at `) && readStatusFile(live)?.runId === x.runId);
+  x?.fail(4);
+  // an own run past its deadline (a stopped or sleeping probe): the next own run ends it `failed` and starts its own
+  const a = joinAs(base, ownRun(-1_000));
+  a.p?.measuring("a");
+  const b = joinAs(base, ownRun());
+  const bm = b.p?.measuring("b");
+  const ended = b.log.find((l) => l.startsWith(`note  run ${a.p?.runId ?? "?"} — abandoned — the probe that started it (pid ${process.pid} on ${os.hostname()}, `));
+  safe("an own run past its deadline → the next own run joins, its `measuring` ends that run `failed` first (one note line: abandoned … past the run's deadline) and writes rev 1 of its own",
+    () => a.p !== null && b.p !== null && bm?.kind === "ok" && bm.doc.rev === 1 && bm.doc.runId === b.p.runId && ended !== undefined && /is past the run's deadline /.test(ended));
+  const aFiles = probeFiles(mk("dt-part-out-"));
+  const aDone = a.p?.finish("measured", aFiles.write);
+  safe("…the abandoned probe's late `done` → over (RunOpen: the run that replaced it is open), 'another run opened while this probe ran; nothing is written', no files, b's status kept",
+    () => aDone?.kind === "over" && aDone.refusal instanceof VR.RunOpen && aFiles.calls() === 0
+      && a.log.at(-1)?.startsWith(`verify-probe: another run opened while this probe ran; nothing is written — run ${b.p?.runId ?? "?"} of Plots__1_1 is a probe's own run`) === true
+      && readStatusFile(live)?.runId === b.p?.runId && readStatusFile(live)?.phase === "measuring");
+  b.p?.finish("measured", probeFiles(mk("dt-part-out-")).write);
+  const aFail = a.p?.fail(4);
+  safe("…once that run has ended, the abandoned probe's exit-4 record → over (RunReplaced, exit 2): 'was replaced by run <b> (done) while this probe ran', b's done kept",
+    () => aFail?.kind === "over" && aFail.refusal instanceof VR.RunReplaced && aFail.exit === 2
+      && a.log.at(-1) === `verify-probe: run ${a.p?.runId ?? "?"} was replaced by run ${b.p?.runId ?? "?"} (done) while this probe ran — nothing more is written in it` && v2(base)?.phase === "done");
+});
+
+await block("participant: failed probe attempts:", () => {
+  const { base } = project();
+  VR.writeStatus(base, { runId: "run-x", phase: "renderer-ready", by: "agent" });
+  const p1 = joinAs(base, named("run-x"));
+  p1.p?.measuring("m");
+  const f1 = p1.p?.fail(4);
+  safe("a --run's exit 4 → counted: `measuring`, probeFailures 1, the attempt line printed (re-run once in this run)",
+    () => f1?.kind === "ok" && f1.doc.phase === "measuring" && f1.doc.probeFailures === 1
+      && p1.log.includes("status run run-x measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run run-x); the next failed attempt ends it failed"));
+  const p2 = joinAs(base, named("run-x"));
+  p2.p?.measuring("m");
+  const f2 = p2.p?.fail(4);
+  safe("a second failed attempt in that run → the run ends `failed` (probeFailures 2), 'the probe ended the run failed (a retry is a new run: --new-run)'",
+    () => f2?.kind === "ok" && f2.doc.phase === "failed" && f2.doc.probeFailures === 2 && f2.doc.detail === "probe exit 4 — nothing written (failed probe attempt 2 of 2: the probe ended the run failed)"
+      && p2.log.includes("status run run-x failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)"));
+  const ended = JSON.stringify(v2(base));
+  const p3 = joinAs(base, named("run-x"));
+  safe("…a third probe in that run → over at join (RunEnded): 'verify-probe: run run-x already ended at failed (…)', the status untouched",
+    () => p3.p === null && p3.over?.kind === "over" && p3.over.refusal instanceof VR.RunEnded && (p3.log[0] ?? "").startsWith("verify-probe: run run-x already ended at failed (probe exit 4") && JSON.stringify(v2(base)) === ended);
+  const p4 = joinAs(base, named("run-y"));
+  safe("a --run's exit 3 before its `measuring` (no renderer) is still counted; exit 0/1/2 are no attempt (null)",
+    () => p4.p?.fail(1) === null && p4.p.fail(3)?.kind === "ok" && v2(base)?.probeFailures === 1 && v2(base)?.runId === "run-y");
+  VR.writeStatus(base, { runId: "run-y", phase: "failed", by: "agent" });
+  const o = joinAs(base, ownRun());
+  safe("an own run that never recorded its `measuring` has nothing to end (null)", () => o.p?.fail(4) === null && v2(base)?.runId === "run-y");
+  o.p?.measuring("m");
+  const of = o.p?.fail(3);
+  safe("an own run's exit 3 after its `measuring` → ended `failed` at once (rev 2, 'probe exit 3 — nothing written'), no attempt counted",
+    () => of?.kind === "ok" && of.doc.phase === "failed" && of.doc.rev === 2 && of.doc.detail === "probe exit 3 — nothing written" && of.doc.probeFailures === undefined);
+  if (NO_READONLY !== null) console.log(`  (skipped: an uncounted attempt — ${NO_READONLY})`);
+  else {
+    const { base: b2, live: l2 } = project();
+    VR.writeStatus(b2, { runId: "run-z", phase: "renderer-ready", by: "agent" });
+    const z = joinAs(b2, named("run-z"));
+    const zf = readOnlyCache(l2, () => z.p?.fail(4));
+    safe("an attempt the run cache refuses → refused (why cache, exit 6), a warning, and the 'not counted' line saying no status write is recorded until the cache takes writes",
+      () => zf?.kind === "refused" && zf.why === "cache" && zf.exit === 6 && z.log.some((l) => l.startsWith("warning  run cache "))
+        && z.log.some((l) => l.startsWith("status run run-z not counted — this failed attempt (exit 4) is not in the run's status (the run cache refused the write)")));
+  }
+});
+
+await block("participant: over while measuring (the write's lock):", () => {
+  const scene = (choice: VR.RunChoice, meanwhile: (base: string, runId: string) => void): { j: Joined; r: VR.RunOutcome | undefined; calls: number; base: string; live: string } => {
+    const { base, live } = project();
+    const j = joinAs(base, choice);
+    j.p?.measuring("m");
+    meanwhile(base, j.p?.runId ?? "");
+    const files = probeFiles(mk("dt-part-out-"));
+    const r = j.p?.finish("measured", files.write);
+    return { j, r, calls: files.calls(), base, live };
+  };
+  const a1 = scene(named("run-e"), (b, id) => VR.writeStatus(b, { runId: id, phase: "failed", by: "agent", detail: "gave up" }));
+  safe("a --run ended while measuring → over (RunEnded): '… already ended at failed (gave up) — … — it ended while this probe ran; its status is left as it is', no files",
+    () => a1.r?.kind === "over" && a1.r.refusal instanceof VR.RunEnded && a1.calls === 0 && v2(a1.base)?.phase === "failed"
+      && a1.j.log.at(-1) === "verify-probe: run run-e already ended at failed (gave up) — start a new run with --new-run — it ended while this probe ran; its status is left as it is");
+  const a5 = scene(named("run-15"), (b) => VR.writeStatus(b, { runId: "run-16", phase: "queued", by: "orchestrator" }));
+  safe("a --run, another run queued while measuring → over (RunNotCurrent): 'another run opened while this probe ran — run run-15 is not the current run of Plots__1_1: run run-16 is open (phase queued, rev 1, by orchestrator, …', no files, its status kept",
+    () => a5.r?.kind === "over" && a5.r.refusal instanceof VR.RunNotCurrent && a5.calls === 0 && v2(a5.base)?.runId === "run-16" && v2(a5.base)?.rev === 1
+      && a5.j.log.at(-1)?.startsWith("verify-probe: another run opened while this probe ran — run run-15 is not the current run of Plots__1_1: run run-16 is open (phase queued, rev 1, by orchestrator, ") === true);
+  const a7 = scene(named("run-19"), (b) => { VR.writeStatus(b, { runId: "run-20", phase: "queued", by: "orchestrator" }); VR.writeStatus(b, { runId: "run-20", phase: "done", by: "agent" }); });
+  safe("a --run, another run started AND ended while measuring → over (RunReplaced): 'was replaced by run run-20 (done) while this probe ran', no files, no replaced note over it",
+    () => a7.r?.kind === "over" && a7.r.refusal instanceof VR.RunReplaced && a7.calls === 0 && v2(a7.base)?.runId === "run-20" && v2(a7.base)?.rev === 2
+      && a7.j.log.at(-1) === "verify-probe: run run-19 was replaced by run run-20 (done) while this probe ran — nothing more is written in it" && !a7.j.log.some((l) => l.startsWith("note  ")));
+  const a2 = scene(ownRun(), (b) => VR.writeStatus(b, { runId: "run-13", phase: "queued", by: "orchestrator" }));
+  safe("its own run, another run queued while measuring → over (RunOpen): 'another run opened while this probe ran; nothing is written — run run-13 of Plots__1_1 is open (phase queued, rev 1, by orchestrator, …', no files",
+    () => a2.r?.kind === "over" && a2.r.refusal instanceof VR.RunOpen && a2.calls === 0 && v2(a2.base)?.runId === "run-13"
+      && a2.j.log.at(-1)?.startsWith("verify-probe: another run opened while this probe ran; nothing is written — run run-13 of Plots__1_1 is open (phase queued, rev 1, by orchestrator, ") === true);
+});
+
+await block("participant: a refused finish, then the recovery:", () => {
+  if (NO_READONLY !== null) { console.log(`  (skipped: a refused finish — ${NO_READONLY})`); return; }
+  // refused at the lock (before the files): the same admission is asked again without the lock, then the files are written
+  {
+    const { dir, base, live } = project();
+    const j = joinAs(base, ownRun());
+    j.p?.measuring("m");
+    const files = probeFiles(dir);
+    const r = readOnlyCache(live, () => j.p?.finish("measured", files.write));
+    const w = j.p?.unrecordedWarning(base) ?? "";
+    safe("its own `done` refused by the run cache → refused (why cache), a warning, the files written once by the recovery, the status still `measuring`",
+      () => r?.kind === "refused" && r.why === "cache" && files.calls() === 1 && fs.existsSync(files.file) && v2(base)?.phase === "measuring" && j.log.some((l) => l.startsWith("warning  run cache ")));
+    safe("…unrecordedWarning: which write was refused, the live status still says measuring, and the command that records it (from where the cache takes writes) — the verify dir, nothing to move",
+      () => w.startsWith(`warning  ${base}.measured.json is written, but the run cache refused the probe's \`done\` status write for run ${j.p?.runId ?? "?"} — the live status still says measuring`)
+        && w.includes(", from where the run cache takes writes, with: ") && w.includes(`--status Plots__1_1 --phase done --run ${j.p?.runId ?? "?"} --dir `) && !w.includes("after moving"));
+    const elsewhere = j.p?.unrecordedWarning(path.join(mk("dt-part-out-"), "Plots__1_1")) ?? "";
+    safe("…written elsewhere (an own run's --out outside the verify dir) → the warning says to move the measured file into the verify dir first",
+      () => elsewhere.includes(`after moving `) && elsewhere.endsWith(`to ${base}.measured.json (it reads the verify dir)`));
+  }
+  // refused after the files (the lock taken over inside the write): the files stand, nothing is written twice
+  {
+    const { base } = project();
+    const j = joinAs(base, named("run-l"));
+    j.p?.measuring("m");
+    const lock = VR.lockFileOfStatus(base);
+    const files = probeFiles(mk("dt-part-out-"), () => { fs.writeFileSync(lock, "another holder\n"); });
+    const r = j.p?.finish("measured", files.write);
+    fs.rmSync(lock, { force: true });
+    safe("its `measured` refused after the files (the lock taken over: LockLost) → refused (why lost, exit 1), the files written once, never re-run; the warning names the lost lock",
+      () => r?.kind === "refused" && r.why === "lost" && r.exit === 1 && files.calls() === 1 && v2(base)?.phase === "measuring"
+        && (j.p?.unrecordedWarning(base) ?? "").includes("another writer took over the status lock of run run-l while the probe's `measured` status write held it"));
+  }
+  // its `measuring` refused as well: no live status of the run exists
+  {
+    const { base, live } = project();
+    VR.writeStatus(base, { runId: "run-seed", phase: "failed", by: "agent" });
+    const j = joinAs(base, named("run-u"));
+    const files = probeFiles(mk("dt-part-out-"));
+    const [m, r] = readOnlyCache(live, () => [j.p?.measuring("m"), j.p?.finish("measured", files.write)]);
+    safe("every write refused (measuring too) → both refused, the files written, the warning says no live status exists (compare: unrecorded)",
+      () => m?.kind === "refused" && r?.kind === "refused" && files.calls() === 1 && j.p?.measuringRecorded === false
+        && (j.p.unrecordedWarning(base)).includes("(its `measuring` write was refused too) — no live status of the run exists, so --compare will report the run as unrecorded"));
+  }
+  // refused at the lock, and the run is over meanwhile: the recovery's admission says so — no files, exit 2
+  const refusedOver = (choice: VR.RunChoice, meanwhile: (base: string, runId: string) => void): { j: Joined; r: VR.RunOutcome | undefined; calls: number; base: string } => {
+    const { base, live } = project();
+    const j = joinAs(base, choice);
+    j.p?.measuring("m");
+    meanwhile(base, j.p?.runId ?? "");
+    const files = probeFiles(mk("dt-part-out-"));
+    const r = readOnlyCache(live, () => j.p?.finish("measured", files.write));
+    return { j, r, calls: files.calls(), base };
+  };
+  const a9 = refusedOver(ownRun(), (b, id) => VR.writeStatus(b, { runId: id, phase: "failed", by: "agent", detail: "ended by hand" }));
+  safe("its own run ended by hand while measuring, its `done` refused by the cache → over (RunEnded) from the recovery's check: 'verify-probe: run <id> already ended at failed (ended by hand) …', no files",
+    () => a9.r?.kind === "over" && a9.r.refusal instanceof VR.RunEnded && a9.calls === 0 && a9.j.log.at(-1) === `verify-probe: run ${a9.j.p?.runId ?? "?"} already ended at failed (ended by hand) — start a new run with --new-run`);
+  const a10 = refusedOver(ownRun(), (b) => VR.writeStatus(b, { runId: "run-24", phase: "queued", by: "orchestrator" }));
+  safe("its own run, another queued while measuring, its `done` refused by the cache → over with the own run's refusal ('verify-probe: run run-24 of Plots__1_1 is open'), never 'is not the current run'; no files",
+    () => a10.r?.kind === "over" && a10.r.refusal instanceof VR.RunOpen && a10.calls === 0
+      && a10.j.log.at(-1)?.startsWith("verify-probe: run run-24 of Plots__1_1 is open (phase queued, rev 1, by orchestrator, ") === true && !a10.j.log.some((l) => /is not the current run/.test(l)));
+  const a4 = refusedOver(ownRun(), (b) => VR.writeStatus(b, { runId: "run-14", phase: "done", by: "agent", detail: "replaced it" }));
+  safe("its own run replaced by one that ended, its `done` refused by the cache → over (RunReplaced), no files, the replacement's done kept",
+    () => a4.r?.kind === "over" && a4.r.refusal instanceof VR.RunReplaced && a4.calls === 0 && v2(a4.base)?.runId === "run-14" && /was replaced by run run-14 \(done\) while this probe ran/.test(a4.j.log.at(-1) ?? ""));
+  const a6 = refusedOver(named("run-17"), (b) => VR.writeStatus(b, { runId: "run-18", phase: "queued", by: "orchestrator" }));
+  safe("a --run, another queued while measuring, its `measured` refused by the cache → over (RunNotCurrent): 'verify-probe: run run-17 is not the current run of Plots__1_1: run run-18 is open (phase queued, …', no files",
+    () => a6.r?.kind === "over" && a6.r.refusal instanceof VR.RunNotCurrent && a6.calls === 0 && a6.j.log.at(-1)?.startsWith("verify-probe: run run-17 is not the current run of Plots__1_1: run run-18 is open (phase queued, ") === true);
+  const a8 = refusedOver(named("run-21"), (b) => { VR.writeStatus(b, { runId: "run-22", phase: "queued", by: "orchestrator" }); VR.writeStatus(b, { runId: "run-22", phase: "done", by: "agent" }); });
+  safe("a --run, another started and ended while measuring, its `measured` refused by the cache → over (RunReplaced), no files, the newer run's done kept",
+    () => a8.r?.kind === "over" && a8.r.refusal instanceof VR.RunReplaced && a8.calls === 0 && v2(a8.base)?.runId === "run-22" && /run run-21 was replaced by run run-22 \(done\) while this probe ran/.test(a8.j.log.at(-1) ?? ""));
+});
+
+await block("participant: replaced-run notes:", () => {
+  const { base } = project();
+  const old = VR.writeStatus(base, { runId: "run-old", phase: "done", by: "agent" });
+  const j = joinAs(base, named("run-new"));
+  const m = j.p?.measuring("m");
+  const note = `note  run run-new replaced run run-old (ended at done, ${old.at}) as the screen's last run — recorded as \`replaced\` in run run-new's status`;
+  safe("a --run's first write over a run that ended → ok, rev 1 with replaced {run-old, done}, and one note line saying so", () =>
+    m?.kind === "ok" && m.doc.rev === 1 && m.doc.replaced?.runId === "run-old" && j.log.filter((l) => l === note).length === 1);
+  const fin = j.p?.finish("measured", probeFiles(mk("dt-part-out-")).write);
+  safe("…its later writes carry replaced and print no note", () => fin?.kind === "ok" && fin.doc.rev === 2 && fin.doc.replaced?.runId === "run-old" && j.log.filter((l) => l.startsWith("note  ")).length === 1);
+  VR.writeStatus(base, { runId: "run-new", phase: "failed", by: "agent" });
+  const fresh = joinAs(base, { run: "new" }, { by: "agent" });
+  const w = fresh.p?.write({ phase: "queued" });
+  safe("a new run (--new-run) over an ended run → no replaced, no note", () => w?.kind === "ok" && w.doc.replaced === undefined && fresh.log.length === 0);
+  VR.writeStatus(base, { runId: fresh.p?.runId ?? "", phase: "failed", by: "agent" });
+  const own = joinAs(base, ownRun());
+  const om = own.p?.measuring("m");
+  safe("its own run over an ended run → no replaced, no note", () => om?.kind === "ok" && om.doc.replaced === undefined && own.log.length === 0);
+});
+
+await block("participant: ended on a stop:", () => {
+  const { base, live } = project();
+  const stops = stopHook();
+  const j = joinAs(base, ownRun(), { stops });
+  j.p?.measuring("m");
+  stops.fire("probe stopped by SIGTERM — nothing written");
+  const s1 = readStatusFile(live);
+  stops.fire("probe stopped by SIGINT — nothing written");
+  safe("its own run armed → a stop ends it `failed` with the stop's detail (rev 2), once: a second stop writes nothing",
+    () => stops.arms === 1 && s1 !== null && s1.runId === j.p?.runId && s1.phase === "failed" && s1.rev === 2 && s1.detail === "probe stopped by SIGTERM — nothing written" && readStatusFile(live)?.rev === 2);
+  // an exit 3/4 ends its own run: the stop hook is disarmed then (the signal listeners come off), and a later stop writes nothing
+  const fstops = stopHook();
+  const fj = joinAs(base, ownRun(), { stops: fstops });
+  fj.p?.measuring("m");
+  const fd = fstops.disarms;
+  fj.p?.fail(4);
+  const afterFail = fs.readFileSync(live, "utf8");
+  fstops.fire("probe stopped by SIGTERM — nothing written");
+  safe("its own run ended by an exit 4 → the stop hook disarmed by that write; a later stop writes nothing",
+    () => fstops.arms === 1 && fstops.disarms > fd && readStatusFile(live)?.phase === "failed" && fs.readFileSync(live, "utf8") === afterFail);
+  // a stop whose write finds the run over (another opened beside it): disarmed too, nothing written over that run
+  const ostops = stopHook();
+  const oj = joinAs(base, ownRun(), { stops: ostops });
+  oj.p?.measuring("m");
+  VR.writeStatus(base, { runId: "run-o", phase: "queued", by: "orchestrator" });
+  const od = ostops.disarms;
+  ostops.fire("probe stopped by SIGTERM — nothing written");
+  safe("a stop whose write is over (RunOpen: another run queued) → the stop hook disarmed, the queued run's status kept, the over line printed",
+    () => ostops.disarms > od && v2(base)?.runId === "run-o" && v2(base)?.phase === "queued"
+      && oj.log.at(-1)?.startsWith("verify-probe: another run opened while this probe ran; nothing is written — run run-o of Plots__1_1 is open") === true);
+  VR.writeStatus(base, { runId: "run-o", phase: "failed", by: "orchestrator" });
+  VR.writeStatus(base, { runId: "run-n", phase: "renderer-ready", by: "agent" });
+  const nstops = stopHook();
+  joinAs(base, named("run-n"), { stops: nstops }).p?.measuring("m");
+  safe("a --run is never armed: a stop writes nothing in the verifier's run", () => nstops.arms === 0);
+  if (NO_READONLY !== null) console.log(`  (skipped: an own run whose measuring was refused — ${NO_READONLY})`);
+  else {
+    VR.writeStatus(base, { runId: "run-n", phase: "failed", by: "agent" });
+    const rstops = stopHook();
+    const r = joinAs(base, ownRun(), { stops: rstops });
+    readOnlyCache(live, () => r.p?.measuring("m"));
+    safe("its own run whose `measuring` was refused → not armed: nothing for a stop to end", () => rstops.arms === 0 && r.p?.measuringRecorded === false && v2(base)?.runId === "run-n");
+  }
+});
+
+await block("participant: a --status writer:", () => {
+  const { base, live } = project();
+  VR.writeStatus(base, { runId: "run-open", phase: "driving", by: "agent" });
+  const late = joinAs(base, named("run-late"), { by: "agent" });
+  safe("a named run beside another open run → over at join (exit 2), the refusal's own sentence (no 'verify-probe:' prefix)", () =>
+    late.p === null && late.over?.kind === "over" && late.over.exit === 2 && (late.log[0] ?? "").startsWith("run run-late is not the current run of Plots__1_1: run run-open is open (phase driving, "));
+  const cur = joinAs(base, named("run-open"), { by: "orchestrator" });
+  const w = cur.p?.write({ phase: "driving", detail: "heartbeat" });
+  safe("…continuing the open run → ok, rev 2, by the writer", () => w?.kind === "ok" && w.doc.rev === 2 && w.doc.by === "orchestrator" && cur.log.length === 0);
+  if (NO_READONLY !== null) console.log(`  (skipped: a --status write the cache refuses — ${NO_READONLY})`);
+  else {
+    const r = readOnlyCache(live, () => cur.p?.write({ phase: "driving" }));
+    safe("a --status write the run cache refuses → refused (why cache, exit 6), the cache's one sentence as the line", () =>
+      r?.kind === "refused" && r.why === "cache" && r.exit === 6 && (cur.log.at(-1) ?? "").startsWith("run cache ") && !(cur.log.at(-1) ?? "").startsWith("warning"));
+  }
+});
+
+// the lines a refused or failed probe write prints
+safe("probeAttemptLine after an exit 4: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
+  VR.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 4) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
+  && VR.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 4) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+safe("probeAttemptLine after an exit 3: ask the user first, then re-run once in the run; the second still ends it", () =>
+  VR.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 3) === "status run r1 measuring — failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
+  && VR.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 3) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
+safe("probeAttemptUncounted: an attempt the status lock or cache refused names why, the one re-run (exit 4: at once) and the command that ends the run", () => {
+  const l = VR.probeAttemptUncounted({ runId: "r1", exit: 4, by: "busy", screen: "Orders", verifyDir: "/p/design/verify" });
+  return l.startsWith("status run r1 not counted — this failed attempt (exit 4) is not in the run's status (another status write held the status lock for the whole wait). Re-run the probe once in this run (--run r1); if that attempt fails too, whatever its own line says, end the run: bun --no-install --no-env-file ")
+    && l.endsWith(" --status Orders --phase failed --run r1 --detail \"probe exit 4 twice\" --dir /p/design/verify");
+});
+safe("probeAttemptUncounted with an unwritable run cache: says a verify-screen --status write would be refused the same way, re-run once it takes writes — no command to run now", () => {
+  const l = VR.probeAttemptUncounted({ runId: "r1", exit: 3, by: "cache", screen: "Orders", verifyDir: "/p/design/verify" });
+  return l === "status run r1 not counted — this failed attempt (exit 3) is not in the run's status (the run cache refused the write). Until the run cache takes writes (the warning above says how), " +
+    "no status write of this run is recorded — a verify-screen --status write that ends it would be refused the same way. Ask the user to make a renderer available, then re-run the probe once in this " +
+    "run (--run r1) once it does; if that attempt fails too, end the run failed (verify-screen --status … --phase failed --run r1) whatever its own line says"
+    && !l.includes("--dir") && !l.includes("--detail");
+});
+safe("measuredRefusedWhy: a lock taken over (LockLost), a lock held throughout (LockBusy) and an unwritable run cache each get their own sentence", () => {
+  const lost = VR.measuredRefusedWhy(VR.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-1");
+  const busy = VR.measuredRefusedWhy(VR.statusRefusalOf(new LockBusy("/x/S.status.json.lock", "held")), "run-1");
+  const cache = VR.measuredRefusedWhy(VR.statusRefusalOf(new VR.RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-1");
+  return /took over the status lock of run run-1/.test(lost) && !/run cache/.test(lost)
+    && /held the status lock of run run-1 for the whole wait/.test(busy) && !/run cache/.test(busy)
+    && cache === "the run cache refused the probe's `measured` status write for run run-1";
+});
+safe("measuredRefusedWhy: the probe's own run (no --run) names its `done` write", () =>
+  VR.measuredRefusedWhy(VR.statusRefusalOf(new VR.RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-2", "done") === "the run cache refused the probe's `done` status write for run run-2"
+  && /the probe's `done` status write held it/.test(VR.measuredRefusedWhy(VR.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-2", "done")));
+
 // ---------------------------------------------------------------- M-a: the run cache stays inside the project
 console.log("the run cache stays inside the project (M-a):");
 const CACHE = path.join("node_modules", ".cache", "designtwin-verify");

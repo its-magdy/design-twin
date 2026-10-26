@@ -37,8 +37,6 @@ import type * as PBT from "../design-to-code/probe-behaviour.ts";
 import { installPageRuntime } from "../design-to-code/page-runtime.ts";
 import { parseCssColor } from "../design-to-code/color.ts";
 import { PROC_HOST, type ProcHost } from "../design-to-code/kill-tree.ts";
-import { LockBusy, LockLost } from "../bridge/src/file-lock.ts";
-import { RunCacheUnwritable } from "../design-to-code/run-cache.ts";
 import { readStatus } from "../design-to-code/verify-run.ts";
 import type { BehaviourCheck as BehaviourCheckRow, InteractionEvidence } from "../design-to-code/types.ts";
 // probe-behaviour.ts is loaded dynamically too (a tree without it: every behaviour check is a clean ✗)
@@ -900,24 +898,6 @@ module.exports = { chromium: { async launch() { return { version: () => "1.0", c
     helpText.status === 0 && helpText.stdout.includes("[--ready <selector> | none]") && helpText.stdout.includes("by default the frame's tag [data-dt-node=\"<frame id>\"]")
     && helpText.stdout.includes("a plan with none is no steps") && helpText.stdout.includes("the second ends the run `failed` — the probe writes it")
     && helpText.stdout.includes("probe's own tests only: every other run is refused (exit 2)") && !helpText.stdout.includes(VP.BEHAVIOUR_OFF_ENV));
-  t("[run] probeAttemptLine after an exit 4: the first failed attempt says re-run once in the run; the second says the probe ended it", () =>
-    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 4) === "status run r1 measuring — failed probe attempt 1 of 2: re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
-    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 4) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
-  t("[run] probeAttemptLine after an exit 3: ask the user first, then re-run once in the run; the second still ends it", () =>
-    VP.probeAttemptLine({ runId: "r1", phase: "measuring", probeFailures: 1 }, 3) === "status run r1 measuring — failed probe attempt 1 of 2: ask the user to make a renderer available, then re-run the probe once in this run (--run r1); the next failed attempt ends it failed"
-    && VP.probeAttemptLine({ runId: "r1", phase: "failed", probeFailures: 2 }, 3) === "status run r1 failed — failed probe attempt 2 of 2: the probe ended the run failed (a retry is a new run: --new-run)");
-  t("[run] probeAttemptUncounted: an attempt the status lock or cache refused names why, the one re-run (exit 4: at once) and the command that ends the run", () => {
-    const l = VP.probeAttemptUncounted({ runId: "r1", exit: 4, by: "busy", screen: "Orders", verifyDir: "/p/design/verify" });
-    return l.startsWith("status run r1 not counted — this failed attempt (exit 4) is not in the run's status (another status write held the status lock for the whole wait). Re-run the probe once in this run (--run r1); if that attempt fails too, whatever its own line says, end the run: bun --no-install --no-env-file ")
-      && l.endsWith(" --status Orders --phase failed --run r1 --detail \"probe exit 4 twice\" --dir /p/design/verify");
-  });
-  t("[run] probeAttemptUncounted with an unwritable run cache: says a verify-screen --status write would be refused the same way, re-run once it takes writes — no command to run now", () => {
-    const l = VP.probeAttemptUncounted({ runId: "r1", exit: 3, by: "cache", screen: "Orders", verifyDir: "/p/design/verify" });
-    return l === "status run r1 not counted — this failed attempt (exit 3) is not in the run's status (the run cache refused the write). Until the run cache takes writes (the warning above says how), " +
-      "no status write of this run is recorded — a verify-screen --status write that ends it would be refused the same way. Ask the user to make a renderer available, then re-run the probe once in this " +
-      "run (--run r1) once it does; if that attempt fails too, end the run failed (verify-screen --status … --phase failed --run r1) whatever its own line says"
-      && !l.includes("--dir") && !l.includes("--detail");
-  });
 
   // --browser-path is checked first — before the project's Playwright is resolved (`none` has none) or a browser
   // launched: a missing path, a directory (a macOS .app), a file that is not executable → exit 3, one line, no stack
@@ -2724,18 +2704,5 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
 }
 
 check("[LAUNCH_ARGS] the probe's chromium flags include --disable-lcd-text (grayscale text AA; the e2e suites that render references import the same list)", VP.LAUNCH_ARGS.includes("--disable-lcd-text"));
-
-// a refused `measured` status write is worded by why: a lost lock or a busy one is not the run cache refusing it
-t("measuredRefusedWhy: a lock taken over (LockLost), a lock held throughout (LockBusy) and an unwritable run cache each get their own sentence", () => {
-  const lost = VP.measuredRefusedWhy(VP.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-1");
-  const busy = VP.measuredRefusedWhy(VP.statusRefusalOf(new LockBusy("/x/S.status.json.lock", "held")), "run-1");
-  const cache = VP.measuredRefusedWhy(VP.statusRefusalOf(new RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-1");
-  return /took over the status lock of run run-1/.test(lost) && !/run cache/.test(lost)
-    && /held the status lock of run run-1 for the whole wait/.test(busy) && !/run cache/.test(busy)
-    && cache === "the run cache refused the probe's `measured` status write for run run-1";
-});
-t("measuredRefusedWhy: the probe's own run (no --run) names its `done` write", () =>
-  VP.measuredRefusedWhy(VP.statusRefusalOf(new RunCacheUnwritable("/p/node_modules/.cache/designtwin-verify", "/p", "EACCES")), "run-2", "done") === "the run cache refused the probe's `done` status write for run run-2"
-  && /the probe's `done` status write held it/.test(VP.measuredRefusedWhy(VP.statusRefusalOf(new LockLost("/x/S.status.json.lock")), "run-2", "done")));
 
 report();
