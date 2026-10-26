@@ -1,8 +1,8 @@
 // The bridge holder (bridge/src/bridge-holder.ts) through its interface, in-process: a fake bridge factory and a fake
 // daemon side stand in for server-core and the daemon socket, so the sharing rules — who binds, when it is published,
 // whether a session that lost its client may exit, and that everything is let go exactly once — are checked without
-// a port, a socket or a subprocess. test/mcp-lifecycle.test.ts and test/mcp-share.test.ts still boot the real MCP
-// server for what only a process shows (stdin, signals, exit codes).
+// a port, a socket or a subprocess. Which stdio event or signal means the client has gone is test/client-presence.test.ts's;
+// test/mcp-lifecycle.test.ts and test/mcp-share.test.ts still boot the real MCP server for what only a process shows.
 //   bun test/bridge-holder.test.ts
 import { check, report } from "./assert.ts";
 import { bridgeHolder } from "../bridge/src/bridge-holder.ts";
@@ -144,6 +144,8 @@ console.log("\nsession:");
   const again = await h.upstream();
   check("routing through a daemon, every call re-resolves: once it has gone, the session takes the bridge over",
     again.kind === "own" && b.made.length === 1 && d.connects() === 2);
+  check("…on ONE daemon address: resolved once for the settings, again only after the token commit before the bind",
+    d.keyedOn.length === 2);
   h.release();
 }
 {
@@ -216,6 +218,30 @@ console.log("\nsession:");
   check("idle window off → still serving, and the log says it never stops on its own and why",
     s?.idleOuts[0] === 0 && logs.some((l) => l.includes("never shuts down on its own (FIGMA_DAEMON_IDLE_MIN=0)")));
   h.release();
+}
+{
+  const b = bridges();
+  const d = daemonSide();
+  const { h, logs } = holder("session", b, d, { ...SETTINGS, idleMs: 0, idleRaw: "soon" });
+  await h.upstream();
+  await settled();
+  const s = d.served[0];
+  if (s) s.activity = { frames: 1, inFlight: 0, idleForMs: 0 };
+  h.clientLeft("stdin closed");
+  check("an unparsable idle value → the raw value is quoted as not a number of minutes, never reported as \"=0\"",
+    s?.idleOuts[0] === 0 && logs.some((l) => l.includes('FIGMA_DAEMON_IDLE_MIN="soon" is not a number of minutes above 0')) &&
+    !logs.some((l) => l.includes("(FIGMA_DAEMON_IDLE_MIN=0)")));
+  h.release();
+}
+{
+  const b = bridges();
+  const d = daemonSide({ live: true });
+  const { h, released } = holder("session", b, d);
+  const up = await h.upstream();
+  h.clientLeft("stdin closed");
+  await settled();
+  check("routed through a daemon, the client leaves → released at once; the daemon is never touched (no bridge, nothing served)",
+    up.kind === "daemon" && released() === "the MCP client went away (stdin closed) — exiting" && b.made.length === 0 && d.served.length === 0);
 }
 {
   const b = bridges();

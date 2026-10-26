@@ -9,9 +9,10 @@ import { pathToFileURL } from "node:url";
 import { check, report } from "./assert.ts";
 import { bunSync } from "./children.ts";
 import {
-  commitToken, daemonPlace, daemonTokenOf, humanMs, idleMsFromEnv, readSettings, tokenOverridden, tokenSetting,
+  commitToken, daemonAddressOf, daemonTokenOf, humanMs, idleMsFromEnv, readSettings, tokenOverridden, tokenSetting,
 } from "../bridge/src/settings.ts";
 import { fingerprint } from "../bridge/src/token-store.ts";
+import { pipeName } from "../bridge/src/daemon-auth.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-settings-"));
 // token-store reads FIGMA_BRIDGE_TOKEN and the saved file's place from process.env: an empty config dir, no env token.
@@ -56,7 +57,7 @@ console.log("\ntoken:");
   const env = readSettings({ env: { FIGMA_BRIDGE_PORT: "8789" } });
   check("FIGMA_BRIDGE_TOKEN is the effective token; the daemon is looked up at this port, keyed on it",
     env.ok && env.settings.token.ok && env.settings.token.resolved.source === "env" &&
-    daemonPlace(env.settings).port === 8789 && daemonPlace(env.settings).place.token === "env-tok");
+    ((a) => a.ok && a.port === 8789 && a.sock === pipeName("env-tok", 8789))(daemonAddressOf(env.settings, undefined, { platform: "win32", uid: undefined, tmpdir: dir })));
   delete process.env.FIGMA_BRIDGE_TOKEN;
 }
 
@@ -128,6 +129,9 @@ console.log("\nlimits:");
   const r = readSettings({ env: { FIGMA_DAEMON_IDLE_MIN: "soon", FIGMA_BRIDGE_MAX_PAYLOAD_MB: "64", DT_TEST_EPHEMERAL_PORT: "1" } });
   check("readSettings carries the idle window (and its raw value), the payload cap and the test seam",
     r.ok && r.settings.idleMs === 0 && r.settings.idleRaw === "soon" && r.settings.maxPayload.mb === 64 && r.settings.ephemeralPort);
+  const x = readSettings({ env: { XDG_RUNTIME_DIR: "/run/user/1000" } });
+  check("readSettings carries XDG_RUNTIME_DIR, the one place the daemon's socket directory is read from the environment",
+    x.ok && x.settings.runtimeDir === "/run/user/1000");
 }
 
 console.log("\nno load-time effects:");

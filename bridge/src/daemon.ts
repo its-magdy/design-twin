@@ -20,11 +20,10 @@
 // first and answer with forged replies. Nothing there plays the part of the 0700 directory below. So on
 // win32 the pipe's NAME is derived from the bridge token (daemon-auth.ts pipeName), and before any frame
 // both ends prove they hold that token (daemon-auth.ts, which says what that does and does not stop). Every
-// serve / stop / lookup below takes that path where `handshakeOn` says so: win32 by default, and anywhere a
+// serve / stop / lookup below takes that path where its address says so (daemonAddress): win32 by default, and anywhere a
 // caller asks (`handshake: true` — the POSIX suites drive the whole exchange that way).
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { AUTH_TIMEOUT_MS, clientHandshake, ipcKey, pipeName, serverHandshake } from "./daemon-auth.ts";
 import type { IpcAuth } from "./daemon-auth.ts";
@@ -32,8 +31,6 @@ import { errMsg, errCode } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
 import { deadline, systemClock } from "./clock.ts";
-import { bridgePortOrExit } from "./ports.ts";
-import { daemonTokenOf, idleMsFromEnv, tokenSetting } from "./settings.ts";
 import { replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ProgressTick } from "./server-core.ts";
@@ -85,22 +82,14 @@ function isDaemonStatus(x: unknown): x is DaemonStatusView {
 }
 
 export interface ServeOptions {
-  port?: number;
   log?: (m: string) => void;
-  /** The idle window in ms (0 = none): the holder passes its settings' (settings.ts idleMs); absent, FIGMA_DAEMON_IDLE_MIN. */
-  idleMs?: number;
+  /** The idle window in ms (0 = none): the holder passes its settings' (settings.ts idleMs). */
+  idleMs: number;
   signals?: boolean;
   /** Install installCrashHandlers for this process. Defaults to `signals`: a serve() that owns the
    *  process's signals owns its lifetime too (`dtwin serve`); a host with its own lifetime (the MCP
    *  server passes signals:false) installs its own, and an in-process test passes false. */
   crashHandlers?: boolean;
-  /** The platform the location and handshake are chosen for (defaults to process.platform): win32 listens
-   *  on a pipe named from the token, and requires the handshake. */
-  platform?: NodeJS.Platform;
-  /** Require the handshake (daemon-auth.ts) from every client. Defaults to on for win32 only. */
-  handshake?: boolean;
-  /** The bridge token the pipe name and handshake key on (defaults to daemonToken()'s resolution). */
-  token?: string | null;
   /** What the session's idle clock runs on (clock.ts; systemClock when absent) — a suite's fake one steps it. */
   clock?: Clock;
 }
@@ -128,43 +117,9 @@ export interface DaemonConnection {
   request<C extends Cmd>(msg: DaemonCommandRequest<C>, o?: DaemonRequestOptions): Promise<Sent<C>>;
 }
 
-// ---- the handshake: where, and keyed on what
-
-const isWin = (place: { platform?: NodeJS.Platform | undefined }): boolean => (place.platform ?? process.platform) === "win32";
-/** Does a connection to (or from) this place prove the token first: win32 always unless told otherwise,
- *  elsewhere only when asked. Both ends of one daemon must agree — a handshaking client never writes before
- *  the hello, and a handshaking server drops a frame that comes first. */
-const handshakeOn = (place: { platform?: NodeJS.Platform | undefined; handshake?: boolean | undefined }): boolean => place.handshake ?? isWin(place);
-
-/** The bridge token the pipe name and the handshake key on: the place's own when it names one (an entry passes
- *  its settings' — settings.ts daemonPlace), else the environment's by the same resolution (settings.ts
- *  tokenSetting / daemonTokenOf): null when nothing is saved yet or a token file cannot be read. */
-export function daemonToken(place: SockPlace = {}): string | null {
-  if (place.token !== undefined) return place.token;
-  return daemonTokenOf(tokenSetting({ ...(place.env ? { env: place.env } : {}) }));
-}
-
-/** Why a handshaking daemon cannot be named or served: no token to key it on. */
-export const NO_DAEMON_TOKEN = "no bridge token is saved yet, so the daemon's pipe cannot be named — start a bridge once (any dtwin command that connects to Figma saves one) and try again";
-
-/** The handshake for `sock` at `place`, or null where none is used. Throws NO_DAEMON_TOKEN without a token. */
-function ipcAuth(sock: string, place: SockPlace): IpcAuth | null {
-  if (!handshakeOn(place)) return null;
-  const token = daemonToken(place);
-  if (token === null) throw new Error(NO_DAEMON_TOKEN);
-  return { key: ipcKey(token), name: sock };
-}
-
-/** The refusal when something that cannot prove the token holds the daemon's name: not ours, and nothing
- *  was sent to it. ONE spelling (serve, and a request whose daemon fails the handshake). */
-export function foreignHolder(sock: string): Error {
-  return new Error(`${sock} is held by a process that could not prove it knows your bridge token — not a dtwin daemon of yours, so nothing was sent to it. ` +
-    "If it outlives your own dtwin sessions, another user may be squatting the name: `dtwin --rotate-token` moves the daemon to a new one.");
-}
-
-// ---- where the socket lives
+// ---- the address: where the daemon is reached, and keyed on what — resolved ONCE, from values
 //
-// The socket answers without a token, so its DIRECTORY is the access control: only a directory that
+// The socket answers without a token, so on POSIX its DIRECTORY is the access control: only a directory that
 // this user owns and nobody else can enter is safe. os.tmpdir() alone is not — on macOS it is a
 // per-user 0700 directory, but on Linux it is usually /tmp (mode 1777, shared), where another local
 // user could bind the socket name first: our CLI would then take forged replies from their process,
@@ -179,18 +134,114 @@ export function foreignHolder(sock: string): Error {
 // create, replace or remove an entry, so the socket file in it is ours; it is still checked (owner)
 // before use, as a second line.
 //
-// Windows (no process.getuid) keeps os.tmpdir() unchanged: a per-user directory there, and POSIX
-// mode bits do not apply. (No socket file lives there anyway: on win32 the daemon is a named pipe — winPipe.)
+// The address is resolved once (daemonAddress); the directory and the socket file are checked again at
+// EVERY use (checkedSock), because a long-lived process (the MCP server) resolves it once and uses it for
+// hours: a directory someone makes or opens up after the resolution is never trusted unchecked.
+//
+// No POSIX uids (an injected uid of undefined): the tmpdir unchanged, and no mode bits to check.
+// Windows: a named pipe named from the token (daemon-auth.ts pipeName) — no directory, no file, no length
+// or owner check: a pipe is not a path in any filesystem, and goes away with the process that holds it.
 //
 // Length: the kernel limits a Unix socket address to sockaddr_un.sun_path — 108 bytes on Linux, 104 on
 // macOS, each with its terminating NUL. Bun does not hand a longer path to the kernel as it is: on Linux
 // it binds and connects through /proc/self/fd/<dir fd>/<name> (bun-usockets bsd.c), so any length works
 // there. On macOS, only a recent Bun has the equivalent (fchdir into the directory, then the bare name);
 // an older one fails with ENAMETOOLONG — and Node (before the Bun port) silently TRUNCATED the path and bound a
-// different file. So on macOS a path over 103 bytes is refused here, by sockPath, with the fix named
+// different file. So on macOS a path over 103 bytes is refused here, with the fix named
 // (MAX_SOCK_PATH_BYTES), rather than left to whichever of those the running Bun does. It takes a long
 // TMPDIR to get there: a default macOS tmpdir is ~48 bytes, so `<tmpdir>/designtwin-<uid>/designtwin-<port>.sock`
 // is ~84 bytes; /run/user/<uid>/designtwin-<port>.sock (Linux, XDG_RUNTIME_DIR) ~36.
+
+/** What a daemon address is resolved from — values only: an entry passes its settings' (settings.ts
+ *  daemonAddressOf), a suite whichever platform and uid it is checking. Nothing here reads the environment. */
+export interface AddressInput {
+  /** the bridge port the daemon serves (keyed by port, so two bridges on two ports get two daemons) */
+  port: number;
+  /** the bridge token the pipe name and the handshake key on (settings.ts daemonTokenOf); null = none saved */
+  token: string | null;
+  /** win32 is a named pipe, and handshakes by default */
+  platform: NodeJS.Platform;
+  /** the owner the socket directory and file must have; undefined = no POSIX uids (Windows) */
+  uid: number | undefined;
+  /** the base for the fallback socket directory, and where an earlier build's socket lived (os.tmpdir()) */
+  tmpdir: string;
+  /** XDG_RUNTIME_DIR as the entry read it */
+  runtimeDir?: string | undefined;
+  /** prove the token before any frame (daemon-auth.ts) — on for win32 unless told otherwise, elsewhere only when
+   *  asked (the POSIX suites drive the whole exchange that way). Both ends of one daemon must agree: a handshaking
+   *  client never writes before the hello, and a handshaking server drops a frame that comes first. */
+  handshake?: boolean;
+}
+
+/** Where a daemon is reached: its socket or pipe and the handshake a connection starts with — or why there is
+ *  none (daemonAddress). */
+export type DaemonAddress = ReachableAddress | RefusedAddress;
+
+export interface ReachableAddress {
+  readonly ok: true;
+  readonly port: number;
+  readonly platform: NodeJS.Platform;
+  /** the socket path (POSIX) or the pipe name (win32) */
+  readonly sock: string;
+  readonly pipe: boolean;
+  /** the handshake, or null where the socket's directory is the check */
+  readonly auth: IpcAuth | null;
+  /** POSIX with uids: the directory checked at every use, and whether this module makes it (the fallback under the
+   *  tmpdir — never XDG_RUNTIME_DIR, which is the system's) */
+  readonly dir: { readonly path: string; readonly uid: number; readonly make: boolean } | null;
+  readonly legacy: LegacyPlace | null;
+}
+
+/** Where a daemon from an earlier build listened (<tmpdir>/designtwin-<port>.sock) when that is not the current socket,
+ *  and the owner a socket there must have to be ours. Kept on a refused address too (a current path too long): that
+ *  old daemon may well be what holds the port. */
+export interface LegacyPlace { readonly sock: string; readonly uid: number }
+
+export interface RefusedAddress {
+  readonly ok: false;
+  readonly port: number;
+  readonly why: string;
+  /** refused for want of a token (a pipe, or a handshake, with none saved): no daemon of ours can be there */
+  readonly noToken: boolean;
+  readonly legacy: LegacyPlace | null;
+}
+
+/** Why a handshaking daemon cannot be named or served: no token to key it on. */
+export const NO_DAEMON_TOKEN = "no bridge token is saved yet, so the daemon's pipe cannot be named — start a bridge once (any dtwin command that connects to Figma saves one) and try again";
+
+/** THE resolution: the daemon's socket (POSIX) or pipe (win32) for `port`, and its handshake — or a refusal with
+ *  its reason (no token to name a pipe or key a handshake; a socket path too long for the platform). The only
+ *  filesystem look is whether XDG_RUNTIME_DIR is private now; the directory chosen is checked again at each use. */
+export function daemonAddress(i: AddressInput): DaemonAddress {
+  const { port, token, platform, uid } = i;
+  const handshake = i.handshake ?? platform === "win32";
+  const refuse = (why: string, noToken = false, legacy: LegacyPlace | null = null): RefusedAddress => ({ ok: false, port, why, noToken, legacy });
+  if (token === null && (handshake || platform === "win32")) return refuse(NO_DAEMON_TOKEN, true);
+  const authFor = (sock: string): IpcAuth | null => (handshake && token !== null ? { key: ipcKey(token), name: sock } : null);
+  if (platform === "win32" && token !== null) {
+    const sock = pipeName(token, port);
+    return { ok: true, port, platform, sock, pipe: true, auth: authFor(sock), dir: null, legacy: null };
+  }
+  const name = `designtwin-${port}.sock`;
+  const xdg = i.runtimeDir;
+  const dir = uid === undefined ? null
+    : xdg && path.isAbsolute(xdg) && privateDirProblem(xdg, uid) === null ? { path: xdg, uid, make: false }
+    : { path: path.join(i.tmpdir, `designtwin-${uid}`), uid, make: true };
+  const sock = path.join(dir?.path ?? i.tmpdir, name);
+  // No build ever served a daemon on Windows before the pipe; without uids the current location IS the tmpdir.
+  const old = path.join(i.tmpdir, name);
+  const legacy = dir && old !== sock ? { sock: old, uid: dir.uid } : null;
+  const tooLong = sockLengthProblem(sock, platform);
+  if (tooLong) return refuse(tooLong, false, legacy);
+  return { ok: true, port, platform, sock, pipe: false, auth: authFor(sock), dir, legacy };
+}
+
+/** The refusal when something that cannot prove the token holds the daemon's name: not ours, and nothing
+ *  was sent to it. ONE spelling (serve, and a request whose daemon fails the handshake). */
+export function foreignHolder(sock: string): Error {
+  return new Error(`${sock} is held by a process that could not prove it knows your bridge token — not a dtwin daemon of yours, so nothing was sent to it. ` +
+    "If it outlives your own dtwin sessions, another user may be squatting the name: `dtwin --rotate-token` moves the daemon to a new one.");
+}
 
 /** Why `dir` is not safe to hold this user's socket, or null when it is. */
 export function privateDirProblem(dir: string, uid: number): string | null {
@@ -203,54 +254,6 @@ export function privateDirProblem(dir: string, uid: number): string | null {
   return null;
 }
 
-export interface SockPlace {
-  env?: NodeJS.ProcessEnv;
-  /** The base for the fallback directory (defaults to os.tmpdir()). */
-  tmpdir?: string;
-  /** The owner to require (defaults to process.getuid(); an explicit undefined = no POSIX uids, as on Windows). */
-  uid?: number | undefined;
-  /** The platform the location is chosen for (defaults to process.platform): win32 is a named pipe. */
-  platform?: NodeJS.Platform;
-  /** Prove the token before any frame (daemon-auth.ts). Defaults to on for win32 only (handshakeOn). */
-  handshake?: boolean;
-  /** The bridge token (defaults to daemonToken()'s resolution; null = none saved). */
-  token?: string | null;
-}
-
-function placeUid(place: SockPlace): number | undefined {
-  return "uid" in place ? place.uid : process.getuid?.();
-}
-
-/** The directory the daemon socket lives in — created if needed, and checked. Throws when the
- *  directory exists but is not private to this user. */
-export function sockDir(place: SockPlace = {}): string {
-  return findSockDir(place, true);
-}
-
-// `create` false (a lookup): a directory that does not exist yet is null — no daemon can be listening
-// in it, and nothing is created or connected to (a directory someone makes after this look is never
-// trusted unchecked).
-function findSockDir(place: SockPlace, create: true): string;
-function findSockDir(place: SockPlace, create: boolean): string | null;
-function findSockDir(place: SockPlace, create: boolean): string | null {
-  const tmpdir = place.tmpdir ?? os.tmpdir();
-  const uid = placeUid(place);
-  if (uid === undefined) return tmpdir;
-  const xdg = (place.env ?? process.env).XDG_RUNTIME_DIR;
-  if (xdg && path.isAbsolute(xdg) && privateDirProblem(xdg, uid) === null) return xdg;
-  const dir = path.join(tmpdir, `designtwin-${uid}`);
-  if (!create) {
-    try { fs.lstatSync(dir); } catch (e) { if (errCode(e) === "ENOENT") return null; }
-  } else {
-    // mode is narrowed further by the umask, never widened; an existing directory is left as it is and
-    // judged by the check below.
-    try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
-  }
-  const bad = privateDirProblem(dir, uid);
-  if (bad) throw new Error(`refusing to use ${dir} for the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
-  return dir;
-}
-
 /** What to do about a refused socket location — quoted by every refusal, and by `dtwin doctor`. */
 export const SOCK_FIX = "Remove it (or have its owner remove it), or point XDG_RUNTIME_DIR or TMPDIR at a directory only you can access.";
 
@@ -260,36 +263,6 @@ export function sockFileProblem(sock: string, uid: number): string | null {
   let st: fs.Stats;
   try { st = fs.lstatSync(sock); } catch { return null; }
   return st.uid === uid ? null : `it is owned by uid ${st.uid}, not ${uid}`;
-}
-
-// Without an explicit port, the one a bridge binds: FIGMA_BRIDGE_PORT parsed as settings.ts does, so " 8788"
-// names the 8788 socket and a value no plugin can reach exits with the same message rather than
-// naming a socket no bridge ever serves.
-function sockName(port: number | undefined, place: SockPlace): string {
-  return `designtwin-${port || bridgePortOrExit((place.env ?? process.env).FIGMA_BRIDGE_PORT)}.sock`;
-}
-
-// win32: the named pipe for `port`, named from the token (daemon-auth.ts pipeName) — null with no token,
-// where no daemon of ours can be listening. No directory, no file, no length or owner check: a pipe is not
-// a path in any filesystem, and goes away with the process that holds it.
-function winPipe(port: number | undefined, place: SockPlace): string | null {
-  const token = daemonToken(place);
-  return token === null ? null : pipeName(token, port || bridgePortOrExit((place.env ?? process.env).FIGMA_BRIDGE_PORT));
-}
-
-// Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one socket.
-// Throws when the location is refused (sockDir, or a socket file that is not ours): that is final for
-// the commands that create or stop a daemon (serve, assertNoDaemon, stop). A lookup that only asks "is
-// a daemon running?" goes through lookupSock instead. On win32 it is the pipe (winPipe), and the one
-// refusal is having no token to name it with.
-export function sockPath(port?: number, place: SockPlace = {}): string {
-  if (isWin(place)) {
-    const pipe = winPipe(port, place);
-    if (pipe === null) throw new Error(NO_DAEMON_TOKEN);
-    return pipe;
-  }
-  const dir = sockDir(place);
-  return path.join(dir, checkedSockName(port, place, dir));
 }
 
 /** The longest socket path (bytes, without the NUL) `platform` is held to — see "Length" above. Only
@@ -305,70 +278,74 @@ export function sockLengthProblem(sock: string, platform: NodeJS.Platform = proc
     "Point XDG_RUNTIME_DIR or TMPDIR at a shorter directory only you can access.";
 }
 
-function checkedSockName(port: number | undefined, place: SockPlace, dir: string): string {
-  const name = sockName(port, place);
-  const uid = placeUid(place);
-  const sock = path.join(dir, name);
-  const tooLong = sockLengthProblem(sock, place.platform);
-  if (tooLong) throw new Error(tooLong);
-  const bad = uid === undefined ? null : sockFileProblem(sock, uid);
-  if (bad) throw new Error(`refusing to use ${sock} as the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
-  return name;
+// The socket of `a`, its directory checked NOW. `make` (serve, assertNoDaemon): the fallback directory is created
+// if it is missing. A lookup (`make` false) creates nothing: a directory that does not exist yet is null — no
+// daemon can be listening in it. Throws the refusal when the directory, or a socket file already in it, is not
+// this user's own.
+function checkedSock(a: ReachableAddress, make: boolean): string | null {
+  if (!a.dir) return a.sock;
+  const { path: dir, uid } = a.dir;
+  if (make && a.dir.make) {
+    // mode is narrowed further by the umask, never widened; an existing directory is left as it is and
+    // judged by the check below.
+    try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if (errCode(e) !== "EEXIST") throw e; }
+  } else if (!make) {
+    try { fs.lstatSync(dir); } catch (e) { if (errCode(e) === "ENOENT") return null; }
+  }
+  const bad = privateDirProblem(dir, uid);
+  if (bad) throw new Error(`refusing to use ${dir} for the dtwin daemon socket: ${bad}. ${SOCK_FIX}`);
+  const file = sockFileProblem(a.sock, uid);
+  if (file) throw new Error(`refusing to use ${a.sock} as the dtwin daemon socket: ${file}. ${SOCK_FIX}`);
+  return a.sock;
 }
 
-// sockPath for a lookup: null when the directory does not exist (nothing created), or on win32 when there
-// is no token to name the pipe with; throws a refusal.
-function findSock(port: number | undefined, place: SockPlace): string | null {
-  if (isWin(place)) return winPipe(port, place);
-  const dir = findSockDir(place, false);
-  return dir === null ? null : path.join(dir, checkedSockName(port, place, dir));
+/** The socket to serve at `a` — its directory created if needed, and checked (stop and the lookups create nothing).
+ *  Throws the address's refusal, or the location's. */
+export function sockPath(a: DaemonAddress): string {
+  if (!a.ok) throw new Error(a.why);
+  return checkedSock(a, true) ?? a.sock;
 }
 
-/** Why the socket for `port` cannot be used, or null when it can — the refusal as a value, without
- *  creating anything. Null on win32: a pipe has no location to refuse (the handshake is its check). */
-export function sockProblem(port?: number, place: SockPlace = {}): string | null {
-  if (isWin(place)) return null;
-  try { findSock(port, place); return null; } catch (e) { return errMsg(e); }
+/** The directory the daemon socket lives in — created if needed, and checked (POSIX: a pipe has none, and throws). */
+export function sockDir(a: DaemonAddress): string {
+  if (a.ok && a.pipe) throw new Error(`${a.sock} is a named pipe: it has no socket directory`);
+  return path.dirname(sockPath(a));
+}
+
+/** Why the daemon at `a` cannot be used, or null when it can — the refusal as a value, without creating anything.
+ *  Null for a pipe (the handshake is its check) and for want of a token (no daemon of ours can be there). */
+export function sockProblem(a: DaemonAddress): string | null {
+  if (!a.ok) return a.noToken ? null : a.why;
+  try { checkedSock(a, false); return null; } catch (e) { return errMsg(e); }
 }
 
 // A refused location must not take every command down with it. Anyone able to create
 // <tmpdir>/designtwin-<uid> first (a shared /tmp) could otherwise lock this user out of dtwin
 // entirely. So the "is a daemon running?" lookups (connect, status) read a refusal as "no daemon" —
 // the one-shot path then runs exactly as it does without a daemon — and say so ONCE per process, on
-// stderr (stdout is the MCP server's protocol channel, and a CLI's data).
+// stderr (stdout is the MCP server's protocol channel, and a CLI's data). No token is no daemon, silently.
 let refusalWarned = false;
-function lookupSock(port: number | undefined, place: SockPlace): string | null {
-  try { return findSock(port, place); } catch (e) {
+function lookup(a: DaemonAddress): ReachableAddress | null {
+  const warn = (why: string): null => {
     if (!refusalWarned) {
       refusalWarned = true;
-      console.error("[dtwin] " + errMsg(e) + " Going on without a daemon.");
+      console.error("[dtwin] " + why + " Going on without a daemon.");
     }
     return null;
-  }
-}
-
-// lookupSock plus its handshake: null (no daemon) when either says so — handshaking with no token to key
-// on is "no daemon" for a lookup, as a refused location is.
-function lookupAuthed(port: number | undefined, place: SockPlace): { sock: string; auth: IpcAuth | null } | null {
-  const sock = lookupSock(port, place);
-  if (!sock) return null;
-  try { return { sock, auth: ipcAuth(sock, place) }; } catch { return null; }
+  };
+  if (!a.ok) return a.noToken ? null : warn(a.why);
+  try { return checkedSock(a, false) === null ? null : a; } catch (e) { return warn(errMsg(e)); }
 }
 
 /** The socket of a daemon started by an earlier dtwin build, which listened directly in the tmpdir
  *  (<tmpdir>/designtwin-<port>.sock) — when a socket owned by this user is there and it is not the
  *  current location; otherwise null. Only ever used to stop that daemon or to name it in an error. */
-export function legacySock(port?: number, place: SockPlace = {}): string | null {
-  if (isWin(place)) return null; // no build ever served a daemon on Windows before the pipe
-  const uid = placeUid(place);
-  if (uid === undefined) return null; // no uids: the current location IS the tmpdir
-  const sock = path.join(place.tmpdir ?? os.tmpdir(), sockName(port, place));
+export function legacySock(a: DaemonAddress): string | null {
+  if (!a.legacy) return null;
+  const { sock, uid } = a.legacy;
   let st: fs.Stats;
   try { st = fs.lstatSync(sock); } catch { return null; }
-  if (!st.isSocket() || st.uid !== uid) return null;
-  let current: string | null = null;
-  try { const dir = findSockDir(place, false); current = dir && path.join(dir, sockName(port, place)); } catch { /* refused: not the current one */ }
-  return sock === current ? null : sock;
+  return st.isSocket() && st.uid === uid ? sock : null;
 }
 
 // Newline-delimited JSON. JSON.stringify escapes literal newlines, so a bare "\n" is an unambiguous
@@ -403,16 +380,21 @@ export function alreadyRunning(sock: string): Error {
   return new Error(`a dtwin daemon is already running on ${sock} — stop it with --stop`);
 }
 
-/** The socket path for `port` — or a throw if a LIVE daemon already answers on it, or (handshaking) if
- *  something that cannot prove the token holds the name (foreignHolder). */
-export async function assertNoDaemon(port?: number, place: SockPlace = {}): Promise<string> {
-  const sock = sockPath(port, place);
+/** The socket path at `a` — or a throw: the address's refusal, a refused location, a LIVE daemon already answering on
+ *  it, or (handshaking) something that cannot prove the token holding the name (foreignHolder). */
+export async function assertNoDaemon(a: DaemonAddress): Promise<string> {
+  return (await unclaimed(a)).sock;
+}
+
+async function unclaimed(a: DaemonAddress): Promise<ReachableAddress> {
+  if (!a.ok) throw new Error(a.why);
+  const sock = sockPath(a);
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
-  const held = await probeAs(sock, ipcAuth(sock, place));
+  const held = await probeAs(sock, a.auth);
   if (held === "live") throw alreadyRunning(sock);
   if (held === "foreign") throw foreignHolder(sock);
-  return sock;
+  return a;
 }
 
 // The `exit` hook that removes the socket file when a `signals: false` host (the MCP server) goes
@@ -481,13 +463,10 @@ export interface ServeHandle {
 // serve() is the socket adapter around the served session (served-session.ts): the net.Server, the listen race and
 // takeover of a stale socket file, the handshake, and the process's signals and crash hooks. What a frame is, what the
 // daemon answers, the idle decision and cancel-on-leave are the session's.
-export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, signals = true, crashHandlers = signals, platform, handshake, token, clock }: ServeOptions = {}): Promise<ServeHandle> {
-  const place: SockPlace = { ...ifDefined("platform", platform), ...ifDefined("handshake", handshake), ...ifDefined("token", token) };
-  return assertNoDaemon(port, place).then((sock) => {
-    // A pipe (win32) has no file: nothing stale to remove before listening, or after.
-    const pipe = isWin(place);
-    // Every client proves the token before its first frame is read (null: the directory is the check).
-    const auth = ipcAuth(sock, place);
+export function serve(bridge: DaemonBridge, at: DaemonAddress, { log, idleMs: idleWindow, signals = true, crashHandlers = signals, clock }: ServeOptions): Promise<ServeHandle> {
+  return unclaimed(at).then(({ sock, pipe, auth }) => {
+    // A pipe (win32) has no file: nothing stale to remove before listening, or after. `auth`: every client proves
+    // the token before its first frame is read (null: the directory is the check).
     if (!pipe) { try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ } }
 
     let forgetExit: (() => void) | null = null;
@@ -495,7 +474,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMs: idleWindow, sig
     // The session's shutdown lets the socket go FIRST (release), synchronously: stop listening, remove the socket file,
     // drop the process hooks — then it aborts its requests and closes the bridge.
     const session = createServedSession(bridge, {
-      idleMs: idleWindow ?? idleMsFromEnv(),
+      idleMs: idleWindow,
       ...ifDefined("clock", clock),
       ...ifDefined("log", log),
       release: () => {
@@ -592,7 +571,7 @@ function send(conn: net.Socket, obj: SessionFrame): void {
 
 // Is there a LIVE daemon? A stale socket file (crashed daemon) answers ECONNREFUSED, and must read as
 // "no daemon" rather than hanging or erroring — otherwise one crash makes every later CLI run fail.
-// `auth` (handshaking, see ipcAuth): the __ping goes out only once the daemon has proved the token.
+// `auth` (handshaking, the address's): the __ping goes out only once the daemon has proved the token.
 export function probe(sock: string, timeoutMs = 1500, auth: IpcAuth | null = null): Promise<boolean> {
   return probeAs(sock, auth, timeoutMs).then((held) => held === "live");
 }
@@ -603,7 +582,13 @@ export function probe(sock: string, timeoutMs = 1500, auth: IpcAuth | null = nul
 export type ProbeResult = "live" | "none" | "foreign";
 
 export function probeAs(sock: string, auth: IpcAuth | null, timeoutMs = 1500): Promise<ProbeResult> {
-  return new Promise<ProbeResult>((resolve) => {
+  return ask(sock, auth, "__ping", timeoutMs).then((r) => r.held);
+}
+
+// One control frame (`__ping`, `__status`) on ONE connection, with the probe's reading of what holds the socket: the
+// daemon's reply when it is "live". A status is its own probe — no second connection after a __ping.
+function ask(sock: string, auth: IpcAuth | null, cmd: "__ping" | "__status", timeoutMs: number): Promise<{ held: ProbeResult; reply: DaemonReply | null }> {
+  return new Promise<{ held: ProbeResult; reply: DaemonReply | null }>((resolve) => {
     let done = false;
     let connected = false;
     let stopHs = (): void => {};
@@ -611,25 +596,26 @@ export function probeAs(sock: string, auth: IpcAuth | null, timeoutMs = 1500): P
     // Handshaking, a peer that accepted and then stalled or failed holds the name: "foreign", not "none".
     const silent = (): ProbeResult => (connected && auth ? "foreign" : "none");
     const t = setTimeout(() => finish(silent()), timeoutMs);
-    function finish(v: ProbeResult): void {
+    function finish(v: ProbeResult, reply: DaemonReply | null = null): void {
       if (done) return;
       done = true;
       clearTimeout(t);
       stopHs();
       try { if (v === "live") c?.end(); else c?.destroy(); } catch { /* already gone */ }
-      resolve(v);
+      resolve({ held: v, reply });
     }
     try { c = net.createConnection(sock); } catch { return finish("none"); }
     const conn = c;
     conn.on("error", () => finish(silent()));
     conn.setEncoding("utf8");
-    const ping = (): void => { try { conn.write(JSON.stringify({ cmd: "__ping" }) + "\n"); } catch { finish(silent()); } };
+    const ping = (): void => { try { conn.write(JSON.stringify({ cmd }) + "\n"); } catch { finish(silent()); } };
     // Only a daemon REPLY is a daemon: a handshaking daemon's hello reaching a client that does not handshake
     // (it wrote its __ping first) is not one, and neither is anything else that happens to write a line.
     const onFrame = framer((line) => {
       let parsed: unknown;
       try { parsed = JSON.parse(line) as unknown; } catch { return finish(silent()); }
-      finish(parseDaemonReply(parsed) ? "live" : silent());
+      const reply = parseDaemonReply(parsed);
+      if (reply) finish("live", reply); else finish(silent());
     });
     if (!auth) {
       conn.on("data", onFrame);
@@ -743,11 +729,12 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
 }
 
 // The routing decision every CLI command makes: use the daemon if one is live, otherwise report that
-// there isn't one and let the caller open its own bridge exactly as it does without a daemon.
-export async function connect(port?: number, place: SockPlace = {}): Promise<DaemonConnection | null> {
-  const found = lookupAuthed(port, place);
-  if (!found || !(await probe(found.sock, undefined, found.auth))) return null;
-  const { sock, auth } = found;
+// there isn't one and let the caller open its own bridge exactly as it does without a daemon. The probe proves
+// it is live; each request then opens its own connection (the protocol is one request per connection).
+export async function connect(at: DaemonAddress): Promise<DaemonConnection | null> {
+  const a = lookup(at);
+  if (!a || !(await probe(a.sock, undefined, a.auth))) return null;
+  const { sock, auth } = a;
   // The daemon's reply to a forwarded command is the plugin's own reply. The daemon's bridge already
   // checked it against commands.ts on arrival, but that was another process (and possibly an older
   // build), so it is checked again here — which is what makes the typed reply below honest rather
@@ -761,32 +748,41 @@ export async function connect(port?: number, place: SockPlace = {}): Promise<Dae
   return { sock, request: send };
 }
 
-/** Stops the live daemon for `port`: true when one was stopped, false when none was running. A refused
- *  socket location throws (sockPath); on win32 no saved token means no daemon of ours to stop: false. */
-export async function stop(port?: number, place: SockPlace = {}): Promise<boolean> {
-  const sock = isWin(place) ? winPipe(port, place) : sockPath(port, place);
-  if (sock === null) return false;
-  const auth = ipcAuth(sock, place);
-  if (!(await probe(sock, undefined, auth))) return false;
-  await request(sock, { cmd: "__shutdown" }, 5000, undefined, undefined, auth);
+/** Stops the live daemon at `at`: true when one was stopped, false when none was running. A refused socket
+ *  location throws; no saved token (a pipe, or a handshake) means no daemon of ours to stop: false. */
+export async function stop(at: DaemonAddress): Promise<boolean> {
+  if (!at.ok) {
+    if (at.noToken) return false;
+    throw new Error(at.why);
+  }
+  const sock = checkedSock(at, false);
+  if (sock === null || !(await probe(sock, undefined, at.auth))) return false;
+  await request(sock, { cmd: "__shutdown" }, 5000, undefined, undefined, at.auth);
   return true;
 }
 
 /** Stops a live daemon from an earlier build (legacySock); returns its socket, or null when there is
  *  none. For `--stop` after stop() found nothing at the current location. */
-export async function stopLegacy(port?: number, place: SockPlace = {}): Promise<string | null> {
-  const sock = legacySock(port, place);
+export async function stopLegacy(at: DaemonAddress): Promise<string | null> {
+  const sock = legacySock(at);
   if (!sock || !(await probe(sock))) return null;
   await request(sock, { cmd: "__shutdown" }, 5000);
   return sock;
 }
 
-export async function status(port?: number, place: SockPlace = {}): Promise<DaemonStatusView | null> {
-  const found = lookupAuthed(port, place);
-  if (!found || !(await probe(found.sock, undefined, found.auth))) return null;
-  // The daemon's own __status reply: `daemon: true` is checked, the rest is read as optional (a daemon
-  // from an OLDER bridge may omit newer fields — see staleness.ts daemonRowStalenessNote).
-  const { result } = await request(found.sock, { cmd: "__status" }, 5000, undefined, undefined, found.auth);
-  if (!isDaemonStatus(result)) throw new Error("the daemon answered __status with an unexpected shape");
-  return result;
+// The status probe's budget: a __status is answered by the daemon itself, never forwarded, but a daemon busy relaying
+// a large export may take a moment to read it — the budget the separate request after a __ping used to get.
+const STATUS_TIMEOUT_MS = 5000;
+
+/** The live daemon's own __status, or null when none is running at `at` — one connection: the __status is the probe. */
+export async function status(at: DaemonAddress): Promise<DaemonStatusView | null> {
+  const a = lookup(at);
+  if (!a) return null;
+  const { held, reply } = await ask(a.sock, a.auth, "__status", STATUS_TIMEOUT_MS);
+  if (held !== "live" || !reply) return null;
+  if (!reply.ok) throw new Error(reply.error);
+  // `daemon: true` is checked, the rest is read as optional (a daemon from an OLDER bridge may omit newer
+  // fields — see staleness.ts daemonRowStalenessNote).
+  if (!isDaemonStatus(reply.result)) throw new Error("the daemon answered __status with an unexpected shape");
+  return reply.result;
 }

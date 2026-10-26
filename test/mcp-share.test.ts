@@ -9,6 +9,7 @@ import net from "node:net";
 import type { ChildProcess } from "node:child_process";
 import { startMcp } from "./children.ts";
 import * as daemon from "../bridge/src/daemon.ts";
+import { addressAt } from "./bridge-settings.ts";
 import { check, report } from "./assert.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -70,7 +71,7 @@ void (async () => {
   // fail its tool call; the holder's token commit ("auth: using FIGMA_BRIDGE_TOKEN") runs once, before its first bind.
   // The spawned servers inherit this env, so they resolve the same address: on Windows a pipe named from the
   // token, which is the CHILDREN's (env above) — not whatever this process would resolve on its own.
-  const sock = daemon.sockPath(8789, { token: env.FIGMA_BRIDGE_TOKEN });
+  const sock = daemon.sockPath(addressAt(8789, env.FIGMA_BRIDGE_TOKEN));
   try { fs.unlinkSync(sock); } catch { /* none left over (and a pipe has no file) */ }
   const mute = net.createServer(() => { /* accept, never reply */ });
   await new Promise<void>((r) => mute.listen(sock, () => r()));

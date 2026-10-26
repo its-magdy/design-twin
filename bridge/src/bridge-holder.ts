@@ -26,7 +26,7 @@ import { daemonUpstream, ownUpstream, servedBridge } from "./route.ts";
 import type { HeldBridge, Upstream } from "./route.ts";
 import type { DaemonBridge, DaemonConnection, DaemonStatusView, ServeHandle } from "./daemon.ts";
 import * as daemon from "./daemon.ts";
-import { commitToken, daemonPlace, daemonTokenOf, humanMs } from "./settings.ts";
+import { commitToken, daemonAddressOf, humanMs } from "./settings.ts";
 import type { BridgeSettings } from "./settings.ts";
 import type { Bridge, BridgeOptions } from "./server-core.ts";
 import { errMsg } from "./errmsg.ts";
@@ -39,24 +39,24 @@ export type Lifetime = "one-shot" | "serve" | "session";
 export type OwnBridge = HeldBridge & Pick<Bridge, "listening">;
 export type BridgeFactory = (settings: BridgeSettings, opts: BridgeOptions) => OwnBridge;
 
-/** What the holder needs of the daemon socket, bound to a port and token (daemonSide). */
+/** What the holder needs of the daemon socket, bound to one resolved address (daemonSide). */
 export interface DaemonSide {
   /** the live daemon's connection, or null */
   connect(): Promise<DaemonConnection | null>;
   status(): Promise<DaemonStatusView | null>;
   /** throws when a live daemon (or a foreign holder) already has the socket */
   assertNoDaemon(): Promise<string>;
-  serve(bridge: DaemonBridge, o: { idleMs: number; signals: boolean; log: (m: string) => void; token: string | null }): Promise<ServeHandle>;
+  serve(bridge: DaemonBridge, o: { idleMs: number; signals: boolean; log: (m: string) => void }): Promise<ServeHandle>;
 }
 
-/** The daemon module, bound to `settings`' port and token (settings.ts daemonPlace). */
+/** The daemon module, bound to the address `settings` resolve to (settings.ts daemonAddressOf) — resolved here, once. */
 export function daemonSide(settings: BridgeSettings): DaemonSide {
-  const { port, place } = daemonPlace(settings);
+  const at = daemonAddressOf(settings);
   return {
-    connect: () => daemon.connect(port, place),
-    status: () => daemon.status(port, place),
-    assertNoDaemon: () => daemon.assertNoDaemon(port, place),
-    serve: (bridge, o) => daemon.serve(bridge, { port, ...o }),
+    connect: () => daemon.connect(at),
+    status: () => daemon.status(at),
+    assertNoDaemon: () => daemon.assertNoDaemon(at),
+    serve: (bridge, o) => daemon.serve(bridge, at, o),
   };
 }
 
@@ -100,7 +100,13 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
   // since, nor print it again. Committed once, even when that first bind then fails (a held port).
   let settings = deps.settings;
   let committed = false;
-  const side = (): DaemonSide => deps.daemon(settings);
+  // The daemon side for the settings as they are now: resolved once per settings value — again only after a commit
+  // changed the token it is keyed on.
+  let sideOf: { settings: BridgeSettings; side: DaemonSide } | null = null;
+  const side = (): DaemonSide => {
+    if (sideOf?.settings !== settings) sideOf = { settings, side: deps.daemon(settings) };
+    return sideOf.side;
+  };
   // The bridge this process holds, its adapter, and the socket it is published on (null until serve() bound it).
   let own: { bridge: OwnBridge; up: Upstream; close: () => void } | null = null;
   let served: ServeHandle | null = null;
@@ -160,7 +166,7 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
 
   // Publish the held bridge on the daemon socket. `idleMs` 0 for a session while its client is here.
   function publish(b: OwnBridge, close: () => void, idleMs: number, signals: boolean): Promise<ServeHandle> {
-    return side().serve(servedBridge(b, close), { idleMs, signals, log, token: daemonTokenOf(settings.token) });
+    return side().serve(servedBridge(b, close), { idleMs, signals, log });
   }
 
   // A daemon found: its adapter (listings from its status, at the place it was found).
