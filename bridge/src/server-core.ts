@@ -15,7 +15,6 @@ import type { Server, ServerWebSocket } from "bun";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import * as tokenStore from "./token-store.ts";
-import type { ResolvedToken } from "./token-store.ts";
 import { errCode, errMsg } from "./errmsg.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { abortReason } from "./abort-reason.ts";
@@ -51,7 +50,8 @@ type VerifyClientCallback = (ok: boolean, code?: number, message?: string) => vo
 // sandboxed attacker iframe on any site the user visits also sends "Origin: null" — so without the token any
 // local page/process could drive the plugin. See AgentSeal's Figma-MCP CSWSH writeup. token-store.ts owns
 // everything ABOUT the token that isn't this handshake (precedence, per-OS path, the file's 0600 mode); settings.ts
-// resolves it without persisting, and createBridge commits a freshly minted one the moment it is about to be used.
+// resolves it without persisting, the bridge holder commits it (settings.ts commitToken) before its first bind, and
+// createBridge only admits with it.
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -163,36 +163,13 @@ function verifyClientAgainst(expected: string, info: HandshakeInfo, done: Verify
 // Origin/Host failures are still refused outright at the HTTP layer.
 const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
 
-// ---- the plugin <-> bridge protocol on the wire: the JSON each side sends. The plugin's side is
-// figma-plugin/ui.html (plain JS, so these types are its contract, not its source); the test suites'
-// fake plugin (test/fake-plugin.ts) sends and reads exactly these.
-
-/** bridge -> plugin: run one command; the plugin answers with a ReplyFrame carrying the same id. */
-export interface CommandFrame<C extends Cmd = Cmd> { id: string; cmd: C; args: Commands[C]["args"] }
-/** bridge -> plugin: the bridge gave up on request `id` (timed out, stalled out, or its caller left). */
-export interface CancelFrame { type: "cancel"; id: string }
-export type BridgeFrame = CommandFrame | CancelFrame;
-/** plugin -> bridge: who this plugin is, sent on every socket open. ui.html sends null for what it does not
- *  know; a plugin older than version reporting omits pluginVersion. */
-export interface HelloFrame {
-  type: "hello";
-  instanceId?: string | null; file?: string | null; fileKey?: string | null; page?: string | null; pluginVersion?: string | null;
-}
-/** plugin -> bridge: an unsolicited progress tick (figma-plugin/src/progress.ts), for the run serving `requestId`. */
-export interface ProgressFrame {
-  type: "progress";
-  requestId?: string | null; phase?: string; page?: { index: number; of: number; name?: string | null } | null;
-  nodes?: number | null; assets?: number | null;
-  /** a `queued` frame: who the waiting run is for */
-  source?: "ui" | "bridge"; label?: string;
-}
-/** plugin -> bridge: the answer to command `id`. */
-export type ReplyFrame = { [C in Cmd]: { id: string; ok: true; result: Commands[C]["reply"] } }[Cmd] | { id: string; ok: false; error: string };
-export type PluginWireFrame = HelloFrame | ProgressFrame | ReplyFrame;
+// ---- the plugin <-> bridge protocol on the wire: plugin-frames.ts, the one module both sides type against.
+export type { BridgeFrame, CancelFrame, CommandFrame, HelloFrame, PluginWireFrame, ProgressFrame, ReplyFrame } from "./plugin-frames.ts";
+import type { BridgeFrame } from "./plugin-frames.ts";
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
-/** A plugin progress tick as ui.html relays it: `{type:"progress", phase, page, nodes, assets}` — the
+/** A plugin progress tick as the plugin's relay (figma-plugin/src/relay.ts) sends it: `{type:"progress", phase, page, nodes, assets}` — the
  *  counters figma-plugin/src/progress.ts emits, each absent when the phase has none. Read defensively:
  *  it is foreign JSON, and only a human-readable progress message is ever built from it. */
 export interface ProgressTick {
@@ -202,7 +179,7 @@ export interface ProgressTick {
   assets: number | null;
 }
 
-/** One frame from the plugin (figma-plugin/ui.html), after parsePluginFrame: a `hello` identity
+/** One frame from the plugin (its relay, figma-plugin/src/relay.ts), after parsePluginFrame: a `hello` identity
  *  announcement, an unsolicited `progress` tick, or the reply to one command (`{id, ok, result, error}`).
  *  Anything else — a non-object, a reply whose id is not a string — is dropped (null). */
 type PluginFrame =
@@ -640,16 +617,12 @@ interface BridgeOptions {
 
 function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   const port = settings.port;
-  // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
-  // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
-  // every single run is exactly the habit this store exists to end. `--show-token` reveals it on
-  // demand; `--token-status` answers "which one is in play" without disclosing it.
   // A token that could not be resolved (a mistyped --token-file) surfaces HERE, where the caller's error handling
   // turns it into a one-line message. Before the server is even constructed, so a failed start leaves nothing
-  // listening.
+  // listening. The token is admitted as given: saving a minted one and saying which is in play is the commit before a
+  // bridge first binds (settings.ts commitToken, run by the bridge holder), not a side effect of constructing one.
   if (!settings.token.ok) throw settings.token.error;
-  let tokenInfo = settings.token.resolved;
-  const token = tokenInfo.token;
+  const token = settings.token.resolved.token;
 
   // The per-frame cap (settings.ts maxPayloadFromEnv): FIGMA_BRIDGE_MAX_PAYLOAD_MB, or 128 MB.
   const payload = settings.maxPayload;
@@ -657,39 +630,6 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
   const { mb: maxPayloadMb, bytes: maxPayloadBytes } = payload;
   const admit = admitWith(token);
 
-  // Commit a freshly-minted token to disk now that one is actually being used. Settings resolved it
-  // (deliberately without persisting); this is where it becomes permanent.
-  if (tokenInfo.source === "ephemeral") {
-    try {
-      const file = tokenStore.write(token);
-      tokenInfo = { ...tokenInfo, source: "file", path: file, created: true };
-    } catch (e) {
-      tokenInfo = { ...tokenInfo, persistError: e };
-    }
-  }
-
-  if (tokenInfo.source === "token-file") {
-    console.error(`[bridge] auth: token read from ${tokenInfo.path} (${tokenStore.fingerprint(token)}).`);
-  } else if (tokenInfo.source === "env") {
-    console.error(`[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment (${tokenStore.fingerprint(token)}).`);
-  } else if (tokenInfo.created) {
-    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
-    console.error(`[bridge] saved to ${tokenInfo.path} — you won't be asked to paste it again.`);
-    console.error("[bridge] see it later with `dtwin --show-token`; replace it with `dtwin --rotate-token`.");
-  } else if (tokenInfo.source === "ephemeral") {
-    // Couldn't persist (read-only FS, no HOME, locked-down container). Still works — but say so,
-    // because the user WILL have to paste again next run and deserves to know why.
-    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
-    console.error(
-      "[bridge] could not save it (" + errMsg(tokenInfo.persistError) + ") — it changes every run. " +
-        "Set FIGMA_BRIDGE_TOKEN to a stable value instead."
-    );
-  } else {
-    console.error(`[bridge] auth: using the saved token from ${tokenInfo.path} (${tokenStore.fingerprint(token)}).`);
-    if (tokenInfo.path !== null && tokenStore.loosePerms(tokenInfo.path)) {
-      console.error(`[bridge] warning: ${tokenInfo.path} is readable by other users — chmod 600 it.`);
-    }
-  }
   // MULTI-CLIENT registry. Every connected plugin instance gets an entry, keyed by a server-minted
   // `connId` — one Figma file per entry, so a design file and the library file it draws on can be
   // driven from the same bridge instead of stealing the socket from each other.
@@ -1136,12 +1076,6 @@ function createBridge(settings: BridgeSettings, opts: BridgeOptions = {}) {
     request, isConnected, awaitClient, connectionInfo, listClients, resolveClient, close, port, listening, boundPort,
     /** the failed-handshake record, and the fingerprint of the token this bridge checks against (doctor reads both) */
     authStats: () => authStatsFor(token),
-    /** the token a daemon serving this bridge is keyed on (settings.ts daemonTokenOf): this bridge's own once it is saved —
-     *  the run that mints one saves it above, before anything serves — else null */
-    savedToken: (): string | null => (tokenInfo.source === "ephemeral" ? null : token),
-    /** the token in use, as the next bridge of this process should be given it: a token minted and saved here is now
-     *  the saved file's (so a later bridge neither writes it over a rotated file nor prints it again) */
-    tokenInUse: (): ResolvedToken => ({ token, source: tokenInfo.source, path: tokenInfo.path, created: false }),
     /** test seam: one heartbeat round, run by hand — with `heartbeatMs: 0` it is the only one. */
     heartbeatTick,
   };

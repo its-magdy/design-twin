@@ -66,8 +66,8 @@ void (async () => {
   // tool calls sent in the same stdin write would each see no daemon and each call createBridge(), and the
   // second bind would hit EADDRINUSE. To hold that window open deterministically, a MUTE listener sits on
   // the daemon socket path: it accepts and never answers, so every daemon probe waits out its 1.5s
-  // timeout — long enough for all three resolutions to be in flight at once. createBridge prints its
-  // "auth: using FIGMA_BRIDGE_TOKEN" line once per call — that line is the count of bridges opened.
+  // timeout — long enough for all three resolutions to be in flight at once. A second bind would hit EADDRINUSE and
+  // fail its tool call; the holder's token commit ("auth: using FIGMA_BRIDGE_TOKEN") runs once, before its first bind.
   // The spawned servers inherit this env, so they resolve the same address: on Windows a pipe named from the
   // token, which is the CHILDREN's (env above) — not whatever this process would resolve on its own.
   const sock = daemon.sockPath(8789, { token: env.FIGMA_BRIDGE_TOKEN });
@@ -81,7 +81,7 @@ void (async () => {
     .map((o) => JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n").join(""));
   const both = await until(() => c.reply(2) && c.reply(3));
   check("two concurrent tool calls both answer, neither as an error", both && !/"isError":true/.test((c.reply(2) ?? "") + (c.reply(3) ?? "")));
-  check("…from ONE bridge (createBridge ran once) and the process is still up",
+  check("…from ONE bridge (a second bind would have failed its call on the held port), the token committed once, and the process still up",
     (c.err.match(/auth: using FIGMA_BRIDGE_TOKEN/g) || []).length === 1 && c.code === undefined);
   c.proc.kill();
   await until(() => c.code !== undefined);

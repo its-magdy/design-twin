@@ -23,8 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
 import { ifDefined, isRecord, nullProto } from "./json-util.ts";
-import { designSystemManifestFile, designSystemPart, exportInDesignDir, readDesignSystemManifest } from "./export-reader.ts";
-import { readJson } from "./read-json.ts";
+import { exportInDesignDir, readComponentCatalog } from "./export-reader.ts";
 import { writeJsonLike } from "./json-file.ts";
 import { exitCli, runCli } from "./stdio.ts";
 import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
@@ -116,32 +115,17 @@ function loadJson(p: string): unknown {
 // id -> component name, from an existing export (optional; only needed for Code Connect forms that
 // give a node-id URL but no component identifier).
 //
-// Since the design-system split (bridge/src/design-system-layout.ts) `design-system.json` is a slim
-// pointer manifest with NO `components` array — reading `ds.components` off it silently yields an
-// empty map, and every node-id-only mapping is then dropped at the `if (!name) continue` below. That
-// reads as a clean run that just "found fewer mappings", which is the silent-wrong-answer failure
-// design-to-code/catalog-input.ts exists to prevent. So the `files.componentsLocal` pointer is followed
-// (export-reader.ts designSystemPart: inside the export only, one reason when it cannot be), and an
-// inline array is still accepted for pre-split exports. The export is the one the design dir holds
-// (design/export, or design/ itself on the older flat layout). `problem` is why an export that IS there
-// could not be read; only a row whose `id` AND `name` are strings can be a lookup entry.
-const isCatalogLike = (x: unknown): x is { components: unknown[] } => isRecord(x) && Array.isArray(x.components);
-isCatalogLike.expected = "a component catalog: an object with a `components` array";
-
+// The catalog is export-reader.ts readComponentCatalog's — design-system.json's `files.componentsLocal` pointer (inside
+// the export only), else the inline components[] of an export from before the design-system split — so a node-id-only
+// mapping is never silently dropped because the slim manifest has no `components` of its own (the silent-wrong-answer
+// failure design-to-code/catalog-input.ts exists to prevent). The export is the one the design dir holds (design/export,
+// or design/ itself on the older flat layout). `problem` is why an export that IS there could not be read (none when
+// nothing is exported); only a row whose `id` AND `name` are strings can be a lookup entry.
 function loadIdToName(designDir: string): { idToName: Map<string, string>; problem: string | null } {
   const idToName = new Map<string, string>();
-  const root = exportInDesignDir(designDir);
-  const manifest = readDesignSystemManifest(root);
-  if ("error" in manifest) return { idToName, problem: manifest.missing ? null : `${designSystemManifestFile(root)} ${manifest.error}` };
-  let rows: unknown[] | null = Array.isArray(manifest.doc.components) ? manifest.doc.components : null;
-  if (!rows) {
-    const part = designSystemPart(root, "componentsLocal");
-    if ("error" in part) return { idToName, problem: part.error };
-    const catalog = readJson(part.file, isCatalogLike);
-    if ("error" in catalog) return { idToName, problem: `${part.file} ${catalog.error}` };
-    rows = catalog.doc.components;
-  }
-  for (const c of rows) {
+  const catalog = readComponentCatalog(exportInDesignDir(designDir));
+  if ("error" in catalog) return { idToName, problem: catalog.missing ? null : catalog.error };
+  for (const c of catalog.components) {
     if (!isRecord(c)) continue;
     const { id, name } = c;
     if (typeof id === "string" && id && typeof name === "string") idToName.set(id, name);

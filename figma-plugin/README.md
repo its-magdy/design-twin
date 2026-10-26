@@ -1,8 +1,11 @@
 # Design Twin — plugin (main thread)
 
 The plugin's read/extraction logic is written in **TypeScript** (`src/*.ts`) and bundled to
-**`code.js`** — the file `manifest.json` loads as `main`. `code.js` is committed, so the plugin
-imports into Figma with **zero build** for consumers. You only build when you edit `src/`.
+**`code.js`** — the file `manifest.json` loads as `main`. Its window, **`ui.html`** (`ui`), is built
+too: `ui.template.html` (the DOM, the port walk, the reconnect) with `src/relay.ts` — the plugin's
+half of the bridge protocol — bundled into its script. Both are committed, so the plugin imports
+into Figma with **zero build** for consumers. You only build when you edit `src/` or
+`ui.template.html`; never edit `ui.html` by hand.
 
 ## Layout
 
@@ -23,9 +26,12 @@ src/
   run.ts         one run's context: read options, counters, warnings, asset tables, memo caches, cancel flag
   state.ts       the run scheduler: queue, bracket (opens/closes each run's context), bridge cancels
   progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
+  messages.ts    the main thread <-> window message contract
+  relay.ts       the window's bridge relay: main-thread messages <-> socket frames (bundled into ui.html)
   util.ts        pure helpers (hex, base64, rounding)
 figma-augment.d.ts  local typing shims for API newer than the pinned typings (empty by default)
-build.ts         esbuild bundle script
+ui.template.html the window's source; build.ts splices the relay bundle in at its `/*@relay*/` marker
+build.ts         esbuild build script (code.js + ui.html); build-options.ts holds the options the tests build from
 ```
 
 ## Dev Mode
@@ -41,12 +47,12 @@ from its manifest** — Figma reads `editorType` only at import.
 ```sh
 bun install          # @figma/plugin-typings + esbuild + typescript
 bun run typecheck    # tsc --noEmit  (the whole point: catches property-name / mixed / null bugs)
-bun run build        # esbuild src/main.ts -> code.js  (commit the result)
+bun run build        # esbuild src/main.ts -> code.js, ui.template.html + src/relay.ts -> ui.html  (commit both)
 bun run watch        # rebuild on save
 ```
 
 Then in Figma: **Plugins → Development → Import plugin from manifest…** → `manifest.json`.
-After a rebuild, close & reopen the plugin window (a stale window runs stale `code.js`).
+After a rebuild, close & reopen the plugin window (a stale window runs stale `code.js` / `ui.html`).
 
 ## Type-safety notes
 
@@ -128,5 +134,6 @@ CLI flags (`--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared
 - **Why "token rejected" is possible at all:** a browser socket cannot read an HTTP 401, so the bridge
   admits the plugin's iframe just long enough to close it with code `4401` — see `admit` in
   `bridge/server-core.js`. It is never registered as a client.
-- `test/ui.test.js` runs `ui.html`'s script against a fake DOM + WebSocket and covers these states.
+- `test/ui.test.ts` runs `ui.html`'s script (built in memory from the current sources) against a fake DOM +
+  WebSocket and covers these states; `test/plugin-relay.test.ts` covers each relay translation on its own.
 

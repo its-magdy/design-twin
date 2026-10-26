@@ -361,7 +361,9 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 1. ✅ **Exporter plugin** (done) — full design system + all layers + assets, loopback-only
    `allowedDomains`, read-only, no internet. Manual file handoff. **This is enough to start.** Authored in
    **TypeScript** (`figma-plugin/src/*.ts`, typed against `@figma/plugin-typings`) and bundled to
-   `code.js` via esbuild; the built `code.js` is committed so import stays zero-build. `tsc --noEmit`
+   `code.js` via esbuild; its window `ui.html` is built from `ui.template.html` with the bridge relay
+   (`src/relay.ts`, typed against `bridge/src/plugin-frames.ts`) bundled in. Both are committed so import
+   stays zero-build. `tsc --noEmit`
    is the first test gate. See `figma-plugin/README.md`.
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes

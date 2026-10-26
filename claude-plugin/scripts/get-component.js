@@ -370,10 +370,6 @@ var CliExit = class extends Error {
   }
 };
 var cliDepth = 0;
-function exitCli(code) {
-  if (cliDepth > 0) throw new CliExit(code);
-  process.exit(code);
-}
 function runCli(main2, o, argv = process.argv.slice(2)) {
   installQueuedConsole();
   const done = o.done ?? ((code) => {
@@ -442,12 +438,20 @@ function manifestProblem(doc, givenPath, payloadKey, wantFile) {
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`;
 }
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-  const problem = manifestProblem(doc, givenPath, payloadKey, wantFile);
-  if (problem !== null) {
-    console.error(`error  ${problem}`);
-    exitCli(2);
-  }
+function loadDocFile(file, what, guard, hint, readAt = file) {
+  const r = readJson(readAt, guard);
+  if ("doc" in r) return r;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  return { error: `${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : "") };
+}
+function loadSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const r = loadDocFile(file, what, anyJson, hint);
+  if ("error" in r) return r;
+  const manifest = manifestProblem(r.doc, file, payloadKey, wantFile);
+  if (manifest !== null) return { error: manifest };
+  if (guard(r.doc)) return { doc: r.doc };
+  return { error: `${what}: '${file}' is not ${guard.expected || "the expected kind of document"}` };
 }
 
 // bridge/src/design-system-layout.ts
@@ -497,10 +501,9 @@ function readOrThrow(file, guard) {
   throw new Error(`'${file}' ${r.error}`);
 }
 function getComponent(catalogFile, handle) {
-  const raw = readOrThrow(catalogFile, anyJson);
-  assertNotManifest(raw, catalogFile, "components", "design-system/components.local.json");
-  if (!isComponentsCatalog(raw)) throw new Error(`'${catalogFile}' is not ${isComponentsCatalog.expected}`);
-  const catalog = raw;
+  const loaded = loadSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json");
+  if ("error" in loaded) throw new Error(loaded.error);
+  const catalog = loaded.doc;
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
   const pointer = comp.variantsFile || comp.nodeFile;

@@ -25,6 +25,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { sha256Hex } from "./hash.ts";
+import { errMsg } from "./errmsg.ts";
 
 /** Where the token in play came from. "ephemeral" = minted for this run only, never stored. */
 export type TokenSource = "token-file" | "env" | "file" | "ephemeral";
@@ -181,6 +182,56 @@ export function resolve({ tokenFile = null, persist = true }: ResolveOptions = {
     // the caller reports why so it isn't a silent downgrade.
     return { token, source: "ephemeral", path: null, created: false, persistError: e };
   }
+}
+
+/** What committing a token on its first use did (commit). */
+export interface CommittedToken {
+  /** the token as every later use should see it: a minted one now the saved file's, or kept ephemeral with why */
+  resolved: ResolvedToken;
+  /** this commit minted it (saved or not) — the one time the token itself is printed */
+  minted: boolean;
+  /** the mint could not be saved: it changes every run */
+  saveFailed: boolean;
+  /** what to tell the user, one line each */
+  notice: string[];
+}
+
+// THE first use of a resolved token: save it when nothing has (resolve() with persist:false leaves a minted token
+// "ephemeral"), and say which token is in play.
+//
+// The token itself is printed ONCE — on the commit that mints it — and never again. It is stable from here on, the
+// plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on every single run is
+// exactly the habit this store exists to end. `--show-token` reveals it on demand; `--token-status` answers "which one
+// is in play" without disclosing it. Committing again what a commit returned saves and prints nothing new.
+// It expects an UNSAVED resolution (resolve() with persist:false, as settings.ts does) or its own output: a token resolve()
+// minted with persist:true and failed to save carries persistError already, and is taken as reported — its paste line
+// is resolve()'s caller's to print.
+export function commit(t: ResolvedToken, file: string = tokenPath()): CommittedToken {
+  const fp = fingerprint(t.token);
+  if (t.source === "ephemeral" && t.persistError === undefined) {
+    const paste = "auth token (paste into the plugin's \"Bridge token\" field): " + t.token;
+    try {
+      write(t.token, file);
+      return {
+        resolved: { ...t, source: "file", path: file, created: true }, minted: true, saveFailed: false,
+        notice: [paste, `saved to ${file} — you won't be asked to paste it again.`, "see it later with `dtwin --show-token`; replace it with `dtwin --rotate-token`."],
+      };
+    } catch (e) {
+      // Couldn't persist (read-only FS, no HOME, locked-down container). Still works — but say so, because the user
+      // WILL have to paste again next run and deserves to know why.
+      return {
+        resolved: { ...t, persistError: e }, minted: true, saveFailed: true,
+        notice: [paste, `could not save it (${errMsg(e)}) — it changes every run. Set FIGMA_BRIDGE_TOKEN to a stable value instead.`],
+      };
+    }
+  }
+  const done = (...notice: string[]): CommittedToken => ({ resolved: t, minted: false, saveFailed: false, notice });
+  if (t.source === "token-file") return done(`auth: token read from ${t.path} (${fp}).`);
+  if (t.source === "env") return done(`auth: using FIGMA_BRIDGE_TOKEN from the environment (${fp}).`);
+  if (t.source === "ephemeral") return done(`auth: using this run's unsaved token (${fp}).`);
+  const notice = [`auth: using the saved token from ${t.path} (${fp}).`];
+  if (t.path !== null && loosePerms(t.path)) notice.push(`warning: ${t.path} is readable by other users — chmod 600 it.`);
+  return done(...notice);
 }
 
 // What --token-status prints: everything about the token except the token.
