@@ -1795,13 +1795,13 @@ void (async () => {
   fs.rmSync(noStampDir, { recursive: true, force: true });
   fs.rmSync(badJsonDir, { recursive: true, force: true });
 
-  // figma-mcp.ts wires readSnapshotInfo into figma_status's result unconditionally (both the
-  // connected and not-connected branches carry `snapshot`) — checked statically here rather than by
-  // importing figma-mcp.ts, whose top-level createBridge()/main() open a real WS server + stdio
+  // figma-mcp.ts wires snapshot-meta's reading of the export's freshness (snapshotInfoOf) into figma_status's
+  // result unconditionally (both the connected and not-connected branches carry `snapshot`) — checked statically here
+  // rather than by importing figma-mcp.ts, whose top-level createBridge()/main() open a real WS server + stdio
   // transport and would hang the test process.
   const mcpSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts"), "utf8");
-  ok("[status] figma-mcp.ts wires snapshot-meta's readSnapshotInfo into figma_status",
-    /snapshot-meta\.ts/.test(mcpSrc) && /readSnapshotInfo/.test(mcpSrc));
+  ok("[status] figma-mcp.ts wires snapshot-meta's snapshotInfoOf into figma_status",
+    /snapshot-meta\.ts/.test(mcpSrc) && /snapshotInfoOf\(/.test(mcpSrc));
   ok("[status] figma_status reports `snapshot` on BOTH the connected and disconnected branches",
     (() => {
       const toolBody = mcpSrc.slice(mcpSrc.indexOf('"figma_status"'), mcpSrc.indexOf('"figma_get_selection"'));
@@ -3353,68 +3353,28 @@ void (async () => {
     ok("[doctor] no parallel tree, no layout warning", !doctor.checkProject(cleanDir).find((c) => c.id === "layout"));
   }
 
-  // Doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
-  // screens across two pages, none stamped (an older-bridge export), plus one design system. It
-  // does not report a single line naming only the design system's file for the WHOLE export
-  // ("exported 12.7h ago from 'Design System - Sample (Copy)'"); it counts screens separately
-  // from the design system and says plainly when a screen's source was never recorded.
+  // Doctor's export line is one reading of export-reader.ts readExportFreshness (test/export-reader.test.ts checks
+  // the grouping per source, the unstamped group, the design system's stamp and every problem). Here only the wiring:
+  // screens per source, the unstamped ones and the design system each said, in one summary line that stays first,
+  // then one warn per unusable file — and the screens never attributed to the design system's file.
   {
-    const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
+    const exp = path.join(dir, "design", "export");
     const at = new Date().toISOString();
-    fs.mkdirSync(path.join(dsDir3, "design", "export"), { recursive: true });
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NIMA (Copy)" }));
-    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageA"), { recursive: true });
-    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageB"), { recursive: true });
-    // Root index has NO layers[] at all (the older-bridge shape) — only pageDirs, forcing the
-    // per-page-index fallback.
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "index.json"), JSON.stringify({
-      pageDirs: [
-        { page: "PageA", dir: "PageA", index: "pages/PageA/index.json", layers: 3 },
-        { page: "PageB", dir: "PageB", index: "pages/PageB/index.json", layers: 2 },
-      ],
-    }));
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageA", "index.json"), JSON.stringify({
-      layers: [{ id: "1:1", name: "S1", file: "pages/PageA/S1.json", exportedAt: at }, { id: "1:2", name: "S2", file: "pages/PageA/S2.json", exportedAt: at }, { id: "1:3", name: "S3", file: "pages/PageA/S3.json", exportedAt: at }],
-    }));
-    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageB", "index.json"), JSON.stringify({
-      layers: [{ id: "2:1", name: "S4", file: "pages/PageB/S4.json", exportedAt: at }, { id: "2:2", name: "S5", file: "pages/PageB/S5.json", exportedAt: at }],
-    }));
-    const checks3 = doctor.checkProject(dsDir3);
-    const exp3 = byId(checks3, "export");
-    ok("[doctor] exportSourceCounts: 5 unstamped screens are counted and named as source-not-recorded",
-      exp3.status === "ok" && /5 screen\(s\) \(source not recorded — pulled by an older bridge; re-pull to stamp it\)/.test(exp3.detail));
-    ok("[doctor] exportSourceCounts: the design system is reported separately, by its own name",
-      /design system from 'Design System - NIMA \(Copy\)'/.test(exp3.detail));
-    ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
-      !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
-  }
-
-  // A corrupt or wrong-shaped export index is SAID, not silently counted as "no screens" (a
-  // `pageDirs: 5` must not throw inside one try and drop every screen without a word).
-  {
-    const badDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-badindex-"));
-    const exp = path.join(badDir, "design", "export");
     fs.mkdirSync(path.join(exp, "pages", "PageA"), { recursive: true });
-    const at = new Date().toISOString();
+    fs.mkdirSync(path.join(exp, "pages", "PageB"), { recursive: true });
     fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: "DS File" }));
-    fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: 5 }));
-    const c1 = doctor.checkProject(badDir).filter((c) => c.id === "export");
-    ok("[doctor] a wrong-shaped pages/index.json is a warn naming the file and the field; the summary line stays first",
-      c1.length === 2 && c1[0]?.status === "ok" && /DS File/.test(c1[0]?.detail ?? "")
-      && c1[1]?.status === "warn" && /pages\/index\.json is not the export's pages\/index\.json: .*`pageDirs`/.test(c1[1]?.detail ?? ""));
     fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: [{ index: "pages/PageA/index.json" }] }));
-    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), "{truncated");
-    const c2 = doctor.checkProject(badDir).filter((c) => c.id === "export");
-    ok("[doctor] a truncated per-page index is a warn naming THAT file",
-      c2.some((c) => c.status === "warn" && /pages\/PageA\/index\.json is not valid JSON/.test(c.detail)));
-    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({ layers: [null, { id: "1:1", name: "S1", file: "pages/PageA/S1.json", exportedAt: at }] }));
-    const c3 = doctor.checkProject(badDir).filter((c) => c.id === "export");
-    ok("[doctor] a valid index (a null row is skipped) adds no warn and counts the screen",
-      c3.length === 1 && /1 screen\(s\)/.test(c3[0]?.detail ?? ""));
-    fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: { name: "x" } }));
-    const c4 = doctor.checkProject(badDir).filter((c) => c.id === "export");
-    ok("[doctor] a non-string design-system `file` is a warn, never printed as [object Object]",
-      c4.some((c) => /design-system\.json is not a design-system manifest: .*`file`/.test(c.detail)) && !c4.some((c) => /\[object Object\]/.test(c.detail)));
+    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({
+      layers: [{ id: "1:1", name: "S1", file: "pages/PageA/S1.json", sourceFile: "App File", exportedAt: at }, { id: "1:2", name: "S2", file: "pages/PageA/S2.json", exportedAt: at }],
+    }));
+    fs.writeFileSync(path.join(exp, "pages", "PageB", "index.json"), "{truncated");
+    const lines = doctor.checkProject(dir).filter((c) => c.id === "export");
+    ok(`[doctor] export: one summary line per source, then a warn per unusable file (got ${JSON.stringify(lines.map((c) => c.detail))})`,
+      lines.length === 2 && lines[0]?.status === "ok"
+      && /1 screen\(s\) from 'App File'/.test(lines[0].detail) && /1 screen\(s\) \(source not recorded/.test(lines[0].detail)
+      && /design system from 'DS File'/.test(lines[0].detail) && !/screen\(s\) from 'DS File'/.test(lines[0].detail)
+      && lines[1]?.status === "warn" && /pages\/PageB\/index\.json is not valid JSON/.test(lines[1].detail));
   }
   {
     const mcpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-mcpshape-"));

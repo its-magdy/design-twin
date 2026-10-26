@@ -12,9 +12,9 @@
 import path from "node:path";
 import { isComponentDetailFile, isComponentsCatalog } from "./doc-guards.ts";
 import type { DocGuard } from "../bridge/src/read-json.ts";
-import { anyJson, readJson } from "../bridge/src/read-json.ts";
+import { readJson } from "../bridge/src/read-json.ts";
 import { bareArgs, cliArity, scriptCmd } from "./cli-args.ts";
-import { assertNotManifest } from "./catalog-input.ts";
+import { loadSplitFile } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
 import { runCli } from "./proc.ts";
@@ -63,12 +63,11 @@ function readOrThrow<T>(file: string, guard: DocGuard<T>): T {
 }
 
 function getComponent(catalogFile: string, handle: string): GetComponentResult {
-  // assertNotManifest refuses the one wrong file people pass here, with its own explanation, before
-  // the catalog's shape is checked.
-  const raw = readOrThrow(catalogFile, anyJson);
-  assertNotManifest(raw, catalogFile, "components", "design-system/components.local.json");
-  if (!isComponentsCatalog(raw)) throw new Error(`'${catalogFile}' is not ${isComponentsCatalog.expected}`);
-  const catalog = raw;
+  // loadSplitFile refuses the one wrong file people pass here (the manifest), with its own explanation, before the
+  // catalog's shape is checked — as a value, never an exit: design_get_component runs this in-process.
+  const loaded = loadSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json");
+  if ("error" in loaded) throw new Error(loaded.error);
+  const catalog = loaded.doc;
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
   // A standalone COMPONENT's node tree lives under nodeFile (no variants array to hang it off);

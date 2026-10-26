@@ -892,6 +892,7 @@ function readExportIndex(exportRoot) {
     rootProblem: rootProblem && rootProblem.error,
     problems,
     rows,
+    rootExportedAt: rootStamp,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => typeof row.exportedAt === "string" && row.exportedAt || (fromRoot.has(row) ? rootStamp : void 0)

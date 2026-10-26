@@ -11,9 +11,9 @@
 // "no snapshot" or crashed on — figma_status's whole point is to say what it knows, loudly.
 import fs from "node:fs";
 import path from "node:path";
-import { errMsg } from "./errmsg.ts";
-import { DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
-import { exportRoot, readExportIndex, rootIndexFile } from "./export-reader.ts";
+import { DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
+import { exportRoot, readExportFreshness } from "./export-reader.ts";
+import type { ExportFreshness } from "./export-reader.ts";
 
 const MANIFEST = DESIGN_SYSTEM_FILES.MANIFEST;
 
@@ -71,6 +71,9 @@ export function snapshotAge(doc: unknown, now?: number): SnapshotAge {
 // "nothing exported yet" to someone who has just exported a screen is wrong and sends them to re-run
 // a pull they already ran (live run #5), so a screen doc counts as an export too — it is exactly as
 // stamped as the others.
+// The design system's stamp (design-system.json, else design-system/tokens.json) and the page walk's
+// (pages/index.json) are export-reader.ts's (readExportFreshness): the filename alone identifies each as an
+// export. Only the DISCOVERED top-level files below have to earn it via looksLikeExport.
 // design/ also holds files this tool GENERATES from an export — tokens.dtcg.json,
 // tokens.resolver.json, target.json, an audit report. Those carry no export stamp (or a different
 // one) and must never be mistaken for the export itself, so a screen doc is identified by SHAPE, not
@@ -84,26 +87,16 @@ function looksLikeExport(doc: unknown): boolean {
      Array.isArray(field(doc, "components")) || Array.isArray(field(doc, "variables")) || (!!files && typeof files === "object");
 }
 
-// Which file carries the freshness stamp, in order of how much of the design it covers.
-// design-system.json only exists after a `--design-system` or full pull; `pages/index.json` after a
-// page walk; a single-screen pull (`--node`/selection) writes ONLY `design/<Screen>.json`. Reporting
-// "nothing exported yet" to someone who has just exported a screen is wrong and sends them to re-run
-// a pull they already ran (live run #5), so a screen doc counts as an export too — it is exactly as
-// stamped as the others.
-// `named: true` means the filename alone identifies it as an export, so its shape is not second-
-// guessed (a hand-trimmed design-system.json is still a design-system.json). Only the DISCOVERED
-// files have to earn it via looksLikeExport.
-interface SnapshotCandidate { f: string; named: boolean }
+/** One file that may carry the stamp: its path, its stamp, and the human label of what it came from. */
+interface SnapshotCandidate { file: string; exportedAt: unknown; sourceFile: string | undefined }
 
-function snapshotCandidates(dir: string): SnapshotCandidate[] {
-  // design-system/tokens.json carries the same stamp as the manifest (design-system-layout.ts stamps every part), so an
-  // export whose manifest is missing — a first design-system pull cut short — still reports its age, as doctor counts it.
-  const out: SnapshotCandidate[] = [{ f: path.join(dir, MANIFEST), named: true }, { f: path.join(dir, DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES.TOKENS), named: true },
-    { f: rootIndexFile(dir), named: true }];
-  // Then any other top-level .json, newest first. Top level only — never a recursive walk, since this
-  // runs on every figma_status/doctor call and design/assets/ can hold thousands of files.
+// Every other top-level .json of the export, newest first, that looks like an export (an older single-screen pull's
+// design/<Screen>.json). Top level only — never a recursive walk, since this runs on every figma_status/doctor call and
+// design/assets/ can hold thousands of files. An unreadable or unparseable one is passed over: only the named files'
+// problems are reported (export-reader's).
+function topLevelCandidates(dir: string): SnapshotCandidate[] {
   let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   const rest: Array<{ f: string; mtime: number }> = [];
   for (const e of entries) {
     if (!e.isFile() || !e.name.endsWith(".json") || e.name === MANIFEST) continue;
@@ -111,49 +104,50 @@ function snapshotCandidates(dir: string): SnapshotCandidate[] {
     try { rest.push({ f, mtime: fs.statSync(f).mtimeMs }); } catch { /* vanished mid-read */ }
   }
   rest.sort((a, b) => b.mtime - a.mtime);
-  return out.concat(rest.map((r) => ({ f: r.f, named: false })));
+  const out: SnapshotCandidate[] = [];
+  for (const { f } of rest) {
+    let doc: unknown;
+    try { doc = JSON.parse(fs.readFileSync(f, "utf8")) as unknown; } catch { continue; }
+    if (!looksLikeExport(doc)) continue; // a generated file (tokens.*.json, target.json, an audit)
+    // A screen doc has no `file` (that is a design-system field); its `screen` is the human label.
+    const screen = field(doc, "screen");
+    out.push({ file: f, exportedAt: field(doc, "exportedAt"), sourceFile: asText(field(doc, "file")) || (typeof screen === "string" ? screen : undefined) });
+  }
+  return out;
+}
+
+/** The stamp figma_status and doctor report, read off one freshness reading (export-reader.ts readExportFreshness):
+ *  the design system's, else the page walk's, else a top-level screen doc's. A STAMPED export always wins over an
+ *  unstamped one — design/variables.json is the case that forces this: a single-screen pull writes it alongside the
+ *  screen doc, it is export-shaped (variables[]), and it carries no exportedAt of its own. null when nothing is
+ *  exported; the first unusable export file when nothing usable is there. */
+export function snapshotInfoOf(fresh: ExportFreshness): SnapshotInfo | SnapshotParseError | null {
+  const named: SnapshotCandidate[] = [];
+  if (fresh.designSystem) named.push({ file: fresh.designSystem.from, exportedAt: fresh.designSystem.stamp.exportedAt, sourceFile: fresh.designSystem.stamp.file });
+  if (fresh.index) named.push({ file: fresh.index.from, exportedAt: fresh.index.exportedAt, sourceFile: undefined });
+  const isStamped = (c: SnapshotCandidate): boolean => !!c.exportedAt;
+  let pick = named.find(isStamped);
+  if (!pick) {
+    const rest = topLevelCandidates(fresh.root);
+    pick = rest.find(isStamped) ?? named[0] ?? rest[0];
+  }
+  if (!pick) {
+    const p = fresh.problems[0];
+    return p ? { file: path.join(fresh.root, ...p.file.split("/")), error: `${p.file} ${p.error}` } : null; // null: no export on disk yet — not an error
+  }
+  const { exportedAt, ageMs, problem } = snapshotAge({ exportedAt: pick.exportedAt });
+  const label = path.basename(pick.file);
+  const warning =
+    problem === "missing" ? `no exportedAt stamp in ${label} — freshness unknown (re-export with the current plugin)`
+    : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp`
+    : undefined;
+  return { file: pick.file, exportedAt, ageMs, sourceFile: pick.sourceFile, warning };
 }
 
 export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseError | null {
   // export-reader.ts's one precedence (the legacy flat layout included: a project that exported before design/export/
   // existed must still report its snapshot, not "nothing yet"), which write-out.ts writes by too.
-  const dir = exportRoot(outDir);
-  const cands = snapshotCandidates(dir);
-  let file: string | null = null, doc: unknown = null, parseError: SnapshotParseError | null = null;
-  let fallback: { file: string; doc: unknown } | null = null;
-  for (const { f: cand, named } of cands) {
-    let raw: string;
-    try { raw = fs.readFileSync(cand, "utf8"); } catch { continue; }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw) as unknown;
-    } catch (e) {
-      // A corrupt export is worth reporting even though a later candidate might still be readable —
-      // but only for a file we KNOW was meant to be an export. Remember it and keep looking.
-      if (named && parseError === null) parseError = { file: cand, error: path.basename(cand) + " is not valid JSON: " + errMsg(e) };
-      continue;
-    }
-    if (!named && !looksLikeExport(parsed)) continue; // a generated file (tokens.*.json, target.json, an audit)
-    // A STAMPED export always wins over an unstamped one. design/variables.json is the case that
-    // forces this: a single-screen pull writes it alongside the screen doc, it is export-shaped
-    // (variables[]), and it carries no exportedAt of its own — so picking purely by order would
-    // report "freshness unknown" while a perfectly stamped screen doc sat right next to it.
-    if (!field(parsed, "exportedAt")) { if (fallback === null) fallback = { file: cand, doc: parsed }; continue; }
-    file = cand; doc = parsed; break;
-  }
-  if (file === null && fallback !== null) { file = fallback.file; doc = fallback.doc; }
-  if (file === null) return parseError; // null when there is simply no export on disk yet — not an error
-  const label = path.basename(file);
-  // A screen doc has no `file` (that is a design-system field); its `screen` is the human label, so
-  // fall back to it rather than reporting the source as unknown.
-  const screen = field(doc, "screen");
-  const sourceFile = asText(field(doc, "file")) || (typeof screen === "string" ? screen : undefined);
-  const { exportedAt, ageMs, problem } = snapshotAge(doc);
-  const warning =
-    problem === "missing" ? `no exportedAt stamp in ${label} — freshness unknown (re-export with the current plugin)`
-    : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp`
-    : undefined;
-  return { file, exportedAt, ageMs, sourceFile, warning };
+  return snapshotInfoOf(readExportFreshness(exportRoot(outDir)));
 }
 
 /** The newest screen row of the export's index. `file` is the screen JSON's path relative to the export dir, as the
@@ -167,28 +161,24 @@ export interface LastScreenExport {
   sourceFile?: string;
 }
 
-// Which screen was exported LAST, read from disk — every row of the export's index (export-reader.ts: the root
-// pages/index.json and every page index, each screen once), newest stamp wins (a page walk's rows carry no stamp of their
-// own and are dated by the root index's top-level `exportedAt`). Never throws: no index, no rows or no parseable stamp is
-// null, the same "nothing to report" figma_status gives any other absent export.
-export function lastScreenExport(outDir?: string, now?: number): LastScreenExport | null {
-  const ix = readExportIndex(exportRoot(outDir));
-  let best: { row: (typeof ix.rows)[number]; t: number; at: string } | null = null;
-  for (const row of ix.rows) {
-    if (!row.id) continue;
-    const at = ix.exportedAtOf(row);
-    const t = at ? Date.parse(at) : NaN;
-    if (!at || Number.isNaN(t)) continue;
-    if (!best || t >= best.t) best = { row, t, at }; // a tie goes to the later row: merges append the newest pull
-  }
+// Which screen was exported LAST, read off one freshness reading (export-reader.ts: every row of the root
+// pages/index.json and every page index, each screen once; newest stamp wins, a page walk's rows dated by the root
+// index's top-level `exportedAt`). null when no row has a parseable stamp — the same "nothing to report" figma_status
+// gives any other absent export.
+export function lastScreenOf(fresh: ExportFreshness, now?: number): LastScreenExport | null {
+  const best = fresh.newestScreen;
   if (!best) return null;
   const { name, id, file, sourceFile } = best.row;
   return {
     name: typeof name === "string" ? name : undefined,
     id,
     file: typeof file === "string" ? file : undefined,
-    exportedAt: best.at,
+    exportedAt: best.exportedAt,
     ageMs: (now || Date.now()) - best.t,
     ...(typeof sourceFile === "string" && sourceFile ? { sourceFile } : {}),
   };
+}
+
+export function lastScreenExport(outDir?: string, now?: number): LastScreenExport | null {
+  return lastScreenOf(readExportFreshness(exportRoot(outDir)), now);
 }

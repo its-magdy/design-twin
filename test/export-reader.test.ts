@@ -16,10 +16,11 @@ import { locateExport } from "../design-to-code/verify-locate.ts";
 import { exportSiblings } from "../design-to-code/screen-inputs.ts";
 import { findExportNeighbours } from "../design-to-code/design-system-dir.ts";
 import {
-  designSystemPart, exportInDesignDir, exportRoot, exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readDesignSystemStamp, readExportIndex,
+  designSystemPart, exportInDesignDir, exportRoot, exportRootOfScreen, findExportRoot, hasExportIndex, pagesRootOfScreen, readComponentCatalog, readDesignSystemStamp,
+  readExportFreshness, readExportIndex,
 } from "../bridge/src/export-reader.ts";
 import { checkProject } from "../bridge/src/doctor.ts";
-import { lastScreenExport, readSnapshotInfo } from "../bridge/src/snapshot-meta.ts";
+import { lastScreenExport, readSnapshotInfo, snapshotInfoOf } from "../bridge/src/snapshot-meta.ts";
 import type { IndexRow } from "../design-to-code/types.ts";
 
 const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-index-" + tag + "-"));
@@ -330,6 +331,83 @@ console.log("the design system: its stamp, and the manifest's pointers");
   check("no manifest at all: no design export found", "error" in missing && /no design export found at .*design-system\.json/.test(missing.error));
 }
 
+console.log("the component catalog: where its rows come from, or why there are none");
+{
+  const root = tmp("catalog");
+  const nothing = readComponentCatalog(root);
+  check("nothing exported: no catalog, and `missing` says it is not a fault", "error" in nothing && nothing.missing && /no design export found at .*design-system\.json/.test(nothing.error));
+  // pre-split: design-system.json carried the components inline (what `dtwin seed` has always accepted)
+  put(path.join(root, "design-system.json"), { exportedAt: "2026-01-01T00:00:00.000Z", file: "Kit", components: [{ id: "1:1", name: "Button", key: "k1" }] });
+  const inline = readComponentCatalog(root);
+  check(`pre-split: the manifest's own components[], said to be inline (got ${JSON.stringify(inline)})`,
+    "file" in inline && inline.source === "inline" && inline.file === path.join(root, "design-system.json") && inline.components.length === 1);
+  // split: the manifest points at design-system/components.local.json
+  put(path.join(root, "design-system", "components.local.json"), { components: [{ id: "1:1", name: "Button", key: "k1" }, { id: "1:2", name: "Card", key: "k2" }] });
+  put(path.join(root, "design-system.json"), { exportedAt: "2026-01-02T00:00:00.000Z", file: "Kit", files: { componentsLocal: "design-system/components.local.json" } });
+  const split = readComponentCatalog(root);
+  check("split: the pointer's file, said to be the pointer's", "file" in split && split.source === "pointer" && split.file === path.join(root, "design-system", "components.local.json") && split.components.length === 2);
+  put(path.join(root, "design-system.json"), { files: { componentsLocal: "design-system/gone.json" } });
+  const gone = readComponentCatalog(root);
+  check("split, the pointed-at file absent: named, and not `missing` (an export IS there)", "error" in gone && !gone.missing && /gone\.json does not exist/.test(gone.error));
+  put(path.join(root, "design-system", "not-a-catalog.json"), { variables: [] });
+  put(path.join(root, "design-system.json"), { files: { componentsLocal: "design-system/not-a-catalog.json" } });
+  const notCat = readComponentCatalog(root);
+  check("split, the pointed-at file not a catalog: said", "error" in notCat && /not-a-catalog\.json is not a component catalog/.test(notCat.error));
+  // missing pointer: a slim manifest with no componentsLocal (and no inline components)
+  put(path.join(root, "design-system.json"), { exportedAt: "2026-01-02T00:00:00.000Z", files: { tokens: "design-system/tokens.json" } });
+  const noPointer = readComponentCatalog(root);
+  check("missing pointer: said, and not `missing`", "error" in noPointer && !noPointer.missing && /has no files\.componentsLocal pointer/.test(noPointer.error));
+  // pointer outside the export: refused before anything is read
+  put(path.join(path.dirname(root), "outside-components.local.json"), { components: [{ id: "9:9", name: "Leak" }] });
+  put(path.join(root, "design-system.json"), { files: { componentsLocal: "../outside-components.local.json" } });
+  const out = readComponentCatalog(root);
+  check(`pointer outside the export: refused (got ${"error" in out ? out.error : "a file"})`, "error" in out && /files\.componentsLocal \('\.\.\/outside-components\.local\.json'\) leads outside the export/.test(out.error));
+  put(path.join(root, "design-system.json"), "null");
+  const bad = readComponentCatalog(root);
+  check("a manifest that is not one: said, not `missing`", "error" in bad && !bad.missing && /is not a design-system manifest/.test(bad.error));
+}
+
+console.log("freshness, per source");
+{
+  const root = tmp("fresh");
+  const empty = readExportFreshness(root);
+  check("nothing exported: no source, no problem", empty.designSystem === null && empty.index === null && empty.screens.length === 0 && empty.newestScreen === null && empty.problems.length === 0);
+  check("…and snapshot-meta says nothing exported", snapshotInfoOf(empty) === null);
+  // an unstamped manifest beside a stamped split part: the stamped one dates the design system
+  put(path.join(root, "design-system.json"), { file: "Kit", files: {} });
+  put(path.join(root, "design-system", "tokens.json"), { exportedAt: "2026-01-01T00:00:00.000Z", file: "Kit", variables: [] });
+  const ds = readExportFreshness(root).designSystem;
+  check(`the design system: the stamped one of manifest and part, with the file it came from (got ${JSON.stringify(ds)})`,
+    ds?.stamp.exportedAt === "2026-01-01T00:00:00.000Z" && ds.from === path.join(root, "design-system", "tokens.json"));
+  // screens from two Figma files, plus rows pulled before rows were stamped (an older bridge), and a broken page index
+  put(path.join(root, "pages", "index.json"), { exportedAt: "2026-01-03T00:00:00.000Z", pageDirs: [], layers: [
+    { id: "1:1", name: "A1", file: "pages/A/A1.json", sourceFile: "App" },
+    { id: "1:2", name: "A2", file: "pages/A/A2.json", sourceFile: "App", exportedAt: "2026-01-04T00:00:00.000Z" },
+  ] });
+  put(path.join(root, "pages", "B", "index.json"), { layers: [
+    { id: "2:1", name: "B1", file: "pages/B/B1.json", sourceFile: "Marketing", exportedAt: "2026-01-02T00:00:00.000Z" },
+    { id: "2:2", name: "Old1", file: "pages/B/Old1.json" },
+    { id: "2:3", name: "Old2", file: "pages/B/Old2.json" },
+  ] });
+  put(path.join(root, "pages", "C", "index.json"), "{truncated");
+  const f = readExportFreshness(root);
+  const group = (src: string | null) => f.screens.find((g) => g.sourceFile === src);
+  check(`screens grouped by source, each with its newest stamp (got ${JSON.stringify(f.screens)})`,
+    group("App")?.count === 2 && group("App")?.newestAt === "2026-01-04T00:00:00.000Z"
+    && group("Marketing")?.count === 1 && group("Marketing")?.newestAt === "2026-01-02T00:00:00.000Z");
+  check("rows with no source are one group of their own, never another source's", group(null)?.count === 2 && group(null)?.newestAt === undefined);
+  check("the page walk's own stamp", f.index?.exportedAt === "2026-01-03T00:00:00.000Z");
+  check("the newest screen", f.newestScreen?.row.id === "1:2" && f.newestScreen.exportedAt === "2026-01-04T00:00:00.000Z");
+  check(`every unusable file is a problem (got ${JSON.stringify(f.problems)})`, f.problems.length === 1 && f.problems[0]?.file === "pages/C/index.json");
+  const snap = snapshotInfoOf(f);
+  check("snapshot-meta reads the same answer: the design system's stamp first", !!snap && "exportedAt" in snap && snap.exportedAt === "2026-01-01T00:00:00.000Z" && snap.sourceFile === "Kit");
+  const onlyBroken = tmp("fresh-broken");
+  put(path.join(onlyBroken, "design-system.json"), "{ not json");
+  const broken = snapshotInfoOf(readExportFreshness(onlyBroken));
+  check(`nothing usable but a broken manifest: the problem, not "nothing exported" (got ${JSON.stringify(broken)})`,
+    !!broken && "error" in broken && /design-system\.json is not valid JSON/.test(broken.error) && broken.file === path.join(onlyBroken, "design-system.json"));
+}
+
 console.log("doctor counts each screen once (a screen re-filed under a renamed page's dir)");
 {
   // Two single-screen pulls of one frame, the page renamed in Figma between them: the second files the screen under
@@ -351,6 +429,7 @@ console.log("doctor counts each screen once (a screen re-filed under a renamed p
   put(path.join(root, "pages", "New", "Tray__10_1.json"), { exportedAt: at, nodes: [] });
   put(path.join(root, "pages", "Old", "Tray__10_1.json"), { exportedAt: at, nodes: [] });
   check("fixture: the reader holds one row for the frame", readExportIndex(root).rows.length === 1);
+  check("freshness: one screen from one source", (() => { const g = readExportFreshness(root).screens; return g.length === 1 && g[0]?.sourceFile === "Product" && g[0].count === 1; })());
   const exp = checkProject(project).filter((c) => c.id === "export");
   check(`doctor: 1 screen, not 2 (got ${JSON.stringify(exp.map((c) => c.detail))})`, exp.length === 1 && /^1 screen\(s\) from 'Product'/.test(exp[0]?.detail ?? ""));
 }

@@ -1,6 +1,6 @@
 // export-reader.ts — the READING side of an export: the one module every reader of the export layout asks, beside the
 // modules that WRITE it (pages-layout.ts the pages/ tree, design-system-layout.ts the design-system split, both written
-// by write-out.ts). It owns four things, and no reader re-derives any of them:
+// by write-out.ts). It owns six things, and no reader re-derives any of them:
 //
 //   1) WHICH export: exportRoot(dir) — the dir given, else FIGMA_EXPORT_DIR, else this project's export (project-layout
 //      findExportDir: design/export, or design/ on the older flat layout). write-out.ts writes where this reads. A
@@ -30,6 +30,12 @@
 //      those a split part carries (design-system-layout.ts stamps every part).
 //   4) A MANIFEST POINTER: designSystemPart(root, part) — the file design-system.json's `files.<part>` names, inside the
 //      export only, or one sentence saying why there is none.
+//   5) THE COMPONENT CATALOG: readComponentCatalog(root) — its rows and where they came from: the `files.componentsLocal`
+//      pointer (the split layout), else design-system.json's own inline `components` (an export from before the split);
+//      or why there is none.
+//   6) FRESHNESS, PER SOURCE: readExportFreshness(root) — the design system's stamp (3), the page walk's, every screen (2)
+//      grouped by the Figma file it came from, and the newest screen. doctor's export summary and figma_status's
+//      snapshot / lastScreenExport (snapshot-meta.ts) are each one reading of it.
 //
 // Nothing here throws: a missing or unreadable file adds nothing, and a reader that reports it gets the reason.
 import fs from "node:fs";
@@ -145,6 +151,8 @@ export interface ExportIndex {
   readonly problems: readonly ExportProblem[];
   /** every indexed screen once: the root index's rows, then the page indexes' (see the top of the file) */
   readonly rows: readonly IndexRow[];
+  /** pages/index.json's own `exportedAt` (a page walk stamps its root index once); undefined when absent */
+  readonly rootExportedAt: string | undefined;
   /** some index lists the node */
   isExported(id: string): boolean;
   /** the row's screen file (absolute), when its `file` lies inside the export root; else null */
@@ -240,6 +248,7 @@ export function readExportIndex(exportRoot: string): ExportIndex {
     rootProblem: rootProblem && rootProblem.error,
     problems,
     rows,
+    rootExportedAt: rootStamp,
     isExported: (id) => byId.has(id),
     fileOf: (row) => inside(root, row.file),
     exportedAtOf: (row) => (typeof row.exportedAt === "string" && row.exportedAt) || (fromRoot.has(row) ? rootStamp : undefined),
@@ -272,27 +281,28 @@ const stampOf = (doc: DesignSystemStamp): DesignSystemStamp => {
   return s;
 };
 
-/** The design system's stamp — design-system.json's, else that of design-system/tokens.json (every split part carries
- *  it) — null when neither is there and usable; `problems` names each that is there but unusable. */
-export function readDesignSystemStamp(root: string): { stamp: DesignSystemStamp | null; problems: ExportProblem[] } {
+/** The design system's stamp and the file it was read from — design-system.json's, else that of
+ *  design-system/tokens.json (every split part carries it); of the two, the first that carries `exportedAt`, else the
+ *  first usable. null when neither is there and usable; `problems` names each that is there but unusable. */
+export function readDesignSystemStamp(root: string): { stamp: DesignSystemStamp | null; from: string | null; problems: ExportProblem[] } {
   const problems: ExportProblem[] = [];
   const manifestFile = designSystemManifestFile(root);
   const manifest = readDesignSystemManifest(root);
-  if ("doc" in manifest) return { stamp: stampOf(manifest.doc), problems };
+  if ("doc" in manifest && manifest.doc.exportedAt) return { stamp: stampOf(manifest.doc), from: manifestFile, problems };
   const mp = problemOf(root, manifestFile, manifest);
   if (mp) problems.push(mp);
   const tokensFile = path.join(root, DESIGN_SYSTEM_DIR, DESIGN_SYSTEM_FILES.TOKENS);
   const tokens = readJson(tokensFile, isStampedPart);
   const tp = problemOf(root, tokensFile, tokens);
   if (tp) problems.push(tp);
-  return { stamp: "doc" in tokens ? stampOf(tokens.doc) : null, problems };
+  if ("doc" in tokens && tokens.doc.exportedAt) return { stamp: stampOf(tokens.doc), from: tokensFile, problems };
+  if ("doc" in manifest) return { stamp: stampOf(manifest.doc), from: manifestFile, problems };
+  return "doc" in tokens ? { stamp: stampOf(tokens.doc), from: tokensFile, problems } : { stamp: null, from: null, problems };
 }
 
-/** The file design-system.json's `files.<part>` pointer names (absolute), inside the export only — else why there is
- *  none, as one sentence naming the manifest. A reader that cannot go on without the part says it; one that can, may. */
-export function designSystemPart(root: string, part: DesignSystemPart): { file: string } | { error: string } {
+// A pointer of a manifest already read: the file, inside the export only, or why there is none.
+function partOf(root: string, manifest: ReadResult<DesignSystemManifestView>, part: DesignSystemPart): { file: string } | { error: string } {
   const file = designSystemManifestFile(root);
-  const manifest = readDesignSystemManifest(root);
   if ("error" in manifest) {
     return { error: manifest.missing
       ? `no design export found at ${file} — run an export first (a --design-system or full pull)`
@@ -302,4 +312,88 @@ export function designSystemPart(root: string, part: DesignSystemPart): { file: 
   if (typeof rel !== "string" || !rel) return { error: `${file} has no files.${part} pointer — re-export with a current dtwin` };
   const target = inside(root, rel);
   return target === null ? { error: `${file} files.${part} ('${rel}') leads outside the export — re-export with a current dtwin` } : { file: target };
+}
+
+/** The file design-system.json's `files.<part>` pointer names (absolute), inside the export only — else why there is
+ *  none, as one sentence naming the manifest. A reader that cannot go on without the part says it; one that can, may. */
+export function designSystemPart(root: string, part: DesignSystemPart): { file: string } | { error: string } {
+  return partOf(root, readDesignSystemManifest(root), part);
+}
+
+// ---------------------------------------------------------------- the component catalog
+/** The export's component catalog: its rows and the file they were read from — `pointer`: the file design-system.json's
+ *  `files.componentsLocal` names (the split layout); `inline`: design-system.json itself, whose own `components` array an
+ *  export from before the split carries — or why there is none (`missing`: no design-system.json at all, i.e. nothing
+ *  exported yet, which a reader that can go on without the catalog may pass over). Rows are as on disk: each reader
+ *  checks the fields it reads. */
+export type ComponentCatalog =
+  | { readonly file: string; readonly source: "pointer" | "inline"; readonly components: readonly unknown[] }
+  | { readonly error: string; readonly missing: boolean };
+const isCatalogDoc: DocGuard<{ components: unknown[] }> = /* @__PURE__ */ Object.assign(
+  (x: unknown): x is { components: unknown[] } => isRecord(x) && Array.isArray(x.components),
+  { expected: "a component catalog: an object with a `components` array" });
+
+/** The component catalog of the export at `root`: the `files.componentsLocal` pointer when the manifest has one, else
+ *  the manifest's inline `components` (a pre-split export). Never throws. */
+export function readComponentCatalog(root: string): ComponentCatalog {
+  const manifest = readDesignSystemManifest(root);
+  if ("doc" in manifest && manifest.doc.files?.componentsLocal === undefined && Array.isArray(manifest.doc.components)) {
+    return { file: designSystemManifestFile(root), source: "inline", components: manifest.doc.components };
+  }
+  const part = partOf(root, manifest, "componentsLocal");
+  if ("error" in part) return { error: part.error, missing: "error" in manifest && manifest.missing === true };
+  const catalog = readJson(part.file, isCatalogDoc);
+  return "doc" in catalog
+    ? { file: part.file, source: "pointer", components: catalog.doc.components }
+    : { error: `${part.file} ${catalog.error}`, missing: false };
+}
+
+// ---------------------------------------------------------------- freshness, per source
+/** The screens one Figma file contributed: rows sharing a `sourceFile` (null: rows pulled before rows were stamped). */
+export interface ScreenSource {
+  readonly sourceFile: string | null;
+  readonly count: number;
+  /** the newest parseable stamp among them (exportedAtOf); undefined when none has one */
+  readonly newestAt: string | undefined;
+}
+/** How fresh the export at `root` is, per source, read once: the design system's stamp, the page walk's, every screen
+ *  grouped by the Figma file it came from, and the newest screen. */
+export interface ExportFreshness {
+  readonly root: string;
+  /** readDesignSystemStamp's answer, when there is one: the stamp and the file (absolute) it was read from */
+  readonly designSystem: { readonly stamp: DesignSystemStamp; readonly from: string } | null;
+  /** pages/index.json's own stamp, when it was read */
+  readonly index: { readonly from: string; readonly exportedAt: string | undefined } | null;
+  /** every indexed screen (readExportIndex), grouped by source in first-seen order */
+  readonly screens: readonly ScreenSource[];
+  /** the row with the newest parseable stamp (a tie goes to the later row: merges append the newest pull) */
+  readonly newestScreen: { readonly row: IndexRow; readonly exportedAt: string; readonly t: number } | null;
+  /** every index, manifest or part that is there but unusable */
+  readonly problems: readonly ExportProblem[];
+}
+
+/** The export at `root`'s freshness, per source. Never throws. */
+export function readExportFreshness(root: string): ExportFreshness {
+  const ix = readExportIndex(root);
+  const ds = readDesignSystemStamp(root);
+  const groups = new Map<string | null, { count: number; newestAt: string | undefined; t: number }>();
+  let newestScreen: ExportFreshness["newestScreen"] = null;
+  for (const row of ix.rows) {
+    const at = ix.exportedAtOf(row);
+    const t = at ? Date.parse(at) : NaN;
+    const key = typeof row.sourceFile === "string" && row.sourceFile ? row.sourceFile : null;
+    let g = groups.get(key);
+    if (!g) { g = { count: 0, newestAt: undefined, t: -Infinity }; groups.set(key, g); }
+    g.count++;
+    if (at && !Number.isNaN(t) && t > g.t) { g.newestAt = at; g.t = t; }
+    if (row.id && at && !Number.isNaN(t) && (!newestScreen || t >= newestScreen.t)) newestScreen = { row, exportedAt: at, t };
+  }
+  return {
+    root,
+    designSystem: ds.stamp && ds.from ? { stamp: ds.stamp, from: ds.from } : null,
+    index: ix.indexed ? { from: rootIndexFile(root), exportedAt: ix.rootExportedAt } : null,
+    screens: [...groups].map(([sourceFile, g]) => ({ sourceFile, count: g.count, newestAt: g.newestAt })),
+    newestScreen,
+    problems: [...ix.problems, ...ds.problems],
+  };
 }
