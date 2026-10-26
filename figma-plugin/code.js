@@ -774,6 +774,16 @@
   }
 
   // ../bridge/src/commands.ts
+  var WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText"];
+  var WRITE_OPS = {
+    createFrame: { effect: "creates", required: [], shows: {} },
+    createText: { effect: "creates", required: ["text"], shows: { newText: "text" } },
+    setFill: { effect: "overwrites", required: ["nodeId", "color"], shows: { newFill: "color" } },
+    setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } }
+  };
+  function missingWriteFields(op, fields) {
+    return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
+  }
   var COMMAND_TRAITS = {
     ping: { run: "identity", export: false },
     whoami: { run: "identity", export: false },
@@ -813,21 +823,24 @@
   var nodeArgs = (a) => a.nodeId === void 0 || a.nodeId === null ? NO_NODE_ID : isStr(a.nodeId) ? null : "`nodeId` is not a string";
   var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
   var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
-  var WRITE_OP_SET = { createFrame: true, createText: true, setFill: true, setText: true };
-  var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OP_SET, v);
+  var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
   var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum);
   var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color"];
   var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
   function writeOpError(o, i) {
     const at = `ops[${i}]`;
     if (!isRecord(o)) return `\`${at}\` is not an object`;
-    if (!isWriteOpName(o.op)) return `\`${at}.op\` is not one of ${Object.keys(WRITE_OP_SET).join(" | ")}`;
-    return first([
+    const op = o.op;
+    if (!isWriteOpName(op)) return `\`${at}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
+    const typeErr = first([
       ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
       ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
       opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
       opt(o, "padding", isPadding, "four numbers", `${at}.padding`)
     ]);
+    if (typeErr !== null) return typeErr;
+    const missing = missingWriteFields(op, o);
+    return missing.length ? `\`${at}\` (${op}): missing ${missing.join(", ")}` : null;
   }
   var writeArgs = (a) => {
     if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
@@ -3879,6 +3892,10 @@
         ...ifDefined("failedOp", first2 && first2.op),
         error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
       };
+    }
+    for (const [i, op] of list.entries()) {
+      const bad = writeOpError(op, i);
+      if (bad !== null) return { ok: false, applied, failedAt: i, ...ifDefined("failedOp", op && op.op), error: bad };
     }
     for (const [i, op] of list.entries()) {
       try {

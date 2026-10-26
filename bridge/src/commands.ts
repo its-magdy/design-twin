@@ -67,8 +67,9 @@ export interface ScreenshotArgs extends NodeArgs {
   scale?: number;
 }
 
-/** The four write ops figma-plugin/src/writes.ts implements. */
-export type WriteOpName = "createFrame" | "createText" | "setFill" | "setText";
+/** The four write ops figma-plugin/src/writes.ts implements (figma_write's Zod enum reads this list). */
+export const WRITE_OP_NAMES = ["createFrame", "createText", "setFill", "setText"] as const;
+export type WriteOpName = (typeof WRITE_OP_NAMES)[number];
 /** One write op (writes.ts applyWrite imports it): only the fields each op actually reads. Every optional
  *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
  *  `.optional()` field as `T | undefined`; the plugin reads an undefined field exactly as an absent one. */
@@ -89,6 +90,61 @@ export interface WriteOp {
 }
 export interface WriteArgs {
   ops: WriteOp[];
+}
+
+/** A WriteOp field that holds a string. */
+type WriteStrField = "parentId" | "name" | "fill" | "text" | "nodeId" | "color";
+/** What each write op IS, in one row — read by figma_write's dry run (writeOpPreview), the wire check
+ *  (writeOpError — the gate a `write` command passes in the plugin's handleBridge, via parseCommandRequest, before
+ *  writes.ts applyWrites runs; applyWrites repeats it for its direct callers). So a batch the preview calls invalid
+ *  is one the plugin refuses before it touches the file, never one it half-applies. */
+interface WriteOpRow {
+  /** creates = additive (a new node); overwrites = replaces a property on a node the user already has (the
+   *  irreversible half). */
+  effect: "creates" | "overwrites";
+  /** The fields the op cannot run without. */
+  required: readonly WriteStrField[];
+  /** The new value the preview shows, by preview key, and the op field it is read from. */
+  shows: { newFill?: WriteStrField; newText?: WriteStrField };
+}
+// A Record keyed by the union, like COMMAND_SET: an op added to WRITE_OP_NAMES without a row fails to compile.
+export const WRITE_OPS: { readonly [K in WriteOpName]: WriteOpRow } = {
+  createFrame: { effect: "creates", required: [], shows: {} },
+  createText: { effect: "creates", required: ["text"], shows: { newText: "text" } },
+  setFill: { effect: "overwrites", required: ["nodeId", "color"], shows: { newFill: "color" } },
+  setText: { effect: "overwrites", required: ["nodeId", "text"], shows: { newText: "text" } },
+};
+
+/** The fields op `op` requires that `fields` lacks (an undefined field is absent: see WriteOp). */
+export function missingWriteFields(op: WriteOpName, fields: Partial<Record<WriteStrField, unknown>>): WriteStrField[] {
+  return WRITE_OPS[op].required.filter((k) => fields[k] === undefined);
+}
+
+/** One step of figma_write's dry run: what op `index` would do, without doing it. */
+export interface WritePreviewStep {
+  index: number;
+  op: WriteOpName;
+  effect: "creates" | "overwrites";
+  /** the node an overwrite changes (null when the op names none); where a create lands */
+  target: string | null;
+  newFill?: string | undefined;
+  newText?: string | undefined;
+  /** "missing <fields>" — the plugin refuses the batch up front for the same reason */
+  invalid?: string;
+}
+export function writeOpPreview(o: WriteOp, index: number): WritePreviewStep {
+  const row = WRITE_OPS[o.op];
+  const creates = row.effect === "creates";
+  const missing = missingWriteFields(o.op, o);
+  return {
+    index,
+    op: o.op,
+    effect: row.effect,
+    target: creates ? (o.parentId ? `new node under ${o.parentId}` : "new node on the current page") : o.nodeId || null,
+    ...(row.shows.newFill ? { newFill: o[row.shows.newFill] } : {}),
+    ...(row.shows.newText ? { newText: o[row.shows.newText] } : {}),
+    ...(missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- replies
@@ -408,23 +464,27 @@ const nodeArgs: ArgsCheck = (a) =>
 const designSystemArgs: ArgsCheck = (a) => opt(a, "variantVisuals", isBool, "a boolean");
 const isPageSel = (v: unknown): boolean => isStr(v) || (Array.isArray(v) && v.every(isStr));
 
-// A Record keyed by the union, like COMMAND_SET: an op added to WriteOpName without a row fails to compile.
-const WRITE_OP_SET: Record<WriteOpName, true> = { createFrame: true, createText: true, setFill: true, setText: true };
-const isWriteOpName = (v: unknown): boolean => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OP_SET, v);
+const isWriteOpName = (v: unknown): v is WriteOpName => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OPS, v);
 const isPadding = (v: unknown): boolean => Array.isArray(v) && v.length === 4 && v.every(isNum);
-const WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color"];
+const WRITE_STR_FIELDS: readonly WriteStrField[] = ["parentId", "name", "fill", "text", "nodeId", "color"];
 const WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
-/** Op `i` of a write batch against WriteOp: `op` names one of the four ops, every other declared field has its type. */
-function writeOpError(o: unknown, i: number): string | null {
+/** Op `i` of a write batch against WriteOp: `op` names one of the four ops, every other declared field has its
+ *  type, and the op's row in WRITE_OPS has every field it requires. The wire check (argsShapeError, which the
+ *  plugin's handleBridge applies to every `write` before it runs) is this, and writes.ts applyWrites repeats it. */
+export function writeOpError(o: unknown, i: number): string | null {
   const at = `ops[${i}]`;
   if (!isRecord(o)) return `\`${at}\` is not an object`;
-  if (!isWriteOpName(o.op)) return `\`${at}.op\` is not one of ${Object.keys(WRITE_OP_SET).join(" | ")}`;
-  return first([
+  const op = o.op;
+  if (!isWriteOpName(op)) return `\`${at}.op\` is not one of ${WRITE_OP_NAMES.join(" | ")}`;
+  const typeErr = first([
     ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
     ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
     opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
     opt(o, "padding", isPadding, "four numbers", `${at}.padding`),
   ]);
+  if (typeErr !== null) return typeErr;
+  const missing = missingWriteFields(op, o);
+  return missing.length ? `\`${at}\` (${op}): missing ${missing.join(", ")}` : null;
 }
 const writeArgs: ArgsCheck = (a) => {
   if (!Array.isArray(a.ops)) return a.ops === undefined ? "`ops` is missing" : "`ops` is not an array";

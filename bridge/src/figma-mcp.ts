@@ -36,7 +36,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
-import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
+import { WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -748,7 +748,7 @@ const hexColor = z.string().regex(HEX_COLOR_RE, `must be ${HEX_COLOR_HINT}`);
 // published JSON schema keeps a single `pattern`. setFill's `color` stays strict: it has no "none".
 const hexColorOrEmpty = z.string().regex(new RegExp(`^(?:${HEX_COLOR_RE.source.slice(1, -1)}|)$`), `must be ${HEX_COLOR_HINT}, or "" for no fill`);
 const writeOpShape = z.object({
-  op: z.enum(["createFrame", "createText", "setFill", "setText"]),
+  op: z.enum(WRITE_OP_NAMES),
   parentId: z.string().optional(),
   name: z.string().optional(),
   width: z.number().optional(),
@@ -763,23 +763,9 @@ const writeOpShape = z.object({
   color: hexColor.optional(),
 }).passthrough();
 
+// Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
 function previewWrites(ops: WriteOp[]) {
-  const steps = ops.map((o, i) => {
-    const creates = o.op === "createFrame" || o.op === "createText";
-    const missing = o.op === "createText" ? (o.text == null ? ["text"] : [])
-      : o.op === "setFill" ? [o.nodeId == null ? "nodeId" : "", o.color == null ? "color" : ""].filter(Boolean)
-      : o.op === "setText" ? [o.nodeId == null ? "nodeId" : "", o.text == null ? "text" : ""].filter(Boolean)
-      : [];
-    return {
-      index: i,
-      op: o.op,
-      effect: creates ? "creates" : "overwrites",
-      target: creates ? (o.parentId ? `new node under ${o.parentId}` : "new node on the current page") : o.nodeId || null,
-      ...(o.op === "setFill" ? { newFill: o.color } : {}),
-      ...(o.op === "setText" || o.op === "createText" ? { newText: o.text } : {}),
-      ...(missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}),
-    };
-  });
+  const steps = ops.map(writeOpPreview);
   return {
     dryRun: true,
     applied: false,

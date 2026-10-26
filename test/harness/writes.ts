@@ -1,4 +1,5 @@
 // The WRITE plane (writes.ts) and parentId.
+import { argsShapeError, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
 import type { FakeNode } from "../fake-figma.ts";
@@ -63,7 +64,7 @@ export const cases: Case[] = [{
     const wBadFill = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#gg0000" }]);
     ok("write: setFill with non-hex digits fails and leaves the fills alone", wBadFill.ok === false && /not a valid colour/.test(must(wBadFill.error, "wBadFill.error")) && rectTarget.fills === rectFillBefore);
     const wNoColor = await api.applyWrites([{ op: "setFill", nodeId: "r:1" }]);
-    ok("write: setFill without a color fails rather than painting black", wNoColor.ok === false && /not a valid colour/.test(must(wNoColor.error, "wNoColor.error")) && rectTarget.fills === rectFillBefore);
+    ok("write: setFill without a color fails rather than painting black", wNoColor.ok === false && /missing color/.test(must(wNoColor.error, "wNoColor.error")) && rectTarget.fills === rectFillBefore);
     const wBare = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "ff0000" }]);
     ok("write: a colour without the # fails", wBare.ok === false);
     const wAlpha = await api.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#0000ff80" }]);
@@ -91,8 +92,50 @@ export const cases: Case[] = [{
     ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
     ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
     ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-    ok("write: unknown op is rejected", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error").indexOf("unknown write op") !== -1);
+    ok("write: unknown op is rejected, naming the four", must((await api.applyWrites([{ op: "nope" }])).error, "write nope error") === "`ops[0].op` is not one of createFrame | createText | setFill | setText");
     ok("write: empty/omitted batch is a no-op success", (await api.applyWrites(undefined)).ok === true);
+
+    // A dry run refuses a createText with no `text` ("missing text"), so applying it must refuse it too — not
+    // create an empty text node the preview said would never be made.
+    const beforeNoText = created.length;
+    const wNoText = await api.applyWrites([{ op: "createFrame", name: "first" }, { op: "createText" }]);
+    ok("write: createText without text is refused up front, before any op lands",
+      wNoText.ok === false && wNoText.failedAt === 1 && wNoText.failedOp === "createText" && /missing text/.test(must(wNoText.error, "wNoText.error"))
+      && wNoText.applied.length === 0 && created.length === beforeNoText);
+  },
+}, {
+  name: "one write-op table: the dry run's invalid == the plugin's refusal == the wire's",
+  async run() {
+    // Every op, complete and then short of each field it sets, through all three readers of commands.ts WRITE_OPS:
+    // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
+    // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
+    const { textTarget, rectTarget, groupTarget } = targetsOf();
+    const { api, created } = writableWorld({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
+    const complete: { [K in WriteOpName]: WriteOp } = {
+      createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
+      createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
+      setFill: { op: "setFill", nodeId: "r:1", color: "#00f" },
+      setText: { op: "setText", nodeId: "t:1", text: "x" },
+    };
+    for (const name of WRITE_OP_NAMES) {
+      const full = complete[name];
+      const fields = Object.keys(full).filter((k) => k !== "op");
+      const variants: WriteOp[] = [full, { op: name }, ...fields.map((k) => Object.fromEntries(Object.entries(full).filter(([f]) => f !== k)) as WriteOp)];
+      let refusedSome = false;
+      for (const v of variants) {
+        const step = writeOpPreview(v, 0);
+        const before = created.length;
+        const applied = await api.applyWrites([{ ...v }]); // spread: the VM api takes the loose fake-figma op shape
+        const wire = argsShapeError("write", { ops: [v] });
+        const previewValid = step.invalid === undefined;
+        refusedSome ||= !previewValid;
+        ok(`[WRITE-OPS] ${JSON.stringify(v)}: preview ${previewValid ? "valid" : step.invalid} == plugin ${applied.ok ? "applied" : applied.error} == wire ${wire ?? "ok"}`,
+          previewValid === applied.ok && previewValid === (wire === null)
+          && (previewValid || (applied.applied.length === 0 && created.length === before && /missing/.test(applied.error ?? ""))));
+        ok(`[WRITE-OPS] ${name}: the preview's effect is its row's`, step.effect === WRITE_OPS[name].effect);
+      }
+      ok(`[WRITE-OPS] ${name}: some variant is refused exactly when the row requires a field`, refusedSome === WRITE_OPS[name].required.length > 0);
+    }
   },
 }, {
   name: "parentId (a silent reparent must not slip through)",
