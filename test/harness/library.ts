@@ -320,7 +320,7 @@ export const cases: Case[] = [{
     ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NIMA");
     ok("[LIB-FILE] records fileKey as the durable directory identity", src.fileKey === "FILEKEY1234567");
     ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(src.collectionKeys));
-    // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
+    // exportedAt/file must stay top-level and unchanged — export-verdict.ts and drift-lint read them.
     ok("[LIB-FILE] keeps the freshness stamp intact", typeof d.exportedAt === "string" && d.file === "My File");
 
     // Publish status: gated to library mode because Figma answers UNPUBLISHED for everything when

@@ -85,7 +85,7 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
   const join = (name: string): string => dir + s + name;
 
   // The stamp every split file carries, plus `source`. `exportedAt`/`file` stay top-level and
-  // unmodified so snapshot-meta.ts and design-to-code/drift-lint.ts keep reading them off whichever file they
+  // unmodified so export-verdict.ts and design-to-code/drift-lint.ts keep reading them off whichever file they
   // are handed; `source` is additive and tells a consumer this is a library catalog, not a design
   // file's — a distinction that is otherwise invisible, because inside the library file every object
   // is local and `remote` is therefore false on all of them.
@@ -181,7 +181,7 @@ export function mergeLibrariesIndex(prev: unknown, built: LibraryLayout): Librar
   else rows.push(row);
   rows.sort((a, b) => String(dirOf(a)).localeCompare(String(dirOf(b))));
   // No top-level `file`/`exportedAt` stamp here on purpose: this index spans SEVERAL Figma files, and
-  // `file` is contractually "which one file did this come from" (snapshot-meta.ts reads it as
+  // `file` is contractually "which one file did this come from" (export-verdict.ts reads it as
   // sourceFile). Each row carries its own stamp instead, so per-library staleness stays visible.
   return { libraries: rows, generatedAt: new Date().toISOString() };
 }

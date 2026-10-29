@@ -35,7 +35,6 @@ import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
 import { writePages } from "../bridge/src/write-out.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "../bridge/src/staleness.ts";
-import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { ClientRow, HelloFrame, ProgressTick, ReplyFrame } from "../bridge/src/server-core.ts";
 import { COMMANDS } from "../bridge/src/commands.ts";
 import type { Cmd, Commands, FullExportReply, PingReply } from "../bridge/src/commands.ts";
@@ -43,6 +42,8 @@ import type { Sent } from "../bridge/src/route.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonBridge } from "../bridge/src/daemon.ts";
 import type { Check, Report } from "../bridge/src/doctor.ts";
+import { exportRoot } from "../bridge/src/export-reader.ts";
+import { readExportVerdict } from "../bridge/src/export-verdict.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 import type { Clock } from "../bridge/src/clock.ts";
 import { fakeClock } from "./fake-clock.ts";
@@ -1703,12 +1704,8 @@ void (async () => {
   // ---------------------------------------------------------------- staleness stamp: write-through + figma_status
   // design-system.json's `exportedAt`/`file` are stamped by the PLUGIN (collect.ts/components.ts), not
   // by figma-pull — this only proves the CLI's write path is faithful (never strips or re-derives the
-  // stamp) and that snapshot-meta.js (the shared reader figma_status uses) reads it back correctly.
+  // stamp); what figma_status and doctor make of it is test/export-verdict.test.ts's.
   console.log("\nfigma-pull / figma-mcp — snapshot freshness stamp:");
-  const snapshotMeta = await import("../bridge/src/snapshot-meta.ts");
-  // readSnapshotInfo returns SnapshotInfo | SnapshotParseError | null; the assertions below probe fields
-  // of either arm (a missing one reads as undefined), so read it through that view.
-  const readSnapshotInfo = (dir?: string): Partial<SnapshotInfo & SnapshotParseError> | null => snapshotMeta.readSnapshotInfo(dir);
   const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-stamp-"));
   const stampedAt = new Date(Date.now() - 5 * 3600000).toISOString(); // 5h old
   pull.writeJson(stampDir, "design-system.json", { exportedAt: stampedAt, file: "My Design File", components: [] }, true);
@@ -1716,92 +1713,25 @@ void (async () => {
   ok("[stamp] figma-pull writes design-system.json's exportedAt through unchanged", stamped.exportedAt === stampedAt);
   ok("[stamp] and the file name too", stamped.file === "My Design File");
 
-  const info = readSnapshotInfo(stampDir);
-  ok("[status] readSnapshotInfo finds the export and reports its exportedAt", !!(info && info.exportedAt === stampedAt));
-  ok("[status] and the source file name, under sourceFile (distinct from its OWN `file` = the json path)",!!(
-    info && info.sourceFile === "My Design File" && info.file === path.join(stampDir, "design-system.json")));
-  ok("[status] and computes a plausible age (~5h, generously bounded)",!!(
-    info && (info.ageMs ?? NaN) > 4.9 * 3600000 && (info.ageMs ?? NaN) < 5.1 * 3600000));
-
-  ok("[status] missing export dir -> null, not a throw (not-yet-exported is not an error)",
-    readSnapshotInfo(path.join(stampDir, "does-not-exist")) === null);
-
-  const noStampDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-nostamp-"));
-  pull.writeJson(noStampDir, "design-system.json", { components: [] }, true); // no exportedAt at all
-  const noStampInfo = readSnapshotInfo(noStampDir);
-  ok("[status] a snapshot with no exportedAt reports a warning instead of pretending it's fresh",!!(
-    noStampInfo && noStampInfo.exportedAt === undefined && typeof noStampInfo.warning === "string"));
-
-  const badJsonDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-badjson-"));
-  fs.mkdirSync(badJsonDir, { recursive: true });
-  fs.writeFileSync(path.join(badJsonDir, "design-system.json"), "{ not valid json");
-  const badInfo = readSnapshotInfo(badJsonDir);
-  ok("[status] unparseable design-system.json reports an error, not a crash", !!(badInfo && typeof badInfo.error === "string"));
-
-  // A single-screen pull writes design/<Screen>.json and NOTHING else that is stamped —
-  // no design-system.json, no pages/index.json. Reading only the first meant doctor told someone who
-  // had just exported a screen that nothing had been exported yet.
-  (() => {
-    const scrDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-screen-"));
-    const at = new Date(Date.now() - 2 * 3600000).toISOString();
-    fs.writeFileSync(path.join(scrDir, "Skills_list.json"), JSON.stringify({ exportedAt: at, screen: "Skills list", nodes: [{ id: "1:2" }], manifest: {} }));
-    const i = readSnapshotInfo(scrDir);
-    ok("[status] a single-screen export IS an export — its stamp is found with no design-system.json",!!(
-      i && i.exportedAt === at && (i.ageMs ?? NaN) > 1.9 * 3600000));
-    ok("[status] and a screen doc's `screen` stands in for the source-file name",!!(
-      i && i.sourceFile === "Skills list"));
-    // design/ also holds files this tool GENERATES. None of them may be mistaken for the export.
-    fs.writeFileSync(path.join(scrDir, "target.json"), JSON.stringify({ profile: "web-tailwind" }));
-    fs.writeFileSync(path.join(scrDir, "tokens.dtcg.json"), JSON.stringify({ color: { bg: { $value: "#fff" } } }));
-    fs.writeFileSync(path.join(scrDir, "tokens.resolver.json"), JSON.stringify({ name: "r", sets: [] }));
-    ok("[status] generated files (target/tokens.*) are not mistaken for the export",!!(
-      readSnapshotInfo(scrDir)?.file?.endsWith("Skills_list.json")));
-    // variables.json IS export-shaped (variables[]) but carries no stamp of its own; a stamped doc
-    // sitting next to it must win, or the report reads "freshness unknown" for a fresh export.
-    fs.writeFileSync(path.join(scrDir, "variables.json"), JSON.stringify({ variables: [{ name: "x" }] }));
-    const withVars = readSnapshotInfo(scrDir);
-    ok("[status] an unstamped variables.json never outranks the stamped screen doc beside it",
-      withVars?.exportedAt === at && withVars.warning === undefined);
-    // …but when it is genuinely the only export-shaped file, it is still reported (with the warning)
-    // rather than the caller being told nothing was exported at all.
-    const onlyVars = fs.mkdtempSync(path.join(os.tmpdir(), "figma-onlyvars-"));
-    fs.writeFileSync(path.join(onlyVars, "variables.json"), JSON.stringify({ variables: [] }));
-    const ov = readSnapshotInfo(onlyVars);
-    ok("[status] an unstamped export is reported WITH its warning, not as 'nothing exported'",!!(
-      ov && ov.exportedAt === undefined && /variables\.json/.test(ov.warning ?? "")));
-    // A page walk's index is the third shape.
-    const pagesDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-pages-"));
-    fs.mkdirSync(path.join(pagesDir, "pages"));
-    fs.writeFileSync(path.join(pagesDir, "pages", "index.json"), JSON.stringify({ exportedAt: at, pageDirs: [] }));
-    ok("[status] a page walk's pages/index.json is found too", readSnapshotInfo(pagesDir)?.exportedAt === at);
-    // And a directory with only generated output is still "nothing exported".
-    const genOnly = fs.mkdtempSync(path.join(os.tmpdir(), "figma-genonly-"));
-    fs.writeFileSync(path.join(genOnly, "target.json"), JSON.stringify({ profile: "web-tailwind" }));
-    ok("[status] a design/ holding only generated files still reports no export",
-      readSnapshotInfo(genOnly) === null);
-  })();
-
-  ok("[status] FIGMA_EXPORT_DIR env is honored when no outDir arg is given", (() => {
+  ok("[status] FIGMA_EXPORT_DIR names the export figma_status judges when no outDir is given", (() => {
     const prev = process.env.FIGMA_EXPORT_DIR;
     process.env.FIGMA_EXPORT_DIR = stampDir;
     try {
-      return readSnapshotInfo()?.exportedAt === stampedAt;
+      return readExportVerdict(exportRoot(), Date.now()).newest?.exportedAt === stampedAt;
     } finally {
       if (prev === undefined) delete process.env.FIGMA_EXPORT_DIR; else process.env.FIGMA_EXPORT_DIR = prev;
     }
   })());
 
   fs.rmSync(stampDir, { recursive: true, force: true });
-  fs.rmSync(noStampDir, { recursive: true, force: true });
-  fs.rmSync(badJsonDir, { recursive: true, force: true });
 
-  // figma-mcp.ts wires snapshot-meta's reading of the export's freshness (snapshotInfoOf) into figma_status's
-  // result unconditionally (both the connected and not-connected branches carry `snapshot`) — checked statically here
+  // figma-mcp.ts reports export-verdict's verdict (readExportVerdict → statusSnapshot) in figma_status's result
+  // unconditionally (both the connected and not-connected branches carry `snapshot`) — checked statically here
   // rather than by importing figma-mcp.ts, whose top-level createBridge()/main() open a real WS server + stdio
   // transport and would hang the test process.
   const mcpSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts"), "utf8");
-  ok("[status] figma-mcp.ts wires snapshot-meta's snapshotInfoOf into figma_status",
-    /snapshot-meta\.ts/.test(mcpSrc) && /snapshotInfoOf\(/.test(mcpSrc));
+  ok("[status] figma-mcp.ts reports export-verdict's verdict in figma_status",
+    /export-verdict\.ts/.test(mcpSrc) && /statusSnapshot\(readExportVerdict|statusSnapshot\(verdict\)/.test(mcpSrc));
   ok("[status] figma_status reports `snapshot` on BOTH the connected and disconnected branches",
     (() => {
       const toolBody = mcpSrc.slice(mcpSrc.indexOf('"figma_status"'), mcpSrc.indexOf('"figma_get_selection"'));
@@ -1857,7 +1787,7 @@ void (async () => {
   // figma-pull.js resolves which connected Figma file a pull actually talked to and stamps the RESULT
   // as `r.sourceFile` (see resolveSourceFile()/stampSource() there); write-out.js's job is only to
   // persist it. Before this fix, a screen JSON carried no field naming its own source at all, so
-  // doctor.js could only ever report whichever file design-system.json or the snapshot-meta pick
+  // doctor.js could only ever report whichever file design-system.json or a single-file pick
   // happened to name — attributing every screen to the wrong Figma file when the design system lives
   // in a different one.
   {
@@ -2300,7 +2230,7 @@ void (async () => {
   // so an export lands in the project being built, not next to the bridge's own source.
   ok("[write-out] a relative outDir resolves against process.cwd()",
     OUT.resolveOutDir("design") === path.resolve(process.cwd(), "design"));
-  ok("[write-out] FIGMA_EXPORT_DIR is the fallback — the same var snapshot-meta.js reads",
+  ok("[write-out] FIGMA_EXPORT_DIR is the fallback — the same var export-verdict.ts (figma_status) reads",
     (() => {
       const prev = process.env.FIGMA_EXPORT_DIR;
       process.env.FIGMA_EXPORT_DIR = "custom-out";
@@ -3349,10 +3279,11 @@ void (async () => {
     ok("[doctor] no parallel tree, no layout warning", !doctor.checkProject(cleanDir).find((c) => c.id === "layout"));
   }
 
-  // Doctor's export line is one reading of export-reader.ts readExportFreshness (test/export-reader.test.ts checks
-  // the grouping per source, the unstamped group, the design system's stamp and every problem). Here only the wiring:
-  // screens per source, the unstamped ones and the design system each said, in one summary line that stays first,
-  // then one warn per unusable file — and the screens never attributed to the design system's file.
+  // Doctor's export line is export-verdict.ts's verdict, worded (test/export-verdict.test.ts checks the attribution,
+  // the unstamped group, the newest stamp, staleness and every problem). Here only the wiring:
+  // screens per source, the unstamped ones and the design system each said, in one summary line that stays first (a
+  // mixed export pointing at the cross-file check), then one warn per unusable file — and the screens never attributed
+  // to the design system's file.
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
     const exp = path.join(dir, "design", "export");
@@ -3370,6 +3301,7 @@ void (async () => {
       lines.length === 2 && lines[0]?.status === "ok"
       && /1 screen\(s\) from 'App File'/.test(lines[0].detail) && /1 screen\(s\) \(source not recorded/.test(lines[0].detail)
       && /design system from 'DS File'/.test(lines[0].detail) && !/screen\(s\) from 'DS File'/.test(lines[0].detail)
+      && /audit-design/.test(lines[0].next ?? "")
       && lines[1]?.status === "warn" && /pages\/PageB\/index\.json is not valid JSON/.test(lines[1].detail));
   }
   {
@@ -3383,16 +3315,19 @@ void (async () => {
       && m2.status === "warn" && /`mcpServers` must be an object of server entries, not a string/.test(m2.detail));
   }
 
-  // A "not checked" warn means a check that should have run, didn't — the roll-up must be
-  // false, not just when something outright failed.
+  // A skipped check means a check that should have run, didn't — the roll-up must be false, not just when something
+  // outright failed. Skipped is said on the check itself, never read back off its wording.
   {
-    const okChecks = [{ id: "a", status: "ok" }, { id: "b", status: "ok" }];
-    const notCheckedWarn = [{ id: "a", status: "ok" }, { id: "plugin", status: "warn", detail: "not checked — port 8787 is held by something else" }];
-    const ordinaryWarn = [{ id: "a", status: "ok" }, { id: "export", status: "warn", detail: "exported 3 days ago — the Figma file may have moved on" }];
-    const runOk = (checks: Array<{ status: string; detail?: string }>) => !checks.some((c) => c.status === "fail" || (c.status === "warn" && /not checked/i.test(c.detail || "")));
+    const okChecks = [{ status: "ok" as const }, { status: "ok" as const }];
+    const skipped = doctor.checkPlugin({ skipped: "port 8787 is held by something else" });
+    const ordinaryWarn = [{ status: "ok" as const }, { status: "warn" as const, detail: "exported 3 days ago — the Figma file may have moved on" }];
+    const saysNotChecked = [{ status: "warn" as const, detail: "not checked — in so many words, but a note" }];
+    const runOk = (checks: Array<Partial<Check> & Pick<Check, "status">>): boolean => doctor.reportOk(checks.map((c) => ({ id: "plugin", title: "t", detail: "", ...c })));
     ok("[doctor] ok roll-up: all-ok is true", runOk(okChecks) === true);
     ok("[doctor] ok roll-up: a plain warn (advice about project state) stays true", runOk(ordinaryWarn) === true);
-    ok("[doctor] ok roll-up: a 'not checked' warn makes it false, even with zero fails", runOk(notCheckedWarn) === false);
+    ok("[doctor] a plugin probe that could not run is a skipped warn", skipped.status === "warn" && skipped.skipped === true);
+    ok("[doctor] ok roll-up: a skipped check makes it false, even with zero fails", doctor.reportOk([{ id: "bun", title: "Bun", status: "ok", detail: "" }, skipped]) === false);
+    ok("[doctor] ok roll-up: the words 'not checked' alone flip nothing", runOk(saysNotChecked) === true);
   }
 
   console.log("\ndoctor — probes (real sockets, spare ports):");
@@ -3452,7 +3387,7 @@ void (async () => {
   ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
     byId(docReport.checks, "plugin").status === "warn" && byId(docReport.checks, "token").status === "warn");
   ok("[doctor-cli] ok is false while the plugin check is a 'not checked' warn, not just on an outright fail",
-    docReport.ok === false && /not checked/.test(byId(docReport.checks, "plugin").detail));
+    docReport.ok === false && byId(docReport.checks, "plugin").skipped === true && /not checked/.test(byId(docReport.checks, "plugin").detail));
   ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
   const docHuman = runDoctor([]);
   ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Bun:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));

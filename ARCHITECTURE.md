@@ -108,8 +108,10 @@ a reply only from the connection it went to, a closing connection failing its ow
 handlers feed events to (`bridge/src/pending-requests.ts`), on a substitutable clock (`bridge/src/clock.ts`). What a read SENDS is one
 pure step above the route (`bridge/src/read-plan.ts`): a scope (a node, the selection, pages, the design
 system, a library, a screenshot) and its read options become the command, its arguments and its time budget
-— or the options that scope does not take, as each `read-opts.ts` row declares — for both front-ends, and
-both write the reply through the one `writeAny`. How the MCP server hands a read BACK is another pure step
+— or the options that scope does not take, as each `read-opts.ts` row declares — for both front-ends. One
+module runs that plan (`bridge/src/read-run.ts`): through the route to the file named, its progress ticks relayed
+(`queued` said once), cancellable, its request and write timed, and its reply stamped with the file that answered
+before the writer — the one `writeAny`, for both front-ends — ever sees it. How the MCP server hands a read BACK is another pure step
 (`bridge/src/delivery.ts`): inline when it fits the client's limit, written when asked, written on its own
 (an implicit spill, keeping `<file>.prev` copies) when it does not fit, refused when `writeToDisk:false`
 forbids that — and the note, worded from the change report `writeAny` returns for a spill (the `.prev`

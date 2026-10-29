@@ -29,7 +29,8 @@ import { createRoute } from "./route.ts";
 import type { RouteRequest, Upstream } from "./route.ts";
 import { TIMEOUTS, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
-import { stampSource } from "./source-stamp.ts";
+import { runRead, tickMessage } from "./read-run.ts";
+import type { ReadRun } from "./read-run.ts";
 import type { ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -146,7 +147,7 @@ import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findMapFile } from "./project-layout.ts";
-import { exportRoot, readComponentCatalog, readExportFreshness } from "./export-reader.ts";
+import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile } from "./doc-types.ts";
 
@@ -184,11 +185,7 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   const pending: Promise<void>[] = [];
   const onTick: OnTick = (t) => {
     if (settled || extra.signal.aborted || presence.gone.aborted) return;
-    const parts = [t.phase ?? "export"];
-    if (t.page) parts.push(`page ${t.page.index} of ${t.page.of}${t.page.name ? ` (${t.page.name})` : ""}`);
-    if (t.nodes !== null) parts.push(`${t.nodes} nodes`);
-    if (t.assets !== null) parts.push(`${t.assets} assets`);
-    pending.push(extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: ++progress, message: parts.join(", ") } })
+    pending.push(extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: ++progress, message: tickMessage(t) } })
       .catch(() => { /* the client went away; the export itself carries on */ }));
   };
   try {
@@ -210,19 +207,12 @@ const callSignal = (extra: ToolExtra | undefined): AbortSignal => (extra ? Abort
 /** The two writeShape arguments every export tool reads — what Zod parses them to, not a restatement. */
 type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
 
-/** An export the bridge answered: the reply stamped with its source file, and the clock. */
-interface Pulled { r: Stamped<ExportReply>; t0: number; requestMs: number }
-// One export request: timed, progress-relaying, cancellable, and stamped with WHICH connected file
-// answered — the same `sourceFile` the CLI writes (figma-pull.ts), on written and inline results alike.
-// What is sent, and its budget, are the read plan's (read-plan.ts).
-async function pull<C extends ReadCmd>(extra: ToolExtra | undefined, plan: PlanOf<C>, client: string | undefined, progress = true): Promise<Pulled> {
-  const t0 = Date.now();
-  const { cmd, args, timeout: timeoutMs } = plan;
-  const sent = progress
-    ? await withProgress(extra, (onTick) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick, signal: callSignal(extra) }))
-    : await route.request(cmd, args, { timeoutMs, target: client, signal: callSignal(extra) });
-  const reply: ExportReply = sent.reply;
-  return { r: stampSource({ reply, client: sent.client }), t0, requestMs: Date.now() - t0 };
+// One export, run (read-run.ts): the read plan sent to the file the call names, its ticks relayed as progress
+// notifications, cancelled with the call, timed, and stamped with WHICH connected file answered — the same
+// `sourceFile` the CLI writes (figma-pull.ts), on written and inline results alike.
+function pull<C extends ReadCmd>(extra: ToolExtra | undefined, plan: PlanOf<C>, client: string | undefined, progress = true): Promise<ReadRun<C>> {
+  const run = (onTick: OnTick | undefined): Promise<ReadRun<C>> => runRead(route, plan, { target: client, onProgress: onTick, signal: callSignal(extra) });
+  return progress ? withProgress(extra, run) : run(undefined);
 }
 
 // The most recent write THIS server made (per process — gone on restart). figma_status reports
@@ -243,11 +233,11 @@ function preflightOut(a: WriteArgs): void {
 
 // One export, delivered: the pure step (delivery.ts) decides inline / written / refused and words the note, from the
 // change report write-out returns for an implicit spill; this does the measuring, the writing and the bookkeeping.
-function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: number | undefined }) {
-  const { r, t0, requestMs } = p;
+function exportResult(tool: string, a: WriteArgs, run: ReadRun<ReadCmd>, opts?: { scale?: number | undefined }) {
+  const r: Stamped<ExportReply> = run.reply;
   // The clock rides along inline too (top level); `write` is 0 — nothing was written. The text only when it fits: a
   // real export is tens of megabytes, so the size is measured without serialising it.
-  const d = decideDelivery(a.writeToDisk, (limit) => prettyJsonWithin({ ...stripAssets(r), durationMs: { total: Date.now() - t0, request: requestMs, write: 0 } }, limit), inlineLimitChars());
+  const d = decideDelivery(a.writeToDisk, (limit) => prettyJsonWithin({ ...stripAssets(r), durationMs: run.durationMs() }, limit), inlineLimitChars());
   if (d.kind === "refuse") throw new Error(d.message);
   if (d.kind === "inline") return textResult(d.text);
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
@@ -255,9 +245,7 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
   const dir = assertInsideCwd(a.outDir);
   // An IMPLICIT spill must not silently replace what is on disk: it keeps `.prev` copies (keepPrev), and the change
   // report says which — kept, replaced, and the earlier ones still there. An explicit write keeps nothing.
-  const w0 = Date.now();
-  const { changes, ...written } = writeAny(a.outDir, r, wlog, { scale: opts && opts.scale, keepPrev: d.implicit });
-  const writeMs = Date.now() - w0;
+  const { changes, ...written } = run.write((stamped) => writeAny(a.outDir, stamped, wlog, { scale: opts && opts.scale, keepPrev: d.implicit }));
   const wrote = written.wrote;
   const said = describeWrite(d, "screen" in wrote ? { kind: "screen", dir, screen: wrote.screen, changes }
     : "reference" in wrote ? { kind: "screenshot", dir, reference: wrote.reference, changes }
@@ -266,7 +254,7 @@ function exportResult(tool: string, a: WriteArgs, p: Pulled, opts?: { scale?: nu
   // A screenshot's node size and render scale (from the plugin; absent from an older one) beside the
   // PNG's own pixel size (writeScreenshot reads it from the bytes).
   const shot = "reference" in r ? { ...ifDefined("w", r.w), ...ifDefined("h", r.h), ...ifDefined("scale", r.scale) } : {};
-  return textResult({ ...shot, ...written, durationMs: { total: Date.now() - t0, request: requestMs, write: writeMs }, note: said.note });
+  return textResult({ ...shot, ...written, durationMs: run.durationMs(), note: said.note });
 }
 
 // Shared by every export tool, so the pair cannot end up declared on some and not others — the exact
@@ -323,13 +311,10 @@ function planned<P extends ReadPlan>(p: P | ReadRefusal): P {
 
 const READ_ONLY = { readOnlyHint: true } as const;
 
-// The design-system.json a figma-pull run left on disk carries its own `exportedAt`/`file` (stamped by
-// the plugin — collect.ts/components.ts, not invented here). figma_status reads it opportunistically so
-// an agent can see how stale its LAST EXPORT is without shelling out — this is snapshot age, distinct
-// from bridge connectivity, so a missing/unreadable file is not an error, just `snapshot: null`.
-// Lives in its own dependency-free module (snapshot-meta.ts, same pattern as node-id.ts /
-// errmsg.ts) so the test suite can read it directly, without loading the MCP server.
-import { snapshotInfoOf, lastScreenOf } from "./snapshot-meta.ts";
+// figma_status reports the verdict on the export on disk (export-verdict.ts — the one `dtwin doctor` formats) so an
+// agent can see how stale, and how mixed, its LAST EXPORT is without shelling out. That is distinct from bridge
+// connectivity, so nothing exported is not an error, just `snapshot: null`.
+import { readExportVerdict, statusSnapshot } from "./export-verdict.ts";
 
 // The version the server reports in its MCP `initialize` answer: the package's own, never a literal that
 // drifts from it.
@@ -339,16 +324,16 @@ const server = new McpServer({ name: "designtwin", version: pkg.version });
 server.registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
   guarded(async (a, extra) => {
-    // One freshness reading of the export (export-reader.ts) answers both the snapshot and the newest screen row
-    // (disk); lastWrite is this server's own last write (session).
-    const fresh = readExportFreshness(exportRoot());
-    const snapshot = snapshotInfoOf(fresh);
-    const ledger = { lastScreenExport: lastScreenOf(fresh), lastWrite };
+    // One verdict on the export (export-verdict.ts) answers both the snapshot and the newest screen row (disk);
+    // lastWrite is this server's own last write (session).
+    const verdict = readExportVerdict(exportRoot());
+    const snapshot = statusSnapshot(verdict);
+    const ledger = { lastScreenExport: verdict.lastScreen, lastWrite };
     if (!(a && a.client)) {
       const clients = await route.listClients();
       if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });

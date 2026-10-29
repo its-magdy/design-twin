@@ -28,7 +28,7 @@
 //
 // design-system.json stays, slim: the stamp (`exportedAt`/`file`/`colorProfile`) plus a `files`
 // pointer map, so an existing consumer that opens design-system.json still finds its way. The stamp is
-// repeated into every split file on purpose — snapshot-meta.ts and design-to-code/drift-lint.ts read
+// repeated into every split file on purpose — export-verdict.ts and design-to-code/drift-lint.ts read
 // `exportedAt` off whichever file they are handed, and design-to-code/tokens.ts, map-bootstrap.ts and
 // drift-lint.ts are now pointed at tokens.json / components.local.json directly.
 //

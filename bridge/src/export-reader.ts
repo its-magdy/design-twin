@@ -34,8 +34,8 @@
 //      pointer (the split layout), else design-system.json's own inline `components` (an export from before the split);
 //      or why there is none.
 //   6) FRESHNESS, PER SOURCE: readExportFreshness(root) — the design system's stamp (3), the page walk's, every screen (2)
-//      grouped by the Figma file it came from, and the newest screen. doctor's export summary and figma_status's
-//      snapshot / lastScreenExport (snapshot-meta.ts) are each one reading of it.
+//      grouped by the Figma file it came from, and the newest screen. export-verdict.ts judges it (attribution, age,
+//      staleness), which is what doctor's export summary and figma_status's snapshot / lastScreenExport report.
 //
 // Nothing here throws: a missing or unreadable file adds nothing, and a reader that reports it gets the reason.
 import fs from "node:fs";
@@ -75,6 +75,9 @@ export function resolveInside(base: string, rel: string, within: string = base):
 /** A pointer an export document holds ("/"-separated, relative to the export root), resolved inside the root only;
  *  an absolute pointer is refused too. */
 const inside = (root: string, rel: unknown): string | null => (typeof rel === "string" && rel && !path.isAbsolute(rel) ? resolveInside(root, rel) : null);
+/** A file an export document names ("/"-separated, relative to the export root — an index row's `file`), absolute,
+ *  inside the root only; null for anything else (an absolute path, `..` leaving the root, a non-string). */
+export const exportFileOf = (root: string, rel: unknown): string | null => inside(root, rel);
 
 /** An export file that is there but unusable: its name relative to the export root ("/"-spelt), and why. */
 export interface ExportProblem { readonly file: string; readonly error: string }
@@ -360,6 +363,8 @@ export interface ScreenSource {
   readonly count: number;
   /** the newest parseable stamp among them (exportedAtOf); undefined when none has one */
   readonly newestAt: string | undefined;
+  /** the row that stamp is on; null when none has one */
+  readonly newestRow: IndexRow | null;
 }
 /** How fresh the export at `root` is, per source, read once: the design system's stamp, the page walk's, every screen
  *  grouped by the Figma file it came from, and the newest screen. */
@@ -381,23 +386,23 @@ export interface ExportFreshness {
 export function readExportFreshness(root: string): ExportFreshness {
   const ix = readExportIndex(root);
   const ds = readDesignSystemStamp(root);
-  const groups = new Map<string | null, { count: number; newestAt: string | undefined; t: number }>();
+  const groups = new Map<string | null, { count: number; newestAt: string | undefined; newestRow: IndexRow | null; t: number }>();
   let newestScreen: ExportFreshness["newestScreen"] = null;
   for (const row of ix.rows) {
     const at = ix.exportedAtOf(row);
     const t = at ? Date.parse(at) : NaN;
     const key = typeof row.sourceFile === "string" && row.sourceFile ? row.sourceFile : null;
     let g = groups.get(key);
-    if (!g) { g = { count: 0, newestAt: undefined, t: -Infinity }; groups.set(key, g); }
+    if (!g) { g = { count: 0, newestAt: undefined, newestRow: null, t: -Infinity }; groups.set(key, g); }
     g.count++;
-    if (at && !Number.isNaN(t) && t > g.t) { g.newestAt = at; g.t = t; }
+    if (at && !Number.isNaN(t) && t > g.t) { g.newestAt = at; g.newestRow = row; g.t = t; }
     if (row.id && at && !Number.isNaN(t) && (!newestScreen || t >= newestScreen.t)) newestScreen = { row, exportedAt: at, t };
   }
   return {
     root,
     designSystem: ds.stamp && ds.from ? { stamp: ds.stamp, from: ds.from } : null,
     index: ix.indexed ? { from: rootIndexFile(root), exportedAt: ix.rootExportedAt, sourceFile: ix.rootSourceFile } : null,
-    screens: [...groups].map(([sourceFile, g]) => ({ sourceFile, count: g.count, newestAt: g.newestAt })),
+    screens: [...groups].map(([sourceFile, g]) => ({ sourceFile, count: g.count, newestAt: g.newestAt, newestRow: g.newestRow })),
     newestScreen,
     problems: [...ds.problems, ...ix.problems],
   };
