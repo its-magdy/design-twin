@@ -7,22 +7,16 @@
 //     found / recorded / gone), and the binding of the plan used: its waivers/descopes/anchors/navigate/reference rows
 //     for compare to apply, the hash of its waivers the report records, and — against what the expectation recorded —
 //     the reasons the run cannot pass (a bound section drifted) and the notes beside them.
-// No file reads (resolvePlan takes a reader); the hashes are the ones report-freshness.ts judges a report's waivers by.
+// No file reads (resolvePlan takes a reader). The waivers hash is owner-decisions.ts's, the one report-freshness.ts judges a report's waivers by.
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { canonical, ifDefined } from "../bridge/src/json-util.ts";
+import { waiversHash } from "./owner-decisions.ts";
 import { actionForExpect, isPlanExpect, parseSteps } from "./probe-steps.ts";
 import { isJsonObject } from "./types.ts";
 import type { Plan, PlanAnchor, PlanDeviation, PlanInteractionsInput, PlanPlaceholdersInput, VerifyExpectation, VerifyInteraction } from "./types.ts";
 
 // ---------------------------------------------------------------- the plan's rows and their hashes
-
-/** sha256 (hex) of the canonical JSON of {waivers, descopes}; `[]`, absent or non-array hash as the empty set. */
-export function waiversHash(plan: Plan | null | undefined): string {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical({ descopes, waivers }));
-}
 
 /** The plan's placeholder rows: deviations[] with field "placeholder" — a TEXT layer the builder declares it built as a
  *  form control's placeholder attribute (Figma has no such role: a hint and a value are both just TEXT). */

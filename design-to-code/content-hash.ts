@@ -107,7 +107,7 @@ function planCodeSkippedNote(plan: { anchors?: unknown; components?: unknown }, 
 }
 
 // The plan's own content as the Stop hook binds it (verify-build.ts verification.hook.planHash): the plan minus
-// `status`, the owner's waivers[]/descopes[] (accepting a delta must not send the hook back to pending; a report
+// `status`, the owner's waivers[]/descopes[] (owner-decisions.ts — accepting a delta must not send the hook back to pending; a report
 // records their hash instead) and ALL of `verification`: `verify-screen --compare --record-plan` writing it must not
 // reopen a plan. (Its one blocking check, a hand edit of verification.recorded, reopens the plan in plan-status open.)
 function planHash(plan: object | null | undefined): string {
