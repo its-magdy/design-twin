@@ -2,7 +2,7 @@
 // and waivers (applied / reopened / unused), and the hash a report records — table tests over plain deltas and reports,
 // no expectation, no compare(). verify-waivers.test.ts stays the end-to-end check (compare(), the CLI).
 // Run with:  bun test/owner-decisions.test.ts
-import { acceptInto, descopeRound, selectForAccept, waiverRound, waiverTolerance, waiversChanged, waiversHash, whyNotWaivable } from "../design-to-code/owner-decisions.ts";
+import { acceptInto, descopeRound, selectForAccept, waiverRound, waiversChanged, waiversHash, whyNotWaivable } from "../design-to-code/owner-decisions.ts";
 import type { WaiverGaps, WaiverRound } from "../design-to-code/owner-decisions.ts";
 import type { JsonValue, PlanDescope, PlanWaiver, VerifyDelta, VerifyReport } from "../design-to-code/types.ts";
 import { planHash } from "../design-to-code/content-hash.ts";
@@ -74,12 +74,24 @@ console.log("matching — tolerance, explicit slack, strings with numbers, one d
     ["match (size) within 1px per side", w({ nodeId: "1", field: "match (size)", designed: [300, 120], built: [640, 120] }), delta("1", "match (size)", [300, 120], [641, 120]), true],
   ];
   for (const [name, wv, d, applies] of rows) check(name, (waiverRound([wv], round([d])).applied === 1) === applies);
-  check("waiverTolerance reads a field's own tolerance, and the labels compare writes beside FIELDS",
-    waiverTolerance("font-size") === 0.5 && waiverTolerance("color") === null && waiverTolerance("border-radius (bottom-right)") === 0.5
-    && waiverTolerance("width (text ink)") === 3 && waiverTolerance("overflowX") === 2 && waiverTolerance("not a field") === null);
+  const labelled: Array<[string, number, number]> = [["border-radius (bottom-right)", 0.5, 0.6], ["width (text ink)", 3, 3.1], ["overflowX", 2, 2.1], ["not a field", 0, 0.01]];
+  for (const [field, within, past] of labelled) {
+    const at = (built: number): number => waiverRound([w({ nodeId: "1", field, designed: 10, built: 20 })], round([delta("1", field, 10, built)])).applied;
+    check(`'${field}' is matched within ${within}px, not ${past}px`, at(20 + within) === 1 && at(20 + past) === 0);
+  }
   const twin = [delta("1", "font-size", 14, 16), delta("1", "font-size", 14, 16)];
   const one = waiverRound([w({ nodeId: "1", field: "font-size", designed: 14, built: 16 })], round(twin));
   check("one waiver accepts one delta (a second identical one stays open)", one.applied === 1 && !!twin[0]?.accepted && !twin[1]?.accepted);
+  const pair = [delta("1", "font-size", 14, 16), delta("1", "font-size", 14, 16)];
+  const both = waiverRound([w({ nodeId: "1", field: "font-size", designed: 14, built: 16 }), w({ nodeId: "1", field: "font-size", designed: 14, built: 16 })], round(pair));
+  check("two waivers on two identical deltas: both applied, one each", both.applied === 2 && pair.every((d) => !!d.accepted));
+  // the order the report lists them in is the plan's row order
+  const mixed = waiverRound([
+    w({ nodeId: "a", field: "font-size", designed: 14, built: 16 }), malformed<PlanWaiver>({ nodeId: "b" }), w({ nodeId: "c", field: "font-size", designed: 14, built: 16, exportContentSha256: REPULLED }),
+    w({ nodeId: "d", field: "color", designed: "#000000", built: "#111111" }), w({ nodeId: "e", field: "font-size", designed: 14, built: 16 }), malformed<PlanWaiver>({ nodeId: "f" }),
+  ], round([delta("c", "font-size", 14, 16), delta("e", "font-size", 14, 20)]));
+  check("reopened, unused and notes keep the plan's row order", mixed.reopened.map((r) => r.nodeId).join() === "c,e" && mixed.unused.map((r) => r.nodeId).join() === "a,d"
+    && mixed.notes.length === 2 && /waivers\[1\]/.test(mixed.notes[0] ?? "") && /waivers\[5\]/.test(mixed.notes[1] ?? ""));
   const bad = waiverRound([{ nodeId: "1", field: "font-size" }], round([delta("1", "font-size", 14, 16)]));
   check("a malformed row is ignored with a note naming its index", bad.applied === 0 && bad.notes.length === 1 && /^plan waivers\[0\] is not a plan waiver/.test(bad.notes[0] ?? ""));
 }
@@ -113,6 +125,10 @@ console.log("never waivable — one list for --accept and --compare:");
     check(`${id} (${field}): --accept refuses with the reason --compare gives an unused waiver`, "error" in sel && unused !== undefined && sel.error === `${id} (${field}): ${unused}`);
   }
   const ink = waiverRound([{ nodeId: "9:1", field: "width", designed: 121, built: 34, exportContentSha256: SHA, ...DECIDED }], round([], { inkWidthNodes: new Set(["9:1"]) }));
+  const inkDelta = waiverRound([{ nodeId: "9:1", field: "width", designed: 121, built: 34, exportContentSha256: SHA, ...DECIDED }], round([delta("9:1", "width (text ink)", 100, 104)]));
+  check("…or because this round has a 'width (text ink)' delta for it", /compared as 'width \(text ink\)'/.test(inkDelta.unused[0]?.why ?? ""));
+  const gapFirst = waiverRound([{ nodeId: "7:1", field: "width", designed: 121, built: 34, exportContentSha256: SHA, ...DECIDED }], round([], { gaps, inkWidthNodes: new Set(["7:1"]) }));
+  check("a gap's reason beats the ink-width hint", /the node was not measured/.test(gapFirst.unused[0]?.why ?? ""));
   check("a waiver on a TEXT's width (compared at its ink width now): unused, re-accept", /compared as 'width \(text ink\)'/.test(ink.unused[0]?.why ?? ""));
 }
 
@@ -142,12 +158,14 @@ console.log("descopes — removed from the graded set while their export holds:"
   const ds = (p: Partial<PlanDescope> = {}): PlanDescope => ({ nodeId: "2:5", trigger: "on_click", exportContentSha256: SHA, ...DECIDED, ...p });
   const designed = [{ nodeId: "2:5", trigger: "on_click", destinationId: "1:50" }, { nodeId: "2:4", trigger: "on_click" }];
   const live = descopeRound([ds()], designed, SHA);
-  check("a matching descope: that interaction is descoped, the other is not", live.descoped[0]?.decidedBy === "Sam Doe" && live.descoped[1] === undefined && !live.reopened.length && !live.unused.length);
-  check("the trigger matches case-insensitively", descopeRound([ds({ trigger: "ON_CLICK" })], designed, SHA).descoped[0] !== undefined);
+  const [open, other] = designed;
+  check("a matching descope: that interaction is descoped, the other is not", !!open && !!other && live.descopeOf(open)?.decidedBy === "Sam Doe" && live.descopeOf(other) === undefined && !live.reopened.length && !live.unused.length);
+  check("the trigger matches case-insensitively", !!open && descopeRound([ds({ trigger: "ON_CLICK" })], designed, SHA).descopeOf(open) !== undefined);
+  check("a descope naming the interaction's destination matches it", !!open && descopeRound([ds({ destinationId: "1:50" })], designed, SHA).descopeOf(open) !== undefined);
   const dest = descopeRound([ds({ destinationId: "9:9" })], designed, SHA);
-  check("a descope naming another destination matches nothing: unused", dest.descoped[0] === undefined && dest.unused.length === 1 && /no designed interaction/.test(dest.unused[0]?.why ?? ""));
+  check("a descope naming another destination matches nothing: unused", !!open && dest.descopeOf(open) === undefined && dest.unused.length === 1 && /no designed interaction/.test(dest.unused[0]?.why ?? ""));
   const re = descopeRound([ds()], designed, REPULLED);
-  check("the design re-exported: reopened (graded again), not unused", re.descoped[0] === undefined && re.reopened.length === 1 && re.reopened[0]?.field === "interaction (on_click)"
+  check("the design re-exported: reopened (graded again), not unused", !!open && re.descopeOf(open) === undefined && re.reopened.length === 1 && re.reopened[0]?.field === "interaction (on_click)"
     && /design re-exported/.test(re.reopened[0]?.why ?? "") && !re.unused.length);
   const bad = descopeRound([{ nodeId: "2:5" }], designed, SHA);
   check("a malformed descope is ignored with a note", bad.notes.length === 1 && /^plan descopes\[0\] is not a plan descope/.test(bad.notes[0] ?? ""));
@@ -157,6 +175,8 @@ console.log("descopes — removed from the graded set while their export holds:"
 console.log("the hash — what a report records, and whether it is still current:");
 {
   const p1 = { waivers: [{ nodeId: "1", field: "color", designed: "#111111", built: "#222222", exportContentSha256: SHA, ...DECIDED }], descopes: [] };
+  const flipped = { waivers: p1.waivers.map((x) => ({ decidedAt: x.decidedAt, decidedBy: x.decidedBy, reason: x.reason, exportContentSha256: x.exportContentSha256, built: x.built, designed: x.designed, field: x.field, nodeId: x.nodeId })) };
+  check("key order does not change the hash; a change does", waiversHash(p1) === waiversHash(flipped) && waiversHash(p1) !== waiversHash({}));
   check("none, [] and a plan without the keys hash alike", waiversHash(null) === waiversHash({}) && waiversHash({}) === waiversHash({ waivers: [], descopes: [] }));
   check("a report that recorded none is current for a plan with none, changed for a plan with one",
     !waiversChanged(undefined, {}) && waiversChanged(undefined, p1) && !waiversChanged(waiversHash(p1), p1) && waiversChanged(waiversHash(p1), { waivers: [] }));

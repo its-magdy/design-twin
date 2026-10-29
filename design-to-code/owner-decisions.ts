@@ -110,29 +110,31 @@ export interface DecisionOutcome { notes: string[]; reopened: Reopened; unused: 
 
 const REEXPORTED = (what: string): string => `design re-exported: the export content changed since ${what}`;
 
-/** The descopes of a round's designed interactions: for each (in order) the descope that removes it from the graded set
- *  while the design is the one it was descoped against (a hit on another export is reopened, the interaction graded);
- *  a descope that matches no designed interaction is unused. Matched by node, trigger (case-insensitive) and, when the
- *  row names one, destination. */
-export function descopeRound(rows: readonly unknown[], interactions: ReadonlyArray<Pick<VerifyInteraction, "nodeId" | "trigger" | "destinationId">>, exportSha: string | undefined):
-  DecisionOutcome & { descoped: Array<PlanDescope | undefined> } {
+type DesignedInteraction = Pick<VerifyInteraction, "nodeId" | "trigger" | "destinationId">;
+/** The descopes of a round's designed interactions: `descopeOf(i)` — for one of the interactions given — is the descope
+ *  that removes it from the graded set while the design is the one it was descoped against (a hit on another export is
+ *  reopened, the interaction graded); a descope that matches no designed interaction is unused. Matched by node, trigger
+ *  (case-insensitive) and, when the row names one, destination. */
+export function descopeRound<I extends DesignedInteraction>(rows: readonly unknown[], interactions: readonly I[], exportSha: string | undefined):
+  DecisionOutcome & { descopeOf: (i: I) => PlanDescope | undefined } {
   const notes: string[] = [], reopened: Reopened = [], unused: Unused = [];
   const descopes: PlanDescope[] = [];
   rows.forEach((d, i) => { if (isPlanDescope(d)) descopes.push(d); else notes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`); });
   const used = new Set<PlanDescope>();
-  const descoped = interactions.map((i) => {
+  const descoped = new Map<I, PlanDescope>();
+  for (const i of interactions) {
     const hits = descopes.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === undefined || d.destinationId === i.destinationId));
     for (const d of hits) used.add(d);
     const live = hits.find((d) => d.exportContentSha256 === exportSha);
-    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: REEXPORTED("it was descoped") });
-    return live;
-  });
+    if (live) descoped.set(i, live);
+    else for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: REEXPORTED("it was descoped") });
+  }
   for (const d of descopes) if (!used.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
-  return { notes, reopened, unused, descoped };
+  return { notes, reopened, unused, descopeOf: (i) => descoped.get(i) };
 }
 
 /** The slack a waiver's designed/built values are matched with — the field's own tolerance (null = exact). */
-export function waiverTolerance(label: string): number | null {
+function waiverTolerance(label: string): number | null {
   const f = FIELDS.find((x) => x.label === label);
   if (f) return f.tol;
   if (label === "padding") return TOLERANCE.padding;

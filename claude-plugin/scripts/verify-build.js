@@ -3088,7 +3088,6 @@ function staleText(rel, r) {
 function reportFreshness(root, o = {}) {
   const git = o.git ?? systemGit;
   const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged2 = (inputs, plan) => waiversChanged(inputs.waiversSha256, plan);
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
@@ -3122,10 +3121,10 @@ function reportFreshness(root, o = {}) {
         const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
         if (differ.length) out.push({ kind: "code-changed", files: differ });
       }
-      if (waiversChanged2(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      if (waiversChanged(inputs.waiversSha256, now.plan)) out.push({ kind: "waivers-changed" });
       return out;
     },
-    waiversChanged: waiversChanged2
+    waiversChanged: (inputs, plan) => waiversChanged(inputs.waiversSha256, plan)
   };
 }
 

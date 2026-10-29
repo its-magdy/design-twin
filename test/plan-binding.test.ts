@@ -107,14 +107,6 @@ console.log("planAtCompare — the rows compare applies:");
   check("anchors that are not an object read as none", Object.keys(odd.anchors).length === 0);
 }
 
-console.log("waiversHash — what a report records:");
-{
-  const p1: Plan = { waivers: [{ nodeId: "2:1", field: "font-size", designed: 14, built: 16, exportContentSha256: "e".repeat(64), reason: "kept", decidedBy: "owner", decidedAt: "2026-10-25T00:00:00Z" }] };
-  const flipped: Plan = { waivers: (p1.waivers || []).map((w) => ({ decidedAt: w.decidedAt, decidedBy: w.decidedBy, reason: w.reason, exportContentSha256: w.exportContentSha256, built: w.built, designed: w.designed, field: w.field, nodeId: w.nodeId })) };
-  check("absent and [] hash alike; key order does not matter; a change does",
-    waiversHash({}) === waiversHash({ waivers: [], descopes: [] }) && waiversHash(null) === waiversHash({}) && waiversHash(p1) === waiversHash(flipped) && waiversHash(p1) !== waiversHash({}));
-}
-
 // ---------------------------------------------------------------- selection
 console.log("choosePlan — one rule for --expect and --compare:");
 {

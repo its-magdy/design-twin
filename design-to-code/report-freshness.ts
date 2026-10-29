@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, fileHashes, planCodeFiles } from "./content-hash.ts";
-import { waiversChanged as decisionsChanged } from "./owner-decisions.ts";
+import { waiversChanged } from "./owner-decisions.ts";
 import { runSync } from "./proc.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, Plan } from "./types.ts";
@@ -156,7 +156,6 @@ export interface ReportFreshness {
 export function reportFreshness(root: string, o: { git?: Git; cached?: CachedBytes } = {}): ReportFreshness {
   const git = o.git ?? systemGit;
   const codeNow = (plan: Plan): Record<string, string | null> => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged = (inputs: ReportInputs, plan: Plan): boolean => decisionsChanged(inputs.waiversSha256, plan);
 
   function expectationChanged(rel: string, inputs: ReportInputs): string | null {
     const want = inputs.expectationSha256;
@@ -189,10 +188,10 @@ export function reportFreshness(root: string, o: { git?: Git; cached?: CachedByt
         const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => (measured[f] === undefined ? `${f} (not recorded)` : f));
         if (differ.length) out.push({ kind: "code-changed", files: differ });
       }
-      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      if (waiversChanged(inputs.waiversSha256, now.plan)) out.push({ kind: "waivers-changed" });
       return out;
     },
-    waiversChanged,
+    waiversChanged: (inputs, plan) => waiversChanged(inputs.waiversSha256, plan),
   };
 }
 

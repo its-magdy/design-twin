@@ -1573,7 +1573,7 @@ function gradeInteractions(
   reopened.push(...scopes.reopened);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
     inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence");
-  const interactions = designed.map((i, at): VerifyInteractionResult => {
+  const interactions = designed.map((i): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
     // ok:true passes only with the evidence (one element, an outcome the action produces, no reload)
@@ -1604,7 +1604,7 @@ function gradeInteractions(
     // whose words a detail quotes — the run-bound probe's, else agent evidence (a measured file's rows that are not run-bound too)
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
     // removed from the graded set before grading; evidence that it works anyway is noted, never graded.
-    const scoped = scopes.descoped[at];
+    const scoped = scopes.descopeOf(i);
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`,
       ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
     // its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.

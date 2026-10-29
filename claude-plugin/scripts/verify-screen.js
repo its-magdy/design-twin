@@ -2288,15 +2288,16 @@ function descopeRound(rows, interactions, exportSha) {
     else notes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`);
   });
   const used = /* @__PURE__ */ new Set();
-  const descoped = interactions.map((i) => {
+  const descoped = /* @__PURE__ */ new Map();
+  for (const i of interactions) {
     const hits = descopes.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === void 0 || d.destinationId === i.destinationId));
     for (const d of hits) used.add(d);
     const live = hits.find((d) => d.exportContentSha256 === exportSha);
-    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: REEXPORTED("it was descoped") });
-    return live;
-  });
+    if (live) descoped.set(i, live);
+    else for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: REEXPORTED("it was descoped") });
+  }
   for (const d of descopes) if (!used.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
-  return { notes, reopened, unused, descoped };
+  return { notes, reopened, unused, descopeOf: (i) => descoped.get(i) };
 }
 function waiverTolerance(label) {
   const f = FIELDS.find((x) => x.label === label);
@@ -2686,7 +2687,6 @@ function measuredText(r, subject = "its run") {
 function reportFreshness(root, o = {}) {
   const git = o.git ?? systemGit;
   const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged2 = (inputs, plan) => waiversChanged(inputs.waiversSha256, plan);
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
@@ -2720,10 +2720,10 @@ function reportFreshness(root, o = {}) {
         const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
         if (differ.length) out.push({ kind: "code-changed", files: differ });
       }
-      if (waiversChanged2(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      if (waiversChanged(inputs.waiversSha256, now.plan)) out.push({ kind: "waivers-changed" });
       return out;
     },
-    waiversChanged: waiversChanged2
+    waiversChanged: (inputs, plan) => waiversChanged(inputs.waiversSha256, plan)
   };
 }
 function codeChanged(before, after) {
@@ -6583,7 +6583,7 @@ function gradeInteractions(cx, g) {
   reopened.push(...scopes.reopened);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
     inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
-  const interactions = designed.map((i, at) => {
+  const interactions = designed.map((i) => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
     const gapsOf = (h) => h && h.ok === true && h.result !== "not-probed" ? evidenceGaps(h, i.action) : null;
@@ -6619,7 +6619,7 @@ function gradeInteractions(cx, g) {
       ...ifDefined("overridden", overridden)
     } : {};
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
-    const scoped = scopes.descoped[at];
+    const scoped = scopes.descopeOf(i);
     if (scoped) return Object.assign(row, {
       result: "descoped",
       detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`,
