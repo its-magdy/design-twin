@@ -39,7 +39,7 @@ export function cssVarName(tokenName: string): string {
 // --- theme.css (Tailwind v4). The namespace a variable is filed under decides which utilities it makes (tokens.ts
 // "Tailwind v4 theme"); every generated variable sits under the `figma-` sub-namespace so Tailwind's own scale cannot be
 // redefined.
-/** The Tailwind namespace a variable is filed under (tokens.ts twKind decides it); null = none fits. */
+/** The Tailwind namespace a variable is filed under (variable-class.ts classifies the variable, tokens.ts twKind maps the class); null = none fits. */
 export type TwKind = "color" | "dimension" | "radius" | "fontSize" | "fontFamily";
 const TW_NAMESPACE: Record<TwKind, string> = { color: "color", dimension: "spacing", radius: "radius", fontSize: "text", fontFamily: "font" };
 export const TW_PREFIX = "figma-";

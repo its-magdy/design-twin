@@ -404,7 +404,7 @@ check("[unit-weight] FONT_WEIGHT-scoped FLOAT is unitless", toCSS(tokens({ varia
 check("[unit-opts] opts.unitless overrides px", toCSS(tokens({ variables: [{ name: "z/top", type: "FLOAT", values: { v: 100 } }] }), { unitless: new Set(["z/top"]) }).includes("--z-top: 100;"));
 check("[unit-string-number] string-number FLOAT gets px", toCSS(tokens({ variables: [{ name: "s/x", type: "FLOAT", values: { v: "16" } }] })).includes("--s-x: 16px;"));
 // [unit-line-height] Figma LineHeight is px|percent, NEVER a unitless multiplier -> px is the correct default
-// (unitless `line-height: 24` would mean 24x font size). See the UNITLESS_SCOPES comment in tokens-core.ts.
+// (unitless `line-height: 24` would mean 24x font size). See the UNITLESS_SCOPES comment in variable-class.ts.
 check("[unit-line-height] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS(tokens({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] })).includes("--text-lh: 24px;"));
 // [unit-letter-spacing] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[unit-letter-spacing] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS(tokens({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] })).includes("--text-ls: 0.5px;"));

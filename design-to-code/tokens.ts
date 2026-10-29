@@ -785,7 +785,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
     const r = ref(v), p = pctRef(v);
     // A font-family STRING (the same test theme.css uses) is written as a font-family value, quoted when
     // it is not one identifier — `font-family: var(--Heading)` must not get `Inter Display 2` bare.
-    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const font = classifyVariable(v, opts) === "fontFamily";
     const val = (raw: VariableValue): string => (font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p));
     rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
@@ -864,7 +864,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
   const aliasedByFont = new Set<Variable>();
   // The whole alias chain: a kept STRING that itself aliases another STRING keeps that one too.
-  for (const v of vars) if (v.type === "STRING" && twKind(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
+  for (const v of vars) if (classifyVariable(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
   const leftOut: string[] = [];
   let utilities = 0;
   for (const v of vars) {

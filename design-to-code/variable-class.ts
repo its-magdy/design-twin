@@ -129,9 +129,9 @@ function classifyVariable(v: Variable, opts?: UnitOpts): VariableClass | null {
       if (unit === "px") return lengthClass(v);
       return unit === "scopes" && (v.scopes || []).every((s) => PERCENT_SCOPES.has(s)) ? "percent" : "number";
     }
-    case "EASING": case "TIMING": return null;
+    // a type this file's Variable does not know (a newer export) has no emitter either
+    case "EASING": case "TIMING": default: return null;
   }
-  return null; // a type this file's Variable does not know (a newer export): no emitter writes it either
 }
 /** A class whose values carry a px unit. */
 const isLengthClass = (c: VariableClass | null): c is "length" | "radius" | "fontSize" => c === "length" || c === "radius" || c === "fontSize";

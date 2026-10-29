@@ -733,11 +733,12 @@ function classifyVariable(v, opts) {
       if (unit === "px") return lengthClass(v);
       return unit === "scopes" && (v.scopes || []).every((s) => PERCENT_SCOPES.has(s)) ? "percent" : "number";
     }
+    // a type this file's Variable does not know (a newer export) has no emitter either
     case "EASING":
     case "TIMING":
+    default:
       return null;
   }
-  return null;
 }
 var isLengthClass = (c) => c === "length" || c === "radius" || c === "fontSize";
 var SENTINEL_MIN = 1e4;
@@ -1825,7 +1826,7 @@ function toCSS(designSystem, opts, notes) {
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
     const r = ref(v), p = pctRef(v);
-    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const font = classifyVariable(v, opts) === "fontFamily";
     const val = (raw) => font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p);
     rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
@@ -1867,7 +1868,7 @@ function toTailwind(designSystem, opts, notes) {
   const perMode = modeBlocks(scopes);
   warnings.push(...scopes.warnings);
   const aliasedByFont = /* @__PURE__ */ new Set();
-  for (const v of vars) if (v.type === "STRING" && twKind(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
+  for (const v of vars) if (classifyVariable(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
   const leftOut = [];
   let utilities = 0;
   for (const v of vars) {

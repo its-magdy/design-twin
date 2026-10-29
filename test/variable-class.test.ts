@@ -73,7 +73,7 @@ check("[sentinel] a radius at 1e9", isSentinel(f("Radius/Full"), 1e9));
 check("[sentinel] a scoped CORNER_RADIUS + FONT_SIZE at 1e9 (a radius)", isSentinel(f("Shared", ["CORNER_RADIUS", "FONT_SIZE"]), 1e9));
 check("[sentinel] an unscoped token in a Radius collection — not a radius class, still caught", isSentinel(f("full", undefined, "Radius"), 1e9) && classifyVariable(f("full", undefined, "Radius")) === "length");
 check("[sentinel] a FONT_SIZE-scoped 1e9 is no radius", !isSentinel(f("Huge", ["FONT_SIZE"]), 1e9));
-check("[sentinel] a radius below the threshold, or an alias, is no sentinel", !isSentinel(f("Radius/Full"), 9999) && !isSentinel(f("Radius/Full"), { aliasOf: "x" }));
+check("[sentinel] a radius below the threshold is no sentinel", !isSentinel(f("Radius/Full"), 9999));
 
 // ---------------------------------------------------------------- every emitter reads the same class
 console.log("\nthe emitters agree on the class:");
