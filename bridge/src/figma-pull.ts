@@ -813,7 +813,8 @@ async function serveDaemon(settings: BridgeSettings): Promise<void> {
 // clients` would — so a screen export can be stamped with its real source without this
 // file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
 // that field.
-type Send = <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
+// A read is not sent this way: it runs through Session.read, which stamps it before anything can write it.
+type Send = <C extends Exclude<Cmd, ReadCmd>>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
 
 // What every ordinary command runs on: where its requests go (a running daemon, or a bridge of its own),
 // and the timing and shutdown helpers the commands share.

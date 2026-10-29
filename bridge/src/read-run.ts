@@ -12,8 +12,8 @@
 //   - progress: every tick reaches the caller's onProgress and the meter; the first `queued` tick (the run waits behind
 //     another in that file) is said once through onQueued; tickMessage words a tick (MCP's progress message).
 //     A run that asks for none of these asks the route for no ticks at all.
-//   - the clock: requestMs is the time inside the request (the meter's sent/replied included), writeMs the time
-//     inside write(); durationMs() is the run so far. A tally, when given, adds both to the caller's running totals
+//   - the clock: durationMs().request is the time inside the request (the meter's sent/replied included), writeMs the time
+//     inside write(), and total the run so far. A tally, when given, adds both to the caller's running totals
 //     (the CLI's `done in …` line and its DTWIN_TIMINGS record).
 //   - the stamp: the reply a run hands out is already stamped — write() hands it to the writer, so a writer never
 //     sees an unstamped reply.
@@ -21,7 +21,7 @@ import { stampSource } from "./source-stamp.ts";
 import type { Commands, Cmd } from "./commands.ts";
 import type { PlanOf, ReadCmd } from "./read-plan.ts";
 import type { Route, Sent } from "./route.ts";
-import type { ClientRow, ProgressTick } from "./server-core.ts";
+import type { ProgressTick } from "./server-core.ts";
 import type { Stamped } from "./write-out.ts";
 
 /** What hears a run's request, reply and ticks (timings.ts StageClock is one). */
@@ -54,9 +54,6 @@ export interface ReadRunOptions extends Metering {
 /** One read, answered: its reply stamped with its source, and its clock. */
 export interface ReadRun<C extends ReadCmd> {
   readonly reply: Stamped<Commands[C]["reply"]>;
-  /** the connected file that answered; null from a daemon too old to say */
-  readonly client: ClientRow | null;
-  readonly requestMs: number;
   /** Runs the write-out on the stamped reply, timed. */
   write<W>(out: (reply: Stamped<Commands[C]["reply"]>) => W): W;
   /** total since the run started, the request, the write (0 until written) */
@@ -69,12 +66,15 @@ export async function meteredRequest<C extends Cmd>(request: () => Promise<Sent<
   const now = m.now ?? Date.now;
   const t = now();
   m.meter?.sent();
+  let ms: number | undefined;
   try {
     const sent = await request();
     m.meter?.replied(sent.reply);
-    return { sent, ms: now() - t };
+    ms = now() - t;
+    return { sent, ms };
   } finally {
-    if (m.tally) m.tally.exportMs += now() - t;
+    // a request that fails counts too, up to its failure
+    if (m.tally) m.tally.exportMs += ms ?? now() - t;
   }
 }
 
@@ -106,8 +106,6 @@ export async function runRead<C extends ReadCmd>(route: Pick<Route, "request">, 
   let writeMs = 0;
   return {
     reply,
-    client: sent.client,
-    requestMs,
     write(out) {
       const t = now();
       try { return out(reply); } finally {

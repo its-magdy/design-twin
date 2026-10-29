@@ -52,15 +52,17 @@ try {
     check("no phase: `export`; an unnamed page has no name", tickMessage(t({ page: { index: 1, of: 1, name: null } })) === "export, page 1 of 1");
   }
 
+  // The run's clock is the test's (read-run.ts's `now` seam): the plugin's answer takes 100 ms of it, a write 20.
+  let clockMs = 1000;
+  const now = (): number => clockMs;
   // Two files open: the run reaches the one named, and its reply is stamped with that one.
-  let release: () => void = () => {};
-  const gate = new Promise<void>((r) => { release = r; });
   const app = await plugin(port, "Sample App", {
     exportNode: async (_args, ctx) => {
       ctx.progress({ phase: "queued", page: null, nodes: null, assets: null });
       ctx.progress({ phase: "queued", page: null, nodes: null, assets: null });
       ctx.progress({ phase: "pages", page: { index: 1, of: 1, name: "Home" }, nodes: 5, assets: null });
-      await gate;
+      await sleep(30); // the ticks land before the reply
+      clockMs += 100;
       return node("Sample App");
     },
   });
@@ -73,21 +75,23 @@ try {
     const ticks: string[] = [];
     let queued = 0;
     const tally = { exportMs: 0, writeMs: 0 };
-    setTimeout(release, 120);
-    const run = await runRead(route, planOf("1:2"), { target: "Sample App", meter, tally, onProgress: (t) => ticks.push(String(t.phase)), onQueued: () => queued++ });
+    const run = await runRead(route, planOf("1:2"), { target: "Sample App", meter, tally, now, onProgress: (t) => ticks.push(String(t.phase)), onQueued: () => queued++ });
     check("the plan was sent to the file named, as planned", app.commands("exportNode").length === 1 && kit.commands("exportNode").length === 0
       && JSON.stringify(app.commands("exportNode")[0]?.args) === JSON.stringify(planOf("1:2").args));
-    check(`the reply is stamped with the file that answered (got ${String(run.reply.sourceFile)})`, run.reply.sourceFile === "Sample App" && run.reply.sourceFileKey === "KEY-Sample App" && run.client?.file === "Sample App");
+    check(`the reply is stamped with the file that answered (got ${String(run.reply.sourceFile)})`, run.reply.sourceFile === "Sample App" && run.reply.sourceFileKey === "KEY-Sample App");
     check(`every tick reaches the caller (got ${ticks.join(",")})`, ticks.join(",") === "queued,queued,pages");
     check("`queued` is said once, however many queued ticks", queued === 1);
     check(`the meter hears sent, each tick, then replied (got ${heard.join(",")})`, heard.join(",") === "sent,tick:queued,tick:queued,tick:pages,replied");
-    check(`the request is timed, and added to the tally (${run.requestMs} ms)`, run.requestMs >= 100 && Math.abs(tally.exportMs - run.requestMs) <= 5);
-    check("nothing written yet: write is 0", run.durationMs().write === 0 && run.durationMs().total >= run.requestMs);
+    const d0 = run.durationMs();
+    check(`the request is timed, and added to the tally (got ${JSON.stringify(d0)}, tally ${tally.exportMs})`, d0.request === 100 && tally.exportMs === 100);
+    check("nothing written yet: write is 0", d0.write === 0 && d0.total === 100);
     let seen: unknown;
-    const out = run.write((r) => { seen = r.sourceFile; const t = Date.now(); while (Date.now() - t < 20) { /* a write that takes time */ } return "wrote"; });
+    const out = run.write((r) => { seen = r.sourceFile; clockMs += 20; return "wrote"; });
     check("write hands the writer the stamped reply, and returns what it wrote", seen === "Sample App" && out === "wrote");
     const d = run.durationMs();
-    check(`…timed, and added to the tally (${d.write} ms)`, d.write >= 20 && tally.writeMs === d.write && d.total >= d.request + d.write - 2);
+    check(`…timed, and added to the tally (got ${JSON.stringify(d)})`, d.write === 20 && tally.writeMs === 20 && d.total === 120);
+    const thrown = (() => { try { run.write(() => { clockMs += 5; throw new Error("disk full"); }); return "returned"; } catch (e) { return asErr(e).message; } })();
+    check(`a writer that throws: its error comes through, its time still counted (${thrown})`, thrown === "disk full" && run.durationMs().write === 25 && tally.writeMs === 25);
   }
 
   console.log("a read with no meter and no listener");
@@ -100,11 +104,12 @@ try {
   {
     const heard: string[] = [];
     const tally = { exportMs: 0, writeMs: 0 };
-    const { sent, ms } = await meteredRequest(() => route.request("ping", {}, { target: "Kit" }), { meter: { sent: () => heard.push("sent"), replied: () => heard.push("replied"), tick: () => {} }, tally });
-    check("the meter hears it; its time is added to the tally", heard.join(",") === "sent,replied" && sent.client?.file === "Kit" && Math.abs(tally.exportMs - ms) <= 5);
+    const ping = async (target: string) => { const sent = route.request("ping", {}, { target }); clockMs += 7; return sent; };
+    const { sent, ms } = await meteredRequest(() => ping("Kit"), { meter: { sent: () => heard.push("sent"), replied: () => heard.push("replied"), tick: () => {} }, tally, now });
+    check("the meter hears it; its time is added to the tally", heard.join(",") === "sent,replied" && sent.client?.file === "Kit" && ms === 7 && tally.exportMs === 7);
     const failed = { exportMs: 0, writeMs: 0 };
-    const why = await meteredRequest(() => route.request("ping", {}, { target: "Nobody" }), { tally: failed }).then(() => "resolved", (e: unknown) => asErr(e).message);
-    check(`a request that fails rejects as it did, its time still counted (${why})`, why !== "resolved" && failed.exportMs >= 0);
+    const why = await meteredRequest(() => ping("Nobody"), { tally: failed, now }).then(() => "resolved", (e: unknown) => asErr(e).message);
+    check(`a request that fails rejects as it did, its time still counted (${why})`, /no connected Figma file matches 'Nobody'/.test(why) && failed.exportMs === 7);
   }
 
   console.log("cancel");
