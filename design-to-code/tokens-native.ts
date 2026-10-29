@@ -26,8 +26,8 @@
 // https://developers.figma.com/docs/rest-api/variables-types/: VariableComposedColor.opacity is "An
 // opacity percentage from 0 to 100, or an alias to a FLOAT variable"; VariableScope "OPACITY corresponds
 // to layer opacity, while COLOR_OPACITY corresponds to the opacity channel of a color"). Every platform
-// below takes opacity as a 0–1 fraction, so an OPACITY / COLOR_OPACITY-scoped FLOAT (tokens-core.ts
-// percentOpacity — the same test that gives it `N%` in tokens.css and unit "percent" in DTCG) is written
+// below takes opacity as a 0–1 fraction, so an OPACITY / COLOR_OPACITY-scoped FLOAT (class
+// `percent` in variable-class.ts — the class that gives it `N%` in tokens.css and unit "percent" in DTCG) is written
 // as clamp(N)/100 (clamp: color.ts clampOpacityPct, as Figma clamps):
 //   swiftui       Double   — View.opacity(_ opacity: Double) / Color.opacity(_:), 0…1 (developer.apple.com/documentation/swiftui/view/opacity(_:))
 //   compose       Float    — Modifier.alpha(alpha: Float) / Color.copy(alpha = …), 0f…1f (developer.android.com/reference/kotlin/androidx/compose/ui/draw/package-summary#(androidx.compose.ui.Modifier).alpha(kotlin.Float))
@@ -40,9 +40,10 @@
 import type { TokensDoc, Variable } from "./types.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
 
-// Names, aliases and units must agree with the DTCG/CSS output, so they come from the same readers
-// tokens.ts uses (tokens-core.ts, variable-resolve.ts).
-import { segs, isSentinel, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+// Names, aliases and classes must agree with the DTCG/CSS output, so they come from the same readers
+// tokens.ts uses (tokens-core.ts, variable-class.ts, variable-resolve.ts).
+import { segs, commentText } from "./tokens-core.ts";
+import { classifyVariable, isSentinel, type UnitOpts, type VariableClass } from "./variable-class.ts";
 import { variableResolver, type VariableResolver } from "./variable-resolve.ts";
 import { nullProto } from "../bridge/src/json-util.ts";
 import { disambiguated, keyTag, nativeIdentifier } from "./token-naming.ts";
@@ -65,7 +66,7 @@ interface Candidate { v: Variable; kind: NativeKind; values: Record<string, Conc
 type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
 export interface NativeFile { file: string; text: string; warnings: string[] }
 
-// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens-core.ts). A field holding it is
+// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in variable-class.ts). A field holding it is
 // written as each platform's own idiom — never as the literal.
 const FULL = Object.freeze({ fullyRounded: true });
 
@@ -85,21 +86,13 @@ const PROFILE_ALIASES: Record<string, string> = { "android-compose": "compose", 
 const camel = nativeIdentifier;
 const pascal = (parts: string[]): string => { const c = camel(parts); return c.charAt(0).toUpperCase() + c.slice(1); };
 
-// A font size must scale with the user's setting on Android (sp), a spacing must not (dp). Scopes say
-// so when the designer narrowed them; Figma's default is ALL_SCOPES, so fall back to the name.
-function isFontSize(v: Variable): boolean {
-  const scopes = v.scopes || [];
-  if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-  return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
-}
-
-function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
-  if (v.type === "COLOR") return "color";
-  if (v.type === "BOOLEAN") return "bool";
-  if (v.type === "STRING") return "string";
-  if (v.type === "FLOAT") return unitDecision(v, opts) === "px" ? (isFontSize(v) ? "fontSize" : "dimension") : "number";
-  return null;
-}
+// variable-class.ts decides what a variable is; a native file only has these field types. A font size must scale with
+// the user's setting on Android (sp), every other length must not (dp) — a radius included. An opacity percentage is
+// a number (written as a 0–1 fraction, see the header).
+const NATIVE_KIND: Record<VariableClass, NativeKind> = {
+  color: "color", bool: "bool", string: "string", fontFamily: "string",
+  fontSize: "fontSize", length: "dimension", radius: "dimension", percent: "number", number: "number",
+};
 
 // Loose on purpose (not doc-guards' isComposed): a value with a `composed` key picks the "composed colour" skip note,
 // including a malformed one.
@@ -130,11 +123,12 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
     const fields: NativeField[] = [];
     const cands: Candidate[] = [];
     for (const v of mine) {
-      const kind = kindOf(v, opts);
+      const cls = classifyVariable(v, opts);
+      const kind = cls && NATIVE_KIND[cls];
       if (!segs(v.name).length) continue;
       if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
       // An opacity FLOAT is written as a 0–1 fraction (see the header); every other value verbatim.
-      const pct = kind === "number" && percentOpacity(v, opts);
+      const pct = cls === "percent";
       // Null-prototype: keyed by MODE NAMES, free-form designer strings — `values["__proto__"] = r` on a plain object
       // sets nothing, and the emitter would then read Object.prototype back as that mode's value.
       const values: Record<string, Concrete> = nullProto();
