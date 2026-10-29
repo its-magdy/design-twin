@@ -48,7 +48,8 @@ import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
-import { segs, isSentinel, unitDecision, percentOpacity, commentText, type UnitOpts } from "./tokens-core.ts";
+import { segs, commentText } from "./tokens-core.ts";
+import { classifyVariable, isLengthClass, isSentinel, unitDecision, type UnitOpts, type VariableClass } from "./variable-class.ts";
 import { variableResolver, defaultModeName, baseValue, type VariableResolver } from "./variable-resolve.ts";
 import { toNative, platformOf } from "./tokens-native.ts";
 import { cssVarName, disambiguated, keyTag, tailwindVarName, type TwKind } from "./token-naming.ts";
@@ -59,7 +60,7 @@ import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import { MERGED_VARIABLES_FILE, TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
 
-/** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision, in tokens-core.ts). */
+/** The options every emitter shares (opts.unitless is honoured by the ONE classifyVariable, in variable-class.ts). */
 export interface EmitOpts extends UnitOpts {
   /** toCSS: the selector a non-default mode's block lives under. Default `[<scope.attribute>="<mode>"]`,
    *  where scope.attribute is `data-theme`, or `data-theme-<collection>` when several collections have a
@@ -295,7 +296,7 @@ function collisionMessages(notes: readonly CollisionNote[], opts?: EmitOpts): st
   return out;
 }
 
-// Figma's "fully rounded" corner (tokens-core.ts isSentinel) is written as 9999px on the web, and in DTCG
+// Figma's "fully rounded" corner (variable-class.ts isSentinel) is written as 9999px on the web, and in DTCG
 // with the original kept under $extensions.
 const WEB_FULL_ROUND = 9999;
 const webNumber = (v: Variable, raw: VariableValue): VariableValue => (isSentinel(v, raw) ? WEB_FULL_ROUND : raw);
@@ -391,7 +392,7 @@ const DTCG_TYPE: Partial<Record<VariableType, DtcgType>> = { COLOR: "color", FLO
 const EMITTED_TYPES: ReadonlySet<string> = new Set<VariableType>(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
 const emitted = (v: Variable): boolean => EMITTED_TYPES.has(v.type);
 
-// `dimension`: the FLOAT is a length (see unitDecision) — DTCG 2025.10 requires the object form
+// `dimension`: the FLOAT is a length (variable-class.ts: length, radius or font size) — DTCG 2025.10 requires the object form
 // {value, unit:"px"|"rem"} for $type "dimension"; a bare number there is non-conformant.
 // Only a scalar or an alias has a DTCG value here: an object (a motion value) is null — never "[object Object]".
 // A composed colour's $value is its COLOUR half — a reference, or the structured colour of its hex (a
@@ -430,7 +431,7 @@ function dtcgOpacity(raw: VariableValue | undefined, ref?: (name: string) => str
 // reported. The value check runs BEFORE the group descent so a skipped token leaves no empty group
 // behind in a context file.
 // `opts` is the same bag toCSS takes (opts.unitless) — the px-vs-unitless decision for a FLOAT is made
-// by the ONE unitDecision() every emitter shares, so tokens.dtcg.json, tokens.css and the resolver set
+// by the ONE classifyVariable() every emitter shares, so tokens.dtcg.json, tokens.css and the resolver set
 // files cannot disagree about which numbers are lengths.
 const SKIP = Symbol("resolver-set omits this token");
 type PickValue = (v: Variable) => VariableValue | undefined | typeof SKIP;
@@ -492,7 +493,8 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     if (v.type === "COLOR" && isHexish(bv) && !normHex(bv)) warn(`token '${v.name}' has malformed hex '${bv}'`);
     // A FLOAT that toCSS would emit with `px` IS a dimension; one it leaves unitless (opacity,
     // font-weight) stays a `number`.
-    const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
+    const cls = classifyVariable(v, opts);
+    const dimension = isLengthClass(cls);
     if (dimension) type = "dimension";
     // Figma composes COLOR values only; one on any other type would put a colour under a non-colour $type.
     if (isComposed(bv) && v.type !== "COLOR") { warn(`token '${v.name}' is a ${v.type} variable holding a composed colour value — skipped`); continue; }
@@ -518,10 +520,10 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     if (!withExtensions) { // resolver set files: modes live in the resolver
       // …and so does an opacity FLOAT's scale: a set's `sources` are ordinary DTCG token files
       // (designtokens.org/tr/2025.10/resolver/), so a set file's `number` must say it is Figma's 0–100
-      // percentage exactly as tokens.dtcg.json does (same key, same value, same condition: percentOpacity).
+      // percentage exactly as tokens.dtcg.json does (same key, same value, same condition: the `percent` class).
       const setExt: DtcgFigmaExtension = {};
       if (opacity !== undefined) setExt.opacity = opacity;
-      if (percentOpacity(v, opts)) setExt.unit = "percent";
+      if (cls === "percent") setExt.unit = "percent";
       if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf; continue;
     }
@@ -548,7 +550,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded — emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
     // A `number` token says nothing about its scale; Figma's opacities are 0–100, not DTCG/CSS's 0–1.
-    if (percentOpacity(v, opts)) ext.unit = "percent";
+    if (cls === "percent") ext.unit = "percent";
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean"; // marks a boolean coerced to a string token
     // Vendor key `figma.com` — the namespace the DTCG Resolver Module's own examples and Figma's native
@@ -574,10 +576,10 @@ function toDTCG(designSystem: TokensDoc | null | undefined, warnings?: string[],
   return tree;
 }
 
-// FLOAT unit (tokens-core.ts unitDecision / percentOpacity): '%' for an opacity percentage, px for a length, none otherwise.
+// A number's CSS unit, by its class (variable-class.ts): '%' for an opacity percentage, px for a length, none otherwise.
 function numberUnit(variable: Variable, opts?: UnitOpts): string {
-  if (percentOpacity(variable, opts)) return "%";
-  return unitDecision(variable, opts) === "px" ? "px" : "";
+  const cls = classifyVariable(variable, opts);
+  return cls === "percent" ? "%" : isLengthClass(cls) ? "px" : "";
 }
 // Figma clamps an out-of-range opacity itself (Help Center,
 // https://help.figma.com/hc/en-us/articles/14506821864087): "If the number variable has a negative
@@ -598,7 +600,7 @@ function cssPercentVar(plan: IdPlan, v: Variable | null, opts: UnitOpts | undefi
   const { vars, complete } = plan.vars.closure(v);
   return complete && vars.every((x) => {
     const vals = Object.values(x.values || {}).filter((val) => val !== undefined);
-    return percentOpacity(x, opts) && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || (typeof val === "string" && NUMERIC_TEXT.test(val)));
+    return classifyVariable(x, opts) === "percent" && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || (typeof val === "string" && NUMERIC_TEXT.test(val)));
   });
 }
 
@@ -783,7 +785,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
     const r = ref(v), p = pctRef(v);
     // A font-family STRING (the same test theme.css uses) is written as a font-family value, quoted when
     // it is not one identifier — `font-family: var(--Heading)` must not get `Inter Display 2` bare.
-    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const font = classifyVariable(v, opts) === "fontFamily";
     const val = (raw: VariableValue): string => (font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p));
     rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
@@ -823,25 +825,12 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 // The namespace is decided here (twKind); the name itself is token-naming.ts tailwindVarName's.
 const twName = (v: Variable, opts?: EmitOpts): string => tailwindVarName(v.name, twKind(v, opts));
 
-const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
+// The namespace each class earns (variable-class.ts decides the class). A unitless FLOAT (opacity, weight) and a STRING
+// that is no font family match no namespace.
+const TW_KIND: Partial<Record<VariableClass, TwKind>> = { color: "color", length: "dimension", radius: "radius", fontSize: "fontSize", fontFamily: "fontFamily" };
 function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
-  if (v.type === "COLOR") return "color";
-  const scopes = v.scopes || [];
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  // the scope is the designer's own statement — a FONT_FAMILY-scoped STRING is a font family
-  // whatever it is called ("Heading" in a "Type" collection). The name is only a fallback when the scopes
-  // say nothing (ALL_SCOPES / none); a STRING narrowed to anything else (FONT_STYLE: "Semi Bold") is not one.
-  if (v.type === "STRING") {
-    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
-    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
-  }
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null; // unitless: opacity/weight — no Tailwind namespace fits
-  if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
-  if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
-  if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
-  if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
-  return "dimension";
+  const cls = classifyVariable(v, opts);
+  return (cls && TW_KIND[cls]) ?? null;
 }
 
 // A font family as a font-family VALUE: a family name that is not a single identifier ("Open Sans",
@@ -875,7 +864,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
   const aliasedByFont = new Set<Variable>();
   // The whole alias chain: a kept STRING that itself aliases another STRING keeps that one too.
-  for (const v of vars) if (v.type === "STRING" && twKind(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
+  for (const v of vars) if (classifyVariable(v, opts) === "fontFamily") for (const t of plan.vars.closure(v).vars.slice(1)) aliasedByFont.add(t);
   const leftOut: string[] = [];
   let utilities = 0;
   for (const v of vars) {
@@ -1149,7 +1138,7 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
   }
   // Opacity FLOATs outside 0–100: clamped in the CSS exactly as Figma clamps them (see clampOpacityPct in color.ts).
   for (const v of vars) {
-    if (!percentOpacity(v, opts)) continue;
+    if (classifyVariable(v, opts) !== "percent") continue;
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
