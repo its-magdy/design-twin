@@ -118,6 +118,9 @@ console.log("no usable age");
   put(path.join(both, "design-system.json"), { exportedAt: "yesterday", file: "Kit" });
   check(`no usable stamp, one absent and one not a date: the one not a date is named (got ${readExportVerdict(both, NOW).unknownFreshness})`,
     /exportedAt \('yesterday'\) in design-system\.json/.test(readExportVerdict(both, NOW).unknownFreshness ?? ""));
+  const bothSnap = statusSnapshot(readExportVerdict(both, NOW));
+  check(`…and figma_status's snapshot describes that same source (got ${JSON.stringify(bothSnap)})`, !!bothSnap && "exportedAt" in bothSnap
+    && bothSnap.file === path.join(both, "design-system.json") && bothSnap.exportedAt === "yesterday" && bothSnap.sourceFile === "Kit");
   check("one unparseable source beside a stamped one: the export has an age; that source says why it has none",
     partly.newest?.sourceFile === "App" && partly.unknownFreshness === undefined && src(partly, "design-system", "Kit")?.problem === "unparseable");
 }
@@ -132,6 +135,10 @@ console.log("a page walk's index names the file its unattributed rows do not");
   const snap = statusSnapshot(v);
   check("figma_status's snapshot names it, as it did before", !!snap && "sourceFile" in snap && snap.sourceFile === "Product" && snap.ageMs === 3 * HOUR);
   check("one Figma file: not mixed", !v.mixed);
+  put(path.join(root, "pages", "index.json"), { file: "Product", pageDirs: [], layers: [{ id: "1:1", name: "S", file: "pages/P/S.json" }] });
+  const undated = statusSnapshot(readExportVerdict(root, NOW));
+  check(`…and with no stamp anywhere, the snapshot and its warning are the walk's, as before (got ${JSON.stringify(undated)})`, !!undated && "warning" in undated
+    && undated.file === path.join(root, "pages", "index.json") && undated.sourceFile === "Product" && /no exportedAt stamp in index\.json/.test(undated.warning ?? ""));
 }
 
 console.log("a stamp from the future");

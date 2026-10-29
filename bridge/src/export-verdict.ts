@@ -109,6 +109,8 @@ export interface ExportVerdict {
   readonly stale: boolean;
   /** why freshness is unknown: set when there are sources and none carries a usable stamp */
   readonly unknownFreshness: string | undefined;
+  /** the source unknownFreshness names (set with it) */
+  readonly undated: ExportSource | undefined;
   /** the sources name more than one Figma file */
   readonly mixed: boolean;
   readonly problems: readonly ExportProblem[];
@@ -187,12 +189,14 @@ function verdictOf(fresh: ExportFreshness, now: number): ExportVerdict {
     // a tie goes to a source that names its Figma file (a page walk's index beside the rows it stamped)
     if (!newest || s.ageMs < newest.ageMs || (s.ageMs === newest.ageMs && newest.sourceFile === null && s.sourceFile !== null)) newest = { exportedAt: s.exportedAt, ageMs: s.ageMs, kind: s.kind, sourceFile: s.sourceFile, file: s.file };
   }
-  // why there is no age: a stamp that is not a date says more than one that is absent
-  const first = sources.find((s) => s.problem === "unparseable") ?? sources[0];
+  // why there is no age, said of one source: a stamp that is not a date says more than one that is absent, and a
+  // source read from a file (and naming its Figma file) more than screen rows that name neither
+  const undated = newest ? undefined
+    : sources.find((s) => s.problem === "unparseable") ?? sources.find((s) => s.file && s.sourceFile !== null) ?? sources.find((s) => s.file) ?? sources[0];
   const label = (s: ExportSource): string => (s.file ? path.basename(s.file) : s.kind === "screens" ? "the screen index rows" : s.kind);
-  const unknownFreshness = newest || !first ? undefined
-    : first.problem === "unparseable" ? `exportedAt ('${first.exportedAt}') in ${label(first)} is not a parseable timestamp`
-    : `no exportedAt stamp in ${label(first)} — freshness unknown (re-export with the current plugin)`;
+  const unknownFreshness = !undated ? undefined
+    : undated.problem === "unparseable" ? `exportedAt ('${undated.exportedAt}') in ${label(undated)} is not a parseable timestamp`
+    : `no exportedAt stamp in ${label(undated)} — freshness unknown (re-export with the current plugin)`;
 
   const best = fresh.newestScreen;
   const lastScreen: LastScreenExport | null = best && {
@@ -212,6 +216,7 @@ function verdictOf(fresh: ExportFreshness, now: number): ExportVerdict {
     staleAfterMs: STALE_MS,
     stale: newest !== null && newest.ageMs > STALE_MS,
     unknownFreshness,
+    undated,
     // a screen doc's label is a screen's name, not a Figma file's
     mixed: new Set(sources.filter((s) => s.kind !== "screen-doc" && s.sourceFile !== null).map((s) => s.sourceFile)).size > 1,
     problems: fresh.problems,
@@ -233,7 +238,7 @@ export type StatusSnapshot =
   | { file: string; error: string; problems: readonly ExportProblem[] };
 
 export function statusSnapshot(v: ExportVerdict): StatusSnapshot | null {
-  const first = v.sources[0];
+  const first = v.undated ?? v.sources[0];
   if (!first) {
     const p = v.problems[0];
     return p ? { file: path.join(v.root, ...p.file.split("/")), error: `${p.file} ${p.error}`, problems: v.problems } : null;
