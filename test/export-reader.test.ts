@@ -422,6 +422,9 @@ console.log("doctor counts each screen once (a screen re-filed under a renamed p
   check("freshness: one screen from one source", (() => { const g = readExportFreshness(root).screens; return g.length === 1 && g[0]?.sourceFile === "Product" && g[0].count === 1; })());
   const exp = checkProject(project).filter((c) => c.id === "export");
   check(`doctor: 1 screen, not 2 (got ${JSON.stringify(exp.map((c) => c.detail))})`, exp.length === 1 && /^1 screen\(s\) from 'Product'/.test(exp[0]?.detail ?? ""));
+  const stale = checkProject(project, Date.now() + 3 * 86400000).filter((c) => c.id === "export");
+  check(`doctor: a stale export that mixes Figma files keeps the cross-file pointer beside "re-run" (got ${stale[0]?.next})`,
+    stale[0]?.status === "warn" && /re-run the pull/.test(stale[0].next ?? "") && /audit-design/.test(stale[0].next ?? ""));
 }
 
 report();

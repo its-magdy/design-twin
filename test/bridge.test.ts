@@ -1787,7 +1787,7 @@ void (async () => {
   // figma-pull.js resolves which connected Figma file a pull actually talked to and stamps the RESULT
   // as `r.sourceFile` (see resolveSourceFile()/stampSource() there); write-out.js's job is only to
   // persist it. Before this fix, a screen JSON carried no field naming its own source at all, so
-  // doctor.js could only ever report whichever file design-system.json or the snapshot-meta pick
+  // doctor.js could only ever report whichever file design-system.json or a single-file pick
   // happened to name — attributing every screen to the wrong Figma file when the design system lives
   // in a different one.
   {
@@ -2230,7 +2230,7 @@ void (async () => {
   // so an export lands in the project being built, not next to the bridge's own source.
   ok("[write-out] a relative outDir resolves against process.cwd()",
     OUT.resolveOutDir("design") === path.resolve(process.cwd(), "design"));
-  ok("[write-out] FIGMA_EXPORT_DIR is the fallback — the same var snapshot-meta.js reads",
+  ok("[write-out] FIGMA_EXPORT_DIR is the fallback — the same var export-verdict.ts (figma_status) reads",
     (() => {
       const prev = process.env.FIGMA_EXPORT_DIR;
       process.env.FIGMA_EXPORT_DIR = "custom-out";

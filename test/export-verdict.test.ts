@@ -113,8 +113,40 @@ console.log("no usable age");
   check("a stamp that is not a date: said, with the stamp", /exportedAt \('last week'\) in design-system\.json is not a parseable timestamp/.test(readExportVerdict(bad, NOW).unknownFreshness ?? ""));
   put(path.join(bad, "pages", "index.json"), { pageDirs: [], layers: [{ id: "1:1", name: "S", file: "pages/P/S.json", sourceFile: "App", exportedAt: ago(1) }] });
   const partly = readExportVerdict(bad, NOW);
+  const both = tmp("unparseable-and-missing");
+  put(path.join(both, "pages", "index.json"), { pageDirs: [], layers: [{ id: "1:1", name: "S", file: "pages/P/S.json" }] });
+  put(path.join(both, "design-system.json"), { exportedAt: "yesterday", file: "Kit" });
+  check(`no usable stamp, one absent and one not a date: the one not a date is named (got ${readExportVerdict(both, NOW).unknownFreshness})`,
+    /exportedAt \('yesterday'\) in design-system\.json/.test(readExportVerdict(both, NOW).unknownFreshness ?? ""));
   check("one unparseable source beside a stamped one: the export has an age; that source says why it has none",
     partly.newest?.sourceFile === "App" && partly.unknownFreshness === undefined && src(partly, "design-system", "Kit")?.problem === "unparseable");
+}
+
+console.log("a page walk's index names the file its unattributed rows do not");
+{
+  const root = tmp("walk-named");
+  put(path.join(root, "pages", "index.json"), { exportedAt: ago(3), file: "Product", pageDirs: [], layers: [{ id: "1:1", name: "S", file: "pages/P/S.json" }] });
+  const v = readExportVerdict(root, NOW);
+  check(`the rows stay unattributed; the walk names its Figma file (got ${JSON.stringify(v.sources.map((s) => [s.kind, s.sourceFile]))})`,
+    src(v, "screens", null)?.count === 1 && src(v, "page-walk", "Product")?.ageMs === 3 * HOUR);
+  const snap = statusSnapshot(v);
+  check("figma_status's snapshot names it, as it did before", !!snap && "sourceFile" in snap && snap.sourceFile === "Product" && snap.ageMs === 3 * HOUR);
+  check("one Figma file: not mixed", !v.mixed);
+}
+
+console.log("a stamp from the future");
+{
+  const root = tmp("future");
+  put(path.join(root, "design-system.json"), { exportedAt: ago(-2), file: "Kit" });
+  const v = readExportVerdict(root, NOW);
+  check("a clock ahead of this one: a negative age, newest, never stale", v.newest?.ageMs === -2 * HOUR && !v.stale);
+}
+
+console.log("a row whose file is not inside the export");
+{
+  const root = tmp("abs-row");
+  put(path.join(root, "pages", "index.json"), { pageDirs: [], layers: [{ id: "1:1", name: "S", file: "/elsewhere/S.json", sourceFile: "App", exportedAt: ago(1) }] });
+  check("an absolute `file` names no file (never re-rooted under the export)", (() => { const s = src(readExportVerdict(root, NOW), "screens", "App"); return !!s && s.file === undefined; })());
 }
 
 console.log("unusable files");
@@ -171,6 +203,8 @@ console.log("the newest screen row");
   check("a page-walk row without its own stamp uses the index's exportedAt", (() => { const l = readExportVerdict(dir, NOW).lastScreen; return l?.id === "4:4" && l.exportedAt === ago(0.5); })());
   idx("{ not json");
   check("a garbled index: no newest screen", readExportVerdict(dir, NOW).lastScreen === null);
+  fs.rmSync(path.join(dir, "pages", "index.json"));
+  check("no index: no newest screen", readExportVerdict(dir, NOW).lastScreen === null);
 }
 
 report();

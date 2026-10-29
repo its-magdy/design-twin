@@ -75,6 +75,9 @@ export function resolveInside(base: string, rel: string, within: string = base):
 /** A pointer an export document holds ("/"-separated, relative to the export root), resolved inside the root only;
  *  an absolute pointer is refused too. */
 const inside = (root: string, rel: unknown): string | null => (typeof rel === "string" && rel && !path.isAbsolute(rel) ? resolveInside(root, rel) : null);
+/** A file an export document names ("/"-separated, relative to the export root — an index row's `file`), absolute,
+ *  inside the root only; null for anything else (an absolute path, `..` leaving the root, a non-string). */
+export const exportFileOf = (root: string, rel: unknown): string | null => inside(root, rel);
 
 /** An export file that is there but unusable: its name relative to the export root ("/"-spelt), and why. */
 export interface ExportProblem { readonly file: string; readonly error: string }

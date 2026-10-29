@@ -315,9 +315,9 @@ function exportChecks(v: ExportVerdict, rel: string): Check[] {
     out.push(warn("export", "Export", v.unknownFreshness, "re-run the pull"));
   } else {
     const detail = v.sources.map(sourcePart).join(" + ");
-    if (v.stale) out.push(warn("export", "Export", `${detail} — the Figma file may have moved on`, "re-run the pull before building from it"));
-    else if (v.mixed) out.push({ ...ok("export", "Export", detail), next: "the export mixes Figma files — /designtwin:audit-design's cross-file check says whether they are one system" });
-    else out.push(ok("export", "Export", detail));
+    const mixed = v.mixed ? "the export mixes Figma files — /designtwin:audit-design's cross-file check says whether they are one system" : undefined;
+    if (v.stale) out.push(warn("export", "Export", `${detail} — the Figma file may have moved on`, ["re-run the pull before building from it", mixed].filter(Boolean).join("; ")));
+    else out.push({ ...ok("export", "Export", detail), ...ifDefined("next", mixed) });
   }
   for (const p of problems) out.push(warn("export", "Export", `${p} — left out of the export summary`, "re-run the pull that writes it (or fix the hand edit)"));
   return out;

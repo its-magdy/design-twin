@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DESIGN_SYSTEM_FILES } from "./design-system-layout.ts";
-import { readExportFreshness, resolveInside } from "./export-reader.ts";
+import { exportFileOf, readExportFreshness } from "./export-reader.ts";
 import type { ExportFreshness, ExportProblem } from "./export-reader.ts";
 
 /** How old the newest stamp may be before the export is stale — drift-lint's default max-age too. */
@@ -163,11 +163,14 @@ function verdictOf(fresh: ExportFreshness, now: number): ExportVerdict {
     sources.push({ kind, sourceFile: sourceFile || null, ...(count === undefined ? {} : { count }), exportedAt, ageMs,
       ...(problem ? { problem } : {}), ...(file ? { file } : {}) });
   };
-  const screenFile = (rel: unknown): string | undefined => (typeof rel === "string" && rel ? resolveInside(fresh.root, rel) ?? undefined : undefined);
+  const screenFile = (rel: unknown): string | undefined => exportFileOf(fresh.root, rel) ?? undefined;
   const named = fresh.screens.filter((g) => g.sourceFile !== null);
   for (const g of [...named, ...fresh.screens.filter((g) => g.sourceFile === null)]) add("screens", g.sourceFile, g.newestAt, screenFile(g.newestRow?.file), g.count);
   if (fresh.designSystem) add("design-system", fresh.designSystem.stamp.file, fresh.designSystem.stamp.exportedAt, fresh.designSystem.from);
-  if (fresh.index && !fresh.screens.length) add("page-walk", fresh.index.sourceFile, fresh.index.exportedAt, fresh.index.from);
+  // The page walk's own index: when it lists no screen, or when it names the Figma file that rows of an older bridge
+  // do not (those rows stay unattributed — some may be an earlier walk's — and the walk says what it was).
+  const unrecorded = fresh.screens.some((g) => g.sourceFile === null);
+  if (fresh.index && (!fresh.screens.length || (unrecorded && fresh.index.sourceFile))) add("page-walk", fresh.index.sourceFile, fresh.index.exportedAt, fresh.index.from);
   // The older flat layout's single-screen pull wrote only design/<Screen>.json: an export too, consulted only when
   // nothing above is stamped. A stamped one wins over an unstamped one (design/variables.json — export-shaped, written
   // beside the screen doc, carrying no exportedAt of its own — is the case that forces it); an unstamped one is still
@@ -181,9 +184,11 @@ function verdictOf(fresh: ExportFreshness, now: number): ExportVerdict {
   let newest: ExportNewest | null = null;
   for (const s of sources) {
     if (s.exportedAt === undefined || s.ageMs === undefined) continue;
-    if (!newest || s.ageMs < newest.ageMs) newest = { exportedAt: s.exportedAt, ageMs: s.ageMs, kind: s.kind, sourceFile: s.sourceFile, file: s.file };
+    // a tie goes to a source that names its Figma file (a page walk's index beside the rows it stamped)
+    if (!newest || s.ageMs < newest.ageMs || (s.ageMs === newest.ageMs && newest.sourceFile === null && s.sourceFile !== null)) newest = { exportedAt: s.exportedAt, ageMs: s.ageMs, kind: s.kind, sourceFile: s.sourceFile, file: s.file };
   }
-  const first = sources[0];
+  // why there is no age: a stamp that is not a date says more than one that is absent
+  const first = sources.find((s) => s.problem === "unparseable") ?? sources[0];
   const label = (s: ExportSource): string => (s.file ? path.basename(s.file) : s.kind === "screens" ? "the screen index rows" : s.kind);
   const unknownFreshness = newest || !first ? undefined
     : first.problem === "unparseable" ? `exportedAt ('${first.exportedAt}') in ${label(first)} is not a parseable timestamp`
