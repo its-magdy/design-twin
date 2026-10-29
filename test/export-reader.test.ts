@@ -1,6 +1,7 @@
 // bridge/src/export-reader.ts: the reading side of an export, through one module — which export (exportRoot), every
 // screen it knows about (the root pages/index.json and every page's own pages/<dir>/index.json, merged under one rule),
-// the design system's stamp and its manifest pointers — and the bridge readers that ask it (doctor, snapshot-meta).
+// the design system's stamp and its manifest pointers — and the bridge readers that ask it (doctor). The verdict
+// on its freshness (attribution, age, staleness) is test/export-verdict.test.ts's.
 // Invented screens, temp dirs only. The two-walk fixture is written by bridge/src/pages-layout.ts's own
 // buildPageLayout, byte for byte as write-out.ts's writePages lands it: a page walk REPLACES the root index.
 //   bun test/export-reader.test.ts
@@ -20,7 +21,6 @@ import {
   readExportFreshness, readExportIndex,
 } from "../bridge/src/export-reader.ts";
 import { checkProject } from "../bridge/src/doctor.ts";
-import { lastScreenExport, readSnapshotInfo, snapshotInfoOf } from "../bridge/src/snapshot-meta.ts";
 import type { IndexRow } from "../design-to-code/types.ts";
 
 const tmp = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-index-" + tag + "-"));
@@ -274,8 +274,8 @@ console.log("exportedAtOf: when a row's screen was pulled");
   check("a page walk's root row: the root index's stamp", at("1:1") === "2026-01-02T00:00:00.000Z");
   check("a row's own stamp wins", at("1:2") === "2026-01-03T00:00:00.000Z" && at("2:2") === "2026-01-04T00:00:00.000Z");
   check("an earlier walk's unstamped row, listed by no root row: no stamp (the root's is another walk's)", at("2:1") === undefined);
-  const last = lastScreenExport(root, Date.parse("2026-01-05T00:00:00.000Z"));
-  check(`snapshot-meta's last screen is read off every index, not the root's rows alone (got ${last?.id})`, last?.id === "2:2" && last.file === "pages/Old/Single__2_2.json");
+  const last = readExportFreshness(root).newestScreen;
+  check(`the newest screen is read off every index, not the root's rows alone (got ${last?.row.id})`, last?.row.id === "2:2" && last.row.file === "pages/Old/Single__2_2.json");
 }
 
 console.log("exportRoot: which export a reader reads (and write-out writes)");
@@ -310,9 +310,6 @@ console.log("the design system: its stamp, and the manifest's pointers");
   put(path.join(root, "design-system", "tokens.json"), { exportedAt: "2026-01-01T00:00:00.000Z", file: "Kit", colorProfile: "srgb", variables: [] });
   const fromPart = readDesignSystemStamp(root);
   check("no manifest: a split part's stamp", fromPart.stamp?.file === "Kit" && fromPart.stamp.colorProfile === "srgb" && fromPart.problems.length === 0);
-  const snap = readSnapshotInfo(root);
-  check(`…and snapshot-meta (figma_status, doctor) reports the same export, not "nothing exported" (got ${JSON.stringify(snap)})`,
-    !!snap && "exportedAt" in snap && snap.exportedAt === "2026-01-01T00:00:00.000Z" && snap.sourceFile === "Kit");
   put(path.join(root, "design-system.json"), { exportedAt: "2026-01-02T00:00:00.000Z", file: "Kit v2", files: { componentsLocal: "design-system/components.local.json", tokens: "../outside.json" } });
   const fromManifest = readDesignSystemStamp(root);
   check("the manifest's stamp, the stamp fields only", JSON.stringify(fromManifest.stamp) === JSON.stringify({ exportedAt: "2026-01-02T00:00:00.000Z", file: "Kit v2" }));
@@ -372,7 +369,6 @@ console.log("freshness, per source");
   const root = tmp("fresh");
   const empty = readExportFreshness(root);
   check("nothing exported: no source, no problem", empty.designSystem === null && empty.index === null && empty.screens.length === 0 && empty.newestScreen === null && empty.problems.length === 0);
-  check("…and snapshot-meta says nothing exported", snapshotInfoOf(empty) === null);
   // an unstamped manifest beside a stamped split part: the stamped one dates the design system
   put(path.join(root, "design-system.json"), { file: "Kit", files: {} });
   put(path.join(root, "design-system", "tokens.json"), { exportedAt: "2026-01-01T00:00:00.000Z", file: "Kit", variables: [] });
@@ -398,21 +394,8 @@ console.log("freshness, per source");
   check("rows with no source are one group of their own, never another source's", group(null)?.count === 2 && group(null)?.newestAt === undefined);
   check("the page walk's own stamp", f.index?.exportedAt === "2026-01-03T00:00:00.000Z");
   check("the newest screen", f.newestScreen?.row.id === "1:2" && f.newestScreen.exportedAt === "2026-01-04T00:00:00.000Z");
+  check("…and each source's newest row", group("App")?.newestRow?.id === "1:2" && group("Marketing")?.newestRow?.id === "2:1" && group(null)?.newestRow === null);
   check(`every unusable file is a problem (got ${JSON.stringify(f.problems)})`, f.problems.length === 1 && f.problems[0]?.file === "pages/C/index.json");
-  const snap = snapshotInfoOf(f);
-  check("snapshot-meta reads the same answer: the design system's stamp first", !!snap && "exportedAt" in snap && snap.exportedAt === "2026-01-01T00:00:00.000Z" && snap.sourceFile === "Kit");
-  const onlyBroken = tmp("fresh-broken");
-  put(path.join(onlyBroken, "design-system.json"), "{ not json");
-  const broken = snapshotInfoOf(readExportFreshness(onlyBroken));
-  check(`nothing usable but a broken manifest: the problem, not "nothing exported" (got ${JSON.stringify(broken)})`,
-    !!broken && "error" in broken && /design-system\.json is not valid JSON/.test(broken.error) && broken.file === path.join(onlyBroken, "design-system.json"));
-  put(path.join(onlyBroken, "pages", "index.json"), "{ not json either");
-  const both = snapshotInfoOf(readExportFreshness(onlyBroken));
-  check("a broken manifest AND a broken root index: the manifest's problem is the one reported", !!both && "error" in both && /^design-system\.json /.test(both.error));
-  const labelled = tmp("fresh-label");
-  put(path.join(labelled, "pages", "index.json"), { exportedAt: "2026-01-03T00:00:00.000Z", file: "Product", pageDirs: [] });
-  const fromIndex = snapshotInfoOf(readExportFreshness(labelled));
-  check(`a page walk's root index names its Figma file (got ${JSON.stringify(fromIndex)})`, !!fromIndex && "sourceFile" in fromIndex && fromIndex.sourceFile === "Product");
 }
 
 console.log("doctor counts each screen once (a screen re-filed under a renamed page's dir)");

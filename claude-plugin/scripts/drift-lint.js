@@ -98,8 +98,8 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
-// bridge/src/snapshot-meta.ts
-var MANIFEST2 = DESIGN_SYSTEM_FILES.MANIFEST;
+// bridge/src/export-verdict.ts
+var STALE_MS = 24 * 60 * 60 * 1e3;
 function field(doc, key) {
   return doc && typeof doc === "object" && key in doc ? doc[key] : void 0;
 }
@@ -1177,7 +1177,7 @@ var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + source
 
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0] ?? "";
-var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+var DEFAULT_MAX_AGE_MS = STALE_MS;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
   const { exportedAt, ageMs, problem } = snapshotAge(catalog, opts.now || Date.now());

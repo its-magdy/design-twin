@@ -9,7 +9,7 @@
 //
 // The freshness stamp (`exportedAt`/`file`) is stamped by the PLUGIN (collect.ts/components.ts).
 // Nothing here adds, strips or re-derives it — writeJson writes what it was handed, byte for byte,
-// because snapshot-meta.ts and design-to-code/drift-lint.ts both read that stamp back off disk.
+// because export-verdict.ts and design-to-code/drift-lint.ts both read that stamp back off disk.
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";

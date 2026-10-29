@@ -146,7 +146,7 @@ import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
 import { decideDelivery, describeWrite } from "./delivery.ts";
 import { prettyJsonWithin } from "./json-size.ts";
 import { findMapFile } from "./project-layout.ts";
-import { exportRoot, readComponentCatalog, readExportFreshness } from "./export-reader.ts";
+import { exportRoot, readComponentCatalog } from "./export-reader.ts";
 import type { Stamped } from "./write-out.ts";
 import type { CatalogComponent, ComponentDetailFile } from "./doc-types.ts";
 
@@ -323,13 +323,10 @@ function planned<P extends ReadPlan>(p: P | ReadRefusal): P {
 
 const READ_ONLY = { readOnlyHint: true } as const;
 
-// The design-system.json a figma-pull run left on disk carries its own `exportedAt`/`file` (stamped by
-// the plugin — collect.ts/components.ts, not invented here). figma_status reads it opportunistically so
-// an agent can see how stale its LAST EXPORT is without shelling out — this is snapshot age, distinct
-// from bridge connectivity, so a missing/unreadable file is not an error, just `snapshot: null`.
-// Lives in its own dependency-free module (snapshot-meta.ts, same pattern as node-id.ts /
-// errmsg.ts) so the test suite can read it directly, without loading the MCP server.
-import { snapshotInfoOf, lastScreenOf } from "./snapshot-meta.ts";
+// figma_status reports the verdict on the export on disk (export-verdict.ts — the one `dtwin doctor` formats) so an
+// agent can see how stale, and how mixed, its LAST EXPORT is without shelling out. That is distinct from bridge
+// connectivity, so nothing exported is not an error, just `snapshot: null`.
+import { readExportVerdict, statusSnapshot } from "./export-verdict.ts";
 
 // The version the server reports in its MCP `initialize` answer: the package's own, never a literal that
 // drifts from it.
@@ -339,16 +336,16 @@ const server = new McpServer({ name: "designtwin", version: pkg.version });
 server.registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the export on disk, if any, as `snapshot`: the newest stamp's exportedAt/ageMs/sourceFile, `stale` (older than `staleAfterMs`), `sources` (the screens of each Figma file, and the design system, each with its own age) and `problems` (files there but unusable) — so an agent can tell whether it's about to read a stale or mixed snapshot — plus `lastScreenExport` (the newest screen in pages/index.json) and `lastWrite` (the last file this server wrote, and whether that was an implicit spill).",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
   guarded(async (a, extra) => {
-    // One freshness reading of the export (export-reader.ts) answers both the snapshot and the newest screen row
-    // (disk); lastWrite is this server's own last write (session).
-    const fresh = readExportFreshness(exportRoot());
-    const snapshot = snapshotInfoOf(fresh);
-    const ledger = { lastScreenExport: lastScreenOf(fresh), lastWrite };
+    // One verdict on the export (export-verdict.ts) answers both the snapshot and the newest screen row (disk);
+    // lastWrite is this server's own last write (session).
+    const verdict = readExportVerdict(exportRoot());
+    const snapshot = statusSnapshot(verdict);
+    const ledger = { lastScreenExport: verdict.lastScreen, lastWrite };
     if (!(a && a.client)) {
       const clients = await route.listClients();
       if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot, ...ledger });

@@ -214,8 +214,11 @@ causes apart, marks each check ✓ / ! / ✗, and gives the one next step:
 ```
 dtwin doctor            # exit code 1 only if a check is ✗ (a note, !, is not a failure)
 dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s; it retries every second)
-dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
+dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next, skipped }] }
 ```
+
+`ok` is false when a check is ✗ **or** `skipped` (a check that could not run — the plugin probe while something
+else holds the port, or before a token exists — is a ! marked `skipped: true`, since nothing it would have verified was).
 
 Once a plugin connects, the probe can run up to ~6.5 s past `--wait`: the bridge's settle (so a second
 open file is seen), then each file's `hello` (so it is named).
@@ -230,7 +233,7 @@ open file is seen), then each file's `hello` (so it is named).
 5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
    says so with both fingerprints, instead of the "nothing connected" that case otherwise looks like.
 6. **Project** (the current directory) — `design/`, `design/target.json`, which export LAYOUT it
-   found, the age of the last export, **which Figma files that export mixes**, the component map
+   found, the age of the last export (its newest stamp; stale past 24h), **which Figma files that export mixes**, the component map
    (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
    registration (a legacy `figma` key still works; new setups use `designtwin`). A registered entry that
    cannot start — its command or `figma-mcp.ts` missing, Node-shaped (`node`, a `bridge/dist` script), bun
@@ -238,11 +241,12 @@ open file is seen), then each file's `hello` (so it is named).
    (`bunx designtwin mcp`) — is a ✗ naming `dtwin init --mcp`,
    which repairs it. `DT_TEST_EPHEMERAL_PORT` (a test-only seam) set in the environment is a note too.
 
-   The "which Figma files" line exists because the freshness line describes exactly one file — the
-   snapshot doctor happened to pick — and on a project whose screens came from a different Figma file
-   than its design system it would name the wrong one. When an export mixes sources, doctor
-   lists all of them and points at `/designtwin:audit-design`, whose cross-file check proves
-   whether the screens and the design system really are the same system.
+   The "which Figma files" line exists because one stamp describes exactly one file, and on a project
+   whose screens came from a different Figma file than its design system it would name the wrong one.
+   doctor lists every source with its own age — the screens of each Figma file, the design system — and
+   when they are more than one Figma file it points at `/designtwin:audit-design`, whose cross-file check
+   proves whether the screens and the design system really are the same system. `figma_status`'s
+   `snapshot` is the same verdict (bridge/src/export-verdict.ts), so the two never disagree.
 
 It changes nothing: no token is created, no file written. Check 5 opens a bridge for a few seconds,
 so it only runs when the port is free **and** a token already exists; when a daemon is up doctor asks
@@ -826,6 +830,12 @@ spill (`figma_export_url`/`figma_export_selection`) keeps ONLY `<screen>.json.pr
 `.assets.json`, `pages/index.json` and the merged `variables.json` are replaced with no copy, so a restored `.prev` is
 paired with the NEW siblings. A page/full/design-system spill keeps one per changed JSON file under `pages/` and
 `design-system/` plus `design-system.json`, listed in `wrote.prevKept`, with the count. `figma_status` reports
+`snapshot` — the export on disk, the verdict `dtwin doctor`'s export line words: `exportedAt`/`ageMs`/`sourceFile`/`file`
+of its NEWEST stamp (whichever source was pulled last — not the design system's by default), `warning` when no source
+carries a usable stamp, `stale` (older than `staleAfterMs`, 24h), `sources[]` (`{kind: "screens"|"design-system"|
+"page-walk"|"screen-doc", sourceFile, count?, exportedAt, ageMs, problem?, file?}` — the screens of each Figma file, `sourceFile:
+null` for rows an older bridge did not stamp) and `problems[]` (files there but unusable); `{file, error, problems}` when
+the only export file there is unusable; null when nothing is exported — plus
 `lastScreenExport` (the newest screen on disk: name, id, file, exportedAt, ageMs) and `lastWrite` (this server process's
 last export: tool, time, whether implicit, file, `prev`, `prevKept` count). `figma_whoami`'s `connection` is the addressed
 client's. `page`, `screens` and `catalogs` arguments accept an array, a JSON-encoded array string or a bare string.

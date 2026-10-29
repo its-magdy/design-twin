@@ -443,8 +443,8 @@ contradicts it (`.every()`, not `.some()`); `[unit-mixed]`/`[unit-pure]` in `tes
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
       `unknown-freshness` warning. Override the threshold with `bun design-to-code/drift-lint.ts map.json components.local.json --max-age <hours>`
       (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `bun bridge/src/figma-pull.ts` both surface the
-      same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/export/design-system.json`
-      manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
+      same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` is the export's NEWEST stamp (a design-system pull
+      after the screens reads as the design system's; `snapshot.sources` gives each source's own age).
 
 ### Reality check on a messy file (optional but recommended)
 - [ ] Run tokens on a file that hardcodes hex instead of using variables → `variables[]` is small/empty and

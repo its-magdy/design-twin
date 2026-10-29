@@ -13,7 +13,7 @@
 // "#id" suffix stripped on BOTH sides. Returns { errors, warnings, summary }.
 
 import { TYPE_TO_KIND } from "./kinds.ts"; // shared vocab — kept in sync with map-bootstrap
-import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition of the freshness stamp
+import { snapshotAge, STALE_MS } from "../bridge/src/export-verdict.ts"; // ONE definition of the freshness stamp and its threshold
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./visible-tree.ts";
 import { loadDocFile, loadSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
@@ -49,7 +49,7 @@ type Push = (arr: DriftFinding[], code: DriftCode, message: string, extra?: Part
 // emit `exportedAt` (ISO timestamp, ALWAYS present on a real export) and `file` (figma.root.name) at
 // the top level of buildDesignSystem()'s result. No wrapper is invented here — those are the fields
 // the plugin actually sends, read as-is.
-const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h, overridable (CLI --max-age <hours> / env)
+const DEFAULT_MAX_AGE_MS = STALE_MS; // 24h — doctor's and figma_status's stale threshold — overridable (CLI --max-age <hours> / env)
 
 // Never silently pass: a catalog with no exportedAt gets an explicit "freshness unknown" warning
 // rather than being treated as fresh, and one older than maxAgeMs gets a prominent stale warning
@@ -57,7 +57,7 @@ const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h, overridable (CLI --max-a
 // (the CLI) can also print an extra banner for the stale case without re-deriving the check.
 function checkFreshness(catalog: { exportedAt?: string | null; file?: string } | null | undefined, push: Push, warnings: DriftFinding[], opts: DriftLintOptions = {}): FreshnessWarning | undefined {
   const maxAgeMs = opts.maxAgeMs !== undefined && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
-  // Which field and whether it parses is snapshot-meta's rule (figma_status reads the same stamp);
+  // Which field and whether it parses is export-verdict's rule (figma_status and doctor read the same stamp);
   // only the threshold, the codes and the wording below are this linter's policy.
   const { exportedAt, ageMs, problem } = snapshotAge(catalog, opts.now || Date.now());
   if (problem === "missing") {

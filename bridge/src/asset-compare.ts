@@ -8,7 +8,7 @@
 // in a file the plugin bundle imports breaks that build, even for a function the bundle never calls.
 // svg-normalize.ts stays crypto-free so figma-plugin/src/util.ts can safely re-export it; this file
 // is imported only from the Bun side (bridge/src/write-out.ts, design-to-code/design-diff.ts — the latter
-// bundled by claude-plugin/build-scripts.ts the same way it already bundles bridge/src/snapshot-meta.ts).
+// bundled by claude-plugin/build-scripts.ts the same way it already bundles bridge/src/export-verdict.ts).
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { normalizeSvgText, isSvgName, svgFingerprint, numsWithin, relWithin, SVG_TOL } from "./svg-normalize.ts";

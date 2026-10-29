@@ -21,7 +21,7 @@
 //
 //   dtwin doctor            # human report; exit 1 only if a check is ✗
 //   dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s)
-//   dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
+//   dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next, skipped }] }
 
 import fs from "node:fs";
 import net from "node:net";
@@ -32,9 +32,8 @@ import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
 import * as daemon from "./daemon.ts";
 import type { DaemonStatusView } from "./daemon.ts";
-import { snapshotInfoOf } from "./snapshot-meta.ts";
-import { readExportFreshness } from "./export-reader.ts";
-import type { ExportFreshness } from "./export-reader.ts";
+import { readExportVerdict } from "./export-verdict.ts";
+import type { ExportSource, ExportVerdict } from "./export-verdict.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
@@ -51,19 +50,18 @@ import type { ClientRow, Bridge } from "./server-core.ts";
 import { exitCli } from "./stdio.ts";
 import { daemonAddressOf, readSettings, tokenSetting } from "./settings.ts";
 
-// Same threshold drift-lint uses for its STALE SNAPSHOT warning.
-const STALE_MS = 24 * 60 * 60 * 1000;
-
 /** Every check this report can carry, by id — what `--json` consumers key on. */
 export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
 
-/** One line of the report. `next` is the single next step (absent, or undefined, when there is none). */
+/** One line of the report. `next` is the single next step (absent, or undefined, when there is none). `skipped`: the
+ *  check could not run (a warn), so nothing it would have verified was — the report is not ok beside one. */
 export interface Check {
   id: CheckId;
   title: string;
   status: "ok" | "warn" | "fail";
   detail: string;
   next?: string;
+  skipped?: true;
 }
 
 export interface Report {
@@ -270,7 +268,7 @@ function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null |
 // `r` is probePlugin()'s result, or { skipped } when it could not run.
 function checkPlugin(r: PluginProbe, waitSec?: number): Check {
   const title = "Figma plugin";
-  if (r.skipped) return warn("plugin", title, `not checked — ${r.skipped}`, r.next);
+  if (r.skipped) return { ...warn("plugin", title, `not checked — ${r.skipped}`, r.next), skipped: true };
   if (r.clients && r.clients.length) {
     const c = connectedDetail(r.clients, "connected");
     // A stale plugin bundle IS a problem worth a warn, unlike the multi-client case (still `ok` — being
@@ -288,31 +286,41 @@ function checkPlugin(r: PluginProbe, waitSec?: number): Check {
 
 const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
 
-// The headline is read off export-reader.ts readExportFreshness: every screen row grouped by its own stamped
-// `sourceFile` (write-out.ts stamps it; a screen pulled before that field existed has none, told apart from a real value
-// rather than defaulting to the design system's), plus the design system's stamp — never whichever single document
-// snapshot-meta picks, which would attribute the whole export to the wrong Figma file. The rows are every page index on
-// disk, each screen once by the writer's identity (a screen re-filed under a renamed page's dir is one screen, not two),
-// and every index or manifest that is there but unusable is named, so the caller can say so instead of quietly counting
-// nothing.
-function exportSourceCounts(fresh: ExportFreshness, now: number): { parts: string[]; newestOverall: number | null; problems: string[] } {
-  const parts: string[] = [];
-  let newestOverall: number | null = null;
-  const noteNewest = (iso: string | undefined) => { const t = Date.parse(String(iso)); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
-  const ago = (iso: string | undefined) => (iso ? `${ageStr(now - Date.parse(iso))} ago` : "no stamp");
-  for (const g of fresh.screens) {
-    if (g.sourceFile === null) continue;
-    noteNewest(g.newestAt);
-    parts.push(`${g.count} screen(s) from '${g.sourceFile}' (newest ${ago(g.newestAt)})`);
+// One source of the export (export-verdict.ts), said: whose screens, the design system, and how old each is.
+function sourcePart(src: ExportSource): string {
+  const age = src.ageMs !== undefined ? `${ageStr(src.ageMs)} ago`
+    : src.problem === "unparseable" ? `exportedAt '${src.exportedAt}' is not a parseable timestamp` : "no stamp";
+  const from = src.sourceFile !== null ? ` from '${src.sourceFile}'` : "";
+  switch (src.kind) {
+    case "screens": return src.sourceFile === null
+      ? `${src.count} screen(s) (source not recorded — pulled by an older bridge; re-pull to stamp it)`
+      : `${src.count} screen(s)${from} (newest ${age})`;
+    case "design-system": return `design system${from} (${age})`;
+    case "page-walk": return `page walk${from} (${age})`;
+    case "screen-doc": return `screen '${src.sourceFile ?? path.basename(src.file ?? "")}' (${age})`;
   }
-  const unstamped = fresh.screens.find((g) => g.sourceFile === null)?.count ?? 0;
-  if (unstamped) parts.push(`${unstamped} screen(s) (source not recorded — pulled by an older bridge; re-pull to stamp it)`);
-  const ds = fresh.designSystem?.stamp;
-  if (ds?.file) {
-    noteNewest(ds.exportedAt);
-    parts.push(`design system from '${ds.file}' (${ago(ds.exportedAt)})`);
+}
+
+// The export lines: one summary (always the first "export" check), then one warn per file that is there but unusable.
+// Every fact is the verdict's (export-verdict.ts) — which file each screen came from, the newest stamp, whether it is
+// stale, why there is no age — so doctor and figma_status cannot disagree about the same export; this only words it.
+function exportChecks(v: ExportVerdict, rel: string): Check[] {
+  if (!v.exported) return [warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${rel}/)`, "dtwin list   →   dtwin pull --node <id>   (or --page <name> / --design-system)")];
+  const out: Check[] = [];
+  let problems = v.problems.map((p) => `${p.file} ${p.error}`);
+  if (!v.sources.length) {
+    out.push(warn("export", "Export", problems[0] ?? "", "re-run the pull"));
+    problems = problems.slice(1);
+  } else if (v.unknownFreshness) {
+    out.push(warn("export", "Export", v.unknownFreshness, "re-run the pull"));
+  } else {
+    const detail = v.sources.map(sourcePart).join(" + ");
+    if (v.stale) out.push(warn("export", "Export", `${detail} — the Figma file may have moved on`, "re-run the pull before building from it"));
+    else if (v.mixed) out.push({ ...ok("export", "Export", detail), next: "the export mixes Figma files — /designtwin:audit-design's cross-file check says whether they are one system" });
+    else out.push(ok("export", "Export", detail));
   }
-  return { parts, newestOverall, problems: fresh.problems.map((p) => `${p.file} ${p.error}`) };
+  for (const p of problems) out.push(warn("export", "Export", `${p} — left out of the export summary`, "re-run the pull that writes it (or fix the hand edit)"));
+  return out;
 }
 
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
@@ -341,38 +349,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
         "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
 
-    // Either a SnapshotInfo or a SnapshotParseError (only the latter carries `error`).
-    const fresh = readExportFreshness(ex.dir);
-    const snap = snapshotInfoOf(fresh);
-    // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
-    // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.ts checks all three; naming only
-    // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
-    if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull --node <id>   (or --page <name> / --design-system)"));
-    else if ("error" in snap) out.push(warn("export", "Export", snap.error, "re-run the pull"));
-    else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
-    else {
-      const ageMs = now - Date.parse(String(snap.exportedAt));
-      // Build the headline from the per-source counts (screens grouped by their OWN stamped
-      // source file, plus the design system's), rather than the single file snapshot-meta happened to
-      // pick — which reported "exported 12h ago from 'Acme Kit (Copy)'" on a project
-      // with 5 Sample App screens and 1 Acme Kit design system, attributing every screen to the
-      // wrong file. Falls back to the single-file line when nothing has per-source data yet (an
-      // export entirely from before this field existed, or a bare design-system-only pull).
-      const counts = exportSourceCounts(fresh, now);
-      if (counts.parts.length) {
-        const detail = counts.parts.join(" + ");
-        const stale = counts.newestOverall !== null && now - counts.newestOverall > STALE_MS;
-        out.push(stale
-          ? warn("export", "Export", `${detail} — the Figma file may have moved on`, "re-run the pull before building from it")
-          : ok("export", "Export", detail));
-      } else {
-        const age = ageStr(ageMs);
-        const from = snap.sourceFile ? ` from '${snap.sourceFile}'` : "";
-        out.push(ageMs > STALE_MS ? warn("export", "Export", `exported ${age} ago${from} — the Figma file may have moved on`, "re-run the pull before building from it") : ok("export", "Export", `exported ${age} ago${from}`));
-      }
-      // After the summary line, which stays the first "export" check.
-      for (const p of counts.problems) out.push(warn("export", "Export", `${p} — left out of the export summary`, "re-run the pull that writes it (or fix the hand edit)"));
-    }
+    out.push(...exportChecks(readExportVerdict(ex.dir, now), ex.rel));
 
     const map = LAYOUT.findMapFile(cwd);
     out.push(
@@ -552,14 +529,16 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
   if (tok.shadowed) add(checkToken(tok, pluginCheck, viaDaemon));
 
   add(...checkProject(cwd));
-  // A "not checked" warn (the plugin probe skipped, a port held by something else, etc.) is
-  // not advice like an ordinary warn — it means a check that was supposed to answer "can this project
-  // actually pull anything" never ran. `ok: true` beside one of those is worse than `ok: false`: it
-  // tells an automated caller (or a human skimming --json) that everything was verified when in fact
-  // it wasn't. Only a genuine "not checked" counts here — a warn about project state (stale export,
-  // legacy layout, parallel layout, no map) is real advice and must not flip the roll-up.
-  const notChecked = (c: Check) => c.status === "warn" && /not checked/i.test(c.detail || "");
-  return { ok: !checks.some((c) => c.status === "fail" || notChecked(c)), checks };
+  return { ok: reportOk(checks), checks };
+}
+
+// A skipped check (the plugin probe could not run: a port held by something else, no token yet) is not advice like an
+// ordinary warn — a check that was supposed to answer "can this project actually pull anything" never ran. `ok: true`
+// beside one of those is worse than `ok: false`: it tells an automated caller (or a human skimming --json) that
+// everything was verified when it wasn't. A warn about project state (stale export, legacy layout, no map) is real
+// advice and does not flip the roll-up.
+function reportOk(checks: readonly Check[]): boolean {
+  return !checks.some((c) => c.status === "fail" || c.skipped === true);
 }
 
 const MARK: Record<Check["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
@@ -579,7 +558,7 @@ async function main(argv: string[]): Promise<void> {
     if (a === undefined) continue; // cannot happen: i < argv.length
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
-      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Bun version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
+      console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Bun version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every second); once it has,\n             up to ~6.5 s more so every open file is seen and named\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next, skipped }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
       exitCli(0);
     } else if (a === "--wait" || a.startsWith("--wait=")) {
       const v = a === "--wait" ? argv[++i] : a.slice("--wait=".length);
@@ -598,4 +577,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, exportChecks, reportOk, probePort, probePlugin, run, main };

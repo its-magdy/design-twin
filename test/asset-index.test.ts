@@ -12,7 +12,6 @@ import { screenReply } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import * as writeOut from "../bridge/src/write-out.ts";
 import * as owners from "../bridge/src/asset-owners.ts";
-import * as snapshotMeta from "../bridge/src/snapshot-meta.ts";
 import { fileKeyCache } from "../bridge/src/asset-compare.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { Asset, IrNode, Manifest, ScreenExport, Variable } from "../bridge/src/doc-types.ts";
@@ -491,7 +490,7 @@ console.log("\nany geometry fallback warns, naming the nodes:");
 
 
 // ------------------------------------------------------------------ keepPrev
-// Guarded: a write-out / snapshot-meta from an older build lacks these behaviours (or the export), and each
+// Guarded: a write-out from an older build lacks these behaviours (or the export), and each
 // check must then FAIL with ✗, never crash the suite.
 console.log("\nkeepPrev keeps <screen>.json.prev when the existing file differs:");
 {
@@ -565,31 +564,6 @@ console.log("\nO-1 — the inline limit stays under Claude Code's 50,000-char pe
 t("default (no MAX_MCP_OUTPUT_TOKENS) is capped at 48000", () => writeOut.inlineLimitChars({}) === 48000);
 t("a larger MAX_MCP_OUTPUT_TOKENS does not raise it past 48000", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "100000" }) === 48000);
 t("a smaller MAX_MCP_OUTPUT_TOKENS still lowers it (5000 tokens → 16000 chars)", () => writeOut.inlineLimitChars({ MAX_MCP_OUTPUT_TOKENS: "5000" }) === 16000);
-
-console.log("\nlastScreenExport reads the newest row of pages/index.json:");
-{
-  const fn: unknown = (snapshotMeta as Record<string, unknown>)["lastScreenExport"];
-  const last = (dir: string, now?: number): unknown => (typeof fn === "function" ? (fn as (d: string, n?: number) => unknown)(dir, now) : "missing");
-  const dir = tmp("last");
-  fs.mkdirSync(path.join(dir, "pages"), { recursive: true });
-  const idx = (doc: unknown) => fs.writeFileSync(path.join(dir, "pages", "index.json"), typeof doc === "string" ? doc : JSON.stringify(doc));
-  idx({ pageDirs: [], layers: [
-    { name: "Old", id: "1:1", file: "pages/P/Old__1_1.json", exportedAt: "2026-10-01T00:00:00.000Z" },
-    { name: "New", id: "2:2", file: "pages/P/New__2_2.json", exportedAt: "2026-10-05T00:00:00.000Z", sourceFile: "Sample App" },
-    { name: "Mid", id: "3:3", file: "pages/P/Mid__3_3.json", exportedAt: "2026-10-03T00:00:00.000Z" },
-  ] });
-  const now = Date.parse("2026-10-05T00:00:10.000Z");
-  const got = last(dir, now);
-  const rec = (x: unknown): Record<string, unknown> => (x && typeof x === "object" ? { ...x } : {});
-  t("[unit] the newest row by exportedAt wins (not the last one)", () => rec(got).id === "2:2" && rec(got).name === "New" && rec(got).file === "pages/P/New__2_2.json");
-  t("[unit] …with its age and sourceFile", () => rec(got).ageMs === 10000 && rec(got).sourceFile === "Sample App");
-  idx({ exportedAt: "2026-10-06T00:00:00.000Z", pageDirs: [], layers: [{ name: "Walked", id: "4:4", file: "pages/P/Walked__4_4.json" }] });
-  t("[unit] a page-walk row without its own stamp uses the index's exportedAt", () => rec(last(dir)).id === "4:4" && rec(last(dir)).exportedAt === "2026-10-06T00:00:00.000Z");
-  idx("{ not json");
-  t("[unit] a garbled index → null", () => last(dir) === null);
-  fs.rmSync(path.join(dir, "pages", "index.json"));
-  t("[unit] no index → null", () => last(dir) === null);
-}
 
 console.log("\nthe content index is built only when a consumer needs it, and duplicates are grouped per bucket:");
 {
