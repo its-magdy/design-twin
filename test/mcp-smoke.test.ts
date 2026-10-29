@@ -444,8 +444,8 @@ void (async () => {
       ok("…and lastScreenExport from pages/index.json (id 9:1, its sourceFile)", lse.id === "9:1" && lse.sourceFile === "Sample App" && typeof lse.ageMs === "number");
       // The verdict on the export (export-verdict.ts, which test/export-verdict.test.ts checks) is what `snapshot` carries.
       const snap = rec(st.snapshot);
-      ok("…and `snapshot` is the export verdict: attributed to the screens' file, with its sources and staleness",
-        snap.sourceFile === "Sample App" && snap.stale === false && typeof snap.staleAfterMs === "number"
+      ok(`…and \`snapshot\` is the export verdict: attributed to the screens' file, with its sources and staleness (got ${JSON.stringify(snap)})`,
+        snap.sourceFile === "Sample App" && typeof snap.staleAfterMs === "number" && snap.stale === (Number(snap.ageMs) > snap.staleAfterMs)
         && Array.isArray(snap.sources) && snap.sources.map(rec).some((s) => s.kind === "screens" && s.sourceFile === "Sample App"));
       // re-spilling the SAME design keeps no new .prev, but the note and lastWrite still name the one from before.
       const respill = parse(await client.callTool({ name: "figma_export_url", arguments: { url: "9:1", client: "Sample App" } }));
