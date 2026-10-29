@@ -37,7 +37,7 @@ import { errMsg } from "./errmsg.ts";
 import { emitTimings, stageClock, timingsTarget } from "./timings.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { ClientRow, ProgressTick } from "./server-core.ts";
+import type { ClientRow } from "./server-core.ts";
 // No load-time effects (settings.ts resolves what it once resolved at load), so a static import.
 import { createBridge } from "./server-core.ts";
 // The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
@@ -54,7 +54,8 @@ import { toNodeId } from "./node-id.ts";
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
-import { stampSource } from "./source-stamp.ts";
+import { meteredRequest, runRead } from "./read-run.ts";
+import type { ReadRun } from "./read-run.ts";
 // The ONE registry of read options, shared with the plugin's run reads and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
 import type { ReadOptName } from "./read-opts.ts";
@@ -819,9 +820,10 @@ type Send = <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number
 interface Session {
   /** Where requests, the client listing and the socket stats come from (route.ts). */
   route: Route;
+  /** A command that reads no design (whoami, an index listing), timed for the closing `done in …` line. */
   send: Send;
-  /** Runs one write, adding its time to the closing `done in …` line. */
-  timedWrite: <T>(write: () => T) => T;
+  /** A read plan, run (read-run.ts): stamped, its request and its write timed for the closing `done in …` line. */
+  read: <C extends ReadCmd>(plan: PlanOf<C>) => Promise<ReadRun<C>>;
   doneLine: () => string[];
   /** Closes this process's bridge, if it has one. */
   finish: () => void;
@@ -865,13 +867,7 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   // The plugin sends a `queued` progress frame when this command waits behind another run in the
   // same file (a `start` frame when it begins — never worth a line). Say so once, so a silent wait is
   // not mistaken for a hang; --timeout still bounds it.
-  let queuedSaid = false;
-  const onTick = (tick: ProgressTick): void => {
-    clock?.tick(tick.phase);
-    if (tick.phase !== "queued" || queuedSaid) return;
-    queuedSaid = true;
-    console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
-  };
+  const onQueued = (): void => console.error("[dtwin] queued behind another export in that file — waiting (up to --timeout)");
 
   // The route (route.ts) owns the rules either way — the connect window (`--timeout`; a named --client waits at least NAMED_CLIENT_WAIT_MS), the stall
   // check (own bridge, export commands: if NOTHING is heard back within FIGMA_BRIDGE_STALL_MS of sending, abort
@@ -897,24 +893,13 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   // settles first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the
   // command refused as ambiguous, or listed — instead of the first file to land being taken silently.
   timing.connectMs = (await route.connect(client)).waitedMs;
-  let send: Send = (cmd, args, timeoutMs) => route.request(cmd, args, { timeoutMs, target: client, onProgress: onTick });
   // Where the time went, for the closing `done in …` line. The connect wait is measured above
   // (own bridge only — a daemon does its waiting inside the request), the export is the time inside
-  // send(), the write is every OUT.write* call. All measured from this side: nothing in server-core.
-  const rawSend = send;
-  send = async (cmd, args, timeoutMs) => {
-    const t = Date.now();
-    clock?.sent();
-    try {
-      const r = await rawSend(cmd, args, timeoutMs);
-      clock?.replied(r.reply);
-      return r;
-    } finally { timing.exportMs += Date.now() - t; }
-  };
-  const timedWrite = <T>(write: () => T): T => {
-    const t = Date.now();
-    try { return write(); } finally { timing.writeMs += Date.now() - t; }
-  };
+  // every request, the write is every write-out (read-run.ts adds both to `timing`). All measured from
+  // this side: nothing in server-core.
+  const metering = { meter: clock, tally: timing };
+  const send: Send = async (cmd, args, timeoutMs) => (await meteredRequest(() => route.request(cmd, args, { timeoutMs, target: client }), metering)).sent;
+  const read = <C extends ReadCmd>(plan: PlanOf<C>): Promise<ReadRun<C>> => runRead(route, plan, { ...metering, target: client, onQueued });
   // Every command that prints the done line calls this once, at its end — so it is also where the opt-in record goes
   const doneLine = () => {
     if (clock && timingsTo) emitTimings(clock.record({ command: command.id, viaDaemon, ...timing }), timingsTo);
@@ -923,7 +908,7 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   // With a daemon there is no bridge of ours to close, and closing the DAEMON's would be wrong — the holder knows
   // which, so no exit path below has to.
   const finish = () => { holder.release(); };
-  return { route, send, timedWrite, doneLine, finish };
+  return { route, send, read, doneLine, finish };
 }
 
 // Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
@@ -1034,15 +1019,16 @@ async function listIndexCmd({ send, finish }: Session, childrenId: string | null
 // --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
 // see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
 // it sits next to, so it gets its own branch rather than joining their print-only one.
-async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, plan: PlanOf<"screenshot">, outDir: string): Promise<void> {
+async function screenshotCmd({ read, doneLine, finish }: Session, plan: PlanOf<"screenshot">, outDir: string): Promise<void> {
   console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-  const r = stampSource(await sendPlan(send, plan));
+  const run = await read(plan);
+  const r = run.reply;
   for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
   // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
   // string: those can disagree, and a printed path that
   // finds nothing is worse than no path at all.
   const scale = plan.args.scale;
-  const shot = timedWrite(() => OUT.writeAny(outDir, r, plog, { scale }));
+  const shot = run.write((stamped) => OUT.writeAny(outDir, stamped, plog, { scale }));
   const ref = shot.reference || r.reference;
   if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
   // The node's size, the render scale and the PNG's own pixel size. Each is omitted when its
@@ -1057,11 +1043,8 @@ async function screenshotCmd({ send, timedWrite, doneLine, finish }: Session, pl
   finish();
 }
 
-// A read plan, sent: its command, arguments and budget (read-plan.ts).
-const sendPlan = <C extends ReadCmd>(send: Send, plan: PlanOf<C>): Promise<Sent<C>> => send(plan.cmd, plan.args, plan.timeout);
-
 // A pull: one node, the selection, a library catalog, the design system alone, or pages — written to outDir.
-async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: Exclude<ReadPlan, PlanOf<"screenshot">>, parsed: ParsedArgs): Promise<void> {
+async function exportCmd({ read, doneLine, finish }: Session, plan: Exclude<ReadPlan, PlanOf<"screenshot">>, parsed: ParsedArgs): Promise<void> {
   const { allPages, outDir } = parsed;
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
@@ -1077,18 +1060,18 @@ async function exportCmd({ send, timedWrite, doneLine, finish }: Session, plan: 
   // a daemon relays it). A screen export result has no field of its own naming its source file
   // (unlike design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could
   // only ever report whichever file's export happened to sort first, attributing every screen to it.
-  // Stamped onto the result by source-stamp.ts's stampSource before it reaches write-out.ts, which
-  // persists it onto the screen JSON and its index row. Unstamped (never guessed) when a daemon too old
-  // to relay the client answered. A catalog's writers never read it.
-  const r = stampSource(await sendPlan(send, plan));
+  // Stamped onto the result by the read run (read-run.ts) before write-out.ts sees it, which persists it onto
+  // the screen JSON and its index row. Unstamped (never guessed) when a daemon too old to relay the client
+  // answered. A catalog's writers never read it.
+  const run = await read(plan);
   // The SAME writer the MCP export tools use (write-out.ts's writeAny), so a CLI pull and an MCP pull of
   // the same read land in identical shape: a screen (--node / --selection) through writeScreen, a library
   // catalog (routed on the plugin's own `source.role`, under libraries/<slug>-<fileKey8>/ — it can never
   // overwrite design-system/), the design system alone or a page walk through writeExport's split. The
   // limited-library-variables note of a --design-system pull rides in designSystem.hygiene (see collect.ts),
   // which writeDesignSystem persists to hygiene.json.
-  timedWrite(() => OUT.writeAny(outDir, r, plog));
-  if ("designSystem" in r) printHygiene(r);
+  run.write((r) => OUT.writeAny(outDir, r, plog));
+  if ("designSystem" in run.reply) printHygiene(run.reply);
 
   for (const l of doneLine()) console.error("[dtwin] " + l);
   finish(); // NOT process.exit — see close() in server-core.ts (a daemon-routed run has nothing to close)
