@@ -685,18 +685,15 @@ function segs(name) {
   }
   return v;
 }
-var SENTINEL_MIN = 1e4;
-function isRadiusVar(v) {
+var COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+var commentText = (s) => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
+
+// design-to-code/variable-class.ts
+function narrowedScopes(v) {
   const scopes = v.scopes || [];
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  if (narrowed) return scopes.includes("CORNER_RADIUS");
-  return /radius|corner|round/i.test(String(v.collection || "") + "/" + v.name);
+  return scopes.length && !scopes.every((s) => s === "ALL_SCOPES") ? scopes : null;
 }
-function isSentinel(v, raw) {
-  if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
-  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-  return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
-}
+var qualifiedName = (v) => (v.collection ?? "") + "/" + v.name;
 var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
 var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
 function unitlessName(name) {
@@ -709,16 +706,51 @@ function unitDecision(variable, opts) {
   if (opts && opts.unitless && opts.unitless.has && opts.unitless.has(variable.name)) return "override";
   const scopes = variable.scopes || [];
   if (scopesSayUnitless(scopes)) return "scopes";
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  if (!narrowed && unitlessName(variable.name)) return "name";
+  if (!narrowedScopes(variable) && unitlessName(variable.name)) return "name";
   return "px";
 }
 var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
-function percentOpacity(variable, opts) {
-  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
+function lengthClass(v) {
+  const scopes = narrowedScopes(v);
+  if (scopes) return scopes.includes("CORNER_RADIUS") ? "radius" : scopes.includes("FONT_SIZE") ? "fontSize" : "length";
+  if (/radius|corner|rounded/i.test(v.name)) return "radius";
+  if (/font.?size|text.?size|type.?size/i.test(qualifiedName(v))) return "fontSize";
+  return "length";
 }
-var COMMENT_CONTROLS = /\r\n|[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
-var commentText = (s) => String(s).replace(COMMENT_CONTROLS, " ").replace(/\*\//g, "* /");
+function classifyVariable(v, opts) {
+  switch (v.type) {
+    case "COLOR":
+      return "color";
+    case "BOOLEAN":
+      return "bool";
+    case "STRING": {
+      const scopes = narrowedScopes(v);
+      const font = scopes ? scopes.includes("FONT_FAMILY") : /font.?family|typeface/i.test(qualifiedName(v));
+      return font ? "fontFamily" : "string";
+    }
+    case "FLOAT": {
+      const unit = unitDecision(v, opts);
+      if (unit === "px") return lengthClass(v);
+      return unit === "scopes" && (v.scopes || []).every((s) => PERCENT_SCOPES.has(s)) ? "percent" : "number";
+    }
+    case "EASING":
+    case "TIMING":
+      return null;
+  }
+  return null;
+}
+var isLengthClass = (c) => c === "length" || c === "radius" || c === "fontSize";
+var SENTINEL_MIN = 1e4;
+function mayBeRadius(v) {
+  const scopes = narrowedScopes(v);
+  if (scopes) return scopes.includes("CORNER_RADIUS");
+  return /radius|corner|round/i.test(qualifiedName(v));
+}
+function isSentinel(v, raw) {
+  if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && mayBeRadius(v);
+}
 
 // design-to-code/variable-resolve.ts
 var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -954,18 +986,17 @@ var pascal = (parts) => {
   const c = camel(parts);
   return c.charAt(0).toUpperCase() + c.slice(1);
 };
-function isFontSize(v) {
-  const scopes = v.scopes || [];
-  if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-  return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
-}
-function kindOf(v, opts) {
-  if (v.type === "COLOR") return "color";
-  if (v.type === "BOOLEAN") return "bool";
-  if (v.type === "STRING") return "string";
-  if (v.type === "FLOAT") return unitDecision(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
-  return null;
-}
+var NATIVE_KIND = {
+  color: "color",
+  bool: "bool",
+  string: "string",
+  fontFamily: "string",
+  fontSize: "fontSize",
+  length: "dimension",
+  radius: "dimension",
+  percent: "number",
+  number: "number"
+};
 var hasComposedKey = (x) => !!x && typeof x === "object" && "composed" in x;
 var isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
 function literal(vars, v, mode) {
@@ -990,13 +1021,14 @@ function model(designSystem, warnings, opts) {
     const fields = [];
     const cands = [];
     for (const v of mine) {
-      const kind = kindOf(v, opts);
+      const cls = classifyVariable(v, opts);
+      const kind = cls && NATIVE_KIND[cls];
       if (!segs(v.name).length) continue;
       if (!kind) {
         warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
         continue;
       }
-      const pct = kind === "number" && percentOpacity(v, opts);
+      const pct = cls === "percent";
       const values = nullProto();
       let ok = true;
       for (const m of modeNames) {
@@ -1568,7 +1600,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     }
     let type = DTCG_TYPE[v.type];
     if (v.type === "COLOR" && isHexish(bv) && !normHex(bv)) warn(`token '${v.name}' has malformed hex '${bv}'`);
-    const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
+    const cls = classifyVariable(v, opts);
+    const dimension = isLengthClass(cls);
     if (dimension) type = "dimension";
     if (isComposed(bv) && v.type !== "COLOR") {
       warn(`token '${v.name}' is a ${v.type} variable holding a composed colour value \u2014 skipped`);
@@ -1596,7 +1629,7 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     if (!withExtensions) {
       const setExt = {};
       if (opacity !== void 0) setExt.opacity = opacity;
-      if (percentOpacity(v, opts)) setExt.unit = "percent";
+      if (cls === "percent") setExt.unit = "percent";
       if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf;
       continue;
@@ -1624,7 +1657,7 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     if (typeof v.key === "string" && v.key) ext.key = v.key;
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded \u2014 emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
-    if (percentOpacity(v, opts)) ext.unit = "percent";
+    if (cls === "percent") ext.unit = "percent";
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean";
     if (Object.keys(ext).length) leaf.$extensions = { "figma.com": ext };
@@ -1644,8 +1677,8 @@ function toDTCG(designSystem, warnings, opts, notes) {
   return tree;
 }
 function numberUnit(variable, opts) {
-  if (percentOpacity(variable, opts)) return "%";
-  return unitDecision(variable, opts) === "px" ? "px" : "";
+  const cls = classifyVariable(variable, opts);
+  return cls === "percent" ? "%" : isLengthClass(cls) ? "px" : "";
 }
 var pctOutOfRange = (n) => n < 0 || n > 100;
 var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
@@ -1654,7 +1687,7 @@ function cssPercentVar(plan, v, opts) {
   const { vars, complete } = plan.vars.closure(v);
   return complete && vars.every((x) => {
     const vals = Object.values(x.values || {}).filter((val) => val !== void 0);
-    return percentOpacity(x, opts) && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || typeof val === "string" && NUMERIC_TEXT.test(val));
+    return classifyVariable(x, opts) === "percent" && vals.length > 0 && vals.every((val) => isAlias(val) || typeof val === "number" || typeof val === "string" && NUMERIC_TEXT.test(val));
   });
 }
 function cssValue(raw, unit, ref, pctRef) {
@@ -1805,22 +1838,10 @@ function toCSS(designSystem, opts, notes) {
   return out + perMode.render(opts && opts.selector);
 }
 var twName = (v, opts) => tailwindVarName(v.name, twKind(v, opts));
-var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
+var TW_KIND = { color: "color", length: "dimension", radius: "radius", fontSize: "fontSize", fontFamily: "fontFamily" };
 function twKind(v, opts) {
-  if (v.type === "COLOR") return "color";
-  const scopes = v.scopes || [];
-  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
-  if (v.type === "STRING") {
-    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
-    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
-  }
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null;
-  if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
-  if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
-  if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
-  if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
-  return "dimension";
+  const cls = classifyVariable(v, opts);
+  return (cls && TW_KIND[cls]) ?? null;
 }
 function cssFontFamily(raw) {
   const s = raw.trim();
@@ -2041,7 +2062,7 @@ function lintNames(designSystem, opts, warnings) {
     }
   }
   for (const v of vars) {
-    if (!percentOpacity(v, opts)) continue;
+    if (classifyVariable(v, opts) !== "percent") continue;
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
