@@ -13,7 +13,7 @@ import { buildExpectation } from "../design-to-code/verify-expect.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-shared.ts";
 import type { CompareOptions } from "../design-to-code/verify-compare.ts";
 import type { ExpectInput, ExpectOptions } from "../design-to-code/verify-expect.ts";
-import { waiversHash } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import { isPlan, isVerifyExpectation, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../bridge/src/read-json.ts";
 import type { InteractionEvidence, JsonValue, MeasuredNode, MeasuredStyles, Plan, PlanDescope, PlanWaiver, ProbeFrame, VerifyMeasured, VerifyReportV2, VerifySpec } from "../design-to-code/types.ts";

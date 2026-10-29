@@ -11,7 +11,7 @@ import type { Writable } from "node:stream";
 import { scriptCmd } from "../design-to-code/cli-args.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
-import { waiversHash } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import { build, seamViolations, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import { checkPlan, isStale, validatePlanHeader, anchorCoverage, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import { verificationEvidence } from "../design-to-code/verification-evidence.ts";

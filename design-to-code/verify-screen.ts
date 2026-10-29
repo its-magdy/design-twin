@@ -23,7 +23,8 @@
 //
 // Two commands, one CLI. What they must agree on (tolerances, fields, measured keys, schemas) is defined once in
 // verify-shared.ts so the expectation format and the comparison never drift; the expectation is built in verify-expect.ts,
-// compared in verify-compare.ts and rendered in verify-report-md.ts. This file reads the inputs, writes the artefacts and
+// compared in verify-compare.ts and rendered in verify-report-md.ts; the owner's waivers and descopes (--accept's rows, and what --compare
+// makes of them) are owner-decisions.ts's. This file reads the inputs, writes the artefacts and
 // routes the modes:
 //   bun verify-screen.js --expect  <screen.json>... [--out design/verify]
 //   bun verify-screen.js --compare <Layer>__<id>.expected.json <measured.json> [--interactions <file>] [--out <dir>, default the expectation's]
@@ -39,6 +40,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { parsePlanText, recordPlan, reportFileText, updatePlan } from "./plan-record.ts";
 import { readDocFile } from "./catalog-input.ts";
 import { isPlan, isVerifyReport } from "./doc-guards.ts";
+import { acceptInto, selectForAccept } from "./owner-decisions.ts";
 import { choosePlan } from "./plan-binding.ts";
 import { STATUS_PHASES, TERMINAL_PHASES, readStatusAt, statusMain, waitMain } from "./verify-run.ts";
 import { writeFileAtomic } from "../bridge/src/atomic-write.ts";
@@ -47,8 +49,7 @@ import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { isJsonObject, isPassingVerdict } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import type { JsonValue, Plan, PlanWaiver, ScreenDoc, VerifyDelta, VerifyReport } from "./types.ts";
-import { ifDefined } from "../bridge/src/json-util.ts";
+import type { JsonValue, Plan, ScreenDoc } from "./types.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { runCli } from "./proc.ts";
 import { EXPORT_DIR, VERIFY_DIR } from "../bridge/src/project-layout.ts";
@@ -103,35 +104,6 @@ function expectDirOf(out: string | undefined): string {
 /** The plan for a frame, by plan-binding.ts's one rule for --expect and --compare, over design/plan/ (plansFound). */
 const planFor = (flagged: { file: string; plan: Plan } | undefined, frameId: string | undefined): ReturnType<typeof choosePlan> =>
   choosePlan(flagged, plansFound(process.cwd(), frameId), frameId);
-
-/** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
-function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
-  // a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
-  // waiver written from it would bind to values that may never have been rendered
-  // the integrity reasons compare recorded (report.integrity, [] for a clean run); a report without the field cannot
-  // show its run was verified, so nothing in it is accepted
-  const integrity = rep.integrity;
-  if (!Array.isArray(integrity)) return { error: "the report records no integrity[] — nothing says whether its run was verified; re-run --compare, then accept against the new report" };
-  if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
-  const deltas: VerifyDelta[] = Array.isArray(rep.deltas) ? rep.deltas : [];
-  const picked = sel.group !== undefined ? deltas.filter((d) => d.group === sel.group)
-    : deltas.filter((d) => d.nodeId === sel.node && (sel.field === undefined || d.field === sel.field));
-  if (picked.length) return { deltas: picked };
-  if (sel.group !== undefined) {
-    const gs = [...new Set(deltas.map((d) => d.group).filter((g): g is string => !!g))];
-    return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
-  }
-  const id = sel.node;
-  // Not a delta = not waivable: say which kind of item it is instead.
-  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT — a missing component is never waivable; build it` };
-  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction — never waivable; fix it, or have the owner descope it in plan.descopes` };
-  if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured — there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
-  if (sel.field !== undefined && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured — there is no delta to accept` };
-  const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);
-  return { error: `no delta in the report for ${id}${sel.field !== undefined ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
-}
-
-export { selectForAccept };
 
 // ---------------------------------------------------------------- CLI
 export function main(argv: string[]): number | Promise<number> {
@@ -515,16 +487,9 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
     updatePlan(target, (raw) => {
       if (raw === null) throw new Error(`${target} does not exist`);
       const plan = parsePlanText(raw, target);
-      const waivers: PlanWaiver[] = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
-      wrote = [];
-      for (const d of sel.deltas) {
-        const row: PlanWaiver = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
-        // one row per node + field: a new decision replaces the old one
-        const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
-        if (at >= 0) waivers[at] = row; else waivers.push(row);
-        wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
-      }
-      plan.waivers = waivers;
+      const acc = acceptInto(plan.waivers, sel.deltas, { exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, cause: flags.group });
+      wrote = acc.wrote.map(({ delta: d, replaced }) => `${replaced ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
+      plan.waivers = acc.waivers;
       return plan;
     });
   } catch (e) { console.error(`error  plan: ${errMsg(e)} — no waiver written`); return 1; }

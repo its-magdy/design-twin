@@ -2,7 +2,8 @@
 // the selection rule, the rows --expect consumes and records, the plan --compare resolves (flag / found / recorded / gone),
 // and the table of {what the expectation recorded, the plan used now} → the reasons and notes compare is handed.
 // Run with:  bun test/plan-binding.test.ts
-import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, resolvePlan, waiversHash } from "../design-to-code/plan-binding.ts";
+import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, resolvePlan } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import type { ChosenPlan, ExpectNodes, PlanReader, PlanResolution, PlanSelection } from "../design-to-code/plan-binding.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";
@@ -104,14 +105,6 @@ console.log("planAtCompare — the rows compare applies:");
     && none.waiversInput === undefined && none.navigate === null && none.reasons.length === 0 && none.notes.length === 0);
   const odd = planAtCompare({}, used(B, { anchors: malformed<NonNullable<Plan["anchors"]>>([]) }, "only"));
   check("anchors that are not an object read as none", Object.keys(odd.anchors).length === 0);
-}
-
-console.log("waiversHash — what a report records:");
-{
-  const p1: Plan = { waivers: [{ nodeId: "2:1", field: "font-size", designed: 14, built: 16, exportContentSha256: "e".repeat(64), reason: "kept", decidedBy: "owner", decidedAt: "2026-10-25T00:00:00Z" }] };
-  const flipped: Plan = { waivers: (p1.waivers || []).map((w) => ({ decidedAt: w.decidedAt, decidedBy: w.decidedBy, reason: w.reason, exportContentSha256: w.exportContentSha256, built: w.built, designed: w.designed, field: w.field, nodeId: w.nodeId })) };
-  check("absent and [] hash alike; key order does not matter; a change does",
-    waiversHash({}) === waiversHash({ waivers: [], descopes: [] }) && waiversHash(null) === waiversHash({}) && waiversHash(p1) === waiversHash(flipped) && waiversHash(p1) !== waiversHash({}));
 }
 
 // ---------------------------------------------------------------- selection
