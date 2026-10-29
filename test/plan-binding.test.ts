@@ -2,7 +2,8 @@
 // the selection rule, the rows --expect consumes and records, the plan --compare resolves (flag / found / recorded / gone),
 // and the table of {what the expectation recorded, the plan used now} → the reasons and notes compare is handed.
 // Run with:  bun test/plan-binding.test.ts
-import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, resolvePlan, waiversHash } from "../design-to-code/plan-binding.ts";
+import { choosePlan, planAtCompare, planAtExpect, planInteractionsSha256, resolvePlan } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import type { ChosenPlan, ExpectNodes, PlanReader, PlanResolution, PlanSelection } from "../design-to-code/plan-binding.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
 import { buildExpectation } from "../design-to-code/verify-expect.ts";

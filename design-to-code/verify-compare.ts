@@ -6,8 +6,9 @@
 import fs from "node:fs";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import {
-  isBuildIdentity, isMeasuredBehaviour, isMeasuredVisual, isVisualRegion, isPageOverflow, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach,
+  isBuildIdentity, isMeasuredBehaviour, isMeasuredVisual, isVisualRegion, isPageOverflow, isProbeIdentity, isProbeReach,
 } from "./doc-guards.ts";
+import { descopeRound, waiverRound } from "./owner-decisions.ts";
 import { planAtCompare } from "./plan-binding.ts";
 import type { PlanBinding, PlanResolution } from "./plan-binding.ts";
 import { stepsSha256 } from "./probe-steps.ts";
@@ -21,14 +22,14 @@ import { CANONICAL_MATCHED_BY, idSuffix, normText } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   ArtifactCheck, BehaviourCheck, BehaviourStatus, BuildIdentity, ProbeIdentity, BehaviourSummary, CodeInputs, DeltaSeverity, InteractionEvidence, JsonValue, MeasuredComponent,
-  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, PlanDescope, ProbeFrame, ReportBehaviour,
+  MeasuredNode, MeasuredStyles, InferredRow, PageOverflowCoverage, PaintedBy, ProbeFrame, ReportBehaviour,
   ReportVisual, VerifyDelta, VerifyCoverageV2, VerifyInteraction, VerifyInteractionResult, VerifyMeasured, VerifyAgainst, VerifyReport, VerifyReportV2,
   VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import {
-  EXPECTATION_SCHEMA, FIELDS, PAD_SIDES, REPORT_SCHEMA, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fmt, fourSides, normColor, num, pctText, r2,
+  EXPECTATION_SCHEMA, FIELDS, PAD_SIDES, REPORT_SCHEMA, TEXT_BOX_HEIGHT, TOLERANCE, cssPx, fourSides, normColor, num, pctText, r2,
 } from "./verify-shared.ts";
 import type { Expectation, Field } from "./verify-shared.ts";
 
@@ -335,19 +336,6 @@ export interface CompareOptions {
   inferred?: unknown;
 }
 
-// ---- waivers: does a waiver's recorded value still describe this round's delta?
-/** The slack a waiver's designed/built values are matched with — the field's own tolerance (null = exact). */
-function fieldTolerance(label: string): number | null {
-  const f = FIELDS.find((x) => x.label === label);
-  if (f) return f.tol;
-  if (label === "padding") return TOLERANCE.padding;
-  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
-  if (label === "placement") return TOLERANCE.position;
-  if (label === "width (text ink)") return TOLERANCE.textInk;
-  if (label === "match (size)") return TOLERANCE.size;
-  if (label === "overflowX") return TOLERANCE.position;
-  return null;
-}
 // ---- the previous round's deltas against this round's, keyed nodeId + field. A delta that is gone only
 // because its node or value was not measured this round is LOST COVERAGE, not a fix. "Not measured" means the
 // node is unmeasured or its measured node lacks the value (absent / null) — a value that was measured but the compare
@@ -438,21 +426,6 @@ function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow)
   return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
 }
 
-const NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
-/** Equal within `tol`: numbers by distance, lists item by item, strings exactly — or, with a tolerance, with
- *  every number in them within it (a placement actual "bottom edge at y=1450 in a 900-high frame"). */
-function sameWithin(a: JsonValue, b: JsonValue, tol: number | null): boolean {
-  const t = tol ?? 0;
-  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= t + 1e-9;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => { const y = b[i]; return y !== undefined && sameWithin(x, y, tol); });
-  if (typeof a === "string" && typeof b === "string") {
-    if (tol == null) return a.trim() === b.trim();
-    if (a.replace(NUM_IN_TEXT, "#") !== b.replace(NUM_IN_TEXT, "#")) return false;
-    const na = a.match(NUM_IN_TEXT) || [], nb = b.match(NUM_IN_TEXT) || [];
-    return na.length === nb.length && na.every((x, i) => Math.abs(Number(x) - Number(nb[i])) <= t + 1e-9);
-  }
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 // what makes a spec more than a layout wrapper — it paints or carries copy, so it is built, never folded.
 const PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"] as const;
 const paintOf = (s: VerifySpec): string[] => PAINT_KEYS.filter((k) => s[k] !== undefined);
@@ -1586,26 +1559,21 @@ function gradeInteractions(
 > {
   const { expectation, measured, plan, hiddenSet, inputNotes, reopened, unused } = cx;
   const { pageNotes, measuredRows, probeBound, probeRows, exercised } = g;
-  // the owner's descopes — bound to the export like a waiver; a re-export reopens them.
+  // the export this round grades against — a descope or a waiver accepted on another one is reopened
   const exportSha = expectation.exportContentSha256;
   // expectation.tolerance carries textInk — one without it was written by an older
   // verify-screen (TEXT box widths, no paddingSkip/aliases)
   inputNotes.push(...pageNotes);
   if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === undefined)
     inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) — re-run --expect");
-  const descopeRows: PlanDescope[] = [];
-  plan.descopes.forEach((d, i) => { if (isPlanDescope(d)) descopeRows.push(d); else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`); });
-  const descopeUsed = new Set<PlanDescope>();
-  const descopeFor = (i: VerifyInteraction): PlanDescope | undefined => {
-    const hits = descopeRows.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === undefined || d.destinationId === i.destinationId));
-    for (const d of hits) descopeUsed.add(d);
-    const live = hits.find((d) => d.exportContentSha256 === exportSha);
-    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
-    return live;
-  };
+  // the owner's descopes — bound to the export like a waiver; a re-export reopens them (owner-decisions.ts)
+  const designed = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const scopes = descopeRound(plan.descopes, designed, exportSha);
+  inputNotes.push(...scopes.notes);
+  reopened.push(...scopes.reopened);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
     inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) — graded as agent evidence");
-  const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
+  const interactions = designed.map((i, at): VerifyInteractionResult => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
     // ok:true passes only with the evidence (one element, an outcome the action produces, no reload)
@@ -1636,7 +1604,7 @@ function gradeInteractions(
     // whose words a detail quotes — the run-bound probe's, else agent evidence (a measured file's rows that are not run-bound too)
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
     // removed from the graded set before grading; evidence that it works anyway is noted, never graded.
-    const scoped = descopeFor(i);
+    const scoped = scopes.descoped[at];
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`,
       ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
     // its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
@@ -1666,7 +1634,7 @@ function gradeInteractions(
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
   const interactionsUndesigned = interactions.filter((i) => i.result === "undesigned");
   const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
-  for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
+  unused.push(...scopes.unused);
   return { exportSha, interactions, interactionsFailed, interactionsNotProbed, interactionsPassed, interactionsUndesigned, interactionsDescoped };
 }
 /** evidence for no designed interaction, each with a hint when a designed one is near */
@@ -1759,47 +1727,16 @@ function paintedByNote(cx: CompareCtx): void {
   if (paintedVia.length) inputNotes.push(`background compared through the element that paints it on ${paintedVia.length} node(s) whose own background is transparent (paintedBy): ` +
     `${paintedVia.slice(0, 5).map((p) => `${p.nodeId} by its ${p.how}`).join(", ")}${paintedVia.length > 5 ? `, …and ${paintedVia.length - 5} more` : ""}`);
 }
-/** the plan's waivers — each accepts one delta while its design and values hold, else is reopened or unused */
+/** the plan's waivers — each accepts one delta while its design and values hold, else is reopened or unused (owner-decisions.ts) */
 function applyWaivers(cx: CompareCtx, g: Pick<Graded, "componentsAbsent" | "exportSha" | "interactionsFailed">): Pick<Graded, "applied"> {
   const { plan, specs, deltas, notMeasured, fieldsNotMeasured, inputNotes, reopened, unused } = cx;
   const { componentsAbsent, exportSha, interactionsFailed } = g;
-  // ---- the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
-  // accepted against (whole-export hash), the designed value is the same and the built value has not moved
-  // beyond its tolerance. Anything else reopens it. Never waivable: an absent component, a failed interaction,
-  // a node or value that was not measured — none of them is a delta.
-  const notWaivable = new Map<string, string>();
-  for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured — only a measured delta can be accepted");
-  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable — descope it (plan.descopes, owner-only) if it is deliberately inert");
-  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT — a missing component is never waivable`);
-  let applied = 0;
-  plan.waivers.forEach((w, i) => {
-    if (!isPlanWaiver(w)) { inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`); return; }
-    const cands = deltas.filter((d) => d.nodeId === w.nodeId && d.field === w.field && !d.accepted);
-    if (!cands.length) {
-      const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round — only a measured delta can be accepted" : undefined;
-      // a waiver on a TEXT width written against the old field — the field is the ink width, a different value
-      const inkNow = w.field === "width" && (deltas.some((d) => d.nodeId === w.nodeId && d.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox"))
-        ? "this TEXT's width is compared as 'width (text ink)' — re-accept against the new report" : undefined;
-      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round — fixed? drop the waiver" });
-      return;
-    }
-    if (!exportSha || w.exportContentSha256 !== exportSha) {
-      reopened.push({ nodeId: w.nodeId, field: w.field, why: exportSha ? "design re-exported: the export content changed since the waiver was accepted"
-        : "the expectation records no export content hash — regenerate it with --expect" });
-      return;
-    }
-    const tol = fieldTolerance(w.field);
-    const d = cands.find((x) => sameWithin(w.designed, x.expected, tol) && sameWithin(w.built, x.actual, w.tolerance ?? tol));
-    if (d) {
-      d.accepted = { reason: w.reason, decidedBy: w.decidedBy, decidedAt: w.decidedAt, ...ifDefined("cause", w.cause) };
-      applied++;
-      return;
-    }
-    const c0 = cands.find((x) => sameWithin(w.designed, x.expected, tol));
-    reopened.push({ nodeId: w.nodeId, field: w.field,
-      why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}` });
-  });
-  return { applied };
+  const inkWidthNodes = new Set(specs.filter((sp) => sp.widthFrom === "renderBox").map((sp) => sp.nodeId));
+  const r = waiverRound(plan.waivers, { deltas, exportSha, gaps: { notMeasured, fieldsNotMeasured, interactionsFailed, componentsAbsent }, inkWidthNodes });
+  inputNotes.push(...r.notes);
+  reopened.push(...r.reopened);
+  unused.push(...r.unused);
+  return { applied: r.applied };
 }
 /** an accepted `match (size)` row lifts the size cap on its node's other deltas (a match cap stays) */
 function liftSizeCaps(cx: CompareCtx): void {

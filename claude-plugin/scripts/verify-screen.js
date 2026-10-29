@@ -1968,6 +1968,399 @@ function docOrExit(r) {
   exitCli(2);
 }
 
+// bridge/src/hex-color.ts
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
+var PCT = `${NUM}%`;
+var CH = `${NUM}%?`;
+var CH_OR_NONE = `(?:${CH}|none)`;
+var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
+var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
+var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
+var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
+var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
+function parseCssColor(v) {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  if (t.startsWith("#")) return parseHex(t);
+  const leg = RGB_LEGACY.exec(t);
+  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
+  if (rgb) {
+    const ch = (x) => clamp(comp(x, 255), 255);
+    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const ok = OK.exec(t);
+  if (ok) {
+    const L = comp(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = comp(ok[3], 0.4);
+      b = comp(ok[4], 0.4);
+    } else {
+      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
+    const c = {
+      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
+      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
+      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
+      a: alphaOf(ok[5])
+    };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  const srgb = SRGB.exec(t);
+  if (srgb) {
+    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
+    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
+    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
+  }
+  return null;
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
+
+// design-to-code/verify-shared.ts
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
+}
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  const name = s.toLowerCase().replace(/[^a-z]/g, "");
+  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+var cssWeight = (v) => typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 1e3 ? v : null;
+function fontWeightOf(f) {
+  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : void 0) ?? cssWeight(normWeight(f.weight));
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+function lineHeightPx(lh, fontSize) {
+  if (lh == null) return null;
+  if (typeof lh === "number") return lh;
+  const size = typeof fontSize === "number" ? fontSize : typeof fontSize === "string" ? Number(fontSize) : NaN;
+  const of = (factor) => Number.isFinite(size) && size > 0 && Number.isFinite(factor) ? r2(factor * size) : null;
+  if (typeof lh === "string") {
+    const s = lh.trim().toLowerCase();
+    if (s === "normal") return null;
+    const n = parseFloat(s);
+    if (Number.isNaN(n)) return null;
+    if (s.endsWith("%")) return of(n / 100);
+    if (s.endsWith("px")) return n;
+    return of(n);
+  }
+  if (typeof lh === "object") {
+    const unit = String(lh.unit ?? "px").toLowerCase();
+    if (unit === "percent" || unit === "%") return typeof lh.value === "number" ? of(lh.value / 100) : null;
+    if (unit === "auto") return null;
+    if (unit === "px" || unit === "pixels") return typeof lh.value === "number" ? lh.value : null;
+    return null;
+  }
+  return null;
+}
+var EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
+var REPORT_SCHEMA = "designtwin/verify-report@2";
+var num = (v) => typeof v === "number" && Number.isFinite(v);
+var r2 = (v) => Math.round(v * 100) / 100;
+var PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
+function cssPx(v) {
+  if (num(v)) return v;
+  if (typeof v !== "string" || !PX_RE.test(v)) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fourSides(v) {
+  const parts = num(v) ? [v] : Array.isArray(v) ? v : typeof v === "string" ? v.trim().split(/\s+/) : [];
+  const p = parts.map(cssPx);
+  if (p.length < 1 || p.length > 4 || p.some((x) => x === null)) return null;
+  const [p0, p1 = p0, p2 = p0, p3 = p1] = p.filter((x) => x !== null);
+  return p0 === void 0 || p1 === void 0 || p2 === void 0 || p3 === void 0 ? null : [p0, p1, p2, p3];
+}
+var PAD_SIDES = ["top", "right", "bottom", "left"];
+var TEXT_BOX_HEIGHT = "text box height";
+var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
+};
+var measuredKeysDoc = () => ({
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
+  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+});
+var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
+var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
+
+// design-to-code/owner-decisions.ts
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return sha256Hex(canonical({ descopes, waivers }));
+}
+function waiversChanged(recorded, plan) {
+  return (recorded || waiversHash(null)) !== waiversHash(plan);
+}
+function whyNotWaivable(gaps, nodeId, field) {
+  const absent = gaps.componentsAbsent.find((c) => c.nodeIds.includes(nodeId));
+  if (absent) return `component set '${absent.setName}' is reported ABSENT \u2014 a missing component is never waivable; build it`;
+  if (gaps.interactionsFailed.some((i) => i.nodeId === nodeId)) return "a failed interaction is never waivable \u2014 fix it, or have the owner descope it (plan.descopes) if it is deliberately inert";
+  if (gaps.notMeasured.some((n) => n.nodeId === nodeId)) return "the node was not measured \u2014 only a measured delta can be accepted; measure it (or fold it: plan anchor foldedInto) first";
+  if (field !== void 0 && gaps.fieldsNotMeasured.some((g) => g.nodeId === nodeId && g.field === field)) return "that value was not measured this round \u2014 only a measured delta can be accepted";
+  return null;
+}
+var gapsOfReport = (rep) => ({
+  notMeasured: rep.notMeasured || [],
+  fieldsNotMeasured: rep.fieldsNotMeasured || [],
+  componentsAbsent: rep.componentsAbsent || [],
+  interactionsFailed: (rep.interactions || []).filter((i) => i.result === "fail")
+});
+function selectForAccept(rep, sel) {
+  const integrity = rep.integrity;
+  if (!Array.isArray(integrity)) return { error: "the report records no integrity[] \u2014 nothing says whether its run was verified; re-run --compare, then accept against the new report" };
+  if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) \u2014 nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
+  const deltas = Array.isArray(rep.deltas) ? rep.deltas : [];
+  const picked = sel.group !== void 0 ? deltas.filter((d) => d.group === sel.group) : deltas.filter((d) => d.nodeId === sel.node && (sel.field === void 0 || d.field === sel.field));
+  if (picked.length) return { deltas: picked };
+  if (sel.group !== void 0) {
+    const gs = [...new Set(deltas.map((d) => d.group).filter((g) => !!g))];
+    return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
+  }
+  const id = String(sel.node);
+  const why = whyNotWaivable(gapsOfReport(rep), id, sel.field);
+  if (why !== null) return { error: `${id}${sel.field !== void 0 ? ` (${sel.field})` : ""}: ${why}` };
+  const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);
+  return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
+}
+function acceptInto(waivers, deltas, decision) {
+  const { exportContentSha256: exportContentSha2562, reason, decidedBy, decidedAt, cause } = decision;
+  const out = Array.isArray(waivers) ? [...waivers] : [];
+  const wrote = [];
+  for (const d of deltas) {
+    const row = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportContentSha2562, reason, decidedBy, decidedAt, ...ifDefined("cause", cause) };
+    const at = out.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
+    if (at >= 0) out[at] = row;
+    else out.push(row);
+    wrote.push({ delta: d, replaced: at >= 0 });
+  }
+  return { waivers: out, wrote };
+}
+var REEXPORTED = (what) => `design re-exported: the export content changed since ${what}`;
+function descopeRound(rows, interactions, exportSha) {
+  const notes = [], reopened = [], unused = [];
+  const descopes = [];
+  rows.forEach((d, i) => {
+    if (isPlanDescope(d)) descopes.push(d);
+    else notes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`);
+  });
+  const used = /* @__PURE__ */ new Set();
+  const descoped = interactions.map((i) => {
+    const hits = descopes.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === void 0 || d.destinationId === i.destinationId));
+    for (const d of hits) used.add(d);
+    const live = hits.find((d) => d.exportContentSha256 === exportSha);
+    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: REEXPORTED("it was descoped") });
+    return live;
+  });
+  for (const d of descopes) if (!used.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
+  return { notes, reopened, unused, descoped };
+}
+function waiverTolerance(label) {
+  const f = FIELDS.find((x) => x.label === label);
+  if (f) return f.tol;
+  if (label === "padding") return TOLERANCE.padding;
+  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
+  if (label === "placement") return TOLERANCE.position;
+  if (label === "width (text ink)") return TOLERANCE.textInk;
+  if (label === "match (size)") return TOLERANCE.size;
+  if (label === "overflowX") return TOLERANCE.position;
+  return null;
+}
+var NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
+function sameWithin(a, b, tol) {
+  const t = tol ?? 0;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= t + 1e-9;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => {
+    const y = b[i];
+    return y !== void 0 && sameWithin(x, y, tol);
+  });
+  if (typeof a === "string" && typeof b === "string") {
+    if (tol == null) return a.trim() === b.trim();
+    if (a.replace(NUM_IN_TEXT, "#") !== b.replace(NUM_IN_TEXT, "#")) return false;
+    const na = a.match(NUM_IN_TEXT) || [], nb = b.match(NUM_IN_TEXT) || [];
+    return na.length === nb.length && na.every((x, i) => Math.abs(Number(x) - Number(nb[i])) <= t + 1e-9);
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+function waiverRound(rows, round) {
+  const { deltas, exportSha, gaps, inkWidthNodes } = round;
+  const notes = [], reopened = [], unused = [];
+  let applied = 0;
+  rows.forEach((w, i) => {
+    if (!isPlanWaiver(w)) {
+      notes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`);
+      return;
+    }
+    const cands = deltas.filter((d2) => d2.nodeId === w.nodeId && d2.field === w.field && !d2.accepted);
+    if (!cands.length) {
+      const inkNow = w.field === "width" && (deltas.some((d2) => d2.nodeId === w.nodeId && d2.field === "width (text ink)") || inkWidthNodes.has(w.nodeId)) ? "this TEXT's width is compared as 'width (text ink)' \u2014 re-accept against the new report" : void 0;
+      unused.push({ nodeId: w.nodeId, field: w.field, why: whyNotWaivable(gaps, w.nodeId, w.field) ?? inkNow ?? "no such delta this round \u2014 fixed? drop the waiver" });
+      return;
+    }
+    if (!exportSha || w.exportContentSha256 !== exportSha) {
+      reopened.push({ nodeId: w.nodeId, field: w.field, why: exportSha ? REEXPORTED("the waiver was accepted") : "the expectation records no export content hash \u2014 regenerate it with --expect" });
+      return;
+    }
+    const tol = waiverTolerance(w.field);
+    const d = cands.find((x) => sameWithin(w.designed, x.expected, tol) && sameWithin(w.built, x.actual, w.tolerance ?? tol));
+    if (d) {
+      d.accepted = { reason: w.reason, decidedBy: w.decidedBy, decidedAt: w.decidedAt, ...ifDefined("cause", w.cause) };
+      applied++;
+      return;
+    }
+    const c0 = cands.find((x) => sameWithin(w.designed, x.expected, tol));
+    reopened.push({
+      nodeId: w.nodeId,
+      field: w.field,
+      why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}`
+    });
+  });
+  return { notes, reopened, unused, applied };
+}
+
 // design-to-code/plan-binding.ts
 import path12 from "node:path";
 
@@ -2021,11 +2414,6 @@ function actionForExpect(expect) {
 }
 
 // design-to-code/plan-binding.ts
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return sha256Hex(canonical({ descopes, waivers }));
-}
 function placeholderRows(plan) {
   return (Array.isArray(plan?.deviations) ? plan.deviations : []).filter((d) => d && d.field === "placeholder");
 }
@@ -2297,9 +2685,8 @@ function measuredText(r, subject = "its run") {
 }
 function reportFreshness(root, o = {}) {
   const git = o.git ?? systemGit;
-  const NO_WAIVERS = waiversHash(null);
   const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged = (inputs, plan) => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
+  const waiversChanged2 = (inputs, plan) => waiversChanged(inputs.waiversSha256, plan);
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
@@ -2333,10 +2720,10 @@ function reportFreshness(root, o = {}) {
         const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
         if (differ.length) out.push({ kind: "code-changed", files: differ });
       }
-      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      if (waiversChanged2(inputs, now.plan)) out.push({ kind: "waivers-changed" });
       return out;
     },
-    waiversChanged
+    waiversChanged: waiversChanged2
   };
 }
 function codeChanged(before, after) {
@@ -3732,264 +4119,6 @@ function gatherCompareRun(expFile, measuredFile, flags, root) {
   return { ok: true, expectation, measured, options, set: { name: setName, outBase, statusBase }, recordInto: flags.recordPlan ? planHit : null, notes };
 }
 
-// bridge/src/hex-color.ts
-function formatHex(c) {
-  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
-  const a = Math.round(c.a * 255);
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
-}
-
-// design-to-code/color.ts
-var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const g = HEX.exec(v.trim())?.[1];
-  if (g === void 0) return null;
-  const h = g.toLowerCase();
-  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
-}
-function colorKey(v) {
-  const h = normHex(v);
-  return h === null ? null : h.length === 7 ? h + "ff" : h;
-}
-function parseHex(v) {
-  const k = colorKey(v);
-  if (k === null) return null;
-  const n = (i) => parseInt(k.slice(i, i + 2), 16);
-  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
-}
-var NUM = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
-var PCT = `${NUM}%`;
-var CH = `${NUM}%?`;
-var CH_OR_NONE = `(?:${CH}|none)`;
-var legacy = (ch) => `\\(\\s*(${ch})\\s*,\\s*(${ch})\\s*,\\s*(${ch})\\s*(?:,\\s*(${CH})\\s*)?\\)`;
-var RGB_LEGACY = new RegExp(`^rgba?(?:${legacy(PCT)}|${legacy(NUM)})$`);
-var RGB_MODERN = new RegExp(`^rgba?\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var OK = new RegExp(`^(oklab|oklch)\\(\\s*(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var SRGB = new RegExp(`^color\\(\\s*srgb\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s+(${CH_OR_NONE})\\s*(?:/\\s*(${CH_OR_NONE})\\s*)?\\)$`);
-var comp = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
-var clamp = (n, hi) => Math.min(hi, Math.max(0, n));
-var alphaOf = (x) => x === void 0 ? 1 : clamp(comp(x, 1), 1);
-function parseCssColor(v) {
-  if (typeof v !== "string") return null;
-  const t = v.trim().toLowerCase();
-  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  if (t.startsWith("#")) return parseHex(t);
-  const leg = RGB_LEGACY.exec(t);
-  const rgb = leg ? leg[1] !== void 0 ? leg.slice(1, 5) : leg.slice(5, 9) : RGB_MODERN.exec(t)?.slice(1, 5);
-  if (rgb) {
-    const ch = (x) => clamp(comp(x, 255), 255);
-    const c = { r: ch(rgb[0]), g: ch(rgb[1]), b: ch(rgb[2]), a: alphaOf(rgb[3]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const ok = OK.exec(t);
-  if (ok) {
-    const L = comp(ok[2], 1);
-    let a, b;
-    if (ok[1] === "oklab") {
-      a = comp(ok[3], 0.4);
-      b = comp(ok[4], 0.4);
-    } else {
-      const C = comp(ok[3], 0.4), h = comp(ok[4], 1) * Math.PI / 180;
-      a = C * Math.cos(h);
-      b = C * Math.sin(h);
-    }
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    const enc = (c2) => Math.round(255 * clamp(c2 <= 31308e-7 ? 12.92 * c2 : 1.055 * c2 ** (1 / 2.4) - 0.055, 1));
-    const c = {
-      r: enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3),
-      g: enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3),
-      b: enc(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3),
-      a: alphaOf(ok[5])
-    };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  const srgb = SRGB.exec(t);
-  if (srgb) {
-    const ch = (x) => Math.round(clamp(comp(x, 1) * 255, 255));
-    const c = { r: ch(srgb[1]), g: ch(srgb[2]), b: ch(srgb[3]), a: alphaOf(srgb[4]) };
-    return Number.isFinite(c.r + c.g + c.b + c.a) ? c : null;
-  }
-  return null;
-}
-function compositeOver(fg, bg) {
-  return {
-    r: fg.r * fg.a + bg.r * (1 - fg.a),
-    g: fg.g * fg.a + bg.g * (1 - fg.a),
-    b: fg.b * fg.a + bg.b * (1 - fg.a),
-    a: 1
-  };
-}
-
-// design-to-code/verify-shared.ts
-var TOLERANCE = {
-  fontSize: 0.5,
-  // a browser rounds; a different token does not
-  fontWeight: 0,
-  // 500 vs 600 is a different style, never a rendering artifact
-  lineHeight: 2,
-  // normal/unitless line-heights and font-metric rounding genuinely differ
-  letterSpacing: 0.2,
-  radius: 0.5,
-  padding: 1,
-  gap: 1,
-  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
-  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
-  size: 1,
-  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
-  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
-  position: 2,
-  opacity: 0.02,
-  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
-  stroke: 0.5,
-  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
-  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
-  // in the field runs. Known miss: heavy italics/overhang can exceed it.
-  textInk: 3
-};
-function normColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  const key = colorKey(s);
-  if (key) return key;
-  const c = parseCssColor(s);
-  if (c === null) return s;
-  if (c.a === 0) return "transparent";
-  return colorKey(formatHex(c)) ?? s;
-}
-var WEIGHTS = {
-  thin: 100,
-  extralight: 200,
-  ultralight: 200,
-  light: 300,
-  normal: 400,
-  regular: 400,
-  book: 400,
-  medium: 500,
-  semibold: 600,
-  demibold: 600,
-  bold: 700,
-  extrabold: 800,
-  ultrabold: 800,
-  black: 900,
-  heavy: 900
-};
-function normWeight(v) {
-  if (v == null) return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim();
-  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
-  const name = s.toLowerCase().replace(/[^a-z]/g, "");
-  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
-  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
-}
-var cssWeight = (v) => typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 1e3 ? v : null;
-function fontWeightOf(f) {
-  return cssWeight(f.weightValue) ?? cssWeight(f.variationSettings ? f.variationSettings.wght : void 0) ?? cssWeight(normWeight(f.weight));
-}
-function normFamily(v) {
-  if (v == null) return null;
-  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
-}
-function lineHeightPx(lh, fontSize) {
-  if (lh == null) return null;
-  if (typeof lh === "number") return lh;
-  const size = typeof fontSize === "number" ? fontSize : typeof fontSize === "string" ? Number(fontSize) : NaN;
-  const of = (factor) => Number.isFinite(size) && size > 0 && Number.isFinite(factor) ? r2(factor * size) : null;
-  if (typeof lh === "string") {
-    const s = lh.trim().toLowerCase();
-    if (s === "normal") return null;
-    const n = parseFloat(s);
-    if (Number.isNaN(n)) return null;
-    if (s.endsWith("%")) return of(n / 100);
-    if (s.endsWith("px")) return n;
-    return of(n);
-  }
-  if (typeof lh === "object") {
-    const unit = String(lh.unit ?? "px").toLowerCase();
-    if (unit === "percent" || unit === "%") return typeof lh.value === "number" ? of(lh.value / 100) : null;
-    if (unit === "auto") return null;
-    if (unit === "px" || unit === "pixels") return typeof lh.value === "number" ? lh.value : null;
-    return null;
-  }
-  return null;
-}
-var EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
-var REPORT_SCHEMA = "designtwin/verify-report@2";
-var num = (v) => typeof v === "number" && Number.isFinite(v);
-var r2 = (v) => Math.round(v * 100) / 100;
-var PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
-function cssPx(v) {
-  if (num(v)) return v;
-  if (typeof v !== "string" || !PX_RE.test(v)) return null;
-  const n = parseFloat(v);
-  return Number.isFinite(n) ? n : null;
-}
-function fourSides(v) {
-  const parts = num(v) ? [v] : Array.isArray(v) ? v : typeof v === "string" ? v.trim().split(/\s+/) : [];
-  const p = parts.map(cssPx);
-  if (p.length < 1 || p.length > 4 || p.some((x) => x === null)) return null;
-  const [p0, p1 = p0, p2 = p0, p3 = p1] = p.filter((x) => x !== null);
-  return p0 === void 0 || p1 === void 0 || p2 === void 0 || p3 === void 0 ? null : [p0, p1, p2, p3];
-}
-var PAD_SIDES = ["top", "right", "bottom", "left"];
-var TEXT_BOX_HEIGHT = "text box height";
-var scaleText = (n) => `${Math.round(n * 1e4) / 1e4}x`;
-var FIELDS = [
-  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
-  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
-  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
-  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
-  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
-  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
-  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
-  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
-  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
-  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
-  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
-  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
-  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
-  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
-  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
-  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
-  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
-];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
-var STYLE_KEY_SHAPE = {
-  borderRadius: "number | [tl,tr,br,bl]",
-  padding: "[t,r,b,l]",
-  fill: "an SVG's paint",
-  textBox: "{x,w} of a Range over the text",
-  placeholderText: "el.placeholder",
-  placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case",
-  display: "getComputedStyle(el).display"
-};
-var measuredKeysDoc = () => ({
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (`fill` must be in it)
-  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
-  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
-  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
-  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
-  "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
-  "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-});
-var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
-var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
-
 // design-to-code/verify-expect.ts
 import path19 from "node:path";
 
@@ -5179,17 +5308,6 @@ var LIMITS = [
   "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
   "Severity follows the match: a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). An open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap \u2014 a match-confidence cap stays."
 ];
-function fieldTolerance(label) {
-  const f = FIELDS.find((x) => x.label === label);
-  if (f) return f.tol;
-  if (label === "padding") return TOLERANCE.padding;
-  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
-  if (label === "placement") return TOLERANCE.position;
-  if (label === "width (text ink)") return TOLERANCE.textInk;
-  if (label === "match (size)") return TOLERANCE.size;
-  if (label === "overflowX") return TOLERANCE.position;
-  return null;
-}
 var fieldBase = (f) => f.replace(/\s*\(.*\)$/, "");
 var INTEGRITY_PHRASES = {
   unfinished: "\u2014 the verifier had not finished",
@@ -5281,22 +5399,6 @@ function deltaChanges(prev, cur, now) {
     out.fixed++;
   }
   return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
-}
-var NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
-function sameWithin(a, b, tol) {
-  const t = tol ?? 0;
-  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= t + 1e-9;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => {
-    const y = b[i];
-    return y !== void 0 && sameWithin(x, y, tol);
-  });
-  if (typeof a === "string" && typeof b === "string") {
-    if (tol == null) return a.trim() === b.trim();
-    if (a.replace(NUM_IN_TEXT, "#") !== b.replace(NUM_IN_TEXT, "#")) return false;
-    const na = a.match(NUM_IN_TEXT) || [], nb = b.match(NUM_IN_TEXT) || [];
-    return na.length === nb.length && na.every((x, i) => Math.abs(Number(x) - Number(nb[i])) <= t + 1e-9);
-  }
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 var PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"];
 var paintOf = (s) => PAINT_KEYS.filter((k) => s[k] !== void 0);
@@ -6475,22 +6577,13 @@ function gradeInteractions(cx, g) {
   inputNotes.push(...pageNotes);
   if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0)
     inputNotes.push("expectation written by an older verify-screen (TEXT box widths, no aliases) \u2014 re-run --expect");
-  const descopeRows = [];
-  plan.descopes.forEach((d, i) => {
-    if (isPlanDescope(d)) descopeRows.push(d);
-    else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`);
-  });
-  const descopeUsed = /* @__PURE__ */ new Set();
-  const descopeFor = (i) => {
-    const hits = descopeRows.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === void 0 || d.destinationId === i.destinationId));
-    for (const d of hits) descopeUsed.add(d);
-    const live = hits.find((d) => d.exportContentSha256 === exportSha);
-    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
-    return live;
-  };
+  const designed = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const scopes = descopeRound(plan.descopes, designed, exportSha);
+  inputNotes.push(...scopes.notes);
+  reopened.push(...scopes.reopened);
   if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length)
     inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence");
-  const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
+  const interactions = designed.map((i, at) => {
     const key = String(i.nodeId) + "|" + i.trigger;
     const p = probeRows.get(key), a = exercised.get(key);
     const gapsOf = (h) => h && h.ok === true && h.result !== "not-probed" ? evidenceGaps(h, i.action) : null;
@@ -6526,7 +6619,7 @@ function gradeInteractions(cx, g) {
       ...ifDefined("overridden", overridden)
     } : {};
     const saidBy = fromProbe ? "probe said" : "agent evidence said";
-    const scoped = descopeFor(i);
+    const scoped = scopes.descoped[at];
     if (scoped) return Object.assign(row, {
       result: "descoped",
       detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`,
@@ -6563,7 +6656,7 @@ function gradeInteractions(cx, g) {
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
   const interactionsUndesigned = interactions.filter((i) => i.result === "undesigned");
   const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
-  for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
+  unused.push(...scopes.unused);
   return { exportSha, interactions, interactionsFailed, interactionsNotProbed, interactionsPassed, interactionsUndesigned, interactionsDescoped };
 }
 function unmatchedEvidence(cx, g) {
@@ -6668,42 +6761,12 @@ function paintedByNote(cx) {
 function applyWaivers(cx, g) {
   const { plan, specs, deltas, notMeasured, fieldsNotMeasured, inputNotes, reopened, unused } = cx;
   const { componentsAbsent, exportSha, interactionsFailed } = g;
-  const notWaivable = /* @__PURE__ */ new Map();
-  for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured \u2014 only a measured delta can be accepted");
-  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable \u2014 descope it (plan.descopes, owner-only) if it is deliberately inert");
-  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT \u2014 a missing component is never waivable`);
-  let applied = 0;
-  plan.waivers.forEach((w, i) => {
-    if (!isPlanWaiver(w)) {
-      inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`);
-      return;
-    }
-    const cands = deltas.filter((d2) => d2.nodeId === w.nodeId && d2.field === w.field && !d2.accepted);
-    if (!cands.length) {
-      const fieldGap = fieldsNotMeasured.some((g2) => g2.nodeId === w.nodeId && g2.field === w.field) ? "that value was not measured this round \u2014 only a measured delta can be accepted" : void 0;
-      const inkNow = w.field === "width" && (deltas.some((d2) => d2.nodeId === w.nodeId && d2.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox")) ? "this TEXT's width is compared as 'width (text ink)' \u2014 re-accept against the new report" : void 0;
-      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round \u2014 fixed? drop the waiver" });
-      return;
-    }
-    if (!exportSha || w.exportContentSha256 !== exportSha) {
-      reopened.push({ nodeId: w.nodeId, field: w.field, why: exportSha ? "design re-exported: the export content changed since the waiver was accepted" : "the expectation records no export content hash \u2014 regenerate it with --expect" });
-      return;
-    }
-    const tol = fieldTolerance(w.field);
-    const d = cands.find((x) => sameWithin(w.designed, x.expected, tol) && sameWithin(w.built, x.actual, w.tolerance ?? tol));
-    if (d) {
-      d.accepted = { reason: w.reason, decidedBy: w.decidedBy, decidedAt: w.decidedAt, ...ifDefined("cause", w.cause) };
-      applied++;
-      return;
-    }
-    const c0 = cands.find((x) => sameWithin(w.designed, x.expected, tol));
-    reopened.push({
-      nodeId: w.nodeId,
-      field: w.field,
-      why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}`
-    });
-  });
-  return { applied };
+  const inkWidthNodes = new Set(specs.filter((sp) => sp.widthFrom === "renderBox").map((sp) => sp.nodeId));
+  const r = waiverRound(plan.waivers, { deltas, exportSha, gaps: { notMeasured, fieldsNotMeasured, interactionsFailed, componentsAbsent }, inkWidthNodes });
+  inputNotes.push(...r.notes);
+  reopened.push(...r.reopened);
+  unused.push(...r.unused);
+  return { applied: r.applied };
 }
 function liftSizeCaps(cx) {
   const { deltas, matchCapOf } = cx;
@@ -8620,25 +8683,6 @@ function expectDirOf(out) {
   return path22.dirname(out);
 }
 var planFor = (flagged, frameId) => choosePlan(flagged, plansFound(process.cwd(), frameId), frameId);
-function selectForAccept(rep, sel) {
-  const integrity = rep.integrity;
-  if (!Array.isArray(integrity)) return { error: "the report records no integrity[] \u2014 nothing says whether its run was verified; re-run --compare, then accept against the new report" };
-  if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) \u2014 nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
-  const deltas = Array.isArray(rep.deltas) ? rep.deltas : [];
-  const picked = sel.group !== void 0 ? deltas.filter((d) => d.group === sel.group) : deltas.filter((d) => d.nodeId === sel.node && (sel.field === void 0 || d.field === sel.field));
-  if (picked.length) return { deltas: picked };
-  if (sel.group !== void 0) {
-    const gs = [...new Set(deltas.map((d) => d.group).filter((g) => !!g))];
-    return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
-  }
-  const id = sel.node;
-  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT \u2014 a missing component is never waivable; build it` };
-  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction \u2014 never waivable; fix it, or have the owner descope it in plan.descopes` };
-  if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured \u2014 there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
-  if (sel.field !== void 0 && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured \u2014 there is no delta to accept` };
-  const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);
-  return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
-}
 function main(argv) {
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... [--out design/verify] [--variant <slug>] [--plan <plan.json>]
@@ -9105,16 +9149,9 @@ function acceptMain(files, flags, USAGE) {
     updatePlan(target, (raw) => {
       if (raw === null) throw new Error(`${target} does not exist`);
       const plan = parsePlanText(raw, target);
-      const waivers = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
-      wrote = [];
-      for (const d of sel.deltas) {
-        const row = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
-        const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
-        if (at >= 0) waivers[at] = row;
-        else waivers.push(row);
-        wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
-      }
-      plan.waivers = waivers;
+      const acc = acceptInto(plan.waivers, sel.deltas, { exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, cause: flags.group });
+      wrote = acc.wrote.map(({ delta: d, replaced }) => `${replaced ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
+      plan.waivers = acc.waivers;
       return plan;
     });
   } catch (e) {
@@ -9128,6 +9165,5 @@ function acceptMain(files, flags, USAGE) {
 }
 if (import.meta.main) runCli(main, { name: "verify-screen", errorLine: (e) => `verify-screen: ${errMsg(e)}` });
 export {
-  main,
-  selectForAccept
+  main
 };

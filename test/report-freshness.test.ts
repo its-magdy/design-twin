@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256 } from "../design-to-code/content-hash.ts";
-import { waiversHash } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import { bindMeasured, codeChanged, measuredText, reportFreshness, reportInputs, stampEvidence, staleText } from "../design-to-code/report-freshness.ts";
 import type { Git, StaleReason } from "../design-to-code/report-freshness.ts";
 import type { Plan } from "../design-to-code/types.ts";

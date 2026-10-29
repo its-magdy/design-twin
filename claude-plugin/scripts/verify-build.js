@@ -2934,11 +2934,102 @@ import path17 from "node:path";
 import fs15 from "node:fs";
 import path14 from "node:path";
 
-// design-to-code/plan-binding.ts
+// design-to-code/verify-shared.ts
+var TOLERANCE = {
+  fontSize: 0.5,
+  // a browser rounds; a different token does not
+  fontWeight: 0,
+  // 500 vs 600 is a different style, never a rendering artifact
+  lineHeight: 2,
+  // normal/unitless line-heights and font-metric rounding genuinely differ
+  letterSpacing: 0.2,
+  radius: 0.5,
+  padding: 1,
+  gap: 1,
+  // 1, not 2: a 2px box error is exactly a border put on the wrong side of the box — the filter button
+  // measured 111.83×38 against 110×36, which an inclusive 2px tolerance would let through.
+  size: 1,
+  // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
+  // a column 18.94px out of place or a bar 130px below the frame cannot hide.
+  position: 2,
+  opacity: 0.02,
+  // a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) would let it pass
+  stroke: 0.5,
+  // a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
+};
+function normColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  const key = colorKey(s);
+  if (key) return key;
+  const c = parseCssColor(s);
+  if (c === null) return s;
+  if (c.a === 0) return "transparent";
+  return colorKey(formatHex(c)) ?? s;
+}
+var WEIGHTS = {
+  thin: 100,
+  extralight: 200,
+  ultralight: 200,
+  light: 300,
+  normal: 400,
+  regular: 400,
+  book: 400,
+  medium: 500,
+  semibold: 600,
+  demibold: 600,
+  bold: 700,
+  extrabold: 800,
+  ultrabold: 800,
+  black: 900,
+  heavy: 900
+};
+function normWeight(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const s = String(v).trim();
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  const name = s.toLowerCase().replace(/[^a-z]/g, "");
+  const key = name === "italic" || name === "oblique" ? "regular" : name.replace(/(italic|oblique)$/, "");
+  return WEIGHTS[key] != null ? WEIGHTS[key] : null;
+}
+function normFamily(v) {
+  if (v == null) return null;
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+}
+var FIELDS = [
+  { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
+  { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
+  { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
+  { key: "lineHeight", tol: TOLERANCE.lineHeight, label: "line-height", unit: "px" },
+  { key: "letterSpacing", tol: TOLERANCE.letterSpacing, label: "letter-spacing", unit: "px" },
+  { key: "color", tol: null, norm: normColor, label: "color", high: true, colour: true },
+  { key: "backgroundColor", tol: null, norm: normColor, label: "background", high: true, colour: true },
+  { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
+  { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
+  { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
+  { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
+  { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
+  { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
+  { key: "height", tol: TOLERANCE.size, label: "height", unit: "px", box: true },
+  { key: "x", tol: TOLERANCE.position, label: "x (frame-relative)", unit: "px", box: true },
+  { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
+  { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
+];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+
+// design-to-code/owner-decisions.ts
 function waiversHash(plan) {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
   return sha256Hex(canonical({ descopes, waivers }));
+}
+function waiversChanged(recorded, plan) {
+  return (recorded || waiversHash(null)) !== waiversHash(plan);
 }
 
 // design-to-code/report-freshness.ts
@@ -2996,9 +3087,8 @@ function staleText(rel, r) {
 }
 function reportFreshness(root, o = {}) {
   const git = o.git ?? systemGit;
-  const NO_WAIVERS = waiversHash(null);
   const codeNow = (plan) => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged = (inputs, plan) => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
+  const waiversChanged2 = (inputs, plan) => waiversChanged(inputs.waiversSha256, plan);
   function expectationChanged(rel, inputs) {
     const want = inputs.expectationSha256;
     if (!want) return null;
@@ -3032,10 +3122,10 @@ function reportFreshness(root, o = {}) {
         const differ = Object.keys(h).filter((f) => measured[f] !== h[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
         if (differ.length) out.push({ kind: "code-changed", files: differ });
       }
-      if (waiversChanged(inputs, now.plan)) out.push({ kind: "waivers-changed" });
+      if (waiversChanged2(inputs, now.plan)) out.push({ kind: "waivers-changed" });
       return out;
     },
-    waiversChanged
+    waiversChanged: waiversChanged2
   };
 }
 

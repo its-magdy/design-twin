@@ -9,7 +9,7 @@
 // or a fresh clone flips) and the hash of the plan's waivers[]/descopes[]. git HEAD is recorded and shown, never a reason:
 // a commit does not say whether the tree was dirty. The git calls go through `Git` (injected; systemGit runs git).
 //
-// The waivers hash is plan-binding.ts's (waiversHash): it records it at --compare (report.inputs.waivers), this judges by it.
+// The waivers hash is owner-decisions.ts's (waiversHash): plan-binding records it at --compare (report.inputs.waivers), this judges by it.
 //
 // The consequence of a reason is each caller's: plan-status reads a stale report as `unverified`, verify-compare grades
 // an unbound measured file `incomplete`, verify-run refuses to record it.
@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, fileHashes, planCodeFiles } from "./content-hash.ts";
-import { waiversHash } from "./plan-binding.ts";
+import { waiversChanged as decisionsChanged } from "./owner-decisions.ts";
 import { runSync } from "./proc.ts";
 import { isJsonObject } from "./types.ts";
 import type { CodeInputs, Plan } from "./types.ts";
@@ -144,7 +144,7 @@ export type CachedBytes = (rel: string) => Uint8Array | undefined;
 
 export interface ReportFreshness {
   /** what --compare records about the code of the plan it used: each code file's content hash and git HEAD — none when the
-   *  plan lists no files[] (the plan's waivers/descopes hash is plan-binding.ts's, beside it) */
+   *  plan lists no files[] (the plan's waivers/descopes hash is owner-decisions.ts's, beside it) */
   stamp(plan: { file: string; plan: Plan }): { code?: CodeInputs };
   /** why report `rel` (project-relative; its expectation is `<set>.expected.json` beside it) no longer holds for this plan
    *  and export, in order — [] = fresh */
@@ -155,9 +155,8 @@ export interface ReportFreshness {
 
 export function reportFreshness(root: string, o: { git?: Git; cached?: CachedBytes } = {}): ReportFreshness {
   const git = o.git ?? systemGit;
-  const NO_WAIVERS = waiversHash(null);
   const codeNow = (plan: Plan): Record<string, string | null> => fileHashes(planCodeFiles(plan, root), root, o.cached);
-  const waiversChanged = (inputs: ReportInputs, plan: Plan): boolean => (inputs.waiversSha256 || NO_WAIVERS) !== waiversHash(plan);
+  const waiversChanged = (inputs: ReportInputs, plan: Plan): boolean => decisionsChanged(inputs.waiversSha256, plan);
 
   function expectationChanged(rel: string, inputs: ReportInputs): string | null {
     const want = inputs.expectationSha256;

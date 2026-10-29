@@ -10,7 +10,7 @@ import { sha256Hex } from "../bridge/src/hash.ts";
 import { exportContentSha256, legacyPlanHash, planHash } from "../design-to-code/content-hash.ts";
 import { parsePlan } from "../design-to-code/doc-guards.ts";
 import { lifecycleOf, planStatus, rootOfPlan, storedComputed } from "../design-to-code/plan-status.ts";
-import { waiversHash } from "../design-to-code/plan-binding.ts";
+import { waiversHash } from "../design-to-code/owner-decisions.ts";
 import { reportFreshness } from "../design-to-code/report-freshness.ts";
 import type { Git } from "../design-to-code/report-freshness.ts";
 import type { ExportHit } from "../design-to-code/verify-locate.ts";

@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { runSync } from "../design-to-code/proc.ts";
-import * as VS from "../design-to-code/verify-screen.ts";
+import { selectForAccept } from "../design-to-code/owner-decisions.ts";
 import * as VSC from "../design-to-code/verify-compare.ts";
 import { reportToMarkdown } from "../design-to-code/verify-report-md.ts";
 import { compare } from "../design-to-code/verify-compare.ts";
@@ -274,9 +274,9 @@ safe("a status 'done' naming this measured file → pass; inputs.runId = the run
 });
 // --accept refuses a report whose run failed its integrity checks — a waiver would bind to unverified numbers
 // (the report as --accept reads it: the JSON on disk, through its guard)
-const acceptSel = (r: VerifyReportV2, node: string, field: string): ReturnType<typeof VS.selectForAccept> => {
+const acceptSel = (r: VerifyReportV2, node: string, field: string): ReturnType<typeof selectForAccept> => {
   const onDisk: unknown = JSON.parse(JSON.stringify(r));
-  return isVerifyReport(onDisk) ? VS.selectForAccept(onDisk, { node, field }) : { error: "not a report" };
+  return isVerifyReport(onDisk) ? selectForAccept(onDisk, { node, field }) : { error: "not a report" };
 };
 safe("--accept on a report whose run had not finished (a high delta listed) → refused, naming the integrity reason", () => {
   const r = run(measure({ "2:1": { fontSize: 30 } }, { expectationSha256: SHA_E }), { expectationSha256: SHA_E, measuredSha256: SHA_M, status: status("measuring") });
@@ -440,7 +440,7 @@ safe("--accept refuses a report with no integrity field, whatever its why[] says
   return [unfinished, clean].every((r) => {
     const { integrity: _i, ...without } = r;
     const onDisk: unknown = JSON.parse(JSON.stringify(without));
-    const sel = isVerifyReport(onDisk) ? VS.selectForAccept(onDisk, { node: "2:1", field: "font-size" }) : { error: "not a report" };
+    const sel = isVerifyReport(onDisk) ? selectForAccept(onDisk, { node: "2:1", field: "font-size" }) : { error: "not a report" };
     return "error" in sel && sel.error === NO_INTEGRITY;
   }) && unfinished.why.some((w) => /the verifier had not finished/.test(w));
 });
