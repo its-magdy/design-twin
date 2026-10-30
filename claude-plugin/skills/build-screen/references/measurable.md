@@ -46,7 +46,9 @@ screens by component path, and by name path through the aliases `--expect` build
 `--expect` after re-exporting a sibling), but not repeated names, a shell used twice, or a hand-written probe — and
 never its root: a root tagged with that frame's id is another screen's root on the others (above); a
 per-screen id table (each screen's own ids from its export) still measures more. Either is fine — never invent ids.
-Both follow the reuse rules; untagged sets are reported as tag coverage, never as "missing".
+Both follow the reuse rules; untagged sets are reported as tag coverage, never as "missing". Keeping one frame's ids
+is about tags only: the shell's size, variant and children are still compared in every frame that uses it, and a
+difference becomes a prop (no footer in one column, another width) rather than the first frame's copy.
 
 ## Tag coverage and the opt-out
 

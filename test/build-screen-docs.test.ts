@@ -84,7 +84,7 @@ check("the verifier: exit 3 asks the user, exit 4 reports the navigation log, un
 // --help say so, and what to do when it recurs (--check)
 check("exit 4 names a closed or crashed page or browser and --check when it recurs (verifier agent, verify skill, verify-probe --help)",
   /\*\*Exit 4\*\*[^]{0,400}the page or browser closed or crashed; nothing written\)[^]{0,600}closed or crashed page or browser prints no navigation log: if it recurs on the re-run, run `--check`/.test(flat(read("claude-plugin/agents/visual-verifier.md")))
-  && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(flat(read("claude-plugin/skills/verify/SKILL.md")))
+  && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(verifySkill)
   && /the page or browser closed or crashed \(re-run once; if it recurs, run --check\) \(nothing written; with --run the/.test(flat(read("design-to-code/verify-probe.ts"))));
 check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
 check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Layer>__<id>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
@@ -223,7 +223,7 @@ console.log("verify docs (run integrity + agent safety):");
     && /`status run <id> not counted — …` with the command that ends the run/.test(verifyRef) && /--phase failed --run <id>` command/.test(verifyRef)
     && /A run cache that is not writable refuses that command the same way, so then the line prints none/.test(flat(verifyRef)));
   check("while the user answers an exit 3 the run stays open: it resumes with the same --run id, and an orchestrator's --wait may end `stalled` meanwhile — wait again with that id (verifier, verify skill, run protocol)",
-    ["claude-plugin/agents/visual-verifier.md", "claude-plugin/skills/verify/SKILL.md", "claude-plugin/skills/verify/references/run-protocol.md"].map((f) => read(f))
+    [read("claude-plugin/agents/visual-verifier.md"), verifySkill, read("claude-plugin/skills/verify/references/run-protocol.md")]
       .every((t) => /stays open\s+at `measuring`/.test(flat(t)) && /never `--new-run`/.test(flat(t)) && /exit 5 `stalled`/.test(flat(t)) && /`--wait` again with the same/.test(flat(t))));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
   check("each interaction records outcome (url-changed | dialog-opened | selector-appeared | state-changed | none) and navEvents; a pass needs exactly one match, an allowed outcome, no unexpected navigation; else not-probed; the example carries both fields",
