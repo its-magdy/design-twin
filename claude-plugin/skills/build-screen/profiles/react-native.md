@@ -2,7 +2,7 @@
 
 ## Contents
 Layout · Grid · Scroll/clip/sticky · Prototype reactions · Theming · Effects · Text metrics ·
-Safe area, a11y & RTL · Accessibility naming · Motion · Text overflow · Images · Interaction states ·
+Strokes · Safe area, a11y & RTL · Accessibility naming · Motion · Text overflow · Images · Interaction states ·
 Idiomatic RN (patterns by structure) · Native controls · Hints, not output · Component reuse · Units ·
 Tokens · Components · Text · Assets · Fit the existing app ·
 Output
@@ -19,7 +19,18 @@ Output
   each track).
 - `padding:[t,r,b,l]` → `paddingTop/Right/Bottom/Left`.
 - `justifyContent`/`alignItems` → same prop names, string values (`alignItems:'baseline'` maps 1:1).
-- `widthMode:"fill"` → `flex:1`; `"hug"` → omit; `"fixed"` → `width:N`.
+
+**Sizing (per axis)** — size each axis of each child from its own IR fields; the parent's mode never decides it.
+- **Absent `widthMode`/`heightMode` = fixed**: the export declares that size (`box.w`/`box.h`) → `width:N`/`height:N`,
+  even inside a hug parent (RN's `flexShrink` defaults to 0, so it holds).
+- `hug` → no size. Main-axis `fill` or `grow` → `flex:1` (grow 1, shrink 1, basis 0). Cross-axis `fill` or
+  `alignSelf:"stretch"` → `alignSelf:'stretch'`; `alignSelf` `min`/`center`/`max` → `'flex-start'`/`'center'`/`'flex-end'`.
+- Set `alignItems` on every container from the IR: absent `alignItems` = start → `alignItems:'flex-start'`. Yoga's
+  default is `'stretch'`, which Figma's start is not.
+- `sizeLimits` → `minWidth`/`maxWidth`/`minHeight`/`maxHeight`. A fixed TEXT height → `minHeight`, so font scaling fits.
+- Exceptions: the screen's root frame fills the window (`flex:1` under the safe area), not its `box` — a root that
+  is a modal or sheet keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true`
+  → `position:'absolute'` at its `x`/`y`, sized by `box`.
 
 **Grid (`layout.display:"grid"`)** — RN's flexbox has no native grid. Emulate with nested `<View>` rows:
 use `columns`/`rows`/`columnSizes`/`rowSizes` to compute each row's children and per-item `flex`/fixed
@@ -59,6 +70,17 @@ incl. spread & `inset` (`x y radius spread color`); legacy → `shadow*` (iOS) /
 `letterSpacing` in px: `percent` → pct/100*size. Android `<Text>`: `includeFontPadding:false` +
 `textAlignVertical:'center'`. Respect `allowFontScaling`; cap with `maxFontSizeMultiplier`, never
 fixed-height text boxes. `font.weight` is the verbatim style string → `fontWeight:'{weightValue}'`.
+`runs[]` (mixed text) → nested `<Text>` elements inside one `<Text>`, one per run, each styled from that run's
+`font`, colour and `tokens`; the node's `font` is only the first run.
+
+**Strokes** (`strokes.{weight|weights,align,dash,colors}`, `strokesInLayout`) — the colour is the stroke's own bound
+token (`tokens.strokes`). An RN `borderWidth` always takes layout space (inside the box, like border-box).
+- `align:"inside"` with `strokesInLayout` → `borderWidth` + `borderColor`; it counts toward a hug size.
+- `inside` without `strokesInLayout` → no layout space: `boxShadow` `inset 0 0 0 w color` (New Architecture, 0.76+),
+  else `borderWidth` with each padding reduced by `w`.
+- `outside` → `outlineWidth`/`outlineColor` (0.77+) or a `boxShadow` spread ring (0.76+); `center` → the outline
+  with `outlineOffset: -w/2`. Older RN: an absolutely positioned overlay `View` with the border.
+- Per-side `weights` → `borderTopWidth` etc.; `dash` → `borderStyle:'dashed'` (approximate).
 
 **Safe area, a11y & RTL** — insets via `react-native-safe-area-context` (never a fake status bar); touch
 targets 44 (iOS)/48 (Android) via `hitSlop`; padding is PHYSICAL `[t,r,b,l]` → `paddingStart/End`, check

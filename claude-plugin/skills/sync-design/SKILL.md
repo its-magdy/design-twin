@@ -28,7 +28,7 @@ writes the real path here, not there).
 
 | File | Load it when |
 |------|--------------|
-| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/profiles/<profile>.md` | You are about to write or change code for a node — the stack's conversion rules. Same profile the screen was built with (`design/target.json`). |
+| `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/profiles/<profile>.md`, then the project's `design/profile.md` | You are about to write or change code for a node — the stack's conversion rules. Same profile the screen was built with (`design/target.json`), plus the project's `design/profile.md` when it exists (read after it; it wins where they differ). |
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/ir-fields.md` | A changed field's meaning or unit isn't obvious (`font.lineHeight` percent, `rotation` sign, `strokes.align`). |
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/export-layout.md` | You can't find the screen's JSON, the token file, or the reference image. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md` | Step 5 — rendering and comparing the patched screen. |

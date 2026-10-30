@@ -179,6 +179,16 @@ order, and the manifest check afterwards. Hand off to **`/designtwin:extract`** 
 commands here. Then: **`/designtwin:audit-design <screen>`** (is it buildable?) →
 **`/designtwin:build-screen <screen>`**.
 
+## Your own house rules
+
+The plugin's rules decide fidelity: where the export gives a value, it wins. Where the export is silent — the
+framework and libraries to use, animation, hover/focus/pressed treatment, responsive behaviour, empty and error
+states, which components to prefer — your project decides. Put those house rules in your own skill
+(`.claude/skills/`) or `CLAUDE.md`, which load beside this plugin, or in `design/profile.md`: build-screen,
+audit-design and sync-design read it after the bundled profile, and it wins where the two differ. Write only your
+additions and changes there; don't fork a bundled profile, which then stops getting fixes. Accessibility is never
+waived by either.
+
 ## Where the long-form docs live
 
 **Without a clone of the Design Twin repo, the reference is `dtwin --help` (plus each command's own

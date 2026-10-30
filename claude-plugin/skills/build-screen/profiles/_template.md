@@ -1,4 +1,9 @@
-# Profile: <name>  (copy this file to a root-level `profiles/<name>.md` in your project — it overrides this skill's bundled profiles — and set `profile` in design/target.json)
+# Profile: <name>
+
+For a stack the plugin does not bundle: copy this file to `design/profile.md` in your project, fill it in, and set
+`profile` in `design/target.json` to its name (start a web stack's name with `web-` so the Stop hook checks its
+`data-dt-node` tags). To adjust a bundled profile, write only your additions and changes in `design/profile.md`
+instead — build-screen reads it after the bundled profile, and it wins where the two differ.
 
 Describe how to translate the neutral export IR into this stack. Keep it short and concrete.
 
@@ -11,7 +16,11 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
   a track; no platform aligns the tracks to a baseline, so they pack at start.
 - `padding:[top,right,bottom,left]` → your padding syntax.
 - `justifyContent`, `alignItems` → your main/cross-axis alignment.
-- `widthMode`/`heightMode` (`fill`|`hug`|`fixed`) → stretch / content-sized / fixed.
+- **Sizing, per axis** (REQUIRED) — `widthMode`/`heightMode` are `fill` | `hug`, and **absent = fixed**: the
+  declared `box.w`/`box.h`, kept even inside a hug parent. Say how each maps on the main and the cross axis, how
+  `grow` and `alignSelf` (`min`/`center`/`max`/`stretch`) map, and what your container does with an absent
+  `alignItems` (Figma's is start; CSS and Yoga stretch, SwiftUI and Flutter centre) — set it from the IR. The root
+  frame of a page is the screen, not its `box`; a child of an absolute-layout parent is placed by `x`/`y`.
 - `layout.mode:"absolute"` → infer a flow layout; do NOT hardcode coordinates.
 - `layout.display:"grid"` + `columns`/`rows`/`columnSizes`/`rowSizes`/`columnGap`/`rowGap`/`autoFlow`/
   `autoTracks`, and per-child `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart`/
@@ -37,7 +46,8 @@ Swift/Kotlin constant, theme reference) and how to emit it.
 
 **Components** — how to import and instantiate from `design/codeconnect.local.json`, and how Figma `props` map.
 
-**Text** — element/widget + how `font.size/weight/lineHeight` map to the type scale.
+**Text** — element/widget + how `font.size/weight/lineHeight` map to the type scale, and how `runs[]` (mixed text)
+becomes one styled span per run (`font` is only the first run).
 
 **Assets** — how to consume `design/export/assets/*` (SVG/PNG), including any conversion the user must do.
 Also say what a path-heavy vector costs on this stack (`references/export-layout.md`, heavy vector
@@ -68,7 +78,9 @@ of font size), `font.letterSpacing` (px|percent, absent when 0), `leadingTrim`, 
 `background_blur` `{radius, blurType}`; note how Figma radius maps to the stack's blur/shadow radius.
 `rotation` is DEGREES, Figma positive = counter-clockwise (clockwise-positive stacks: negate).
 
-**Strokes** (optional) — `strokes.{weight|weights{top,right,bottom,left}, align inside|outside|center, dash}`.
+**Strokes** — `strokes.{weight|weights{top,right,bottom,left}, align inside|outside|center, dash}` and
+`strokesInLayout` (the stroke takes layout space and counts toward a hug size, like a CSS border with border-box;
+absent, it takes none). Say how each `align` is drawn with and without it; the colour is `tokens.strokes`.
 
 **Safe area & insets** (optional) — system bars, notches, keyboard; never render a fake status bar frame.
 

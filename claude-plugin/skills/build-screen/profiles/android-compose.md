@@ -37,10 +37,22 @@ Output
   `verticalAlignment` / a `Column`'s `horizontalAlignment` (`Alignment.CenterVertically`, etc.);
   `alignItems:"baseline"` → drop the layout-wide alignment and put `Modifier.alignByBaseline()` on the
   `Row`'s text children instead.
-- `widthMode:"fill"` → depends on the axis: along a `Row`/`Column`'s **main** axis, fill means
-  `Modifier.weight(1f)` — `fillMaxWidth()` there makes the first child eat the whole row. Use
-  `fillMaxWidth()`/`fillMaxHeight()` only on the **cross** axis, or inside a non-weighting parent (`Box`,
-  a screen root). `"hug"` → `wrapContentWidth()`; `"fixed"` → `Modifier.width(N.dp)`.
+
+**Sizing (per axis)** — size each axis of each child from its own IR fields; the parent's mode never decides it.
+- **Absent `widthMode`/`heightMode` = fixed**: the export declares that size (`box.w`/`box.h`) → `Modifier.width(N.dp)` /
+  `height(N.dp)`, even inside a hug parent.
+- `hug` → no size modifier (`wrapContentWidth()` where a parent would otherwise stretch it).
+- `fill` or `grow` along a `Row`/`Column`'s **main** axis → `Modifier.weight(1f)` — `fillMaxWidth()` there makes the
+  first child eat the whole row. Cross-axis `fill` or `alignSelf:"stretch"` → `fillMaxWidth()` in a `Column` /
+  `fillMaxHeight()` in a `Row` (the `Row` needs a bounded height — `Modifier.height(IntrinsicSize.Min)` or a fixed
+  one); inside a non-weighting parent (`Box`, a screen root) fill is `fillMaxWidth()`/`fillMaxHeight()`.
+- Absent `alignItems` = start, which is also Compose's default (`Alignment.Start` / `Alignment.Top`). One child
+  aligned differently (`alignSelf` `min`/`center`/`max`) → `Modifier.align(…)` on it.
+- `sizeLimits` → `Modifier.widthIn(min, max)`/`heightIn(min, max)`. A fixed TEXT height → `heightIn(min = …)`, so
+  font scaling fits.
+- Exceptions: the screen's root frame fills the window (`Scaffold` content), not its `box` — a root that is a dialog
+  or sheet keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true` → a `Box`
+  with `Modifier.offset(x.dp, y.dp)`, sized by `box`.
 
 **Modifier ORDER is semantics, not style.** Modifiers apply outside-in, so the chain order changes the
 result, not just the code. Canonical chain: `size`/`weight` → `clip` → `background` → `border` →
@@ -84,7 +96,9 @@ space rather than a bitmap — there is no asset file for that node.
 
 **Components** — your `@Composable`s per `design/codeconnect.local.json`; pass Figma `props` through.
 
-**Text** — `Text(...)` with `style = MaterialTheme.typography...`; map `font.size` to `.sp`.
+**Text** — `Text(...)` with `style = MaterialTheme.typography...`; map `font.size` to `.sp`. `runs[]` (mixed text) →
+`buildAnnotatedString { withStyle(SpanStyle(...)) { append(run.text) } }`, one span per run from that run's `font`,
+colour and `tokens`; the node's `font` is only the first run.
 
 **Assets** — SVG → import as a vector drawable (`ImageVector` / `painterResource(R.drawable.x)`);
 PNG → `painterResource`. Flag any drawable the user must add to `res/`.
@@ -152,8 +166,11 @@ string → `FontWeight(weightValue)`.
 
 **Shapes & strokes** — `RoundedCornerShape` is circular; if `cornerSmoothing` matters use
 `androidx.graphics.shapes` or a custom path. `radius:{tl,tr,br,bl}` → `RoundedCornerShape(topStart…)`.
-`Modifier.border` draws inside bounds (= `align:"inside"`); `outside`/`center` → padding compensation or
-`drawBehind`. Per-side `weights` → `drawBehind` lines; `dash` → `PathEffect.dashPathEffect`.
+`Modifier.border` draws inside bounds (= `align:"inside"`) and takes no layout space: with `strokesInLayout` the
+stroke counts toward the size, so the padding after it grows by `w` (`.border(w, color, shape).padding(p + w)`);
+without it, `.padding(p)`. `outside`/`center` → `drawBehind` with the stroke offset outward by `w/2` / centred on the
+edge (no layout space). The colour is the stroke's own bound token (`tokens.strokes`). Per-side `weights` →
+`drawBehind` lines; `dash` → `PathEffect.dashPathEffect`.
 
 **Fills & images** — gradients → `Brush.linearGradient`/`radialGradient`/`sweepGradient` (angle from
 `transform`); `GRADIENT_DIAMOND` → asset. Image `scaleMode` `fill` → `ContentScale.Crop`, `fit` →

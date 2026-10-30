@@ -131,8 +131,8 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   and restart.
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
-- **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `<plugin>/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
+- **Wrong stack generated** → set `profile` in `design/target.json`. For a stack the plugin does not bundle, write
+  `design/profile.md` from `<plugin>/skills/build-screen/profiles/_template.md` and name it in `target.json`.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.

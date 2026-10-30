@@ -24,11 +24,14 @@ const flat = (t: string): string => t.replace(/\s*\n\s*/g, " "); // prose wraps;
 const withRefs = (main: string, refs: readonly string[]): string => flat([read(main), ...refs.map((r) => read(r))].join("\n"));
 const extractRefs = ["claude-plugin/skills/extract/references/cross-check.md", "claude-plugin/skills/extract/references/theme-tokens.md"] as const;
 const skill = withRefs("claude-plugin/skills/build-screen/SKILL.md", [
-  ...["gates", "names", "assets", "measurable", "hook-and-status"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
+  ...["gates", "names", "assets", "measurable", "hook-and-status", "plan", "export-layout", "verify"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
 const extractDocs = withRefs("claude-plugin/skills/extract/SKILL.md", extractRefs);
+// Each web profile sends its reader to web-common.md for the rules both share, so a web profile states a rule when it
+// or web-common.md does.
 const twRaw = read("claude-plugin/skills/build-screen/profiles/web-tailwind.md");
-const tw = flat(twRaw);
-const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md"));
+const webCommonRaw = read("claude-plugin/skills/build-screen/profiles/web-common.md");
+const tw = flat(twRaw + "\n" + webCommonRaw);
+const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md") + "\n" + webCommonRaw);
 const builder = flat(read("claude-plugin/agents/screen-builder.md"));
 const validate = read("design-to-code/map-validate-core.ts");
 const step = (n: number): string => skill.split(new RegExp(` ${n}\\. \\*\\*`))[1]?.split(/ \d\. \*\*/)[0] ?? "";
@@ -1167,7 +1170,7 @@ console.log("build-screen docs (per-axis sizing, strokes, mixed runs — the fac
   for (const n of names) {
     const d = doc(n);
     check(`${n}: the sizing card — absent widthMode/heightMode is the declared fixed size, per axis, with grow, alignSelf and the alignItems default`,
-      /absent `widthMode`\/`heightMode` (= fixed|is fixed|means fixed)/i.test(d) && /`heightMode`/.test(d) && /`grow`/.test(d) && /`alignSelf`/.test(d)
+      /absent `widthMode`\/`heightMode` (= fixed|is fixed|means fixed)/i.test(d) && /`heightMode`/.test(d) && /`grow(: ?1)?`/.test(d) && /`alignSelf`/.test(d)
       && /`alignItems`[^.]{0,80}absent[^.]{0,40}start|absent `alignItems`[^.]{0,80}start/i.test(d)
       && /even inside a hug parent/i.test(d) && /root frame/i.test(d));
     check(`${n}: strokes keyed on strokeAlign + strokesInLayout`, /`strokesInLayout`/.test(d) && /inside/.test(d) && /outside/.test(d) && /center/.test(d));
@@ -1177,7 +1180,7 @@ console.log("build-screen docs (per-axis sizing, strokes, mixed runs — the fac
     /`flex: ?0 0 Npx`/.test(webCommon) && /`flex: ?1 1 0`/.test(webCommon) && /`min-width: ?0`/.test(webCommon) && /`min-height: ?0`/.test(webCommon)
     && /`flex: ?0 0 auto`/.test(webCommon) && /`align-self: ?stretch`/.test(webCommon) && /never leave[^.]{0,60}`normal`/i.test(webCommon));
   check("web-common: inside + strokesInLayout is a real border with border-box — the verifier's own words — and an inset ring only without it",
-    /use a real border with `?box-sizing: border-box`?, not a box-shadow ring/.test(webCommon)
+    /use a real border with `?box-sizing: border-box`?, not a box-shadow ring/i.test(webCommon)
     && /without `strokesInLayout`[^.]{0,120}inset/i.test(webCommon) && /outline-offset: ?-w\/2/.test(webCommon)
     && /per-side `weights`[^.]{0,120}(spread|box-shadow)[^.]{0,40}(can't|cannot)/i.test(webCommon) && /stroke's own bound token|`tokens\.strokes`/.test(webCommon));
   check("both web profiles send the reader to web-common.md", /web-common\.md/.test(prof("web-css-modules")) && /web-common\.md/.test(prof("web-tailwind")));

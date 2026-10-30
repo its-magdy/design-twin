@@ -4,6 +4,9 @@
 export in layers (structure → numbers → pixels), fix the largest gap first, and report the evidence.
 
 ## Contents
+- [The build's verify step in full](#the-builds-verify-step-in-full)
+- [Several frames](#several-frames)
+- [The visual-verifier](#the-visual-verifier)
 - [Readiness: make renders comparable](#readiness-make-renders-comparable)
 - [Per-stack rendering](#per-stack-rendering)
 - [Compare in layers](#compare-in-layers)
@@ -11,6 +14,120 @@ export in layers (structure → numbers → pixels), fix the largest gap first, 
 - [The fix loop](#the-fix-loop)
 - [Saying you're alive](#saying-youre-alive)
 - [When you can't render](#when-you-cant-render)
+
+## The build's verify step in full
+
+Step 5 of build-screen, every command and rule; the skill body has the loop.
+
+- Static: build + typecheck + lint; grep the new code for raw hex/px literals and inline SVG.
+- **Live render is the default path, not the fallback.** Check `package.json`/`node_modules` for a dev server
+  and Playwright (or the stack's equivalent from `verify.md`'s table); if present, render the actual screen and
+  diff **computed styles** (`getComputedStyle` — `backgroundColor`, padding, gap, font metrics, or the platform
+  equivalent) against the IR's `layout`/`fills`/token values, not just a visual read of the `.png`. Computed
+  colours come back as `rgb()`/`rgba()` — convert one side rather than string-matching `rgb(229, 231, 235)` against `#E5E7EB`.
+- **Getting a dev server up is itself a step, not an assumption.** Follow whatever the repo already
+  documents (a `README`/`Makefile`/`package.json` script, a `docker-compose.yml`) — the first
+  attempt at an unfamiliar or cross-arch setup (e.g. a container built for a different CPU
+  architecture than the host) commonly needs one platform-specific flag before it boots; treat that
+  failure as a one-line environment fix to make and record, not a reason to fall back to
+  `static-only`. Only fall back once starting it has genuinely been tried and failed.
+- **Measure per node, against the design's own numbers.** Generate the expectation and diff it —
+  close every page and browser of the app you opened BEFORE running the probe or `--compare` (both write
+  into `design/verify/`, and a dev server reloads a page still open on it):
+
+  ```
+  bun --no-install --no-env-file "<scripts>/verify-screen.js" --expect <screen json> --out design/verify
+  bun --no-install --no-env-file "<scripts>/verify-probe.js" --expected design/verify/<Layer>__<id>.expected.json \
+    --url <url> --out design/verify [--steps <plan.json>]   # web: renders, measures every node, writes <Layer>__<id>.measured.json + .png
+  bun --no-install --no-env-file "<scripts>/verify-screen.js" --compare \
+    design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json --out design/verify
+  ```
+
+  `--out` is the verify directory; the set is named by the frame's node (`<Layer>__<id>`, never a name you
+  pick), and a second set of the node — another theme or width — is `--expect --variant <slug>`
+  (`<Layer>__<id>.<slug>`). There is no `--force`. A legacy-named set of the node (a nickname, `<Screen>@320`,
+  `<Screen>-r1`) is a note at `--expect`, which writes the `<Layer>__<id>` set beside it; `--compare` and the probe
+  refuse a legacy-named expectation. Rename the old sets with `verify-screen.js --migrate` (a dry run), then
+  `--migrate --apply` (the verify skill, step 2, has what it skips).
+  Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan
+  found in step 2 as `--steps <plan.json>` (and as `verify-build`'s argument): only a NEW plan is named
+  `design/plan/<Layer>__<id>.json`; an existing plan keeps whatever name it has, and a variant set
+  (`<Layer>__<id>.<slug>`) uses its node's plan — no slugged plan exists. A frame that is not its plan's
+  `nodeId` (a modal in its primary screen's plan) is found by no tool: pass `--plan <that plan>` to `--expect`
+  and `--compare`, and that plan as `--steps`. A plan with no `navigate` runs no steps; after every load the probe waits for the screen root's tag
+  (`--ready` defaults to `[data-dt-node="<frame id>"]`: a step's click can land on another page — a login bounce —
+  and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
+  and the plan's `expect: "dialog"` rows itself (evidence only: `ok: true` or `ok: null`, never `ok: false`);
+  the verifier does not re-drive those. A page that scrolls sideways at the design width is a high waivable
+  delta (`overflowX`) on the root frame.
+
+  What `--expect` emits, what `--compare` grades, and the run a probe without `--run` starts (it is refused while
+  a verifier's run of the screen is open) are in `references/verify.md` (*Numbers*). Read the expectation's rows rather than retyping
+  them into a code comment, and report the verdict `--compare` computes: it exits non-zero unless the verdict is
+  `pass` or `pass-with-deviations` — waivers and descopes are the user's word, never yours.
+- Render the screen at the frame's exact size (`box.w`×`box.h`, fonts loaded, animations off) with
+  the stack's tooling, and also look: **structure** (every tree node present, nothing duplicated)
+  and **pixels** against the `.png` — clipped/overlapping text first, then spacing, alignment,
+  colour. The numbers are the script's job; your eyes catch what numbers can't express.
+- **Re-render immediately before saving any screenshot you will cite as evidence.** A dev server
+  with hot reload picks up edits mid-pass, so a saved screenshot can show strings the shipped
+  code does not have — while the same plan block cites it as proof they were fixed. An artifact that does not
+  depict the build it claims to depict is worse than none.
+- Re-render key states, a large font scale, the other theme, and RTL when supported.
+- Fix the largest discrepancy first, at most **5 rounds** per component, and never buy pixels with worse code —
+  `references/verify.md` (*The fix loop*) has the rules; a residual difference goes in `deviations[]` with its reason.
+- Only if the project genuinely has no dev server/rendering tooling available (checked, not
+  assumed) fall back to a structural + visual self-review against the `.png` — and report it as
+  "not rendered — reviewed statically", never as a verified match.
+- **Record the evidence in the plan** under `verification`: on web `--compare … --record-plan` writes the
+  tool-owned `verification.recorded` block from the report (never edit it), and you still write `coverage`
+  (`hook-and-status.md` has both shapes).
+- **The `Stop` hook** (`verify-build.js`) checks the built code against the plan as your turn ends: it
+  **blocks** on a raw colour the plan resolved to a token, a visible node with no anchor, (web) no
+  `data-dt-node` tag, and a hand edit of `verification.recorded`, and warns on the rest; run it by hand with
+  `bun --no-install --no-env-file "<scripts>/verify-build.js" <plan.json>`.
+- **Status is computed, never stored**:
+  `bun --no-install --no-env-file "<scripts>/verify-build.js" --status <plan.json>` derives it from the
+  hook's result, the hashes of `files[]` and the verify report. Write `status` yourself only as `"abandoned"`
+  or `"awaiting-user"` (and back to `"pending"`); `hook-and-status.md` lists every status and what blocks.
+
+**Reporting the evidence.** Resolve whatever the `Stop` hook blocked on earlier in the turn first. Per frame, report
+the evidence (`verification.recorded.mode` — or `verification.mode` where nothing records it —, what you rendered,
+the `--compare` verdict and coverage line) and the status you expect: `pass` → `verified`; `pass-with-deviations`
+→ `verified-with-deviations`, with each accepted delta (node, field, designed → built, the user's reason) listed
+under the evidence — accepted is not "matches".
+
+## Several frames
+
+Every designed frame you build gets its own expectation and compare: a feature of N frames (a list, its empty state,
+an add form, a dialog, a detail view) is N sets, each named by its node. A frame that lives in another frame's plan (a
+modal in its screen's plan) takes `--plan <that plan>` at `--expect` and `--compare` and that plan as `--steps`; a
+second set of one node (another theme or width) is `--expect --variant <slug>`. A state the probe cannot reach by
+`navigate` steps alone (it never types or chooses) needs a fixture or a deep link the app already offers, recorded in
+the plan; until one exists, report the frame "not verified" with that reason. A shared shell or component is compared
+in every frame that uses it — a delta in one use is a prop the component lacks, never a reason to stop comparing.
+Classify what is left once: actionable (fix it), the designer's or the user's (a question), or a method limit (say so)
+— rounds are for actionable rows only.
+
+## The visual-verifier
+
+For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** agent over checking your own work:
+hand it `design/verify/<Layer>__<id>.expected.json`; it renders, measures every node, drives the designed interactions
+and writes `design/verify/<Layer>__<id>.measured.json` — measurements, not a verdict. You run
+`bun --no-install --no-env-file "<scripts>/verify-screen.js" --compare design/verify/<Layer>__<id>.expected.json design/verify/<Layer>__<id>.measured.json [--interactions design/verify/<Layer>__<id>.evidence.json] --record-plan --out design/verify`
+on what it wrote (`--interactions` when it wrote that file; `--record-plan` records the report in the plan's
+`verification` block), fix the high-severity deltas, and re-verify — every verifier pass (each re-verify round)
+gets a NEW run (`--status <Layer>__<id> --phase queued --new-run`, its id passed to the verifier): an ended run takes no
+more writes, and `--wait` on an old id returns at once on that run's old `done` only until a later run replaces the
+status — after that it ends in exit 5, `stalled` once that run's status stops changing (`--stall`), at the latest on
+`--timeout`. Your own probe without `--run` is such a later run: it
+replaces the live status with its own run's, and the published `design/verify/<Layer>__<id>.status.json` too once that run
+ends `done` (a `failed` one publishes nothing).
+
+It runs for minutes and reports progress into the run cache (`node_modules/.cache/designtwin-verify/`; published as
+`design/verify/<Layer>__<id>.status.json` at `done`). **Wait with `verify-screen.js --wait <Layer>__<id> --run <id>` rather than
+assuming it hung** (exit 0 done, 1 failed or `blocked` on permissions, 5 timeout or no progress, 6 run cache not
+accessible); the run protocol has the rest, including why it takes longer inside a build than on its own.
 
 ## Readiness: make renders comparable
 Most false diffs come from the render, not the code:
@@ -181,9 +298,9 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
 - Cap at **5 rounds per component**, and stop sooner when a round fixes nothing. If a fix to one value
   breaks another (margin vs padding ping-pong), the constraints conflict — step back to the plan,
   split the component, or report it.
-- Never trade maintainability for pixels: a round that adds absolute positioning, a fixed size or a
-  magic offset to a node the export lays out with auto layout, or replaces a token with a literal,
-  is a regression even when the screenshot got closer. Record the residual in `deviations[]` (with a reason) instead —
+- Never trade maintainability for pixels: a round that adds absolute positioning, a magic offset, or a fixed size
+  the export does not declare (absent `widthMode`/`heightMode` is a declaration), or replaces a token with a
+  literal, is a regression even when the screenshot got closer. Record the residual in `deviations[]` (with a reason) instead —
   the record's `deltas` belong to `--record-plan`, which writes `verification.recorded` whole (a hand edit there blocks the Stop hook).
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
