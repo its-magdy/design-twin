@@ -388,6 +388,8 @@ console.log("overfull padding sides, per-side strokes, dropped specs, mutation g
     const { borderWidths: _bw, ...old } = sideStyles(null);
     return (compare(eS, measured([node("9:12", old)])).fieldsNotMeasured ?? []).some((g) => g.nodeId === "9:12" && g.field === "border-width" && /did not report/.test(g.why));
   });
+  safe("…on an inline element too (inline elements draw borders): a missing bottom side is a delta",
+    () => !!deltaOn(compare(eS, measured([node("9:12", sideStyles([0, 0, 0, 0], { display: "inline", borderWidth: 0 }))])), "9:12", /^border-width \(bottom\)$/));
   const eHalf = expect1([{ type: "FRAME", id: "9:13", name: "Hairline", box: { w: 300, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }], strokes: { colors: ["#e6e6e6"], weights: { bottom: 0.5 } } }]);
   safe("a 0.5px bottom side draws as a 1px CSS border: [0,0,1,0] passes", () => !deltaOn(compare(eHalf, measured([node("9:13", sideStyles([0, 0, 1, 0], { borderWidth: 1 }))])), "9:13", /border-width/));
 

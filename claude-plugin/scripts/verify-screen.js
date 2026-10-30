@@ -6128,16 +6128,12 @@ function checkCorners(cx, n) {
 }
 function checkBorderSides(cx, n) {
   const { tally, gap, push } = cx;
-  const { spec, got, gapNull, tagLc, onLeaf, leafWhy, inline } = n;
+  const { spec, got, gapNull, onLeaf, leafWhy } = n;
   const ws = spec.borderWidths;
   if (!ws) return;
   tally("borderWidths", got.borderWidths !== void 0);
   if (onLeaf) {
     gap(spec, "border-width", leafWhy);
-    return;
-  }
-  if (inline) {
-    gap(spec, "border-width", inlineWhy(tagLc));
     return;
   }
   if (got.borderWidths === void 0) {

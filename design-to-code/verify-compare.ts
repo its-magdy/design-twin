@@ -1050,12 +1050,11 @@ function checkCorners(cx: CompareCtx, n: NodeCtx): void {
 /** per-side border widths (a divider with only a bottom stroke), side by side — as CSS draws them */
 function checkBorderSides(cx: CompareCtx, n: NodeCtx): void {
   const { tally, gap, push } = cx;
-  const { spec, got, gapNull, tagLc, onLeaf, leafWhy, inline } = n;
+  const { spec, got, gapNull, onLeaf, leafWhy } = n;
   const ws = spec.borderWidths;
   if (!ws) return;
   tally("borderWidths", got.borderWidths !== undefined);
   if (onLeaf) { gap(spec, "border-width", leafWhy); return; }
-  if (inline) { gap(spec, "border-width", inlineWhy(tagLc)); return; }
   if (got.borderWidths === undefined) { gap(spec, "border-width", "the probe did not report this property", true); return; }
   if (got.borderWidths === null || (Array.isArray(got.borderWidths) && got.borderWidths.some((v) => v === null))) { gapNull("border-width", "borderWidths"); return; }
   const have = fourSides(got.borderWidths);
