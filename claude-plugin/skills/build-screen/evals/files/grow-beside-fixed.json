@@ -1,0 +1,80 @@
+{
+  "nodes": [
+    {
+      "id": "20:1",
+      "name": "Request panel",
+      "type": "FRAME",
+      "box": { "w": 960, "h": 800, "x": 0, "y": 0 },
+      "layout": { "display": "flex", "flexDirection": "column", "gap": 16, "padding": [24, 24, 24, 24] },
+      "fills": [{ "type": "solid", "color": "#F9FAFB", "tokens": { "color": "Surfaces/Page" } }],
+      "reference": "assets/20_1_ref.png",
+      "children": [
+        {
+          "id": "20:2",
+          "name": "Toolbar",
+          "type": "FRAME",
+          "box": { "w": 912, "h": 56 },
+          "widthMode": "fill",
+          "alignSelf": "stretch",
+          "layout": { "display": "flex", "flexDirection": "row", "padding": [0, 16, 0, 16], "alignItems": "center" },
+          "children": [
+            {
+              "id": "20:3",
+              "name": "Title",
+              "type": "TEXT",
+              "text": "New request",
+              "box": { "w": 120, "h": 28 },
+              "widthMode": "hug",
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 18, "weight": "Semi Bold", "weightValue": 600, "lineHeight": { "value": 28, "unit": "px" }, "color": "#101828" }
+            }
+          ]
+        },
+        {
+          "id": "20:4",
+          "name": "Request form",
+          "type": "FRAME",
+          "box": { "w": 912, "h": 344 },
+          "widthMode": "fill",
+          "heightMode": "fill",
+          "alignSelf": "stretch",
+          "grow": 1,
+          "layout": { "display": "flex", "flexDirection": "column", "gap": 12, "padding": [16, 16, 16, 16] },
+          "children": [
+            {
+              "id": "20:5",
+              "name": "Field label",
+              "type": "TEXT",
+              "text": "Reason",
+              "box": { "w": 48, "h": 20 },
+              "widthMode": "hug",
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 14, "weight": "Medium", "weightValue": 500, "lineHeight": { "value": 20, "unit": "px" }, "color": "#344054" }
+            }
+          ]
+        },
+        {
+          "id": "20:6",
+          "name": "Notes panel",
+          "type": "FRAME",
+          "box": { "w": 912, "h": 320 },
+          "widthMode": "fill",
+          "alignSelf": "stretch",
+          "layout": { "display": "flex", "flexDirection": "column", "gap": 8, "padding": [16, 16, 16, 16] },
+          "children": [
+            {
+              "id": "20:7",
+              "name": "Notes title",
+              "type": "TEXT",
+              "text": "Notes",
+              "box": { "w": 40, "h": 20 },
+              "widthMode": "hug",
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 14, "weight": "Medium", "weightValue": 500, "lineHeight": { "value": 20, "unit": "px" }, "color": "#344054" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

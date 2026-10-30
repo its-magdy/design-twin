@@ -1,0 +1,46 @@
+{
+  "skill_name": "build-screen",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Build the sidebar nav group from the export `fixed-child-in-hug.json` (screen node 10:1) as a React + CSS Modules component (design/target.json says web-css-modules). Show me the CSS.",
+      "expected_output": "Sizes each axis from the IR. The Label TEXT has no widthMode, so it is fixed at its declared 141px even though its parent hugs; the Count hugs; the Nav group hugs and does not stretch to the sidebar's width, because the Sidebar column has no alignItems (start), so the CSS sets align-items: flex-start rather than leaving CSS's stretching default. The Nav group centres its children (alignItems center).",
+      "files": ["evals/files/fixed-child-in-hug.json"],
+      "expectations": [
+        "The Label keeps its declared 141px main-axis size and does not shrink: `flex: 0 0 141px` (or `width: 141px` with `flex-shrink: 0`)",
+        "The Label is not left content-sized (no `width: auto` / `flex: 0 0 auto` on it, no removal of its width as 'avoid fixed sizes')",
+        "The Count hugs its content (`flex: 0 0 auto` or no width)",
+        "The Sidebar column sets `align-items: flex-start` (absent alignItems = start), so the Nav group stays 217px wide instead of stretching to 240px",
+        "The Nav group sets `align-items: center`, `column-gap: 8px` and padding 8px 12px",
+        "Colours come from the bound tokens (Text/Secondary, Text/Tertiary, Surfaces/Panel), not from the hex beside them"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Implement the Request panel frame from the export `grow-beside-fixed.json` (screen node 20:1) in CSS Modules (web-css-modules). The form area should behave like the design when the panel is taller or shorter.",
+      "expected_output": "Maps sizing per axis. In the column, the Request form has grow:1 / heightMode fill, so it takes the remaining height with `flex: 1 1 0` and `min-height: 0`. The Toolbar (no heightMode) keeps a fixed 56px main-axis size and the Notes panel (no heightMode) keeps its fixed 320px: neither grows. All three fill the cross axis (widthMode fill / alignSelf stretch) with `align-self: stretch`. The root frame is one viewport, not a fixed 960x800 canvas.",
+      "files": ["evals/files/grow-beside-fixed.json"],
+      "expectations": [
+        "The Request form gets `flex: 1 1 0` (or `flex-grow: 1` with a 0 basis) and `min-height: 0`",
+        "The Notes panel keeps its declared 320px height and does not grow: `flex: 0 0 320px` (or `height: 320px` with `flex-shrink: 0`), never `flex: 1`",
+        "The Toolbar keeps its declared 56px height and does not grow or shrink",
+        "Toolbar, form and notes panel stretch across the column with `align-self: stretch` (or `width: 100%`), not a hard-coded 912px",
+        "The root is not pinned to a fixed 960px width (fluid width with an optional max-width); its fixed height is not transcribed as a page height",
+        "Gaps and padding come from the IR (`row-gap: 16px`, padding 24px)"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Build the status cell with its badge from the export `hug-badge-inside-stroke.json` (screen node 30:1) using Tailwind (web-tailwind, v4 project with the generated theme.css).",
+      "expected_output": "The Badge hugs (68x26) and its stroke is inside with strokesInLayout:true, so the stroke counts toward the hug size: a real 1px border with box-sizing border-box (Tailwind's default), coloured with the stroke's own bound token Borders/Border Default, not an inset box-shadow ring (which would make the badge 2px narrower and shorter). The badge does not stretch: the cell's alignItems is center.",
+      "files": ["evals/files/hug-badge-inside-stroke.json"],
+      "expectations": [
+        "The badge stroke is a real border (`border` / `border-[1px]`), not `shadow-[inset_…]` or `box-shadow: inset`",
+        "The border colour is the stroke's bound token Borders/Border Default (e.g. `border-figma-borders-border-default`), not a nearby grey and not the hex",
+        "The badge keeps border-box sizing and hugs its content (`flex: 0 0 auto` / no width), so it renders 68x26",
+        "The badge is centred in the cell (`items-center`) and does not stretch to the cell's height",
+        "The badge background uses its bound fill token Surfaces/Badge Neutral and its radius 16px"
+      ]
+    }
+  ]
+}

@@ -1151,6 +1151,84 @@ console.log("build-screen docs (shader property definitions):");
     /read `propertyDefs\[defId\]\.name` to name a shader input \(the identifier the shader's source declares/.test(irf)
     && /Figma's properties panel can show a different label, which the Plugin API does not expose/.test(irf));
 }
+console.log("build-screen docs (per-axis sizing, strokes, mixed runs — the facts a first build missed):");
+{
+  // The IR never writes a "fixed" sizing mode (doc-types.ts: widthMode/heightMode are "fill" | "hug"; absent = FIXED),
+  // and its alignItems is absent for start (figma-plugin/src/layout.ts). A web profile states a rule when it or
+  // profiles/web-common.md, which it sends the reader to, does.
+  const dir = "claude-plugin/skills/build-screen";
+  const prof = (n: string): string => flat(read(`${dir}/profiles/${n}.md`));
+  const webCommon = flat(read(`${dir}/profiles/web-common.md`));
+  const names = ["web-css-modules", "web-tailwind", "react-native", "swiftui", "android-compose", "flutter"] as const;
+  const doc = (n: string): string => n.startsWith("web-") ? prof(n) + " " + webCommon : prof(n);
+  const all = [...names, "_template"];
+  const phantom = all.filter((n) => /(widthMode|heightMode)[^.;]{0,80}`"fixed"`|`"fixed"` →|avoid if possible/.test(prof(n)) || /avoid if possible/.test(webCommon));
+  check("no profile maps a `\"fixed\"` sizing mode the IR never writes, and none says \"avoid if possible\"" + (phantom.length ? " — " + phantom.join(", ") : ""), phantom.length === 0);
+  for (const n of names) {
+    const d = doc(n);
+    check(`${n}: the sizing card — absent widthMode/heightMode is the declared fixed size, per axis, with grow, alignSelf and the alignItems default`,
+      /absent `widthMode`\/`heightMode` (= fixed|is fixed|means fixed)/i.test(d) && /`heightMode`/.test(d) && /`grow`/.test(d) && /`alignSelf`/.test(d)
+      && /`alignItems`[^.]{0,80}absent[^.]{0,40}start|absent `alignItems`[^.]{0,80}start/i.test(d)
+      && /even inside a hug parent/i.test(d) && /root frame/i.test(d));
+    check(`${n}: strokes keyed on strokeAlign + strokesInLayout`, /`strokesInLayout`/.test(d) && /inside/.test(d) && /outside/.test(d) && /center/.test(d));
+    check(`${n}: mixed text — one element per run of \`runs[]\`; \`font\` is only the first run`, /`runs\[\]`/.test(d) && /first run/i.test(d));
+  }
+  check("web-common: the CSS per-axis mapping (flex:0 0 Npx, flex:1 1 0 + min-width/min-height 0, flex:0 0 auto, align-self:stretch, never `normal`)",
+    /`flex: ?0 0 Npx`/.test(webCommon) && /`flex: ?1 1 0`/.test(webCommon) && /`min-width: ?0`/.test(webCommon) && /`min-height: ?0`/.test(webCommon)
+    && /`flex: ?0 0 auto`/.test(webCommon) && /`align-self: ?stretch`/.test(webCommon) && /never leave[^.]{0,60}`normal`/i.test(webCommon));
+  check("web-common: inside + strokesInLayout is a real border with border-box — the verifier's own words — and an inset ring only without it",
+    /use a real border with `?box-sizing: border-box`?, not a box-shadow ring/.test(webCommon)
+    && /without `strokesInLayout`[^.]{0,120}inset/i.test(webCommon) && /outline-offset: ?-w\/2/.test(webCommon)
+    && /per-side `weights`[^.]{0,120}(spread|box-shadow)[^.]{0,40}(can't|cannot)/i.test(webCommon) && /stroke's own bound token|`tokens\.strokes`/.test(webCommon));
+  check("both web profiles send the reader to web-common.md", /web-common\.md/.test(prof("web-css-modules")) && /web-common\.md/.test(prof("web-tailwind")));
+  check("flutter: a child's alignSelf stretch is its own infinite cross size, not the parent's CrossAxisAlignment.stretch",
+    !/`alignSelf:"stretch"` → `CrossAxisAlignment\.stretch`/.test(prof("flutter")) && /double\.infinity/.test(prof("flutter")));
+  check("react-native has a stroke section", /\*\*Strokes/.test(prof("react-native")));
+  const vref = flat(read(`${dir}/references/verify.md`));
+  check("verify.md fix loop: a fixed size the export does not declare is the regression (absent widthMode/heightMode is a declaration)",
+    /a fixed size the export does not declare \(absent `widthMode`\/`heightMode` is a declaration\)/.test(vref)
+    && !/a fixed size or a\s+magic offset to a node the export lays out with auto layout/.test(vref));
+  check("ir-fields: no 'use fixed only when the design genuinely is'", !/Use fixed only when the design genuinely is/.test(flat(read(`${dir}/references/ir-fields.md`))));
+  const core = read(`${dir}/SKILL.md`);
+  const coreFlat = flat(core);
+  check(`build-screen SKILL.md is a short core (${core.split("\n").length} lines ≤ 230)`, core.split("\n").length <= 230);
+  check("SKILL.md: no anti-fixed wording", !/fixed only when truly fixed/.test(coreFlat) && !/any fixed size that should hug/.test(coreFlat));
+  check("SKILL.md: --expect runs offline before building, and each component is built from its rows",
+    /--expect/.test(step(2)) && /offline/i.test(step(2)) && /rows/.test(step(3)));
+  check("SKILL.md: every designed frame you build gets its own expect + compare, reported frame → verdict | not verified (why)",
+    /every designed frame you build/i.test(coreFlat) && /frame → verdict \| not verified \(why\)/.test(coreFlat));
+  check("SKILL.md: before reusing a shared component or shell, compare every use and make differences props",
+    /compare every use/i.test(coreFlat) && /props?/.test(coreFlat));
+  check("SKILL.md: precedence — the export's value wins; where it is silent the project's own skills and conventions; accessibility never waived",
+    /Where the export gives a value, it wins/.test(coreFlat) && /Where it is silent/.test(coreFlat) && /project's and user's own skills and conventions/.test(coreFlat) && /Accessibility is never waived/.test(coreFlat));
+  check("SKILL.md names the project overlay design/profile.md once, read after the bundled profile", /`design\/profile\.md`/.test(coreFlat) && /after the bundled profile/i.test(coreFlat));
+  check("audit-design and sync-design honour the overlay (no bundled-only profile path)",
+    /design\/profile\.md/.test(read("claude-plugin/skills/audit-design/SKILL.md")) && /design\/profile\.md/.test(read("claude-plugin/skills/sync-design/SKILL.md")));
+  check("help: house rules go in your own skill or design/profile.md, not a fork", /house rules/i.test(flat(read("claude-plugin/skills/help/SKILL.md"))) && /design\/profile\.md/.test(read("claude-plugin/skills/help/SKILL.md")));
+  check("_template: no copy-the-profile-to-override instruction", !/it overrides this skill's bundled profiles/.test(prof("_template")));
+  const sb = read("claude-plugin/agents/screen-builder.md");
+  check(`screen-builder is short (${sb.split("\n").length} lines ≤ 45), with a per-frame table, own regressions fixed or reverted, and failing custom checks`,
+    sb.split("\n").length <= 45 && /per-frame/i.test(builder) && /(fixed or reverted|fix or revert)/i.test(builder) && /exits? non-zero/i.test(builder) && /fail(ing)? once/i.test(builder));
+  // The evals' fixtures carry the facts each eval tests (so an edit to a fixture cannot quietly drop the case).
+  type N = { id?: string; widthMode?: string; heightMode?: string; grow?: number; strokesInLayout?: boolean; strokes?: { align?: string }; box?: { w?: number }; children?: N[] };
+  const evalsRaw = read(`${dir}/evals/evals.json`);
+  let evals: { evals?: { files?: string[] }[] } = {};
+  try { evals = JSON.parse(evalsRaw) as typeof evals; } catch { /* reported below */ }
+  const files = (evals.evals ?? []).flatMap((e) => e.files ?? []);
+  check(`build-screen evals: ≥3 evals, every fixture exists (${files.length})`, (evals.evals?.length ?? 0) >= 3 && files.length >= 3 && files.every((f) => fs.existsSync(path.join(root, dir, f))));
+  const nodes = (f: string): Map<string, N> => {
+    const m = new Map<string, N>();
+    try {
+      const walk = (n: N): void => { if (n.id) m.set(n.id, n); (n.children ?? []).forEach(walk); };
+      ((JSON.parse(read(`${dir}/evals/files/${f}`)) as { nodes?: N[] }).nodes ?? []).forEach(walk);
+    } catch { /* an unreadable fixture leaves the map empty: the checks below fail */ }
+    return m;
+  };
+  const a = nodes("fixed-child-in-hug.json"), b = nodes("grow-beside-fixed.json"), c = nodes("hug-badge-inside-stroke.json");
+  check("eval fixture: a fixed-width label (no widthMode, box.w 141) inside a hug parent", a.get("10:4")?.widthMode === undefined && a.get("10:4")?.box?.w === 141 && a.get("10:2")?.widthMode === "hug");
+  check("eval fixture: a grow:1 form beside a fixed-height sibling", b.get("20:4")?.grow === 1 && b.get("20:6")?.heightMode === undefined && b.get("20:6")?.grow === undefined);
+  check("eval fixture: a hug badge with an inside stroke and strokesInLayout", c.get("30:2")?.widthMode === "hug" && c.get("30:2")?.strokes?.align === "inside" && c.get("30:2")?.strokesInLayout === true);
+}
 console.log("ir-fields ↔ doc-types (every IR field is documented, every documented field exists):");
 {
   // doc-types.ts is cut into sections by `// ====… <title>` banners. A section's field names are every `name:` /
