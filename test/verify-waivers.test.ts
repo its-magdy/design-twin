@@ -96,6 +96,20 @@ safe("the echo build passes (nothing open, nothing accepted) → plain 'pass'", 
 safe("PASSING_VERDICTS: pass and pass-with-deviations pass; fail/incomplete do not", () =>
   isPassingVerdict("pass") && isPassingVerdict("pass-with-deviations") && !isPassingVerdict("fail") && !isPassingVerdict("incomplete") && !isPassingVerdict(undefined));
 
+// A centered auto-layout popover can deliberately overflow an unclipped root. Missing x/y do not
+// make a child whose stated size cannot fit that root "designed inside" it.
+{
+  const placement = (width: number, height: number, x: number, y: number): VerifyReportV2 => {
+    const e = buildExpectation([{doc:screenExport([{type:"FRAME",id:"91:1",name:"Hint",box:{w:83,h:27},layout:{display:"flex",alignItems:"center",justifyContent:"center"},children:[
+      {type:"FRAME",id:"91:2",name:"Hint body",box:{w:width,h:height},fills:[{type:"solid",color:"#303036"}]},
+    ]}],{nodeId:"91:1",screen:"Hint"}),label:"Hint"}]);
+    return compare(e,{measuredAt:"2026-10-27T00:00:00Z",renderer:"playwright-chromium",viewport:"1440x1236",nodes:e.nodes.map(s=>s.nodeId==="91:2"?{...echo(s),styles:{...echo(s).styles,x,y}}:echo(s))});
+  };
+  safe("source child wider than an unclipped root, position unstated → no invented inside-frame placement delta",()=>!placement(189,20,-53,0).deltas.some(d=>d.field==="placement"));
+  safe("source child taller than an unclipped root, position unstated → no invented inside-frame placement delta",()=>!placement(50,35,0,-4).deltas.some(d=>d.field==="placement"));
+  safe("a source child that can fit still gets a real out-of-frame placement failure",()=>placement(50,20,60,0).deltas.some(d=>d.field==="placement"&&d.severity==="high"));
+}
+
 // ---------------------------------------------------------------- waivers
 console.log("a waiver accepts one delta, bound to export + designed + built:");
 {

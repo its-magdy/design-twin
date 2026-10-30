@@ -3677,10 +3677,24 @@ function sentinelInsert(_arg) {
   s.setAttribute("tabindex", "0");
   s.setAttribute("data-dt-sentinel", "");
   s.setAttribute("style", "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden;outline:none;z-index:-1");
-  body.prepend(s);
+  let host = null;
+  try {
+    host = document.activeElement?.closest('dialog:modal, [aria-modal="true" i]') ?? null;
+    if (!host) {
+      const modals = Array.from(document.querySelectorAll("dialog:modal"));
+      host = modals[modals.length - 1] ?? null;
+    }
+  } catch {
+  }
+  (host ?? body).prepend(s);
   st.sentinel = s;
   s.focus({ preventScroll: true });
-  return document.activeElement === s;
+  const focused = document.activeElement === s;
+  if (!focused) {
+    s.remove();
+    st.sentinel = null;
+  }
+  return focused;
 }
 function sentinelRemove(_arg) {
   const st = window.__dtBeh;
@@ -4642,9 +4656,9 @@ function a11yUnit(ctx) {
       u.guard();
       await park(page);
       u.phase("keyboard.reachable", "keyboard.focus-visible", "a11y.name");
-      await page.evaluate(sentinelInsert, null);
-      let walkEnd = "cap";
-      for (let i = 0; i < WALK_CAP; i++) {
+      const walkStarted = await page.evaluate(sentinelInsert, null);
+      let walkEnd = walkStarted ? "cap" : "start";
+      for (let i = 0; walkStarted && i < WALK_CAP; i++) {
         u.act();
         await page.keyboard.press("Tab");
         const s = await page.evaluate(walkStep, { record: true });
@@ -4678,6 +4692,10 @@ function a11yUnit(ctx) {
         if (s.stop < 0) {
           if (s.closedIn !== null) {
             reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: inside a closed container (${s.closedIn}) \u2014 reachable once it is opened`, evidence: ev });
+            continue;
+          }
+          if (walkEnd === "start") {
+            reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: "not-run: the Tab walk could not establish its focus starting point", evidence: ev });
             continue;
           }
           if (walkEnd === "cap") {
@@ -4995,10 +5013,10 @@ function keyUnit(ctx, b) {
       };
       u.phase("keyboard.activation");
       const marked = await markOpenerSeen(page, row.nodeId, u.act);
-      await page.evaluate(sentinelInsert, null);
+      const walkStarted = await page.evaluate(sentinelInsert, null);
       let reachedOpener = false;
       let ancestorStop = null, insideStop = null;
-      for (let i = 0; i < WALK_CAP; i++) {
+      for (let i = 0; walkStarted && i < WALK_CAP; i++) {
         u.act();
         await page.keyboard.press("Tab");
         const s = await page.evaluate(walkStep, { record: true });
@@ -5015,7 +5033,7 @@ function keyUnit(ctx, b) {
       let opened = null;
       let via = null;
       const notSelf = (what) => `not-run: the Tab stop at the opener is not the opener itself (${what}) \u2014 no key is pressed there`;
-      if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` \u2014 ${marked.why}` : ""}`) : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
+      if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` \u2014 ${marked.why}` : ""}`) : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : !walkStarted ? "not-run: the Tab walk could not establish its focus starting point" : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
       else {
         const e1 = await keyOpen("Enter");
         if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });

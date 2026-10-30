@@ -61,7 +61,7 @@ export interface MemoName<T extends Named = Named> {
    *  Lets a later pass reuse what the walk already retrieved instead of re-fetching by id. */
   obj(id: string): Promise<T | null>;
 }
-function memoName<T extends Named>(fetch: NamedFetch<T>): MemoName<T> {
+function memoName<T extends Named>(fetch: NamedFetch<T>, unavailable?: (id: string) => void): MemoName<T> {
   // Cache the PROMISE, not the resolved value. The extractor fans these lookups out concurrently
   // (Promise.all over text runs, paints, styles), and a value-cache is only written after `await`
   // resolves — so every duplicate reference issued while the first fetch was in flight missed the
@@ -73,6 +73,9 @@ function memoName<T extends Named>(fetch: NamedFetch<T>): MemoName<T> {
     if (!p) {
       // fetch can throw synchronously as well as reject — normalise both to null.
       try { p = Promise.resolve(fetch(id)).catch(() => null); } catch (e) { p = Promise.resolve(null); }
+      // A failed fetch stays memoized for this run, so diagnose it at this seam exactly once,
+      // rather than once per binding and again when the variable dump consumes the same memo.
+      if (unavailable) p = p.then((o) => { if (!o && typeof id === "string" && id) unavailable(id); return o; });
       cache.set(id, p);
     }
     return p;
@@ -120,7 +123,8 @@ export class Run {
    *  PROMISE: paints resolve concurrently, so a value-cache let two fills sharing a hash both miss — costing a
    *  second download AND pushing the source bytes into `assets` twice. */
   readonly imageSizes = new Map<string, Promise<{ w: number; h: number } | undefined>>();
-  readonly varName = memoName((id) => figma.variables.getVariableByIdAsync(id));
+  readonly varName = memoName((id) => figma.variables.getVariableByIdAsync(id), (id) =>
+    this.warn("variable metadata unavailable for '" + id + "' — token names unavailable; raw alias IDs retained where supported"));
   readonly styleName = memoName((id) => figma.getStyleByIdAsync(id));
   /** Prototype destinations. */
   readonly nodeName = memoName((id) => figma.getNodeByIdAsync(id));
@@ -130,7 +134,13 @@ export class Run {
   readonly collection = memoName<VariableCollection>((id) =>
     figma.variables && figma.variables.getVariableCollectionByIdAsync
       ? figma.variables.getVariableCollectionByIdAsync(id)
-      : Promise.resolve(null)).obj;
+      : Promise.resolve(null), (id) => {
+        // Older hosts may legitimately lack this optional API. Keep the raw-id fallback without
+        // diagnosing an unsupported lookup as a failed lookup.
+        if (figma.variables && typeof figma.variables.getVariableCollectionByIdAsync === "function") {
+          this.warn("collection metadata unavailable for '" + id + "' — collection/mode names unavailable; raw mode IDs retained where supported");
+        }
+      }).obj;
   /** Who asked this run to stop, if anyone: the designer's Cancel button, or the bridge giving up on the request
    *  (progress.ts requestAbandon). One field rather than two flags so the run fails with exactly one, truthful
    *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it

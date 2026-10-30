@@ -213,13 +213,13 @@ export const cases: Case[] = [{
     ok("[VARIANTVIS-HIDDEN] …the scan itself still ran (once) with the flag ON, and the flag is back to false afterwards",
       off.pagesRead() === 1 && off.scanSkipped() === true && off.w.figma.skipInvisibleInstanceChildren === false);
 
-    // Dev Mode (the flag defaults to true): the caller's own policy applies to both shapes alike.
+    // Dev Mode (the flag defaults to true): structural exports still retain both shapes' hidden layers.
     const on = build(true);
     const dsOn = await on.w.api.collectDesignSystemOnly({ variantVisuals: true });
     const soloOn = dsOn.designSystem.components.find((c) => c.id === "hs:solo");
     const setOn = dsOn.designSystem.components.find((c) => c.id === "hs:set");
-    ok("[VARIANTVIS-HIDDEN] with the flag already on (Dev Mode's default), standalone and set variant agree",
-      kidIds(soloOn?.node) === '["hs:solo:on"]' && kidIds(setOn?.variants?.[0]?.node) === '["hs:v:on"]');
+    ok("[VARIANTVIS-HIDDEN] with the flag already on (Dev Mode's default), both exported trees are complete",
+      kidIds(soloOn?.node) === '["hs:solo:on","hs:solo:off(hidden)"]' && kidIds(setOn?.variants?.[0]?.node) === '["hs:v:on","hs:v:off(hidden)"]');
     ok("[VARIANTVIS-HIDDEN] …and the flag is left on", on.w.figma.skipInvisibleInstanceChildren === true);
 
     // An abandon armed inside the standalone walk: the run rejects, and the flag is still the caller's.

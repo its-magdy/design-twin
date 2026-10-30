@@ -416,7 +416,7 @@
   }
 
   // src/run.ts
-  function memoName(fetch) {
+  function memoName(fetch, unavailable) {
     const cache = /* @__PURE__ */ new Map();
     const get = (id) => {
       let p = cache.get(id);
@@ -426,6 +426,10 @@
         } catch (e) {
           p = Promise.resolve(null);
         }
+        if (unavailable) p = p.then((o) => {
+          if (!o && typeof id === "string" && id) unavailable(id);
+          return o;
+        });
         cache.set(id, p);
       }
       return p;
@@ -468,14 +472,18 @@
        *  PROMISE: paints resolve concurrently, so a value-cache let two fills sharing a hash both miss — costing a
        *  second download AND pushing the source bytes into `assets` twice. */
       this.imageSizes = /* @__PURE__ */ new Map();
-      this.varName = memoName((id) => figma.variables.getVariableByIdAsync(id));
+      this.varName = memoName((id) => figma.variables.getVariableByIdAsync(id), (id) => this.warn("variable metadata unavailable for '" + id + "' \u2014 token names unavailable; raw alias IDs retained where supported"));
       this.styleName = memoName((id) => figma.getStyleByIdAsync(id));
       /** Prototype destinations. */
       this.nodeName = memoName((id) => figma.getNodeByIdAsync(id));
       /** Variable collections, read to turn a node's pinned variable-mode ids into human names (theming). A file has a
        *  handful reused across every node, so the whole object is cached per run (its .modes list too) — the same
        *  memo, through `.obj`. */
-      this.collection = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null)).obj;
+      this.collection = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null), (id) => {
+        if (figma.variables && typeof figma.variables.getVariableCollectionByIdAsync === "function") {
+          this.warn("collection metadata unavailable for '" + id + "' \u2014 collection/mode names unavailable; raw mode IDs retained where supported");
+        }
+      }).obj;
       /** Who asked this run to stop, if anyone: the designer's Cancel button, or the bridge giving up on the request
        *  (progress.ts requestAbandon). One field rather than two flags so the run fails with exactly one, truthful
        *  message. Starts null with the run, so a cancel that landed while nothing was running — or after the run it
@@ -3272,6 +3280,7 @@
     return tree;
   }
   async function screenResult(r, title, fileBase, nodes, origin) {
+    const variables = await dumpVariables();
     const screen = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifestOf(r) };
     const page = origin && origin.page;
     if (page) {
@@ -3281,7 +3290,7 @@
     if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
     const measurements = collectMeasurements(r);
     if (measurements) screen.measurements = measurements;
-    const out = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: r.assets.slice() };
+    const out = { screenName: safe(fileBase), screen, variables, assets: r.assets.slice() };
     if (page) {
       out.page = page.name;
       out.pageId = page.id;
@@ -3541,7 +3550,19 @@
     }
     return out.length ? out : void 0;
   }
+  async function withAllInstanceChildren(read) {
+    const previous = figma.skipInvisibleInstanceChildren;
+    try {
+      figma.skipInvisibleInstanceChildren = false;
+      return await read();
+    } finally {
+      figma.skipInvisibleInstanceChildren = previous;
+    }
+  }
   async function collectSelection(opts) {
+    return withAllInstanceChildren(() => collectSelectionTree(opts));
+  }
+  async function collectSelectionTree(opts) {
     const r = claimRun();
     const sel = figma.currentPage.selection;
     const first2 = sel[0];
@@ -3560,6 +3581,9 @@
     return n && n.type === "PAGE" ? n : null;
   }
   async function collectNode(rawId, opts) {
+    return withAllInstanceChildren(() => collectNodeTree(rawId, opts));
+  }
+  async function collectNodeTree(rawId, opts) {
     const r = claimRun();
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error(NO_NODE_ID);
@@ -3577,6 +3601,9 @@
     return screenResult(r, node.name, node.name, [tree], { page: pageOf(node), nodeId });
   }
   async function collectScreenshot(rawId, opts) {
+    return withAllInstanceChildren(() => collectScreenshotOf(rawId, opts));
+  }
+  async function collectScreenshotOf(rawId, opts) {
     const r = claimRun();
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error(NO_NODE_ID);
@@ -3606,6 +3633,9 @@
     "TABLE"
   ]);
   async function listPages(opts) {
+    return withAllInstanceChildren(() => listPagesTree(opts));
+  }
+  async function listPagesTree(opts) {
     const depth = opts && opts.depth === 1 ? 1 : 2;
     const localWarnings = [];
     const sink = (m) => localWarnings.push(m);
@@ -3642,6 +3672,9 @@
     };
   }
   async function listChildren(rawId) {
+    return withAllInstanceChildren(() => listChildrenTree(rawId));
+  }
+  async function listChildrenTree(rawId) {
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error(NO_NODE_ID);
     const localWarnings = [];
@@ -3695,6 +3728,9 @@
     };
   }
   async function collectDesignSystemOnly(opts) {
+    return withAllInstanceChildren(() => collectDesignSystemTree(opts));
+  }
+  async function collectDesignSystemTree(opts) {
     const r = claimRun({ sourceBytes: false });
     r.useReads(opts);
     const designSystem = await buildDesignSystem(void 0, serialize);
@@ -3708,6 +3744,9 @@
     return { designSystem };
   }
   async function collectLibraryFile(opts) {
+    return withAllInstanceChildren(() => collectLibraryTree(opts));
+  }
+  async function collectLibraryTree(opts) {
     const r = claimRun({ sourceBytes: false });
     r.useReads(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
@@ -3720,6 +3759,9 @@
     return { designSystem };
   }
   async function collectFull(opts) {
+    return withAllInstanceChildren(() => collectFullTree(opts));
+  }
+  async function collectFullTree(opts) {
     const r = claimRun();
     r.useReads(opts);
     const allPages = !!(opts && opts.allPages);
