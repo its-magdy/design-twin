@@ -2191,9 +2191,10 @@ var FIELDS = [
   { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 var STYLE_KEY_SHAPE = {
   borderRadius: "number | [tl,tr,br,bl]",
+  borderWidths: "[t,r,b,l] \u2014 a ring's sides when it draws the stroke",
   padding: "[t,r,b,l]",
   fill: "an SVG's paint",
   textBox: "{x,w} of a Range over the text",
@@ -4465,6 +4466,7 @@ function expectStroke({ n, spec }) {
       });
     }
     if (st.align) spec.strokeAlign = st.align;
+    if (n.strokesInLayout) spec.strokesInLayout = true;
   }
 }
 function expectRadius({ n, spec, skip, paints }) {
@@ -5090,6 +5092,7 @@ var KNOWN_STYLE_KEYS = /* @__PURE__ */ new Set([
   "fill",
   "borderColor",
   "borderWidth",
+  "borderWidths",
   "borderRadius",
   "gap",
   "gapVisual",
@@ -5189,6 +5192,7 @@ var ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius \u2014 r
 var INLINE_BOX_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "borderRadius"]);
 var inlineWhy = (tag) => `the id sits on an inline <${tag || "element"}>, whose box is its text's \u2014 tag the element that owns the box`;
 var cssBorderWidth = (d) => d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d);
+var STROKE_LAYOUT_NOTE = "stroke drawn without layout space \u2014 the design's stroke takes layout space (strokesInLayout); use a real border with box-sizing: border-box, not a box-shadow ring";
 var isPaintedBy = (x) => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child") && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === void 0 || typeof x.dt === "string");
 function applyFigmaCase(t, c) {
   if (c === "upper") return t.toUpperCase();
@@ -5790,6 +5794,7 @@ function compareSpec(cx, spec) {
   if (!n) return;
   checkFields(cx, n);
   checkCorners(cx, n);
+  checkBorderSides(cx, n);
   checkPadding(cx, n);
   checkPlaceholderText(cx, n);
   checkText(cx, n);
@@ -6063,6 +6068,13 @@ function checkFields(cx, n) {
       }
     }
     const bad = compareField(f, want, have);
+    let layoutNote;
+    if (bad && (f.key === "width" || f.key === "height") && spec.strokesInLayout && spec.sizing?.[f.key === "width" ? "w" : "h"] === "hug" && (got.strokeFrom === "box-shadow" || got.strokeFrom === "outline") && typeof bad.want === "number" && typeof bad.got === "number") {
+      const [t = 0, r = 0, b = 0, l = 0] = spec.borderWidths ?? [];
+      const strokes = spec.borderWidths ? f.key === "width" ? l + r : t + b : 2 * (spec.borderWidth ?? 0);
+      const short2 = bad.want - bad.got;
+      if (strokes > 0 && short2 > 0 && Math.abs(short2 - strokes) <= TOLERANCE.textInk) layoutNote = STROKE_LAYOUT_NOTE;
+    }
     if (bad) {
       push(spec, f.label, f.high ? "high" : "medium", bad, {
         ...ifDefined("unit", f.unit),
@@ -6070,7 +6082,7 @@ function checkFields(cx, n) {
         ...measuredIn !== "rest" ? { measuredIn } : {},
         ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0),
         ...f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` } : {},
-        ...ifDefined("note", [strokeNote, paintNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : void 0].filter((x) => x !== void 0).join("; ") || void 0)
+        ...ifDefined("note", [strokeNote, paintNote, layoutNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : void 0].filter((x) => x !== void 0).join("; ") || void 0)
       });
     }
   }
@@ -6113,6 +6125,51 @@ function checkCorners(cx, n) {
       });
     }
   }
+}
+function checkBorderSides(cx, n) {
+  const { tally, gap, push } = cx;
+  const { spec, got, gapNull, tagLc, onLeaf, leafWhy, inline } = n;
+  const ws = spec.borderWidths;
+  if (!ws) return;
+  tally("borderWidths", got.borderWidths !== void 0);
+  if (onLeaf) {
+    gap(spec, "border-width", leafWhy);
+    return;
+  }
+  if (inline) {
+    gap(spec, "border-width", inlineWhy(tagLc));
+    return;
+  }
+  if (got.borderWidths === void 0) {
+    gap(spec, "border-width", "the probe did not report this property", true);
+    return;
+  }
+  if (got.borderWidths === null || Array.isArray(got.borderWidths) && got.borderWidths.some((v) => v === null)) {
+    gapNull("border-width", "borderWidths");
+    return;
+  }
+  const have = fourSides(got.borderWidths);
+  if (!have) {
+    gap(spec, "border-width", `could not read '${JSON.stringify(got.borderWidths)}' as px border widths [t,r,b,l]`);
+    return;
+  }
+  if (have.some((v) => v < 0)) {
+    gap(spec, "border-width", `${JSON.stringify(got.borderWidths)} is impossible for a border width (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
+    return;
+  }
+  const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
+  PAD_SIDES.forEach((side, i) => {
+    cx.fieldsChecked++;
+    const want0 = ws[i] ?? 0, want = ring ? want0 : cssBorderWidth(want0), h = have[i] ?? 0;
+    const d = Math.abs(want - h);
+    if (d > TOLERANCE.stroke) push(
+      spec,
+      `border-width (${side})`,
+      "medium",
+      { want, got: h, delta: Number(d.toFixed(3)) },
+      { unit: "px", ...want !== want0 ? { note: `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)` } : {} }
+    );
+  });
 }
 function checkPadding(cx, n) {
   const { tally, gap, push } = cx;

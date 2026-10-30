@@ -485,6 +485,9 @@ const g11Nodes: VerifySpec[] = [
   { nodeId: "60:38", name: "Glow", type: "FRAME" },
   { nodeId: "60:39", name: "Soft Card", type: "FRAME" },
   { nodeId: "60:40", name: "Hard Shadow", type: "FRAME" },
+  { nodeId: "60:41", name: "Bottom Rule", type: "FRAME" },
+  { nodeId: "60:42", name: "Inset Bottom", type: "FRAME" },
+  { nodeId: "60:43", name: "Inset Left", type: "FRAME" },
 ];
 // (named as --expect names a set: <Layer>__<id> of its frame)
 const g11Exp = path.join(tmp, "Rota_Settings__60_1.expected.json");
@@ -525,6 +528,14 @@ check("`ring-1` + `shadow-md` together → the ring is read (1, its colour, outs
   styleOf(ringed, "borderWidth") === 1 && styleOf(ringed, "borderColor") === "rgb(10, 132, 255)" && styleOf(ringed, "strokeFrom") === "box-shadow" && styleOf(ringed, "strokeAlign") === "outside");
 check("a real border beside a ring → the border (strokeFrom border, no strokeAlign)",
   styleOf(bord34, "borderWidth") === 1 && styleOf(bord34, "borderColor") === "rgb(5, 5, 5)" && styleOf(bord34, "strokeFrom") === "border" && styleOf(bord34, "strokeAlign") === undefined);
+const sidesOf = (id: string): string => JSON.stringify(styleOf(node(m12, id), "borderWidths"));
+check("borderWidths: a bottom-only 2px border → [0,0,2,0]; a uniform ring → its width on all four sides; no stroke → [0,0,0,0]",
+  sidesOf("60:41") === "[0,0,2,0]" && sidesOf("60:30") === "[1,1,1,1]" && sidesOf("60:40") === "[0,0,0,0]");
+const insB = node(m12, "60:42");
+check("an inset `0 -1px 0` shadow is a bottom stroke → borderWidths [0,0,1,0], borderWidth 1, its colour, box-shadow, inside",
+  sidesOf("60:42") === "[0,0,1,0]" && styleOf(insB, "borderWidth") === 1 && styleOf(insB, "borderColor") === "rgb(230, 230, 230)" && styleOf(insB, "strokeFrom") === "box-shadow" && styleOf(insB, "strokeAlign") === "inside");
+check("an inset `2px 0 0` shadow in the Tailwind stack is a left stroke → borderWidths [0,0,0,2], its colour",
+  sidesOf("60:43") === "[0,0,0,2]" && styleOf(node(m12, "60:43"), "borderColor") === "rgb(10, 132, 255)");
 
 // ---- whose drawn state is hovered and who paints, text-transform, --browser-path
 // The expectation is written here (drawnStateFrom: the node whose state a spec inherits, as --expect writes it).

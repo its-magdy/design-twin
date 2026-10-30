@@ -376,6 +376,29 @@ console.log("overfull padding sides, per-side strokes, dropped specs, mutation g
   // per-side weights + align
   const e4 = expect1([{ type: "FRAME", id: "9:4", name: "Row", box: { w: 300, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }], strokes: { colors: ["#e6e6e6"], weights: { bottom: 1 }, align: "inside" } }]);
   safe("strokes {weights:{bottom:1}, align:inside} → borderWidths [0,0,1,0] AND strokeAlign inside", () => JSON.stringify(spec(e4, "9:4")?.borderWidths) === "[0,0,1,0]" && spec(e4, "9:4")?.strokeAlign === "inside");
+  // per-side widths are compared side by side — a uniform border where the design has only a bottom one is a delta
+  const eS = expect1([{ type: "FRAME", id: "9:12", name: "Rule", box: { w: 300, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }], strokes: { colors: ["#e6e6e6"], weights: { bottom: 2 }, align: "inside" } }]);
+  const sideStyles = (borderWidths: NonNullable<MeasuredStyles["borderWidths"]> | null, extra: MeasuredStyles = {}): MeasuredStyles =>
+    ({ backgroundColor: "rgb(255, 255, 255)", borderColor: "rgb(230, 230, 230)", borderWidth: 2, borderWidths, width: 300, height: 40, opacity: 1, ...extra });
+  const uni = compare(eS, measured([node("9:12", sideStyles([1, 1, 1, 1], { borderWidth: 1 }))]));
+  safe("borderWidths [0,0,2,0] vs a uniform 1px border: deltas on top, right, bottom and left; verdict not pass",
+    () => ["top", "right", "bottom", "left"].every((s) => !!deltaOn(uni, "9:12", new RegExp(`^border-width \\(${s}\\)$`))) && uni.verdict !== "pass");
+  safe("…the same bottom-only border measured: no border-width delta", () => !deltaOn(compare(eS, measured([node("9:12", sideStyles([0, 0, 2, 0]))])), "9:12", /border-width/));
+  safe("…a measured file without borderWidths: 'the probe did not report this property'", () => {
+    const { borderWidths: _bw, ...old } = sideStyles(null);
+    return (compare(eS, measured([node("9:12", old)])).fieldsNotMeasured ?? []).some((g) => g.nodeId === "9:12" && g.field === "border-width" && /did not report/.test(g.why));
+  });
+  const eHalf = expect1([{ type: "FRAME", id: "9:13", name: "Hairline", box: { w: 300, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }], strokes: { colors: ["#e6e6e6"], weights: { bottom: 0.5 } } }]);
+  safe("a 0.5px bottom side draws as a 1px CSS border: [0,0,1,0] passes", () => !deltaOn(compare(eHalf, measured([node("9:13", sideStyles([0, 0, 1, 0], { borderWidth: 1 }))])), "9:13", /border-width/));
+
+  // strokesInLayout: a hug box whose stroke the build draws as a ring (no layout space) measures 2×weight smaller
+  const eL = expect1([{ type: "FRAME", id: "9:14", name: "Chip", box: { w: 82, h: 32 }, widthMode: "hug", fills: [{ type: "solid", color: "#ffffff" }], strokesInLayout: true, strokes: { colors: ["#e6e6e6"], weight: 1, align: "inside" } }]);
+  safe("strokesInLayout is carried onto the spec", () => spec(eL, "9:14")?.strokesInLayout === true);
+  const ringed = (from: NonNullable<MeasuredStyles["strokeFrom"]>, w: number): VerifyReportV2 => compare(eL, measured([node("9:14", { backgroundColor: "rgb(255, 255, 255)", borderColor: "rgb(230, 230, 230)", borderWidth: 1, borderWidths: [1, 1, 1, 1], strokeFrom: from, strokeAlign: "inside", width: w, height: 32, opacity: 1 })]));
+  const NOTE = "stroke drawn without layout space — the design's stroke takes layout space (strokesInLayout); use a real border with box-sizing: border-box, not a box-shadow ring";
+  safe("hug + ring + width 2×weight short: the width delta's note says the stroke takes no layout space", () => (deltaOn(ringed("box-shadow", 80), "9:14", /^width$/)?.note ?? "").includes(NOTE));
+  safe("…the same with a real border: no such note", () => !(deltaOn(ringed("border", 80), "9:14", /^width$/)?.note ?? "").includes("without layout space"));
+  safe("…a ring but 20px short: no such note", () => !(deltaOn(ringed("box-shadow", 62), "9:14", /^width$/)?.note ?? "").includes("without layout space"));
 
   // a node whose only checkable value was excluded says so
   const e5 = expect1([{ type: "FRAME", id: "9:5", name: "Hit Area", box: { w: 200, h: 36 }, radius: 8 }]);
