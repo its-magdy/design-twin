@@ -160,6 +160,26 @@ console.log("verify-screen — the spec as data:");
   ok("a non-leaf frame keeps its padding spec", JSON.stringify(exp.nodes.find((r) => r.nodeId === "4:5")?.padding) === "[4,4,4,4]" && !exp.notComparable.some((r) => r.nodeId === "4:5"));
 }
 {
+  // an exported asset FRAME built as the <img>/<svg> it was exported to: that leaf IS the node, so its box is measured.
+  // (an <img> is display: inline by default — still a box.) assetSkipped (no file exported) is not an asset; a plain FRAME's id on a leaf is still a tagging mistake.
+  const fr = (id: string, extra: Record<string, unknown>): NodeInput => malformed<NodeInput>({ type: "FRAME", id, name: "Avatar", box: { w: 24, h: 24 }, fills: [{ type: "solid", color: "#336699" }], ...extra });
+  const exp = buildExpectation([doc([fr("4:6", { asset: "assets/avatar.svg" }), fr("4:7", { geometry: { fills: ["M0 0"] } }), fr("4:8", { assetSkipped: true }), fr("4:9", {}), fr("4:10", { asset: "assets/badge.svg" })])]);
+  const at = (id: string) => exp.nodes.find((r) => r.nodeId === id);
+  ok("[asset] spec.asset on an asset or geometry FRAME, not on assetSkipped or a plain FRAME",
+    at("4:6")?.asset === true && at("4:7")?.asset === true && at("4:8")?.asset === undefined && at("4:9")?.asset === undefined);
+  const leaf = (id: string, tag: string, w: number): MeasuredNode => ({ nodeId: id, matchedBy: "tag", styles: { tag, ...(tag === "input" ? {} : { display: "inline" }), width: w, height: 24, backgroundColor: "rgba(0, 0, 0, 0)", opacity: 1 } });
+  const r = compare(exp, measured([leaf("4:6", "img", 30), leaf("4:7", "svg", 24), leaf("4:9", "input", 30), leaf("4:10", "input", 30)]));
+  ok("[asset] an asset on an <img>: its box is compared — width 24 → 30 is a delta, not 'a ...rest spread?'", r.deltas.some((d) => d.nodeId === "4:6" && d.field === "width" && d.actual === 30)
+    && !r.fieldsNotMeasured.some((g) => g.nodeId === "4:6" && /^(width|height|x|y)/.test(g.field)));
+  ok("[asset] …a geometry FRAME on an <svg> at its size: no box delta, no box gap", !r.deltas.some((d) => d.nodeId === "4:7" && /^(width|height|x|y)/.test(d.field))
+    && !r.fieldsNotMeasured.some((g) => g.nodeId === "4:7" && /^(width|height|x|y)/.test(g.field)));
+  ok("[asset] …its background on the <img> is still not graded as the frame's", !r.deltas.some((d) => d.nodeId === "4:6" && d.field === "background"));
+  ok("[asset] an asset FRAME on an <input> (not its <img>/<svg>) is still a tagging mistake: no box delta, the ...rest wording", !r.deltas.some((d) => d.nodeId === "4:10")
+    && r.fieldsNotMeasured.some((g) => g.nodeId === "4:10" && g.field === "width" && /\.\.\.rest spread/.test(g.why)));
+  ok("[asset] a plain FRAME on an <input> keeps the ...rest wording and no box delta", !r.deltas.some((d) => d.nodeId === "4:9")
+    && r.fieldsNotMeasured.some((g) => g.nodeId === "4:9" && g.field === "width" && /\.\.\.rest spread/.test(g.why)));
+}
+{
   // Hidden nodes are not rendered, so measuring them is a false failure waiting to happen. The export
   // marks them `hidden: true` — NOT `visible: false`, and a hidden parent hides its subtree.
   const exp = buildExpectation([doc([

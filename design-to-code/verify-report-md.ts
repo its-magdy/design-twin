@@ -271,7 +271,9 @@ function deltasMarkdown(deltas: VerifyDelta[]): string[] {
     const status = d.accepted ? `accepted — ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
     const tx = isTextRow(d.field);
     const cell = (v: unknown): string => mdText(tx ? showText(v) : withUnit(v, d.unit));
-    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` — ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ` +
+    // (a named cause shows its note: the row's advice goes in its Field cell)
+    const why = d.cause === "nominal-overflow" ? ` — nominal overflow: ${mdText(d.note)}` : tx && d.note ? ` — ${mdText(d.note)}` : "";
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${why} | ${cell(d.expected)} | ${cell(d.actual)} | ` +
       `${d.token ? mdText(d.token) : "—"} | ${status} |`);
   }
   L.push("");
