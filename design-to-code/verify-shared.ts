@@ -181,9 +181,9 @@ export const FIELDS: Field[] = [
 // their own way. Exported: the shipped probe (verify-probe.ts) measures exactly these, and measuredKeysDoc()'s
 // styles line is generated from it.
 // (`display` — an id on an inline element measures its text's box, not a frame's)
-export const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+export const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 const STYLE_KEY_SHAPE: Record<string, string> = {
-  borderRadius: "number | [tl,tr,br,bl]", padding: "[t,r,b,l]", fill: "an SVG's paint", textBox: "{x,w} of a Range over the text",
+  borderRadius: "number | [tl,tr,br,bl]", borderWidths: "[t,r,b,l] — a ring's sides when it draws the stroke", padding: "[t,r,b,l]", fill: "an SVG's paint", textBox: "{x,w} of a Range over the text",
   placeholderText: "el.placeholder", placeholderColor: "the ::placeholder colour", tag: "tagName, lower-case",
   display: "getComputedStyle(el).display",
 };

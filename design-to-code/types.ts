@@ -721,6 +721,8 @@ export interface VerifySpec {
   sizing?: { w?: "hug" | "fill"; h?: "hug" | "fill" };
   /** the design's stroke alignment (strokes.align) — a ring read on the other side of the box is noted, not a delta */
   strokeAlign?: "inside" | "outside" | "center";
+  /** the design's stroke takes layout space (strokesIncludedInLayout) — a hug box drawn with a ring instead is noted */
+  strokesInLayout?: true;
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean;
   /** the frame root's prototype scroll direction (IrNode.scroll) — a frame designed to scroll sideways is no overflowX delta */
@@ -793,6 +795,8 @@ export interface MeasuredStyles {
   fill?: string | null;
   borderColor?: string | null;
   borderWidth?: number | null;
+  /** [top, right, bottom, left]: the four computed border widths, or the sides a ring draws */
+  borderWidths?: Array<number | null> | null;
   borderRadius?: number | number[] | string | null;
   padding?: Array<number | null> | null;
   gap?: number | Array<number | null> | null;
