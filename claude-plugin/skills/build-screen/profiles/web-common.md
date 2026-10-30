@@ -25,8 +25,11 @@ a child's size.
 - Every flex container sets `align-items` from `layout.alignItems`; absent `alignItems` = start → `flex-start`.
   Never leave CSS's initial `normal`, which stretches flex items where Figma starts them.
 - `sizeLimits` → `min-width`/`max-width`/`min-height`/`max-height` on top of the mode.
-- A TEXT's fixed width is kept like any other (it wraps inside it); a fixed TEXT height becomes `min-height`, so
-  200% zoom and longer translations still fit.
+- A TEXT's fixed width is kept like any other (it wraps inside it), set on the text's own element — the one carrying
+  its `data-dt-node`, not a padded wrapper or a `<td>`/`<button>`. A fixed TEXT height becomes `min-height`, so 200%
+  zoom and longer translations still fit — except where the design's content already runs past the box (the
+  expectation's `nominalOverflow`): there `height: <nominal>` with visible overflow reproduces the design, and
+  `min-height` is a deliberate choice recorded in `deviations`.
 - Two exceptions. A root frame that is a whole page is one viewport, not a canvas: `width: 100%` (with a `max-width`
   when the design is centred) and at least the viewport tall (`min-height: 100dvh`, or the app shell's content area),
   so a `grow` child has a height to fill. Any other root — a dialog, popover, panel, cell or component frame — keeps

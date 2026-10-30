@@ -76,6 +76,8 @@ The profile has the stack's syntax; these are the facts behind it, and the commo
   `fill` or `alignSelf:"stretch"` on the cross axis → stretches across.
 - Absent `alignItems` = start. Set the container's cross-axis alignment from the IR every time: CSS and React Native
   stretch by default, SwiftUI stacks and Flutter centre.
+- A fixed TEXT height is a minimum, so larger text still fits — unless the design's content already runs past the box
+  (the expectation's `nominalOverflow`): then the nominal height with visible overflow is what the design shows.
 - Exceptions: a root frame that is a whole page is the screen or viewport, not a canvas (any other root — a dialog, a
   panel, a cell — keeps its declared size); an `absolute:true` child is placed by its `x`/`y` and sized by `box`; the children of a `layout.mode:"absolute"` parent (no auto layout) are sized by `box`, but their flow is inferred, never transcribed coordinates.
 - **Strokes**: `strokesInLayout` means the stroke takes layout space and counts toward a hug size (a CSS border with
