@@ -46,7 +46,7 @@ const KNOWN_NODE_KEYS = new Set([
 ]);
 const KNOWN_STYLE_KEYS = new Set([
   "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "borderColor",
-  "borderWidth", "borderRadius", "gap", "gapVisual", "width", "height", "x", "y", "opacity", "padding", "text",
+  "borderWidth", "borderWidths", "borderRadius", "gap", "gapVisual", "width", "height", "x", "y", "opacity", "padding", "text",
   "placeholderText", "placeholderColor", "tag", "textBox", "display", "transform", "rotate", "visible",
   // where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
   "strokeFrom", "strokeAlign",
@@ -129,6 +129,8 @@ const inlineWhy = (tag: string): string => `the id sits on an inline <${tag || "
 // width (0.5 → 1, 1.5 → 1, 2.7 → 2, at DPR 1/2/3). A design's stroke is compared as the border CSS can draw. A ring
 // (box-shadow spread, outline) is not snapped — it is compared with the raw design width.
 const cssBorderWidth = (d: number): number => (d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d));
+// (the skills match this wording)
+const STROKE_LAYOUT_NOTE = "stroke drawn without layout space — the design's stroke takes layout space (strokesInLayout); use a real border with box-sizing: border-box, not a box-shadow ring";
 // the probe's paintedBy block (a hand-written probe's free-form value is ignored)
 const isPaintedBy = (x: unknown): x is PaintedBy => isJsonObject(x) && typeof x.backgroundColor === "string" && (x.via === "ancestor" || x.via === "child")
   && typeof x.tag === "string" && typeof x.depth === "number" && (x.dt === undefined || typeof x.dt === "string");
@@ -781,6 +783,7 @@ function compareSpec(cx: CompareCtx, spec: VerifySpec): void {
   if (!n) return;
   checkFields(cx, n);
   checkCorners(cx, n);
+  checkBorderSides(cx, n);
   checkPadding(cx, n);
   checkPlaceholderText(cx, n);
   checkText(cx, n);
@@ -995,12 +998,21 @@ function checkFields(cx: CompareCtx, n: NodeCtx): void {
       }
     }
     const bad = compareField(f, want, have);
+    // a hug box whose design stroke takes layout space, built with a ring (no layout space): short by the stroke on both sides
+    let layoutNote: string | undefined;
+    if (bad && (f.key === "width" || f.key === "height") && spec.strokesInLayout && spec.sizing?.[f.key === "width" ? "w" : "h"] === "hug"
+      && (got.strokeFrom === "box-shadow" || got.strokeFrom === "outline") && typeof bad.want === "number" && typeof bad.got === "number") {
+      const [t = 0, r = 0, b = 0, l = 0] = spec.borderWidths ?? [];
+      const strokes = spec.borderWidths ? (f.key === "width" ? l + r : t + b) : 2 * (spec.borderWidth ?? 0);
+      const short = bad.want - bad.got;
+      if (strokes > 0 && short > 0 && Math.abs(short - strokes) <= TOLERANCE.textInk) layoutNote = STROKE_LAYOUT_NOTE;
+    }
     if (bad) {
       push(spec, f.label, f.high ? "high" : "medium", bad, {
         ...ifDefined("unit", f.unit), ...ifDefined("token", tokenFor(spec, f.key)), ...(measuredIn !== "rest" ? { measuredIn } : {}),
         ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
         ...(f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` } : {}),
-        ...ifDefined("note", [strokeNote, paintNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : undefined].filter((x): x is string => x !== undefined).join("; ") || undefined),
+        ...ifDefined("note", [strokeNote, paintNote, layoutNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : undefined].filter((x): x is string => x !== undefined).join("; ") || undefined),
       });
     }
   }
@@ -1034,6 +1046,28 @@ function checkCorners(cx: CompareCtx, n: NodeCtx): void {
       });
     }
   }
+}
+/** per-side border widths (a divider with only a bottom stroke), side by side — as CSS draws them */
+function checkBorderSides(cx: CompareCtx, n: NodeCtx): void {
+  const { tally, gap, push } = cx;
+  const { spec, got, gapNull, onLeaf, leafWhy } = n;
+  const ws = spec.borderWidths;
+  if (!ws) return;
+  tally("borderWidths", got.borderWidths !== undefined);
+  if (onLeaf) { gap(spec, "border-width", leafWhy); return; }
+  if (got.borderWidths === undefined) { gap(spec, "border-width", "the probe did not report this property", true); return; }
+  if (got.borderWidths === null || (Array.isArray(got.borderWidths) && got.borderWidths.some((v) => v === null))) { gapNull("border-width", "borderWidths"); return; }
+  const have = fourSides(got.borderWidths);
+  if (!have) { gap(spec, "border-width", `could not read '${JSON.stringify(got.borderWidths)}' as px border widths [t,r,b,l]`); return; }
+  if (have.some((v) => v < 0)) { gap(spec, "border-width", `${JSON.stringify(got.borderWidths)} is impossible for a border width (CSS cannot make it negative) — a measuring artefact; not compared`); return; }
+  const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
+  PAD_SIDES.forEach((side, i) => {
+    cx.fieldsChecked++;
+    const want0 = ws[i] ?? 0, want = ring ? want0 : cssBorderWidth(want0), h = have[i] ?? 0;
+    const d = Math.abs(want - h);
+    if (d > TOLERANCE.stroke) push(spec, `border-width (${side})`, "medium", { want, got: h, delta: Number(d.toFixed(3)) },
+      { unit: "px", ...(want !== want0 ? { note: `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)` } : {}) });
+  });
 }
 /** padding, side by side (a side the design cannot show is skipped) */
 function checkPadding(cx: CompareCtx, n: NodeCtx): void {

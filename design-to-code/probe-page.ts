@@ -364,7 +364,8 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     // transparent colour or spread 0 is padding; a ring is offset 0, blur 0, spread > 0 (the spread is not snapped
     // like a border width). Several distinct rings: the inset one when exactly one is inset, else none is read.
     // An outline with style auto (the UA focus ring) is no designed stroke; one at -width/2 is a centre stroke; any other offset is not read.
-    type Stroke = { width: number; color: string | null; from: "box-shadow" | "outline"; align: "inside" | "outside" | "center" };
+    // sides: [t,r,b,l] when a ring draws one side only (an inset `0 -1px 0` bottom rule); absent = all four
+    type Stroke = { width: number; color: string | null; from: "box-shadow" | "outline"; align: "inside" | "outside" | "center"; sides?: number[] };
     let strokeMemo: Stroke | null | undefined;
     // alpha 0: rgba()'s FOURTH component, or a slash alpha — never a 0 blue channel (rgb(255, 0, 0) is opaque red)
     const transparentColour = (c: string | null): boolean => c === null || c === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?%?\s*\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
@@ -383,7 +384,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       if (strokeMemo !== undefined) return strokeMemo;
       strokeMemo = null;
       if (sides((s) => `border-${s}-width`).some((w) => w !== 0)) return strokeMemo;
-      const rings: Array<{ key: string; spread: number; color: string | null; inset: boolean }> = [];
+      const rings: Array<{ key: string; spread: number; color: string | null; inset: boolean; sides?: number[] }> = [];
       const shadow = cs.getPropertyValue("box-shadow").trim();
       if (shadow && shadow !== "none") {
         for (const entry of splitTop(shadow, /,/)) {
@@ -396,14 +397,21 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           }
           const [x = NaN, y = NaN, blur = 0, spread = 0] = lens;
           const color = colour ? rgba(colour) : rgba(cs.getPropertyValue("color"));
-          if (transparentColour(color) || !(spread > 0) || x !== 0 || y !== 0 || blur !== 0 || lens.length < 2) continue;
+          if (transparentColour(color) || blur !== 0 || lens.length < 2) continue;
+          // one side drawn inside the box: inset, no blur or spread, exactly one offset (y<0 bottom, y>0 top, x<0 right, x>0 left)
+          if (inset && spread === 0 && (x === 0) !== (y === 0)) {
+            const w = r2(Math.abs(x || y)), sides = [y > 0 ? w : 0, x < 0 ? w : 0, y < 0 ? w : 0, x > 0 ? w : 0];
+            rings.push({ key: `${color} ${sides.join(",")} side`, spread: w, color, inset, sides });
+            continue;
+          }
+          if (!(spread > 0) || x !== 0 || y !== 0) continue;
           rings.push({ key: `${color} ${spread} ${inset}`, spread: r2(spread), color, inset });
         }
       }
       const distinct = rings.filter((r, i) => rings.findIndex((o) => o.key === r.key) === i);
       const insetOnes = distinct.filter((r) => r.inset);
       const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : undefined;
-      if (ring) return (strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" });
+      if (ring) return (strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside", ...(ring.sides ? { sides: ring.sides } : {}) });
       if (distinct.length > 1) return strokeMemo;
       const os = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
       const oc = rgba(cs.getPropertyValue("outline-color"));
@@ -532,6 +540,12 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           const ws = sides((s) => `border-${s}-width`).filter((w): w is number => w !== null);
           const st = drawnStroke();
           put(k, st ? st.width : ws.length ? Math.max(...ws) : null, "no computed border width");
+          putStroke();
+          break;
+        }
+        case "borderWidths": {
+          const st = drawnStroke();
+          put(k, st ? (st.sides ?? [st.width, st.width, st.width, st.width]) : sides((s) => `border-${s}-width`), "");
           putStroke();
           break;
         }
