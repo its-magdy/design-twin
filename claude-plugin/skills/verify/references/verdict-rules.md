@@ -113,7 +113,10 @@ applies: that one stays until the element is tagged.
 Hug text (auto width) is compared box to box, tolerance 1px. Fixed- or fill-width text is compared by ink: the
 built text's width (`textBox`, a `Range` over its characters) against the design's rendered text width
 (`renderBox.w`), tolerance 3px, labelled `width (text ink)` — the Figma box of a fixed-width text is listed under
-`notComparable`. Width is not comparable only when the DESIGN truncates — its ink fills the box (ink ≥ box − 3px) or
+`notComparable`, except where that box sizes its parent: a fixed-width text in a parent that hugs its width (truncated or not) carries
+`boxWidth`, compared (as `width (text box)`, tolerance 1px) against the width of the text's own element — not
+measured when the id sits on a padded element or a container tag (`<td>`, `<button>`, …), whose box is not the
+text's. Width is not comparable only when the DESIGN truncates — its ink fills the box (ink ≥ box − 3px) or
 it allows more than one line (`maxLines` > 1); a text set to truncate whose ink ends well inside its box is compared
 by ink. A placeholder's width and x are not comparable (no `Range` reaches its characters). A TEXT node's x and
 width come from `textBox` only, so the probe reports it for every TEXT node.
@@ -128,6 +131,19 @@ centred): that axis is overfull only when its largest child alone is wider than 
 the content is the stacked lines (children packed into lines, each as tall as its largest child, plus the gap
 between lines). A FRAME/INSTANCE id on a `display: inline` element measures its text's box, not a frame's: its
 width, height, x, y, radius and padding are not measured — tag the element that owns the box.
+
+**Content past a fixed box.** When a fixed axis's in-flow content plus padding is larger than the box and the layer
+does not clip, Figma shows the content past the box. The spec keeps the nominal size and adds
+`nominalOverflow: {w|h: {nominal, content}}`. A size delta on that axis stays a delta at its usual severity (either
+size may be what the designer meant), but it carries `cause: "nominal-overflow"` and a note, shown in `report.md`
+as `nominal overflow: …`: `height:<nominal>` with visible overflow reproduces the design. On a layer that clips, the
+nominal box is what shows and the delta is a plain one.
+
+**Assets built as images.** A FRAME/INSTANCE exported as an asset (an asset file or vector geometry) carries
+`asset: true`. Built as an `<img>` or `<svg>` (the file it was exported to), that leaf is the node: its width, height, x and y
+are compared. Its paint, stroke, radius and padding are drawn inside the asset file and are not measured. Any other
+FRAME/INSTANCE id on a leaf (an asset on an `<input>`, a plain frame on an `<img>`, …) is still read as a tagging mistake (a `...rest` spread): tag the
+container.
 
 ## Opacity, table rows, strokes
 

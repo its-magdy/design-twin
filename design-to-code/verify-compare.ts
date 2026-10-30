@@ -545,7 +545,7 @@ interface NodeCtx {
   spec: VerifySpec; m: MeasuredNode; matchedBy: string | null; rawMatch: string; base: MeasuredStyles; got: MeasuredStyles; measuredIn: string;
   state: VerifySpec["drawnState"]; st: NonNullable<MeasuredNode["states"]>[string] | undefined; um: Record<string, string>;
   gapNull: (field: string, ...keys: string[]) => void; zeroAtRest: boolean; stateWhy: string; isText: boolean; container: boolean;
-  tb: NonNullable<MeasuredStyles["textBox"]> | null; tagLc: string; table: boolean | MeasuredStyles["tag"]; onLeaf: boolean; leafWhy: string;
+  tb: NonNullable<MeasuredStyles["textBox"]> | null; tagLc: string; table: boolean | MeasuredStyles["tag"]; onLeaf: boolean; assetLeaf: boolean; leafWhy: string;
   rowTag: boolean; inline: boolean; textDiffers: boolean; firstDelta: number;
 }
 /** an instance set of the expectation and the evidence the probe gave for it */
@@ -780,6 +780,7 @@ function compareSpec(cx: CompareCtx, spec: VerifySpec): void {
   const n = readNode(cx, spec, hit.m, hit.matchedBy);
   if (!n) return;
   checkFields(cx, n);
+  checkTextBoxWidth(cx, n);
   checkCorners(cx, n);
   checkPadding(cx, n);
   checkPlaceholderText(cx, n);
@@ -866,20 +867,23 @@ function readNode(cx: CompareCtx, spec: VerifySpec, m: MeasuredNode, matchedBy: 
   if (isText && tagLc && (CONTAINER_TAGS.has(tagLc) || tagLc === "div") && m.textFrom === undefined) typographyOn.set(String(spec.nodeId), tagLc);
   const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
   const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
-  const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container` : "";
+  // an exported asset built as the <img>/<svg> it was exported to: that leaf IS the node (its box is measured)
+  const assetLeaf = onLeaf && spec.asset === true && (tagLc === "img" || tagLc === "svg");
+  const leafWhy = assetLeaf ? `this ${spec.type} is an exported asset built as an <${String(got.tag).toLowerCase()}>: only its box is measured — the rest is drawn inside the asset file`
+    : onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container` : "";
   const rowTag = ROW_TAGS.has(tagLc);
   const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
   // copy that differs renders a different width (and a centred/right-aligned start) — judge the copy first
   // (the RENDERED strings — the same rule as the copy compare below)
   const textDiffers = isText && spec.text !== undefined && typeof got.text === "string" && !renderedText(spec.text, spec.textCase, got.text, got.textTransform, normText).same;
   const firstDelta = deltas.length; // this node's deltas: deltas.slice(firstDelta) (the caps below)
-  return { spec, m, matchedBy, rawMatch, base, got, measuredIn, state, st, um, gapNull, zeroAtRest, stateWhy, isText, container, tb, tagLc, table, onLeaf, leafWhy, rowTag, inline, textDiffers, firstDelta };
+  return { spec, m, matchedBy, rawMatch, base, got, measuredIn, state, st, um, gapNull, zeroAtRest, stateWhy, isText, container, tb, tagLc, table, onLeaf, assetLeaf, leafWhy, rowTag, inline, textDiffers, firstDelta };
 }
 /** the FIELDS compared one-to-one (a TEXT's x/width from its textBox, a gap from gapVisual, the stroke and radius as CSS draws them, a background through its painter) */
 function checkFields(cx: CompareCtx, n: NodeCtx): void {
   const { unverifiable, tally, paintedVia, lineBoxWhyOf, gap, push } = cx;
   const {
-    spec, m, matchedBy, base, got, measuredIn, state, st, gapNull, stateWhy, isText, container, tb, tagLc, table, onLeaf, leafWhy, rowTag,
+    spec, m, matchedBy, base, got, measuredIn, state, st, gapNull, stateWhy, isText, container, tb, tagLc, table, onLeaf, assetLeaf, leafWhy, rowTag,
     inline, textDiffers,
   } = n;
   for (const f0 of FIELDS) {
@@ -906,8 +910,8 @@ function checkFields(cx: CompareCtx, n: NodeCtx): void {
 
     // (opacity too — hover-revealed content reads 0 at rest; any layer inside a drawn state, not only the owner)
     if (state && measuredIn === "rest" && ((spec.drawnStateOwn && f.colour) || f.key === "opacity")) { gap(spec, f.label, stateWhy); continue; }
-    if (onLeaf && LEAF_FIELDS.has(f.key)) { gap(spec, f.label, leafWhy); continue; }
-    if (inline && INLINE_BOX_FIELDS.has(f.key)) { gap(spec, f.label, inlineWhy(tagLc)); continue; }
+    if (onLeaf && LEAF_FIELDS.has(f.key) && !(assetLeaf && f.box)) { gap(spec, f.label, leafWhy); continue; }
+    if (inline && INLINE_BOX_FIELDS.has(f.key) && !(assetLeaf && f.box)) { gap(spec, f.label, inlineWhy(tagLc)); continue; }
     if (f.key === "borderRadius" && rowTag) { gap(spec, f.label, ROW_RADIUS_WHY); continue; }
     if (textXW && textDiffers) { gap(spec, f.label, "the text differs from the design's, so its width (and a centred or right-aligned start) does too — compared once the copy matches"); continue; }
     if (textXW && val === undefined) { gap(spec, f.label, "report textBox {x,w} — a Range over the text's characters; a TEXT's x/width are never read off its element's box", true); continue; }
@@ -996,14 +1000,41 @@ function checkFields(cx: CompareCtx, n: NodeCtx): void {
     }
     const bad = compareField(f, want, have);
     if (bad) {
+      // a size whose design content overflows its fixed, unclipped box: still a delta (either size may be the intent), named
+      const over = f.key === "width" || f.key === "height" ? spec.nominalOverflow?.[f.key === "width" ? "w" : "h"] : undefined;
+      const overNote = over ? `the design's content overflows its fixed box; ${f.key}:${over.nominal} with visible overflow reproduces it (the design shows ${over.content}px)` : undefined;
       push(spec, f.label, f.high ? "high" : "medium", bad, {
         ...ifDefined("unit", f.unit), ...ifDefined("token", tokenFor(spec, f.key)), ...(measuredIn !== "rest" ? { measuredIn } : {}),
         ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
         ...(f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` } : {}),
-        ...ifDefined("note", [strokeNote, paintNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : undefined].filter((x): x is string => x !== undefined).join("; ") || undefined),
+        ...(over ? { cause: "nominal-overflow" as const } : {}),
+        ...ifDefined("note", [strokeNote, paintNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : undefined, overNote].filter((x): x is string => x !== undefined).join("; ") || undefined),
       });
     }
   }
+}
+/** a fixed-width TEXT's box in a parent that hugs its width (spec.boxWidth): the box sizes the parent, so the width of the
+ *  text's own element is compared — never a container's (a padded element, a <td>, a <button>), whose box is not the text's */
+function checkTextBoxWidth(cx: CompareCtx, n: NodeCtx): void {
+  const { tally, gap, push } = cx;
+  const { spec, got, gapNull, container, matchedBy } = n;
+  const want = spec.boxWidth;
+  if (want === undefined) return;
+  const label = "width (text box)";
+  tally("width", got.width !== undefined);
+  if (got.width === undefined) { gap(spec, label, "the probe did not report this property", true); return; }
+  if (got.width === null) { gapNull(label, "width"); return; }
+  if (container) {
+    gap(spec, label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not ` +
+      "the text's — tag the text's own element to have its fixed box width compared");
+    return;
+  }
+  const have = cssPx(got.width);
+  if (have === null) { gap(spec, label, `could not read '${typeof got.width === "string" ? got.width : JSON.stringify(got.width)}' as a px number`); return; }
+  cx.fieldsChecked++;
+  const d = Math.abs(have - want);
+  if (d > TOLERANCE.size) push(spec, label, "medium", { want, got: have, delta: Number(d.toFixed(3)) },
+    { unit: "px", ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined) });
 }
 /** a per-corner radius (unequal corners) */
 function checkCorners(cx: CompareCtx, n: NodeCtx): void {
