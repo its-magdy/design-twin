@@ -566,11 +566,38 @@ function freeHoverPoint(arg) {
   }
   return null;
 }
+function rawHoverPoint(arg) {
+  const dt = window.__dt;
+  const el = dt.find(arg.path);
+  if (!el) return null;
+  const describe = (e) => dt.describe(e, ["data-dt-node", "id", "class"]);
+  const { w: vw, h: vh } = dt.viewport();
+  if (arg.at === null) el.scrollIntoView({ block: "center", inline: "center" });
+  const o = el.getBoundingClientRect();
+  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
+  const points = arg.at !== null ? [[arg.at.x, arg.at.y]] : [[cx, cy], [l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+  let covered = null;
+  for (const [x, y] of points) {
+    if (x < 0 || y < 0 || x >= vw || y >= vh || arg.at === null && (r < l || b < t)) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (hit && el.contains(hit)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
+    covered ??= describe(hit);
+  }
+  return { covered };
+}
 function focusablePath(path13) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
   const dt = window.__dt;
   const el = dt.find(path13);
   const f = el ? el.closest(FOCUSABLE) : null;
+  return f ? dt.path(f) : null;
+}
+function focusableWithin(path13) {
+  const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
+  const dt = window.__dt;
+  const el = dt.find(path13);
+  if (!el) return null;
+  const f = el.matches(FOCUSABLE) ? el : Array.from(el.querySelectorAll(FOCUSABLE)).find((c) => !c.matches(":disabled") && dt.visible(c, { sized: true }));
   return f ? dt.path(f) : null;
 }
 function screenTags(a) {
@@ -7373,10 +7400,17 @@ async function pass(page, log, o) {
         if (state === "hover") {
           await page.mouse.move(0, 0);
           const via = await hoverDrawnState(page, spec, m, own, pool.byTag);
-          if (via.hovered !== m.path) node.hoverVia = via.hovered;
           if (via.note !== null) node.note = node.note ? `${node.note}; ${via.note}` : via.note;
+          if (via.hovered === null) continue;
+          if (via.hovered !== m.path) node.hoverVia = via.hovered;
+          if (via.rawPointer) node.hoverBy = "raw-pointer";
         } else {
-          focusPath = await page.evaluate(focusablePath, m.path);
+          const oh = ownerHover(spec, m, pool.byTag);
+          if (oh.kind === "owner") {
+            for (const c of [oh, ...oh.next]) if ((focusPath = await page.evaluate(focusableWithin, c.path)) !== null) break;
+          }
+          if (oh.kind === "none" && spec.drawnStateFrom !== void 0 && spec.drawnStateFrom !== spec.nodeId) focusPath = await page.evaluate(focusableWithin, m.path);
+          focusPath ??= await page.evaluate(focusablePath, m.path);
           if (focusPath === null) {
             node.note = "focus state not measured: the element is not focusable (nor is any ancestor)";
             continue;
@@ -7459,7 +7493,7 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
       if (position === null) continue;
       try {
         await loc.hover({ position, timeout: 1e3 });
-        return { hovered: c.path, note: null };
+        return { hovered: c.path, rawPointer: false, note: null };
       } catch (e) {
         if (errorKind(e, page) !== "other") throw e;
         covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
@@ -7469,8 +7503,25 @@ async function hoverDrawnState(page, spec, m, own, byTag) {
     const on = `its drawn-hovered container ${tried[0]}${tried.length > 1 ? ` (nor on ${tried.slice(1).join(", ")})` : ""}`;
     note = covered !== null ? `hovered the element itself: no usable free point on ${on} \u2014 ${covered}` : `hovered the element itself: no free point on ${on}`;
   }
-  await byPath(page, own).first().hover({ timeout: 2e3 });
-  return { hovered: own, note };
+  const withNote = (n) => note !== null ? `${note}; ${n}` : n;
+  let refused;
+  try {
+    await byPath(page, own).first().hover({ timeout: 2e3 });
+    return { hovered: own, rawPointer: false, note };
+  } catch (e) {
+    if (errorKind(e, page) !== "other") throw e;
+    refused = firstLine(e);
+  }
+  await page.mouse.move(0, 0);
+  const at = await page.evaluate(rawHoverPoint, { path: own, at: null });
+  if (at === null) throw new Error("the element is gone");
+  if ("covered" in at) return { hovered: null, rawPointer: false, note: withNote(`hover state not measured: ${at.covered === null ? "no point of the element is in the viewport" : `covered by ${at.covered}`}`) };
+  await page.mouse.move(at.x, at.y);
+  await raf2(page);
+  const still = await page.evaluate(rawHoverPoint, { path: own, at: { x: at.x, y: at.y } });
+  if (still === null) throw new Error("the element is gone");
+  if ("covered" in still) return { hovered: null, rawPointer: false, note: withNote(`hover state not measured: covered by ${still.covered ?? "nothing"} once hovered`) };
+  return { hovered: own, rawPointer: true, note: withNote(`hovered with the raw pointer at (${at.x}, ${at.y}), where elementFromPoint is ${still.hit} (Playwright's hover: ${refused})`) };
 }
 function hoverTarget(c, byTag) {
   if (!c || c.flags.visible && !c.flags.zeroSize) return null;

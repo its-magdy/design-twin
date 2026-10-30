@@ -172,7 +172,11 @@ Each graded interaction result says `evidenceFrom` (`probe` | `agent`) and, for 
 `drawnStateFrom` (the row's id); the probe hovers that OWNER at a point clear of the control, so the row's `:hover`
 is on and the control's own is not (`hoverVia` names the element it hovered). Measuring by hand, do the same: hover
 the owner, not the control. A note "hovered the element itself" means no free point or no tagged owner was found —
-tag the owner with its id.
+tag the owner with its id. When Playwright will not hover the element (an overlay over its centre), the probe moves
+the raw pointer to a point where the element itself is on top (`hoverBy: "raw-pointer"`, a note names the point and
+what `elementFromPoint` returned); no such point → "hover state not measured: covered by <…>", never a hover of the
+element on top. A drawn focus state is put on the same owner: its first focusable descendant is focused (a label
+beside its field's `<input>` is measured under the field's `:focus-within`).
 
 When an element's own background is transparent, the colour compared is the one of the ancestor (or same-box child)
 that paints it (`paintedBy`; one input note lists them). A sibling or overlay painting over the element is not seen

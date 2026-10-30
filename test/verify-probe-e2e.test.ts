@@ -550,6 +550,14 @@ const g17Nodes: VerifySpec[] = [
   { nodeId: "70:51", name: "Remove", type: "INSTANCE", backgroundColor: "#292931ff", drawnState: "hover", drawnStateFrom: "70:50", ancestorIds: ["70:50"] },
   // a transparent box its own two children paint all over
   { nodeId: "70:80", name: "Split Swatch", type: "FRAME", backgroundColor: "#3c3c3cff" },
+  // a label inside a field drawn focused: the focusable <input> is its sibling, not an ancestor
+  { nodeId: "70:101", name: "Field Label", type: "TEXT", text: "Shed width", color: "#0a84ffff", drawnState: "focus", drawnStateFrom: "70:100", ancestorIds: ["70:100"] },
+  // …and a label written straight into the field's own tagged element (it shares it)
+  { nodeId: "70:102", name: "Pitch Field", type: "FRAME" },
+  { nodeId: "70:103", name: "Pitch Label", type: "TEXT", text: "Bobbin pitch", drawnState: "focus", drawnStateFrom: "70:102", ancestorIds: ["70:102"] },
+  // own hover on rows an overlay covers: half (the centre) / whole
+  { nodeId: "70:90", name: "Shed Row", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover" },
+  { nodeId: "70:92", name: "Veiled Row", type: "FRAME", backgroundColor: "#46464fff", drawnState: "hover" },
 ];
 const g17Exp = path.join(tmp, "Loom_Queue__70_1.expected.json");
 fs.writeFileSync(g17Exp, JSON.stringify({ frame: { nodeId: "70:1", name: "Loom Queue", w: 800, h: 600 }, nodes: g17Nodes }));
@@ -609,6 +617,17 @@ check(`the nearest tagged candidate is a same-box <span> (no free point) → the
   /> div:nth-child\(7\)$/.test(hoverVia(run44)) && stateStyles(run44, "hover")?.backgroundColor === "rgb(41, 41, 49)" && run44?.note === undefined);
 check(`an ARIA-grid row whose cells carry tabindex="-1" has free points (a roving-focus cell is not a control): the row is hovered, the button's own :hover stays off (got ${JSON.stringify(grid51?.note)})`,
   /> div:nth-child\(8\) > div:nth-child\(1\)$/.test(hoverVia(grid51)) && stateStyles(grid51, "hover")?.backgroundColor === "rgb(41, 41, 49)" && grid51?.note === undefined);
+const fieldLabel = node(m17, "70:101");
+check(`a label beside its <input> inside a field drawn focused (drawnStateFrom = the field) → the field's first focusable is focused, the label measured in the field's :focus-within (got ${JSON.stringify([fieldLabel?.focusVia, fieldLabel?.note, stateStyles(fieldLabel, "focus")?.color])})`,
+  fieldLabel?.focusVia === "keyboard" && fieldLabel.note === undefined && stateStyles(fieldLabel, "focus")?.color === "rgb(10, 132, 255)" && styleOf(fieldLabel, "color") === "rgb(212, 212, 212)");
+const pitch = node(m17, "70:103");
+check(`a label sharing its field's own element (drawnStateFrom = that field) → the <input> inside it is focused, the label measured in the field's :focus-within (got ${JSON.stringify([pitch?.focusVia, pitch?.note, stateStyles(pitch, "focus")?.color])})`,
+  pitch?.focusVia === "keyboard" && pitch.note === undefined && stateStyles(pitch, "focus")?.color === "rgb(10, 132, 255)");
+const shed = node(m17, "70:90"), veiled = node(m17, "70:92");
+check(`a row whose centre an overlay covers → hovered with the raw pointer at a point where the row is on top (hoverBy raw-pointer), measured in the state (got ${JSON.stringify([shed?.hoverBy, shed?.note, stateStyles(shed, "hover")?.backgroundColor])})`,
+  shed?.hoverBy === "raw-pointer" && stateStyles(shed, "hover")?.backgroundColor === "rgb(70, 70, 79)" && /elementFromPoint/.test(shed.note ?? ""));
+check(`a row an overlay covers whole → no states.hover, the note names what covers it, never a timeout (got ${JSON.stringify(veiled?.note)})`,
+  veiled !== undefined && veiled.states === undefined && /hover state not measured: covered by <div class="veil">/.test(veiled.note ?? "") && !/Timeout/.test(veiled.note ?? ""));
 check(`a transparent box its own children paint all over → no painter (no ancestor answer), compared as transparent (got ${JSON.stringify(styleOf(node(m17, "70:80"), "paintedBy"))})`,
   styleOf(node(m17, "70:80"), "backgroundColor") === "rgba(0, 0, 0, 0)" && styleOf(node(m17, "70:80"), "paintedBy") === undefined);
 check("a transparent wrapper whose only same-box child paints → paintedBy via child (depth 1, no tag of its own)",
