@@ -637,6 +637,31 @@ export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: numb
   return null;
 }
 
+/** Where the raw pointer (page.mouse: no actionability wait) can hover the element at `path` when Playwright's hover
+ *  gave up (an overlay over its centre): it is scrolled to the middle of the viewport, then the first of its centre, 4
+ *  corners and 4 edge midpoints (inset 3px) in the viewport whose document.elementFromPoint is the element or inside it
+ *  (viewport coordinates, with that element). With `at`, that point only (the check after the move). Else `covered`:
+ *  what is on top at its first point in the viewport (null: no point in it). SELF-CONTAINED. */
+export function rawHoverPoint(arg: { path: string; at: { x: number; y: number } | null }): { x: number; y: number; hit: string } | { covered: string | null } | null {
+  const dt = window.__dt;
+  const el = dt.find(arg.path);
+  if (!el) return null;
+  const describe = (e: PageElement | null): string => dt.describe(e, ["data-dt-node", "id", "class"]);
+  const { w: vw, h: vh } = dt.viewport();
+  if (arg.at === null) el.scrollIntoView({ block: "center", inline: "center" });
+  const o = el.getBoundingClientRect();
+  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
+  const points: Array<[number, number]> = arg.at !== null ? [[arg.at.x, arg.at.y]] : [[cx, cy], [l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+  let covered: string | null = null;
+  for (const [x, y] of points) {
+    if (x < 0 || y < 0 || x >= vw || y >= vh || (arg.at === null && (r < l || b < t))) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (hit && el.contains(hit)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
+    covered ??= describe(hit);
+  }
+  return { covered };
+}
+
 // ---------------------------------------------------------------- focus
 /** Where focus can land for the element at `path`: itself or its closest focusable ancestor (path), or null.
  *  SELF-CONTAINED — see the file header. */
@@ -645,6 +670,17 @@ export function focusablePath(path: string): string | null {
   const dt = window.__dt;
   const el = dt.find(path);
   const f = el ? el.closest(FOCUSABLE) : null;
+  return f ? dt.path(f) : null;
+}
+/** Where focus can land INSIDE the owner of a drawn focus state at `path` (`:focus-within` — a label beside the
+ *  field's <input>): the owner itself when focusable, else its first enabled, rendered focusable descendant (path), or
+ *  null. SELF-CONTAINED. */
+export function focusableWithin(path: string): string | null {
+  const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
+  const dt = window.__dt;
+  const el = dt.find(path);
+  if (!el) return null;
+  const f = el.matches(FOCUSABLE) ? el : Array.from(el.querySelectorAll(FOCUSABLE)).find((c) => !c.matches(":disabled") && dt.visible(c, { sized: true }));
   return f ? dt.path(f) : null;
 }
 /** What screenTags reads: `ids` — the expectation's own node ids (its first root's, the frame's own excepted); `known` —
