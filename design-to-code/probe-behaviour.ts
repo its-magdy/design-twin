@@ -345,9 +345,9 @@ const NOT_MODAL = "the battery runs only on a modal dialog (:modal / dialog[open
 export const DIALOG_IDS: readonly BehaviourCheckId[] = ["dialog.focus-on-open", "dialog.focus-trap", "dialog.escape-closes", "dialog.focus-return", "dialog.nested-escape", "dialog.scroll-open", "dialog.scrim", "dialog.click-outside"];
 
 // ---------------------------------------------------------------- page-side functions (SELF-CONTAINED)
-/** P1/R-key: insert a 1px focusable sentinel at the start of body and focus it (the sequential focus starting
- *  point must be known — after a click Chromium starts at the click point). SELF-CONTAINED. */
-function sentinelInsert(_arg: null): boolean {
+/** P1/R-key: start inside the active modal, whose inert background cannot receive focus, else body.
+ *  The sequential focus starting point must be known — after a click Chromium starts at the click point. SELF-CONTAINED. */
+export function sentinelInsert(_arg: null): boolean {
   const prev = window.__dtBeh;
   const st: BehState = prev ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
   window.__dtBeh = st;
@@ -359,10 +359,20 @@ function sentinelInsert(_arg: null): boolean {
   s.setAttribute("tabindex", "0");
   s.setAttribute("data-dt-sentinel", "");
   s.setAttribute("style", "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden;outline:none;z-index:-1");
-  body.prepend(s);
+  let host: PageElement | null = null;
+  try {
+    host = document.activeElement?.closest('dialog:modal, [aria-modal="true" i]') ?? null;
+    if (!host) {
+      const modals = Array.from(document.querySelectorAll("dialog:modal"));
+      host = modals[modals.length - 1] ?? null;
+    }
+  } catch { /* older hosts without :modal retain the body fallback */ }
+  (host ?? body).prepend(s);
   st.sentinel = s;
   s.focus({ preventScroll: true });
-  return document.activeElement === s;
+  const focused = document.activeElement === s;
+  if (!focused) { s.remove(); st.sentinel = null; }
+  return focused;
 }
 /** SELF-CONTAINED. */
 function sentinelRemove(_arg: null): boolean {
@@ -1436,9 +1446,9 @@ function a11yUnit(ctx: UnitCtx): Unit {
       // presses (a repeated element — a date input's fields, a shadow host, an iframe's content — is skipped, never a loop)
       await park(page);
       u.phase("keyboard.reachable", "keyboard.focus-visible", "a11y.name");
-      await page.evaluate(sentinelInsert, null);
-      let walkEnd: "sentinel" | "body" | "cap" = "cap";
-      for (let i = 0; i < WALK_CAP; i++) {
+      const walkStarted = await page.evaluate(sentinelInsert, null);
+      let walkEnd: "sentinel" | "body" | "cap" | "start" = walkStarted ? "cap" : "start";
+      for (let i = 0; walkStarted && i < WALK_CAP; i++) {
         u.act();
         await page.keyboard.press("Tab");
         const s = await page.evaluate(walkStep, { record: true });
@@ -1461,6 +1471,7 @@ function a11yUnit(ctx: UnitCtx): Unit {
         if (s.disabled) { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: "not-run: disabled", evidence: ev }); continue; }
         if (s.stop < 0) {
           if (s.closedIn !== null) { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: inside a closed container (${s.closedIn}) — reachable once it is opened`, evidence: ev }); continue; }
+          if (walkEnd === "start") { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: "not-run: the Tab walk could not establish its focus starting point", evidence: ev }); continue; }
           if (walkEnd === "cap") { reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: the Tab walk stopped at ${WALK_CAP} Tab presses (${nStops} stops) before reaching it`, evidence: ev }); continue; }
           // Tab reaches a control INSIDE a container opener that is not the opener's own control (a card's Delete,
           // one of two buttons in a cell) — that control is reached, the opener is not known to be (never a fail on a guess)
@@ -1741,10 +1752,10 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
       // keyboard.activation: Tab from a sentinel to the opener, Enter (then Space)
       u.phase("keyboard.activation");
       const marked = await markOpenerSeen(page, row.nodeId, u.act);
-      await page.evaluate(sentinelInsert, null);
+      const walkStarted = await page.evaluate(sentinelInsert, null);
       let reachedOpener = false;
       let ancestorStop: string | null = null, insideStop: string | null = null;
-      for (let i = 0; i < WALK_CAP; i++) {
+      for (let i = 0; walkStarted && i < WALK_CAP; i++) {
         u.act();
         await page.keyboard.press("Tab");
         const s = await page.evaluate(walkStep, { record: true });
@@ -1760,7 +1771,7 @@ function keyUnit(ctx: UnitCtx, b: BatteryRow): Unit {
       let via: "Enter" | " " | null = null;
       const notSelf = (what: string): string => `not-run: the Tab stop at the opener is not the opener itself (${what}) — no key is pressed there`;
       if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` — ${marked.why}` : ""}`)
-        : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
+        : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : !walkStarted ? "not-run: the Tab walk could not establish its focus starting point" : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
       else {
         const e1 = await keyOpen("Enter");
         if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });

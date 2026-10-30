@@ -7,6 +7,7 @@ node_modules/
 design/
 
 # Live-test scratch output
+.field-tests/
 livetest-tmp/
 out-selection/
 out-full/

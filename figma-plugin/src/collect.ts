@@ -128,6 +128,9 @@ async function rootTree(r: Run, node: SceneNode): Promise<IrNode | null> {
 // layout a --page pull writes. pageId (not the page NAME) is the identity:
 // PageNode.name is user-editable and the Plugin API documents no uniqueness constraint on it.
 async function screenResult(r: Run, title: string, fileBase: string, nodes: IrNode[], origin?: { page: PageNode | null; nodeId?: string }): Promise<ScreenResult> {
+  // The variable dump runs first: a lookup that first fails there warns into the run, and the manifest is a
+  // snapshot of the run's warnings — taken before the dump, it would miss them.
+  const variables = await dumpVariables();
   const screen: ScreenResult["screen"] = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifestOf(r) };
   const page = origin && origin.page;
   if (page) { screen.page = page.name; screen.pageId = page.id; }
@@ -137,7 +140,7 @@ async function screenResult(r: Run, title: string, fileBase: string, nodes: IrNo
   // Repeated at the TOP level as well as inside `screen`: write-out.ts routes the file into
   // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
   // envelope to a caller that may never write to disk at all.
-  const out: ScreenResult = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: r.assets.slice() };
+  const out: ScreenResult = { screenName: safe(fileBase), screen, variables, assets: r.assets.slice() };
   if (page) { out.page = page.name; out.pageId = page.id; }
   if (origin && origin.nodeId) out.nodeId = origin.nodeId;
   return out;
@@ -493,7 +496,25 @@ function collectMeasurements(r: Run, pages?: ReadonlyArray<PageNode>): IrMeasure
   return out.length ? out : undefined;
 }
 
+// The host may enter with this flag on (notably Dev Mode). It changes both `children` and
+// getNodeByIdAsync, so disable it before lookup, sizing heuristics or serialization. Catalog scans
+// may still enable it temporarily for speed; their own finally restores this complete-read scope.
+// Production entry points are serialized by state.ts, so this scope never overlaps another walk.
+async function withAllInstanceChildren<T>(read: () => Promise<T>): Promise<T> {
+  const previous = figma.skipInvisibleInstanceChildren;
+  try {
+    figma.skipInvisibleInstanceChildren = false;
+    return await read();
+  } finally {
+    figma.skipInvisibleInstanceChildren = previous;
+  }
+}
+
 export async function collectSelection(opts?: CollectOpts): Promise<ScreenResult> {
+  return withAllInstanceChildren(() => collectSelectionTree(opts));
+}
+
+async function collectSelectionTree(opts?: CollectOpts): Promise<ScreenResult> {
   const r = claimRun();
   const sel = figma.currentPage.selection;
   const first = sel[0]; // selection is ReadonlyArray<SceneNode>: undefined exactly when it is empty
@@ -520,6 +541,10 @@ function pageOf(node: BaseNode): PageNode | null {
 
 // Export a single node addressed by id — the plane behind "paste a Figma link and ask".
 export async function collectNode(rawId: string, opts?: CollectOpts): Promise<ScreenResult> {
+  return withAllInstanceChildren(() => collectNodeTree(rawId, opts));
+}
+
+async function collectNodeTree(rawId: string, opts?: CollectOpts): Promise<ScreenResult> {
   const r = claimRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error(NO_NODE_ID);
@@ -546,6 +571,10 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Sc
 // same O(nodes) cost --no-assets exists to avoid for a much bigger payload (PNG > structural JSON).
 // It takes no read options, so its run makes none and its manifest says so (`reads: []`).
 export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotResult> {
+  return withAllInstanceChildren(() => collectScreenshotOf(rawId, opts));
+}
+
+async function collectScreenshotOf(rawId: string, opts?: { scale?: number }): Promise<ScreenshotResult> {
   const r = claimRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error(NO_NODE_ID);
@@ -588,6 +617,10 @@ const TOP_LEVEL_TYPES = new Set([
 //
 // Reuses TOP_LEVEL_TYPES so "what counts as a frame" cannot drift from collectFull's own index.
 export async function listPages(opts?: ListPagesArgs): Promise<ListPagesResult> {
+  return withAllInstanceChildren(() => listPagesTree(opts));
+}
+
+async function listPagesTree(opts?: ListPagesArgs): Promise<ListPagesResult> {
   const depth = opts && opts.depth === 1 ? 1 : 2;
   const localWarnings: string[] = [];
   const sink = (m: string) => localWarnings.push(m);
@@ -642,6 +675,10 @@ export async function listPages(opts?: ListPagesArgs): Promise<ListPagesResult> 
 // a PAGE's top level (SLICE, etc.); once you're a level inside a frame every child type is real content
 // (TEXT, VECTOR, INSTANCE...), so nothing here should be silently dropped from the count.
 export async function listChildren(rawId: string): Promise<ListChildrenResult> {
+  return withAllInstanceChildren(() => listChildrenTree(rawId));
+}
+
+async function listChildrenTree(rawId: string): Promise<ListChildrenResult> {
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error(NO_NODE_ID);
   const localWarnings: string[] = [];
@@ -728,6 +765,10 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
 // be silently dropped by that split, and dropped again by figma_export_design_system's
 // `writeToDisk: true` MCP path — the one place a caller can't fall back to reading the CLI's stderr.
 export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult> {
+  return withAllInstanceChildren(() => collectDesignSystemTree(opts));
+}
+
+async function collectDesignSystemTree(opts?: CollectOpts): Promise<DesignSystemResult> {
   const r = claimRun({ sourceBytes: false }); // the reply has no `assets`: an image fill keeps its size, its original bytes go unread
   r.useReads(opts);
   const designSystem = await buildDesignSystem(undefined, serialize);
@@ -758,6 +799,10 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
 // exactly that of its sibling importShaderAsync), i.e. it would make a read-plane command mutate the
 // user's file — hundreds of subscribed variables, undoable but real. This path reads and writes nothing.
 export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult> {
+  return withAllInstanceChildren(() => collectLibraryTree(opts));
+}
+
+async function collectLibraryTree(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult> {
   const r = claimRun({ sourceBytes: false }); // as collectDesignSystemOnly: the reply has no `assets`
   r.useReads(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
@@ -777,6 +822,10 @@ export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: stri
 // Export the design system + frame trees. Frame trees default to the CURRENT page; pass
 // { allPages:true } to walk every page (opt-in — a whole multi-page file can be very large).
 export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
+  return withAllInstanceChildren(() => collectFullTree(opts));
+}
+
+async function collectFullTree(opts?: CollectOpts): Promise<FullResult> {
   const r = claimRun();
   r.useReads(opts);
   const allPages = !!(opts && opts.allPages);

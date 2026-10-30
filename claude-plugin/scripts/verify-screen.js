@@ -6242,7 +6242,8 @@ function checkPlacement(cx, n) {
   if (num(fr.w) && num(fr.h) && (num(bx.x) || num(bx.y))) {
     const w = num(bx.width) ? bx.width : 0, h = num(bx.height) ? bx.height : 0;
     const tol = TOLERANCE.position;
-    const inDesign = (!num(spec.x) || spec.x >= -tol && spec.x + (spec.width || 0) <= fr.w + tol) && (!num(spec.y) || spec.y >= -tol && spec.y + (spec.height || 0) <= fr.h + tol);
+    const fitsDesign = (!num(spec.width) || spec.width <= fr.w + 2 * tol) && (!num(spec.height) || spec.height <= fr.h + 2 * tol);
+    const inDesign = fitsDesign && (!num(spec.x) || spec.x >= -tol && spec.x + (spec.width || 0) <= fr.w + tol) && (!num(spec.y) || spec.y >= -tol && spec.y + (spec.height || 0) <= fr.h + tol);
     const out = [];
     const over = [];
     let bottomOnly = true;
