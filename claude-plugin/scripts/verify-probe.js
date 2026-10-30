@@ -302,14 +302,20 @@ function measureElements(input) {
           }
           const [x = NaN, y = NaN, blur = 0, spread = 0] = lens;
           const color = colour ? rgba(colour) : rgba(cs.getPropertyValue("color"));
-          if (transparentColour(color) || !(spread > 0) || x !== 0 || y !== 0 || blur !== 0 || lens.length < 2) continue;
+          if (transparentColour(color) || blur !== 0 || lens.length < 2) continue;
+          if (inset && spread === 0 && x === 0 !== (y === 0)) {
+            const w = r2(Math.abs(x || y)), sides2 = [y > 0 ? w : 0, x < 0 ? w : 0, y < 0 ? w : 0, x > 0 ? w : 0];
+            rings.push({ key: `${color} ${sides2.join(",")} side`, spread: w, color, inset, sides: sides2 });
+            continue;
+          }
+          if (!(spread > 0) || x !== 0 || y !== 0) continue;
           rings.push({ key: `${color} ${spread} ${inset}`, spread: r2(spread), color, inset });
         }
       }
       const distinct = rings.filter((r, i) => rings.findIndex((o) => o.key === r.key) === i);
       const insetOnes = distinct.filter((r) => r.inset);
       const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : void 0;
-      if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" };
+      if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside", ...ring.sides ? { sides: ring.sides } : {} };
       if (distinct.length > 1) return strokeMemo;
       const os5 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
       const oc = rgba(cs.getPropertyValue("outline-color"));
@@ -458,6 +464,12 @@ function measureElements(input) {
           const ws = sides((s) => `border-${s}-width`).filter((w) => w !== null);
           const st = drawnStroke();
           put(k, st ? st.width : ws.length ? Math.max(...ws) : null, "no computed border width");
+          putStroke();
+          break;
+        }
+        case "borderWidths": {
+          const st = drawnStroke();
+          put(k, st ? st.sides ?? [st.width, st.width, st.width, st.width] : sides((s) => `border-${s}-width`), "");
           putStroke();
           break;
         }
@@ -1554,7 +1566,7 @@ var FIELDS = [
   { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "borderWidths", "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 
 // design-to-code/types.ts

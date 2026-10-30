@@ -32,6 +32,7 @@ The web column of this table is what the probe reads; use it as the reference fo
 |---|---|
 | `fontFamily` `fontSize` `fontWeight` `lineHeight` `letterSpacing` `color` `backgroundColor` `borderColor` `borderWidth` `opacity` | `getComputedStyle(el)` — colours as `rgb()`/`rgba()`, as-is; the comparison normalises them |
 | `borderRadius` | a number, or `[tl, tr, br, bl]` from `borderTopLeftRadius…` — never `radius` |
+| `borderWidths` | `[top, right, bottom, left]` — the four computed `border-*-width`s; when a ring draws the stroke, the sides it draws |
 | `padding` | `[top, right, bottom, left]` |
 | `gap` / `gapVisual` | CSS `gap`; **and** `gapVisual`, the rendered distance between consecutive children, wherever CSS gap is not what spaces them (a `<table>` uses `border-spacing`) |
 | `width` `height` `x` `y` | `el.getBoundingClientRect()`, with `x`/`y` **minus the frame element's rect** (frame-relative — see `coordinates`) |
@@ -62,7 +63,8 @@ Check these before you call anything wrong:
   computes five shadows, the unused ones transparent — find the ring by its content, never by its position in the
   list), and `outline` with `outline-offset: -Npx` is an inside stroke (`-N/2px`: a centre stroke, straddling the edge).
   Report it as `borderWidth` / `borderColor` with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign` (`inside` |
-  `outside` | `center`), as the probe does —
+  `outside` | `center`), as the probe does — and `borderWidths` as the sides the ring draws (a one-side inset shadow,
+  `inset 0 -1px 0 <colour>`, is a bottom stroke: `[0, 0, 1, 0]`) —
   `border-width: 0` alone is not a missing stroke.
 
 ## The measured file on a native stack

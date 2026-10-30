@@ -323,6 +323,7 @@ function expectStroke({ n, spec }: NodeSpecCtx): void {
     else if (st.weights && typeof st.weights === "object") { const ws = st.weights;
       spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
     if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain)
+    if (n.strokesInLayout) spec.strokesInLayout = true;
   }
 }
 /** the corner radius — one number or per corner, and not compared on a layer that draws nothing */
