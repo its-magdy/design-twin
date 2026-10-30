@@ -6,7 +6,10 @@
      Fix pass 1 (D119): a same-box tagged <span> around a control whose next tagged ancestor has room (L1); an ARIA-grid
      row whose cells carry tabindex="-1" (L2); a row with a checkbox in its first corner and a tile covered by a
      transparent overlay (freeHoverPoint's interactive-descendant and avoid-box guards); a transparent box its own two
-     children paint all over (L5). -->
+     children paint all over (L5).
+     Focus within the owner: a label beside its <input> inside a tagged field drawn focused (the field's :focus-within
+     paints the label), and a label written into its tagged field's own element. Hover past an overlay: a row half under a pinned overlay (its centre covered), and a row a veil
+     covers whole. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -40,6 +43,18 @@
   .tile > span { display: block; width: 150px; height: 28px; }
   .tile > i { position: absolute; inset: 0; }
   .paint2 > div { flex: 1; height: 28px; background: rgb(60, 60, 60); }
+  .side { position: absolute; left: 640px; top: 24px; width: 140px; }
+  .field > span { display: block; }
+  .field > input { width: 120px; }
+  .field:focus-within > span { color: rgb(10, 132, 255); }
+  .lab { display: block; margin-top: 8px; }
+  .lab > input { display: block; width: 120px; }
+  .lab:focus-within { color: rgb(10, 132, 255); }
+  .pinwrap { position: relative; margin-top: 8px; }
+  .srow { height: 28px; }
+  .srow:hover { background: rgb(70, 70, 79); }
+  .pin { position: absolute; left: 0; top: 0; width: 60%; height: 100%; }
+  .veil { position: absolute; inset: 0; }
 </style>
 </head>
 <body>
@@ -58,6 +73,12 @@
   <div class="fx crow" data-dt-node="70:60"><input type="checkbox" aria-label="Pick heddle"><span>Heddle</span><button data-dt-node="70:61" aria-label="Remove heddle"></button></div>
   <div class="fx tile" data-dt-node="70:70"><span data-dt-node="70:71">Reed</span><i></i></div>
   <div class="fx paint2" data-dt-node="70:80"><div></div><div></div></div>
+  <div class="side">
+    <div class="field" data-dt-node="70:100"><span data-dt-node="70:101">Shed width</span><input aria-label="Shed width"></div>
+    <label class="lab" data-dt-node="70:102">Bobbin pitch<input></label>
+    <div class="pinwrap"><div class="srow" data-dt-node="70:90">Shed row</div><div class="pin"></div></div>
+    <div class="pinwrap"><div class="srow" data-dt-node="70:92">Veiled row</div><div class="veil"></div></div>
+  </div>
 </div>
 </body>
 </html>

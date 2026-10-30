@@ -2217,7 +2217,7 @@ var measuredKeysDoc = () => ({
   "nodes[].styles.tag": "the element's tagName, lower-case",
   "nodes[].styles.textTransform": "getComputedStyle(el).textTransform of a TEXT node's element (inherited) \u2014 optional; with it the build's RENDERED string is compared with the design's (spec textCase)",
   "nodes[].styles.paintedBy": "{backgroundColor, via: ancestor|child, tag, depth} \u2014 optional: when the element's own background is transparent, the nearest containing ancestor (or same-box child) that paints it",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured with the OWNER in that state (the spec's drawnStateFrom, else the node itself; focus lands on the owner or its first focusable descendant, as :focus-within) \u2014 required for a node whose spec has drawnState; beside styles, never inside it; a state on a node whose spec has no drawnState is not compared (listed under Inferred, not designed)",
   "inferred[]": "{nodeId?, state, built, why?} \u2014 something the build does that the design never drew (an error message, an empty list, an open state): listed under Inferred, not designed; never graded",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
@@ -2307,6 +2307,7 @@ function waiverTolerance(label) {
   if (label.startsWith("border-radius (")) return TOLERANCE.radius;
   if (label === "placement") return TOLERANCE.position;
   if (label === "width (text ink)") return TOLERANCE.textInk;
+  if (label === "width (text box)") return TOLERANCE.size;
   if (label === "match (size)") return TOLERANCE.size;
   if (label === "overflowX") return TOLERANCE.position;
   return null;
@@ -4340,13 +4341,39 @@ function trackGap(L, dir) {
   if (dir === "row") return typeof L.rowGap === "number" ? L.rowGap : 0;
   return typeof L.columnGap === "number" ? L.columnGap : typeof L.rowGap === "number" ? L.rowGap : 0;
 }
+function padOf(L) {
+  const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.map((k) => L[k]);
+  return [0, 1, 2, 3].map((i) => {
+    const v = pad[i];
+    return typeof v === "number" ? v : 0;
+  });
+}
+function contentExtent(n, L, ax) {
+  const b = n.box;
+  if (!b || L.display === "grid" || L.mode === "absolute") return null;
+  const dir = L.flexDirection === "column" ? "column" : "row";
+  const flow = inFlowChildren(n);
+  const sizes = flow.map((c) => c.box ? ax === "x" ? c.box.w : c.box.h : void 0);
+  if (!flow.length || !sizes.every(num)) return null;
+  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
+  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
+  const main2 = dir === "row" === (ax === "x");
+  const wraps = L.flexWrap === "wrap";
+  if (main2 && !wraps) return sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
+  if (!main2 && wraps) {
+    const pad = padOf(L);
+    const mainSize = ax === "x" ? b.h : b.w;
+    const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
+    const mainSizes = flow.map((c) => c.box ? ax === "x" ? c.box.h : c.box.w : void 0);
+    return wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
+  }
+  return Math.max(...sizes);
+}
 function paddingNotShown(n, L, pad) {
   const b = n.box;
   if (!b || L.display === "grid" || L.mode === "absolute") return [];
   const dir = L.flexDirection === "column" ? "column" : "row";
   const flow = inFlowChildren(n);
-  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
-  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
   const out = [];
   for (const ax of ["x", "y"]) {
     if (ax === "x" ? n.widthMode : n.heightMode) continue;
@@ -4357,17 +4384,9 @@ function paddingNotShown(n, L, pad) {
     const sides = ax === "x" ? ["left", "right"] : ["top", "bottom"];
     const main2 = dir === "row" === (ax === "x");
     const dim = ax === "x" ? "width" : "height";
-    const sizes = flow.map((c) => c.box ? ax === "x" ? c.box.w : c.box.h : void 0);
     const wraps = L.flexWrap === "wrap";
-    if (flow.length && sizes.every(num)) {
-      let content;
-      if (main2 && !wraps) content = sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
-      else if (!main2 && wraps) {
-        const mainSize = ax === "x" ? b.h : b.w;
-        const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
-        const mainSizes = flow.map((c) => c.box ? ax === "x" ? c.box.h : c.box.w : void 0);
-        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
-      } else content = Math.max(...sizes);
+    const content = contentExtent(n, L, ax);
+    if (content !== null) {
       if (a + z + content > size + 1) {
         const al0 = main2 ? L.justifyContent : L.alignItems;
         const al = al0 === "space-around" || al0 === "space-evenly" ? "center" : al0;
@@ -4390,7 +4409,7 @@ function expectNode(n, ctx = {}) {
   const notComparable = [];
   const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
   const placeholder = n.type === "TEXT" && (ctx.planPlaceholder === true || isPlaceholder(n));
-  const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" } : {} };
+  const x = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...ifDefined("parentWidthMode", ctx.parentWidthMode), ...placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" } : {} };
   expectText(x);
   expectFont(x);
   expectPaint(x);
@@ -4541,14 +4560,33 @@ function expectSize(x, box) {
     if (typeof box.w === "number") spec.width = box.w;
     if (typeof box.h === "number") spec.height = box.h;
     if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+    if (n.asset || n.geometry) spec.asset = true;
+    else expectNominalOverflow(x, box);
   }
 }
-function expectTextSize({ n, spec, skip, placeholder }, box) {
+function expectNominalOverflow({ n, spec }, box) {
+  const L = n.layout;
+  if (!L || typeof L !== "object" || n.clip === true || n.assetSkipped) return;
+  const pad = padOf(L);
+  const over = {};
+  for (const ax of ["x", "y"]) {
+    if (ax === "x" ? n.widthMode : n.heightMode) continue;
+    const size = ax === "x" ? box.w : box.h;
+    const extent = contentExtent(n, L, ax);
+    if (!num(size) || extent === null) continue;
+    const content = r2(extent + (ax === "x" ? (pad[3] ?? 0) + (pad[1] ?? 0) : (pad[0] ?? 0) + (pad[2] ?? 0)));
+    if (content > size + 1) over[ax === "x" ? "w" : "h"] = { nominal: size, content };
+  }
+  if (over.w || over.h) spec.nominalOverflow = over;
+}
+function expectTextSize({ n, spec, skip, placeholder, parentWidthMode }, box) {
   const rb = n.renderBox;
   const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
   const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
   const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
   const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+  const sizesParent = !placeholder && !n.widthMode && n.autoResize !== "width_and_height" && parentWidthMode === "hug" && num(box.w);
+  if (sizesParent && (truncated || shadowed || rb && num(rb.w))) spec.boxWidth = box.w;
   if (placeholder) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
   else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
   else if (n.autoResize === "width_and_height") spec.width = box.w;
@@ -4556,7 +4594,7 @@ function expectTextSize({ n, spec, skip, placeholder }, box) {
   else if (rb && num(rb.w)) {
     spec.width = rb.w;
     spec.widthFrom = "renderBox";
-    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words \u2014 the build's text hugs them, so the ink width (renderBox) is compared instead`);
+    if (spec.boxWidth === void 0) skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words \u2014 the build's text hugs them, so the ink width (renderBox) is compared instead`);
   } else spec.width = box.w;
   const lh = spec.lineHeight;
   if (num(lh) && num(box.h) && lh > box.h + 0.5 && n.autoResize !== "width_and_height" && n.autoResize !== "height") {
@@ -4591,7 +4629,7 @@ function expectDrawnState({ n, spec }, inheritedState) {
 function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
 }
-var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} \u2014 a Range over its characters, never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its words; its x is the box's left edge for hug or left-aligned text, else the ink start. TEXT nodes carry no y and no height (vertical ink and line boxes depend on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
+var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} \u2014 a Range over its characters, never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its words; its x is the box's left edge for hug or left-aligned text, else the ink start. A fixed-width text in a parent that hugs its width also carries boxWidth: its box sizes the parent, so its own element's width (never a padded container's) is compared against it. TEXT nodes carry no y and no height (vertical ink and line boxes depend on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 var actionsOf = (r) => (Array.isArray(r.actions) ? r.actions : []).filter((a) => a && (a.type || a.navigation));
 var triggerOf = (r) => String(r.trigger || "on_click").toLowerCase();
 function shellIndex(roots) {
@@ -4792,7 +4830,8 @@ function visibleNode(bx, w, n, c) {
     frame: w.frame,
     ...ifDefined("inheritedState", inherited),
     ...ifDefined("frameId", w.frameId),
-    ...planPlaceholder ? { planPlaceholder } : {}
+    ...planPlaceholder ? { planPlaceholder } : {},
+    ...ifDefined("parentWidthMode", c.parent?.widthMode)
   });
   spec.ancestorIds = ancestorIds;
   if (n.absolute) spec.absolute = true;
@@ -5793,6 +5832,7 @@ function compareSpec(cx, spec) {
   const n = readNode(cx, spec, hit.m, hit.matchedBy);
   if (!n) return;
   checkFields(cx, n);
+  checkTextBoxWidth(cx, n);
   checkCorners(cx, n);
   checkBorderSides(cx, n);
   checkPadding(cx, n);
@@ -5885,12 +5925,13 @@ function readNode(cx, spec, m, matchedBy) {
   if (isText && tagLc && (CONTAINER_TAGS.has(tagLc) || tagLc === "div") && m.textFrom === void 0) typographyOn.set(String(spec.nodeId), tagLc);
   const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
   const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
-  const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container` : "";
+  const assetLeaf = onLeaf && spec.asset === true && (tagLc === "img" || tagLc === "svg");
+  const leafWhy = assetLeaf ? `this ${spec.type} is an exported asset built as an <${String(got.tag).toLowerCase()}>: only its box is measured \u2014 the rest is drawn inside the asset file` : onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container` : "";
   const rowTag = ROW_TAGS.has(tagLc);
   const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
   const textDiffers = isText && spec.text !== void 0 && typeof got.text === "string" && !renderedText(spec.text, spec.textCase, got.text, got.textTransform, normText).same;
   const firstDelta = deltas.length;
-  return { spec, m, matchedBy, rawMatch, base, got, measuredIn, state, st, um, gapNull, zeroAtRest, stateWhy, isText, container, tb, tagLc, table, onLeaf, leafWhy, rowTag, inline, textDiffers, firstDelta };
+  return { spec, m, matchedBy, rawMatch, base, got, measuredIn, state, st, um, gapNull, zeroAtRest, stateWhy, isText, container, tb, tagLc, table, onLeaf, assetLeaf, leafWhy, rowTag, inline, textDiffers, firstDelta };
 }
 function checkFields(cx, n) {
   const { unverifiable, tally, paintedVia, lineBoxWhyOf, gap, push } = cx;
@@ -5911,6 +5952,7 @@ function checkFields(cx, n) {
     tagLc,
     table,
     onLeaf,
+    assetLeaf,
     leafWhy,
     rowTag,
     inline,
@@ -5949,11 +5991,11 @@ function checkFields(cx, n) {
       gap(spec, f.label, stateWhy);
       continue;
     }
-    if (onLeaf && LEAF_FIELDS.has(f.key)) {
+    if (onLeaf && LEAF_FIELDS.has(f.key) && !(assetLeaf && f.box)) {
       gap(spec, f.label, leafWhy);
       continue;
     }
-    if (inline && INLINE_BOX_FIELDS.has(f.key)) {
+    if (inline && INLINE_BOX_FIELDS.has(f.key) && !(assetLeaf && f.box)) {
       gap(spec, f.label, inlineWhy(tagLc));
       continue;
     }
@@ -6076,16 +6118,53 @@ function checkFields(cx, n) {
       if (strokes > 0 && short2 > 0 && Math.abs(short2 - strokes) <= TOLERANCE.textInk) layoutNote = STROKE_LAYOUT_NOTE;
     }
     if (bad) {
+      const over = f.key === "width" || f.key === "height" ? spec.nominalOverflow?.[f.key === "width" ? "w" : "h"] : void 0;
+      const overNote = over ? `the design's content overflows its fixed box; ${f.key}:${over.nominal} with visible overflow reproduces it (the design shows ${over.content}px)` : void 0;
       push(spec, f.label, f.high ? "high" : "medium", bad, {
         ...ifDefined("unit", f.unit),
         ...ifDefined("token", tokenFor(spec, f.key)),
         ...measuredIn !== "rest" ? { measuredIn } : {},
         ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0),
         ...f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` } : {},
-        ...ifDefined("note", [strokeNote, paintNote, layoutNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : void 0].filter((x) => x !== void 0).join("; ") || void 0)
+        ...over ? { cause: "nominal-overflow" } : {},
+        ...ifDefined("note", [strokeNote, paintNote, layoutNote, f.key === "lineHeight" ? lineBoxWhyOf.get(spec.nodeId) : void 0, overNote].filter((x) => x !== void 0).join("; ") || void 0)
       });
     }
   }
+}
+function checkTextBoxWidth(cx, n) {
+  const { tally, gap, push } = cx;
+  const { spec, got, gapNull, container, matchedBy } = n;
+  const want = spec.boxWidth;
+  if (want === void 0) return;
+  const label = "width (text box)";
+  tally("width", got.width !== void 0);
+  if (got.width === void 0) {
+    gap(spec, label, "the probe did not report this property", true);
+    return;
+  }
+  if (got.width === null) {
+    gapNull(label, "width");
+    return;
+  }
+  if (container) {
+    gap(spec, label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 tag the text's own element to have its fixed box width compared`);
+    return;
+  }
+  const have = cssPx(got.width);
+  if (have === null) {
+    gap(spec, label, `could not read '${typeof got.width === "string" ? got.width : JSON.stringify(got.width)}' as a px number`);
+    return;
+  }
+  cx.fieldsChecked++;
+  const d = Math.abs(have - want);
+  if (d > TOLERANCE.size) push(
+    spec,
+    label,
+    "medium",
+    { want, got: have, delta: Number(d.toFixed(3)) },
+    { unit: "px", ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0) }
+  );
 }
 function checkCorners(cx, n) {
   const { tally, gap, push } = cx;
@@ -7541,7 +7620,8 @@ function deltasMarkdown(deltas) {
     const status = d.accepted ? `accepted \u2014 ${mdText(d.accepted.reason)} (${mdText(d.accepted.decidedBy)}, ${mdText(d.accepted.decidedAt)})` : d.group ? `\`${d.group}\`` : "";
     const tx = isTextRow(d.field);
     const cell = (v) => mdText(tx ? showText(v) : withUnit(v, d.unit));
-    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${tx && d.note ? ` \u2014 ${mdText(d.note)}` : ""} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "\u2014"} | ${status} |`);
+    const why = d.cause === "nominal-overflow" ? ` \u2014 nominal overflow: ${mdText(d.note)}` : tx && d.note ? ` \u2014 ${mdText(d.note)}` : "";
+    L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${mdText(d.name)} \`${d.nodeId}\` | ${d.field}${why} | ${cell(d.expected)} | ${cell(d.actual)} | ${d.token ? mdText(d.token) : "\u2014"} | ${status} |`);
   }
   L.push("");
   return L;

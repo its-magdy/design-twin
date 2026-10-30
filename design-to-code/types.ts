@@ -707,6 +707,14 @@ export interface VerifySpec {
   aliases?: string[];
   /** `width` is the text's INK width (renderBox.w), compared with tolerance textInk */
   widthFrom?: "renderBox";
+  /** a fixed-width TEXT's box width (box.w) in a parent that hugs its width — the box sizes the parent, so the text's own
+   *  (unpadded) element width is compared against it, field `width (text box)`, tolerance size */
+  boxWidth?: number;
+  /** a fixed, unclipped axis whose in-flow content (with padding) overflows the box: the nominal size `width`/`height`
+   *  states and the content size the design shows. A size delta stays a delta, marked `cause: "nominal-overflow"` */
+  nominalOverflow?: { w?: { nominal: number; content: number }; h?: { nominal: number; content: number } };
+  /** an exported asset (an asset file or vector geometry): an <img>/<svg> leaf carrying its id is the node, so its box is measured */
+  asset?: true;
   /** padding sides that cannot be compared (a fixed axis that is overfull or centres its content) */
   paddingSkip?: Array<"top" | "right" | "bottom" | "left">;
   /** how each axis is sized in auto layout (absent = fixed) — a growing hug axis alone is no size suspect */
@@ -1085,6 +1093,9 @@ export interface VerifyDelta {
   measuredIn?: string;
   matchedBy?: string;
   note?: string;
+  /** a cause the comparator can name — "nominal-overflow": the design's own content overflows its fixed, unclipped box, so the
+   *  design shows the content size (spec.nominalOverflow). Never changes the severity or the verdict */
+  cause?: "nominal-overflow";
   /** a plan waiver matched this delta — it stays listed, but leaves the counts and the verdict */
   accepted?: { reason: string; decidedBy: string; decidedAt: string; cause?: string };
   /** presentational group id (one cause) — counts and verdict stay per delta */

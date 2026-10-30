@@ -56,7 +56,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response, Selectors } from "playwright";
-import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements, screenTags } from "./probe-page.ts";
+import { collectCandidates, focusablePath, focusableWithin, focusInfo, freeHoverPoint, measureElements, rawHoverPoint, screenTags } from "./probe-page.ts";
 import { PAGE_RUNTIME, byPath, registerPathEngine } from "./page-runtime.ts";
 import type { Candidate, CollectOutput, ForeignRoot, MeasureInput, MeasureItem, Rect, ScreenTags } from "./probe-page.ts";
 import { attrSelector, buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
@@ -963,11 +963,19 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
         if (state === "hover") {
           await page.mouse.move(0, 0);
           const via = await hoverDrawnState(page, spec, m, own, pool.byTag);
-          if (via.hovered !== m.path) node.hoverVia = via.hovered;
           if (via.note !== null) node.note = node.note ? `${node.note}; ${via.note}` : via.note;
+          // never measured where another element is on top: that is not this element's hover
+          if (via.hovered === null) continue;
+          if (via.hovered !== m.path) node.hoverVia = via.hovered;
+          if (via.rawPointer) node.hoverBy = "raw-pointer";
         } else {
-          // focus lands on the element or its closest focusable ancestor — or nowhere (then no state is written)
-          focusPath = await page.evaluate(focusablePath, m.path);
+          // focus lands inside the OWNER of the drawn state (as hover: ownerHover — :focus-within, a label beside its
+          // field's <input>), else on the element or its closest focusable ancestor — or nowhere (then no state is written)
+          const oh = ownerHover(spec, m, pool.byTag);
+          if (oh.kind === "owner") for (const c of [oh, ...oh.next]) if ((focusPath = await page.evaluate(focusableWithin, c.path)) !== null) break;
+          // a label written into its owner's own element (it shares it): ownerHover says none, the owner is that element
+          if (oh.kind === "none" && spec.drawnStateFrom !== undefined && spec.drawnStateFrom !== spec.nodeId) focusPath = await page.evaluate(focusableWithin, m.path);
+          focusPath ??= await page.evaluate(focusablePath, m.path);
           if (focusPath === null) { node.note = "focus state not measured: the element is not focusable (nor is any ancestor)"; continue; }
           // keyboard first (programmatic focus, then Shift+Tab, Tab) so :focus-visible applies as for a user;
           // programmatic focus() alone when the Tab order does not come back to it
@@ -1039,8 +1047,11 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
 /** hover for a drawn hover state. A spec whose state is its owner's (drawnStateFrom — a control in a row drawn
  *  hovered) hovers the OWNER's tagged element at a free point (outside the control, not over another control — freeHoverPoint),
  *  so the row's :hover is on and the control's own is not; no free point, or no tagged owner → the element itself
- *  (`own`), with a note. Returns the path hovered. */
-async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: string, byTag: Map<string, Candidate[]>): Promise<{ hovered: string; note: string | null }> {
+ *  (`own`), with a note. When Playwright's hover of the element gives up (it waits for the element to take the
+ *  pointer: an overlay over its centre defeats it), the raw pointer moves to a point where elementFromPoint is the
+ *  element or inside it (rawHoverPoint; `rawPointer`, a note names that point); none → `hovered` null, the note names
+ *  what covers it. Returns the path hovered. */
+async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: string, byTag: Map<string, Candidate[]>): Promise<{ hovered: string | null; rawPointer: boolean; note: string | null }> {
   const oh = ownerHover(spec, m, byTag);
   let note: string | null = null;
   if (oh.kind === "untagged") note = `hovered the element itself: its drawn-hovered container ${oh.owner} has no visible tagged element (tag it with data-dt-node="${oh.owner}")`;
@@ -1055,7 +1066,7 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
       tried.push(c.id);
       if (position === null) continue;
       // a covered point is retried until the timeout — elementFromPoint said it is free, so a short one
-      try { await loc.hover({ position, timeout: 1000 }); return { hovered: c.path, note: null }; } catch (e) {
+      try { await loc.hover({ position, timeout: 1000 }); return { hovered: c.path, rawPointer: false, note: null }; } catch (e) {
         if (errorKind(e, page) !== "other") throw e;
         covered ??= `the free point on ${c.id} was covered (${firstLine(e)})`;
         await page.mouse.move(0, 0);
@@ -1064,8 +1075,23 @@ async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: stri
     const on = `its drawn-hovered container ${tried[0]}${tried.length > 1 ? ` (nor on ${tried.slice(1).join(", ")})` : ""}`;
     note = covered !== null ? `hovered the element itself: no usable free point on ${on} — ${covered}` : `hovered the element itself: no free point on ${on}`;
   }
-  await byPath(page, own).first().hover({ timeout: 2000 });
-  return { hovered: own, note };
+  const withNote = (n: string): string => (note !== null ? `${note}; ${n}` : n);
+  let refused: string;
+  try { await byPath(page, own).first().hover({ timeout: 2000 }); return { hovered: own, rawPointer: false, note }; } catch (e) {
+    if (errorKind(e, page) !== "other") throw e;
+    refused = firstLine(e);
+  }
+  await page.mouse.move(0, 0);
+  const at = await page.evaluate(rawHoverPoint, { path: own, at: null });
+  if (at === null) throw new Error("the element is gone");
+  if ("covered" in at) return { hovered: null, rawPointer: false, note: withNote(`hover state not measured: ${at.covered === null ? "no point of the element is in the viewport" : `covered by ${at.covered}`}`) };
+  await page.mouse.move(at.x, at.y);
+  await raf2(page);
+  // the hover itself may have put something on top (a tooltip): checked again where the pointer is
+  const still = await page.evaluate(rawHoverPoint, { path: own, at: { x: at.x, y: at.y } });
+  if (still === null) throw new Error("the element is gone");
+  if ("covered" in still) return { hovered: null, rawPointer: false, note: withNote(`hover state not measured: covered by ${still.covered ?? "nothing"} once hovered`) };
+  return { hovered: own, rawPointer: true, note: withNote(`hovered with the raw pointer at (${at.x}, ${at.y}), where elementFromPoint is ${still.hit} (Playwright's hover: ${refused})`) };
 }
 
 /** The element to hover for a drawn hover state: the matched one, or — when it has no size at rest (hover-only

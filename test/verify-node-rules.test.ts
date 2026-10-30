@@ -81,6 +81,23 @@ console.log("A — TEXT width is the ink width, x/width only from textBox:");
   const differs = compare(e, measured([textNode("2:3", "Showing 1 to 12 of 240 entries", { x: 0, w: 260 })]));
   safe("the copy differs: width gap 'the text differs', no width delta (the text delta stays)", () =>
     !deltaOn(differs, "2:3", /width/) && /text differs/.test(gapOn(differs, "2:3", /width/)?.why ?? "") && !!deltaOn(differs, "2:3", /^text$/));
+
+  // a fixed-width label inside a HUG row: its 141px box is what sizes the row, so the element's own width is compared too
+  const eHug = expect1([{ type: "FRAME", id: "2:8", name: "Nav Item", widthMode: "hug", box: { w: 165, h: 40 }, fills: [{ type: "solid", color: "#eeeeee" }], layout: { display: "flex", padding: [10, 12, 10, 12] },
+    children: [{ type: "TEXT", id: "2:9", name: "Nav Label", text: "Members", font: TXT, autoResize: "height", box: { w: 141, h: 20 }, renderBox: { x: 0, y: 0, w: 60, h: 11 } },
+      // a truncated fixed-width label: its words are not comparable, its box still sizes the row
+      { type: "TEXT", id: "2:10", name: "Nav Hint", text: "A long hint that truncates", font: TXT, autoResize: "height", truncate: true, maxLines: 1, box: { w: 120, h: 20 }, renderBox: { x: 0, y: 0, w: 119, h: 11 } }] }]);
+  const s9 = spec(eHug, "2:9");
+  safe("fixed-width text in a hug parent: spec.boxWidth 141 beside the ink width 60, no notComparable 'width (text box)'", () =>
+    s9?.boxWidth === 141 && s9.width === 60 && s9.widthFrom === "renderBox" && !ncOn(eHug, "2:9", /text box/));
+  safe("…a truncated fixed-width text in the hug parent: boxWidth 120 (its width is not compared)", () => spec(eHug, "2:10")?.boxWidth === 120 && spec(eHug, "2:10")?.width === undefined);
+  safe("…fixed-width text in a parent that does not hug keeps ink only (no boxWidth)", () => s1?.boxWidth === undefined && s3?.boxWidth === undefined);
+  const hugText = (w: number, extra: MeasuredStyles = {}) => compare(eHug, measured([textNode("2:9", "Members", { x: 0, w: 60.5 }, { width: w, ...extra })]));
+  safe("…the element hugging its words (60.5 wide): a medium 'width (text box)' delta 141 → 60.5", () => {
+    const d = deltaOn(hugText(60.5), "2:9", /^width \(text box\)$/); return d?.expected === 141 && d.actual === 60.5 && d.severity === "medium"; });
+  safe("…the element 141.5 wide (tolerance 1): no width delta at all", () => !deltaOn(hugText(141.5), "2:9", /width/));
+  safe("…on a padded element: the text box is not measured (its box is not the text's), no delta", () => {
+    const r = hugText(165, { padding: [0, 12, 0, 12] }); return !deltaOn(r, "2:9", /text box/) && /with padding, whose box is not the text's/.test(gapOn(r, "2:9", /^width \(text box\)$/)?.why ?? ""); });
 }
 
 // ---------------------------------------------------------------- B. stroke + opacity
@@ -178,6 +195,21 @@ console.log("D — padding the design cannot show:");
   safe("compare: the build's justify-center with no padding (60 → 0 on skipped sides) is no padding delta", () => !deltaOn(r, "6:2", /padding/));
   const r2 = compare(e, measured([node("6:2", { backgroundColor: "rgb(17, 17, 17)", width: 224, height: 40, padding: [6, 0, 0, 0], tag: "div" })]));
   safe("…but a side still compared (top 0 → 6) is a delta, noting the skipped sides", () => { const d = deltaOn(r2, "6:2", /padding/); return d?.delta === 6 && /left\/right not compared/.test(d.note ?? ""); });
+
+  // a fixed 24px-high header, padding 8+8 and a 24px child: its content (40) overflows the box — unclipped, the design shows 40
+  const header = (id: string, extra: Partial<NodeInput> = {}): NodeInput => ({ type: "FRAME", id, name: "Header", box: { w: 200, h: 24 }, fills: [{ type: "solid", color: "#fafafa" }],
+    layout: { display: "flex", padding: [8, 0, 8, 0] }, children: [{ type: "FRAME", id: `${id}1`, name: "Bar", box: { w: 100, h: 24 }, fills: [{ type: "solid", color: "#333333" }] }], ...extra });
+  const eo = expect1([header("6:8"), header("6:9", { clip: true }), header("6:10", { heightMode: "hug" })]);
+  safe("fixed 24 high, padding 8+8 + 24 child, no clip: nominalOverflow.h = {nominal 24, content 40}; height stays 24", () =>
+    JSON.stringify(spec(eo, "6:8")?.nominalOverflow) === '{"h":{"nominal":24,"content":40}}' && spec(eo, "6:8")?.height === 24);
+  safe("…a clipping box, or a hug axis: no nominalOverflow", () => spec(eo, "6:9")?.nominalOverflow === undefined && spec(eo, "6:10")?.nominalOverflow === undefined);
+  const hdr = (id: string): MeasuredNode => node(id, { backgroundColor: "rgb(250, 250, 250)", width: 200, height: 40, padding: [8, 0, 8, 0], opacity: 1, tag: "div" });
+  const ro = compare(eo, measured([hdr("6:8"), hdr("6:9")]));
+  safe("measured 40: still a medium height delta 24 → 40, marked cause nominal-overflow with how to reproduce it", () => {
+    const d = deltaOn(ro, "6:8", /^height$/);
+    return d?.severity === "medium" && d.expected === 24 && d.actual === 40 && d.cause === "nominal-overflow" && /overflows its fixed box; height:24 with visible overflow reproduces it/.test(d.note ?? ""); });
+  safe("…the clipping box's 24 → 40 is a plain delta (no cause, no note)", () => { const d = deltaOn(ro, "6:9", /^height$/); return d?.delta === 16 && d.cause === undefined && d.note === undefined; });
+  safe("…report.md shows the marker", () => /\| height — nominal overflow: the design's content overflows/.test(reportToMarkdown(ro)));
 }
 
 // ---------------------------------------------------------------- E. a frame id on an inline element

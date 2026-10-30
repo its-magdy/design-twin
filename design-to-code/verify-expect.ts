@@ -153,13 +153,42 @@ function trackGap(L: LayoutSpec, dir: "row" | "column"): number {
   return typeof L.columnGap === "number" ? L.columnGap : typeof L.rowGap === "number" ? L.rowGap : 0;
 }
 
+/** a layout's padding as [top, right, bottom, left] (0 where unstated) */
+function padOf(L: LegacyLayout): number[] {
+  const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.map((k) => L[k]);
+  return [0, 1, 2, 3].map((i) => { const v = pad[i]; return typeof v === "number" ? v : 0; });
+}
+/** The size of a box's in-flow content along one axis, padding excluded: the children and gaps along the main axis, the
+ *  largest child across it. A WRAPPING list's main axis is its largest child (its padding sets the wrap point); its
+ *  counter axis holds the stacked lines (wrapLines) when the main size is known. null = not computable (no box, a grid or
+ *  absolute layout, no in-flow child, a child with no size). */
+function contentExtent(n: IrNode, L: LegacyLayout, ax: "x" | "y"): number | null {
+  const b = n.box;
+  if (!b || L.display === "grid" || L.mode === "absolute") return null;
+  const dir = L.flexDirection === "column" ? "column" : "row";
+  const flow = inFlowChildren(n);
+  const sizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.w : c.box.h) : undefined));
+  if (!flow.length || !sizes.every(num)) return null;
+  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
+  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
+  const main = (dir === "row") === (ax === "x");
+  const wraps = L.flexWrap === "wrap";
+  if (main && !wraps) return sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
+  if (!main && wraps) {
+    const pad = padOf(L);
+    const mainSize = ax === "x" ? b.h : b.w;
+    const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
+    const mainSizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.h : c.box.w) : undefined));
+    return wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
+  }
+  return Math.max(...sizes);
+}
+
 function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Array<{ sides: PadSide[]; why: string }> {
   const b = n.box;
   if (!b || L.display === "grid" || L.mode === "absolute") return [];
   const dir = L.flexDirection === "column" ? "column" : "row";
   const flow = inFlowChildren(n);
-  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
-  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
   const out: Array<{ sides: PadSide[]; why: string }> = [];
   for (const ax of ["x", "y"] as const) {
     if (ax === "x" ? n.widthMode : n.heightMode) continue; // hug/fill: the box follows the content, padding shows
@@ -170,19 +199,9 @@ function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Ar
     const sides: PadSide[] = ax === "x" ? ["left", "right"] : ["top", "bottom"];
     const main = (dir === "row") === (ax === "x");
     const dim = ax === "x" ? "width" : "height";
-    const sizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.w : c.box.h) : undefined));
     const wraps = L.flexWrap === "wrap";
-    if (flow.length && sizes.every(num)) {
-      // A WRAPPING list's main-axis padding sets the wrap point and shows: only its largest child can overflow.
-      // Its counter axis holds the stacked lines (wrapLines) when the main size is known; else the largest child.
-      let content: number;
-      if (main && !wraps) content = sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
-      else if (!main && wraps) {
-        const mainSize = ax === "x" ? b.h : b.w;
-        const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
-        const mainSizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.h : c.box.w) : undefined));
-        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, trackGap(L, dir)) ?? Math.max(...sizes);
-      } else content = Math.max(...sizes);
+    const content = contentExtent(n, L, ax);
+    if (content !== null) {
       if (a + z + content > size + 1) {
         // Figma still insets the first child by the START padding of a start-aligned box whose content
         // overflows (the overflow runs out at the end) — only the end side cannot show; mirrored for end alignment;
@@ -217,7 +236,9 @@ export interface InheritedState { state: DrawnState; why: string; from: string; 
 /** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
 export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string;
   /** the plan declares this node a placeholder (deviations[] field "placeholder") */
-  planPlaceholder?: boolean }
+  planPlaceholder?: boolean;
+  /** how the parent sizes its width (absent = fixed, or no parent) — a fixed-width TEXT in a hug parent sizes it */
+  parentWidthMode?: IrNode["widthMode"] }
 /**
  * The spec row for one VISIBLE node, plus any design values the method cannot compare
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
@@ -227,7 +248,7 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
   const placeholder = n.type === "TEXT" && (ctx.planPlaceholder === true || isPlaceholder(n));
-  const x: NodeSpecCtx = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...(placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" as const } : {}) };
+  const x: NodeSpecCtx = { n, spec, skip, paints: Array.isArray(n.fills) ? n.fills : [], placeholder, ...ifDefined("parentWidthMode", ctx.parentWidthMode), ...(placeholder && ctx.planPlaceholder === true ? { placeholderFrom: "plan" as const } : {}) };
   expectText(x);
   expectFont(x);
   expectPaint(x);
@@ -251,7 +272,9 @@ function expectNode(n: IrNode, ctx: ExpectContext = {}): { spec: VerifySpec; not
  *  the steps is the order of the spec's keys. */
 interface NodeSpecCtx { n: IrNode; spec: VerifySpec; skip: (field: string, value: JsonValue, why: string) => number; paints: Paint[];
   /** an input placeholder (isPlaceholder, or the plan says so) — and "plan" when the plan is why */
-  placeholder: boolean; placeholderFrom?: "plan" }
+  placeholder: boolean; placeholderFrom?: "plan";
+  /** the parent's width sizing (ExpectContext.parentWidthMode) */
+  parentWidthMode?: IrNode["widthMode"] }
 /** the copy and how it renders (text, textCase) */
 function expectText({ n, spec, skip }: NodeSpecCtx): void {
   // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
@@ -415,10 +438,30 @@ function expectSize(x: NodeSpecCtx, box: Box): void {
     if (typeof box.h === "number") spec.height = box.h;
     // a hug axis may GROW in the build (more content) without the match being wrong
     if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+    // an exported asset: built as an <img>/<svg>, that leaf is the node (its box is compared)
+    if (n.asset || n.geometry) spec.asset = true;
+    else expectNominalOverflow(x, box);
   }
 }
+/** a fixed axis whose in-flow content (with padding) overflows the box and is not clipped: Figma shows the content past the
+ *  box, so the design's nominal size is not what it shows — recorded (nominalOverflow), the size spec stays the nominal box */
+function expectNominalOverflow({ n, spec }: NodeSpecCtx, box: Box): void {
+  const L = n.layout;
+  if (!L || typeof L !== "object" || n.clip === true || n.assetSkipped) return;
+  const pad = padOf(L);
+  const over: NonNullable<VerifySpec["nominalOverflow"]> = {};
+  for (const ax of ["x", "y"] as const) {
+    if (ax === "x" ? n.widthMode : n.heightMode) continue; // hug/fill: the box follows the content (or the parent)
+    const size = ax === "x" ? box.w : box.h;
+    const extent = contentExtent(n, L, ax);
+    if (!num(size) || extent === null) continue;
+    const content = r2(extent + (ax === "x" ? (pad[3] ?? 0) + (pad[1] ?? 0) : (pad[0] ?? 0) + (pad[2] ?? 0)));
+    if (content > size + 1) over[ax === "x" ? "w" : "h"] = { nominal: size, content };
+  }
+  if (over.w || over.h) spec.nominalOverflow = over;
+}
 /** a TEXT's width (its box or its ink, or not comparable with why) and a line box taller than a fixed text box */
-function expectTextSize({ n, spec, skip, placeholder }: NodeSpecCtx, box: Box): void {
+function expectTextSize({ n, spec, skip, placeholder, parentWidthMode }: NodeSpecCtx, box: Box): void {
   // a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
   // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
   // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
@@ -432,6 +475,10 @@ function expectTextSize({ n, spec, skip, placeholder }: NodeSpecCtx, box: Box): 
   const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
   const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= box.w - TOLERANCE.textInk);
   const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+  // a FIXED-width text box inside a parent that hugs its width: the box (not the words) sizes the parent, so it is
+  // compared — against the text's own element (verify-compare: never a container), whatever happens to its words
+  const sizesParent = !placeholder && !n.widthMode && n.autoResize !== "width_and_height" && parentWidthMode === "hug" && num(box.w);
+  if (sizesParent && (truncated || shadowed || (rb && num(rb.w)))) spec.boxWidth = box.w;
   if (placeholder) skip("width", box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
   else if (truncated) skip("width", box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
   else if (n.autoResize === "width_and_height") spec.width = box.w;
@@ -439,7 +486,7 @@ function expectTextSize({ n, spec, skip, placeholder }: NodeSpecCtx, box: Box): 
   else if (rb && num(rb.w)) {
     spec.width = rb.w;
     spec.widthFrom = "renderBox";
-    skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, ` +
+    if (spec.boxWidth === undefined) skip("width (text box)", box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, ` +
       `so the ink width (renderBox) is compared instead`);
   } else spec.width = box.w;
   // a FIXED-height text box shorter than its line box (a 28px line in a 24px box). Figma lets the line
@@ -491,7 +538,9 @@ const COORDINATES =
   "IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} — a Range over its characters, " +
   "never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK " +
   "width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its " +
-  "words; its x is the box's left edge for hug or left-aligned text, else the ink start. TEXT nodes carry no y " +
+  "words; its x is the box's left edge for hug or left-aligned text, else the ink start. A fixed-width text in a parent " +
+  "that hugs its width also carries boxWidth: its box sizes the parent, so its own element's width (never a padded " +
+  "container's) is compared against it. TEXT nodes carry no y " +
   "and no height (vertical ink and line boxes depend on font metrics). " +
   "Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 
@@ -758,7 +807,7 @@ function visibleNode(bx: ExpectBuild, w: RootWalk, n: IrNode, c: WalkContext): v
   if (n.id) bx.visibleById.set(n.id, { name: n.name, file: w.sourceFile ?? "", type: n.type });
   const planPlaceholder = !!n.id && bx.plan.isPlaceholder(n.id);
   const { spec, notComparable: gaps } = expectNode(n, { path: c.path, frame: w.frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", w.frameId),
-    ...(planPlaceholder ? { planPlaceholder } : {}) });
+    ...(planPlaceholder ? { planPlaceholder } : {}), ...ifDefined("parentWidthMode", c.parent?.widthMode) });
   spec.ancestorIds = ancestorIds;
   if (n.absolute) spec.absolute = true;
   const par = c.parent;

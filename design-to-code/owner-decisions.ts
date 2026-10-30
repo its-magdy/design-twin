@@ -141,6 +141,7 @@ function waiverTolerance(label: string): number | null {
   if (label.startsWith("border-radius (")) return TOLERANCE.radius;
   if (label === "placement") return TOLERANCE.position;
   if (label === "width (text ink)") return TOLERANCE.textInk;
+  if (label === "width (text box)") return TOLERANCE.size;
   if (label === "match (size)") return TOLERANCE.size;
   if (label === "overflowX") return TOLERANCE.position;
   return null;
