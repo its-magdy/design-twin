@@ -33,12 +33,14 @@ Output
   `.frame(maxHeight: .infinity)` (VStack); cross-axis `fill` or `alignSelf:"stretch"` → the same on the other axis.
 - Set the stack's `alignment:` from the IR: absent `alignItems` = start → `VStack(alignment: .leading)` /
   `HStack(alignment: .top)`. A stack's default is `.center`, which Figma's start is not. One child aligned
-  differently (`alignSelf` `min`/`center`/`max`) → `.frame(maxWidth: .infinity, alignment: …)` on that child.
+  differently (`alignSelf` `min`/`center`/`max`) → a frame on the stack's cross axis around it, keeping its own size
+  inside: `.frame(maxWidth: .infinity, alignment: …)` in a `VStack`, `.frame(maxHeight: .infinity, alignment: …)` in
+  an `HStack`.
 - `sizeLimits` → `.frame(minWidth:maxWidth:minHeight:maxHeight:)`. A fixed TEXT height → `minHeight`, so Dynamic
   Type fits.
 - Exceptions: the screen's root frame is the device screen (safe area, not its `box`) — a root that is a sheet or
-  popover keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true` →
-  `.position`/`.offset` in a `ZStack`, sized by `box`.
+  popover keeps its declared width; an `absolute:true` child → `.position`/`.offset`
+  in a `ZStack`, sized by `box`; inside a `layout.mode:"absolute"` parent infer the flow, each child sized by `box`.
 
 **Grid (`layout.display:"grid"`).** Pick the container by whether any child spans:
 - **No spans** → `LazyVGrid`/`LazyHGrid`. `columns`/`columnSizes` (per-track `{type:"flex"|"fixed"|"hug",

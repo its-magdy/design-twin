@@ -2,7 +2,7 @@
   "nodes": [
     {
       "id": "20:1",
-      "name": "Request panel",
+      "name": "New request",
       "type": "FRAME",
       "box": { "w": 960, "h": 800, "x": 0, "y": 0 },
       "layout": { "display": "flex", "flexDirection": "column", "gap": 16, "padding": [24, 24, 24, 24] },

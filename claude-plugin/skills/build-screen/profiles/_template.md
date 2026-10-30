@@ -20,7 +20,7 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
   declared `box.w`/`box.h`, kept even inside a hug parent. Say how each maps on the main and the cross axis, how
   `grow` and `alignSelf` (`min`/`center`/`max`/`stretch`) map, and what your container does with an absent
   `alignItems` (Figma's is start; CSS and Yoga stretch, SwiftUI and Flutter centre) — set it from the IR. The root
-  frame of a page is the screen, not its `box`; a child of an absolute-layout parent is placed by `x`/`y`.
+  frame of a page is the screen, not its `box`; an `absolute:true` child is placed by `x`/`y` and sized by `box`.
 - `layout.mode:"absolute"` → infer a flow layout; do NOT hardcode coordinates.
 - `layout.display:"grid"` + `columns`/`rows`/`columnSizes`/`rowSizes`/`columnGap`/`rowGap`/`autoFlow`/
   `autoTracks`, and per-child `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart`/

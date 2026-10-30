@@ -36,8 +36,8 @@ When sources disagree about a node, earlier wins:
    verdict — the designer's own code name.
 4. Bound `tokens` / `styles` without `codeSyntax` → grep the project's real token source for an exact
    match.
-5. Raw values (`fills` hex, `layout.gap`) with no bound token → a **MISSING** row per step 2, never a "snap to
-   the closest token" (silent hardcoding by proxy). Record it and get the user's decision.
+5. Raw values (`fills` hex, `layout.gap`) with no bound token → built exactly as exported, never "snapped to the
+   closest token" (silent hardcoding by proxy); only a value that *should* have a token is a **MISSING** row (step 2).
 6. `layout.mode:"absolute"` coordinates → loosest; infer the flow from the screenshot.
 
 ## Scripts and references
@@ -76,8 +76,8 @@ The profile has the stack's syntax; these are the facts behind it, and the commo
   `fill` or `alignSelf:"stretch"` on the cross axis → stretches across.
 - Absent `alignItems` = start. Set the container's cross-axis alignment from the IR every time: CSS and React Native
   stretch by default, SwiftUI stacks and Flutter centre.
-- Exceptions: a page's root frame is the screen or viewport, not a canvas (a dialog root keeps its width); a child of a
-  `layout.mode:"absolute"` parent, or with `absolute:true`, is placed by `x`/`y`.
+- Exceptions: a root frame that is a whole page is the screen or viewport, not a canvas (any other root — a dialog, a
+  panel, a cell — keeps its declared size); an `absolute:true` child is placed by its `x`/`y` and sized by `box`; the children of a `layout.mode:"absolute"` parent (no auto layout) are sized by `box`, but their flow is inferred, never transcribed coordinates.
 - **Strokes**: `strokesInLayout` means the stroke takes layout space and counts toward a hug size (a CSS border with
   `box-sizing: border-box`); without it the stroke takes none (an inset ring). `outside` and `center` strokes take none.
   The colour is the stroke's own bound token (`tokens.strokes`).

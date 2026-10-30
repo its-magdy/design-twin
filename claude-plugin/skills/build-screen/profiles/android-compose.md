@@ -51,8 +51,9 @@ Output
 - `sizeLimits` → `Modifier.widthIn(min, max)`/`heightIn(min, max)`. A fixed TEXT height → `heightIn(min = …)`, so
   font scaling fits.
 - Exceptions: the screen's root frame fills the window (`Scaffold` content), not its `box` — a root that is a dialog
-  or sheet keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true` → a `Box`
-  with `Modifier.offset(x.dp, y.dp)`, sized by `box`.
+  or sheet keeps its declared width; an `absolute:true` child → a `Box` with
+  `Modifier.offset(x.dp, y.dp)`, sized by `box`; inside a `layout.mode:"absolute"` parent infer the flow, each child
+  sized by `box`.
 
 **Modifier ORDER is semantics, not style.** Modifiers apply outside-in, so the chain order changes the
 result, not just the code. Canonical chain: `size`/`weight` → `clip` → `background` → `border` →

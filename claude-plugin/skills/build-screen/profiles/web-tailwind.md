@@ -9,13 +9,13 @@ controls, idiomatic web, interaction states, accessibility, motion and assets ar
 and are written there in plain CSS. This file gives the Tailwind form and what is specific to Tailwind.
 
 **Layout (IR → Tailwind classes)** — each child's size is *Sizing (per axis)* in `web-common.md`: fixed →
-`flex-[0_0_Npx]` on the main axis (`w-[Npx]`/`h-[Npx]` on the cross axis), hug → `flex-none`, fill/`grow` →
+`w-[Npx]`/`h-[Npx]`, plus `flex-none` on the main axis, hug → `flex-none` with no size, fill/`grow` →
 `flex-[1_1_0]` + `min-w-0`/`min-h-0`, cross-axis stretch → `self-stretch`.
 - `display:flex` → `flex`; `flexDirection:"column"` → `flex-col` (row is default).
 - `gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column (not `gap-N`, which also
-  sets the cross axis); N is the nearest scale step (`gap-x-2` ≈ 8px) or `gap-x-[Npx]`. `flexWrap:"wrap"` →
+  sets the cross axis); N is the scale step that equals it exactly, else `gap-x-[Npx]` — never round to a step. `flexWrap:"wrap"` →
   `flex-wrap`, and its track gap: `rowGap` (a wrapping row) → `gap-y-N`, `columnGap` (a wrapping column) →
-  `gap-x-N`, N likewise the nearest scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
+  `gap-x-N`, N likewise the exact scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
   emit none, or `gap-y-0`/`gap-x-0` if a `gap-N` is in play. A wrap's tracks → `content-*`: its
   `alignContent`, else from `alignItems` (`content-start`/`content-center`/`content-end`; `content-stretch`
   when every in-flow child is `alignSelf:"stretch"`; `baseline` → `content-start`, with `items-baseline`
@@ -128,7 +128,7 @@ center → `outline outline-[w] -outline-offset-[w/2]`. Per-side `weights` → `
 `opacity-*`; display-p3 → `[color:color(display-p3_r_g_b)]` with a hex fallback; `intrinsicSize` → `aspect-[w/h]`.
 
 **Text overflow** — `truncate:true` → `truncate` (single line), or with `maxLines:N` → `line-clamp-{N}`;
-`font.textWrap` → `text-balance`/`text-pretty`; a hugging text box → `w-fit`/`h-fit`.
+`font.textWrap` → `text-balance`/`text-pretty`.
 
 **Interaction states** (the rules: `web-common.md`)
 - v4's `outline-hidden` sets `outline-style: none`, so `focus-visible:outline-2` on top draws nothing: add

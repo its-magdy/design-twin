@@ -36,7 +36,8 @@ Output
   `alignSelf` `min`/`center`/`max` → wrap that child in `Align`.
 - `sizeLimits` → `ConstrainedBox(BoxConstraints(...))`. A fixed TEXT height → `minHeight`, so text scaling fits.
 - Exceptions: the screen's root frame fills the screen (`Scaffold` body), not its `box` — a root that is a dialog or
-  sheet keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true` → see below.
+  sheet keeps its declared width; `absolute:true` and `layout.mode:"absolute"` → the next
+  bullet; either way a child is sized by its `box`.
 - `absolute:true` child → `Stack` + `Positioned` (only for genuine overlays); `layout.mode:"absolute"` →
   infer a flow layout, do NOT hardcode coordinates.
 
@@ -84,8 +85,9 @@ DEGREES, Figma positive = counter-clockwise → `Transform.rotate(angle: -rotati
 `RoundedSuperellipseBorder` (Flutter 3.32+; iOS/Android only — other platforms fall back to a plain
 rounded rectangle) or `ContinuousRectangleBorder`. `Border.all(width:)` in a
 `BoxDecoration` is inside; `BorderSide.strokeAlign` (`strokeAlignInside`/`Center`/`Outside`) maps `align`
-directly. A `Container` adds its decoration's border inset to its padding (inside `w`, center `w/2`, outside 0): that
-is `strokesInLayout`. Without `strokesInLayout` the stroke takes no space — draw it as `foregroundDecoration`. The
+directly. A `Container` adds its decoration's border inset to its padding (inside `w`, center `w/2`, outside 0), but Figma
+gives layout space only to an inside stroke with `strokesInLayout`: use `decoration` for that one, and draw every
+other stroke (inside without it, center, outside) as `foregroundDecoration`, which takes no space. The
 colour is the stroke's own bound token (`tokens.strokes`). Per-side `weights` → `Border(top: BorderSide(...))`;
 `dash` → CustomPainter or a package.
 

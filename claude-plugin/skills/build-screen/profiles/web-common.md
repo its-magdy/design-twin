@@ -13,8 +13,9 @@ Fit the existing app
 **Sizing (per axis)** — size each axis of each flex child from its own IR fields; the parent's mode never decides
 a child's size.
 - **Absent `widthMode`/`heightMode` = fixed**: the export declares that size (`box.w`/`box.h`). Use it, even inside
-  a hug parent (a hug parent hugs its children's sizes; it does not make them hug): on the main axis `flex: 0 0 Npx`,
-  on the cross axis `width`/`height: Npx`. A fixed size the export declares is not a magic number; one it does not
+  a hug parent (a hug parent hugs its children's sizes; it does not make them hug): `width`/`height: Npx`, plus
+  `flex: none` on the main axis. (`flex: 0 0 Npx` alone is not enough: a flex item's automatic minimum lets a long
+  word push it past the basis.) A fixed size the export declares is not a magic number; one it does not
   declare is.
 - `hug` → main axis `flex: 0 0 auto`; cross axis no size.
 - Main-axis `fill`, or `grow: 1` → `flex: 1 1 0` plus `min-width: 0` in a row / `min-height: 0` in a column, so
@@ -26,10 +27,12 @@ a child's size.
 - `sizeLimits` → `min-width`/`max-width`/`min-height`/`max-height` on top of the mode.
 - A TEXT's fixed width is kept like any other (it wraps inside it); a fixed TEXT height becomes `min-height`, so
   200% zoom and longer translations still fit.
-- Two exceptions. A page's root frame is one viewport, not a canvas: `width: 100%` (with a `max-width` when the
-  design is centred) and a content height (*Idiomatic web*); a root that is a dialog, popover or other overlay keeps
-  its declared width like any fixed node. A child of a `layout.mode: "absolute"` parent, or one with
-  `absolute: true`, is placed by `x`/`y` and sized by `box`.
+- Two exceptions. A root frame that is a whole page is one viewport, not a canvas: `width: 100%` (with a `max-width`
+  when the design is centred) and at least the viewport tall (`min-height: 100dvh`, or the app shell's content area),
+  so a `grow` child has a height to fill. Any other root — a dialog, popover, panel, cell or component frame — keeps
+  its declared size like any fixed node. And an `absolute:true` child is placed by its `x`/`y` and sized by `box`;
+  the children of a `layout.mode:"absolute"` parent (no auto layout) are sized by `box`, but their flow is inferred,
+  never transcribed coordinates.
 
 **Strokes** (`strokes.{weight|weights,align,dash,colors}`, `strokesInLayout`) — the colour is the stroke's own bound
 token (`tokens.strokes`), never a nearby grey and never the hex beside it.

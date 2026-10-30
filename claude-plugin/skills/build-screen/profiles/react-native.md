@@ -29,8 +29,8 @@ Output
   default is `'stretch'`, which Figma's start is not.
 - `sizeLimits` → `minWidth`/`maxWidth`/`minHeight`/`maxHeight`. A fixed TEXT height → `minHeight`, so font scaling fits.
 - Exceptions: the screen's root frame fills the window (`flex:1` under the safe area), not its `box` — a root that
-  is a modal or sheet keeps its declared width; a child of a `layout.mode:"absolute"` parent or with `absolute:true`
-  → `position:'absolute'` at its `x`/`y`, sized by `box`.
+  is a modal or sheet keeps its declared width; an `absolute:true` child → `position:'absolute'`
+  at its `x`/`y`, sized by `box`; inside a `layout.mode:"absolute"` parent infer the flow, each child sized by `box`.
 
 **Grid (`layout.display:"grid"`)** — RN's flexbox has no native grid. Emulate with nested `<View>` rows:
 use `columns`/`rows`/`columnSizes`/`rowSizes` to compute each row's children and per-item `flex`/fixed

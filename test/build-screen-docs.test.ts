@@ -1081,7 +1081,7 @@ console.log("build-screen docs (wrapped-track gap):");
     && /An absent track gap is 0/.test(cssm));
   check("web-tailwind: gap → gap-x-N (row) / gap-y-N (column), not gap-N; a track gap says nearest scale step or gap-y-[Npx]/gap-x-[Npx]",
     /`gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column \(not `gap-N`, which also sets the cross axis\)/.test(tw)
-    && /N likewise the nearest scale step or `gap-y-\[Npx\]`\/`gap-x-\[Npx\]`/.test(tw) && /An absent track gap is 0/.test(tw));
+    && /N likewise the exact scale step or `gap-y-\[Npx\]`\/`gap-x-\[Npx\]`/.test(tw) && /never round to a step/.test(tw) && /An absent track gap is 0/.test(tw));
   check("react-native: gap → columnGap (row) / rowGap (column), not the gap style; an absent track gap is 0",
     /`gap:N` is the main-axis gap → `columnGap:N` on a row, `rowGap:N` on a column/.test(prof("react-native"))
     && /not the `gap` style, which also sets the cross axis/.test(prof("react-native")) && /An absent track gap is 0/.test(prof("react-native")));
@@ -1176,8 +1176,8 @@ console.log("build-screen docs (per-axis sizing, strokes, mixed runs — the fac
     check(`${n}: strokes keyed on strokeAlign + strokesInLayout`, /`strokesInLayout`/.test(d) && /inside/.test(d) && /outside/.test(d) && /center/.test(d));
     check(`${n}: mixed text — one element per run of \`runs[]\`; \`font\` is only the first run`, /`runs\[\]`/.test(d) && /first run/i.test(d));
   }
-  check("web-common: the CSS per-axis mapping (flex:0 0 Npx, flex:1 1 0 + min-width/min-height 0, flex:0 0 auto, align-self:stretch, never `normal`)",
-    /`flex: ?0 0 Npx`/.test(webCommon) && /`flex: ?1 1 0`/.test(webCommon) && /`min-width: ?0`/.test(webCommon) && /`min-height: ?0`/.test(webCommon)
+  check("web-common: the CSS per-axis mapping (fixed = width/height + flex:none, flex:1 1 0 + min-width/min-height 0, flex:0 0 auto, align-self:stretch, never `normal`)",
+    /`flex: ?none`/.test(webCommon) && /automatic minimum/.test(webCommon) && /`flex: ?1 1 0`/.test(webCommon) && /`min-width: ?0`/.test(webCommon) && /`min-height: ?0`/.test(webCommon)
     && /`flex: ?0 0 auto`/.test(webCommon) && /`align-self: ?stretch`/.test(webCommon) && /never leave[^.]{0,60}`normal`/i.test(webCommon));
   check("web-common: inside + strokesInLayout is a real border with border-box — the verifier's own words — and an inset ring only without it",
     /use a real border with `?box-sizing: border-box`?, not a box-shadow ring/i.test(webCommon)
