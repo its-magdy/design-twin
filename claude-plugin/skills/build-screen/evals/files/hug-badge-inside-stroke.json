@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    {
+      "id": "30:1",
+      "name": "Status cell",
+      "type": "FRAME",
+      "box": { "w": 200, "h": 48, "x": 0, "y": 0 },
+      "layout": { "display": "flex", "flexDirection": "row", "padding": [0, 16, 0, 16], "alignItems": "center" },
+      "reference": "assets/30_1_ref.png",
+      "children": [
+        {
+          "id": "30:2",
+          "name": "Badge",
+          "type": "FRAME",
+          "box": { "w": 68, "h": 26 },
+          "widthMode": "hug",
+          "heightMode": "hug",
+          "layout": { "display": "flex", "flexDirection": "row", "padding": [2, 8, 2, 8], "alignItems": "center" },
+          "radius": 16,
+          "fills": [{ "type": "solid", "color": "#F2F4F7", "tokens": { "color": "Surfaces/Badge Neutral" } }],
+          "strokes": { "colors": ["#D0D5DD"], "weight": 1, "align": "inside" },
+          "strokesInLayout": true,
+          "tokens": { "strokes": "Borders/Border Default" },
+          "children": [
+            {
+              "id": "30:3",
+              "name": "Badge label",
+              "type": "TEXT",
+              "text": "Pending",
+              "box": { "w": 50, "h": 20 },
+              "widthMode": "hug",
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 12, "weight": "Medium", "weightValue": 500, "lineHeight": { "value": 20, "unit": "px" }, "color": "#344054" },
+              "tokens": { "fills": "Text/Secondary" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

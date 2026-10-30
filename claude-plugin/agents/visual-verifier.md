@@ -75,9 +75,8 @@ bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" 
 ```
 
 Use the run id the caller gave you; `run-protocol.md` has the phases, what an ended run refuses, and when to start
-a new run. Write `failed` with the reason if you give up. The caller waits with
-`verify-screen.js --wait <Layer>__<id> --run <id>` (exit 0 done, 1 failed/blocked, 5 timeout or no progress, 6 run cache
-not accessible), which is why the status must move at every step.
+a new run. Write `failed` with the reason if you give up. The caller waits on your run's status, which is why it must
+move at every step.
 
 **Close every page and browser of the app you opened BEFORE running the probe or `--compare`**, and keep everything
 else you produce — `<Layer>__<id>.evidence.json`, state PNGs, scratch scripts — in the run cache

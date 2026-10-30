@@ -4,6 +4,7 @@ The verify skill's step 4 names the four verdicts; this file is how each input i
 line needs explaining, before telling the user why a node or interaction landed where it did.
 
 ## Contents
+- [`--record-plan` in full](#--record-plan-in-full)
 - Run integrity
 - Unmeasured is not passed
 - Page overflow at the design width (`overflowX`)
@@ -171,3 +172,7 @@ an icon drawn by an `<img>`). Say them; they are not passes.
 CSS cannot produce (a negative size, padding, radius, font-size or gap, opacity above 1, a row gap wider than its
 table) is listed as not measured with the reason, never compared as text. An unverifiable value (an `<img>` icon's
 fill) is counted in the headline; it does not block the verdict, and it is not a pass — compare the asset file.
+
+## `--record-plan` in full
+
+`--record-plan` writes the plan's `verification.recorded` block from this report, so nobody copies it in by hand. The block is the tool's, written whole every run: the report's file, sha256, verdict, headline and counts, `mode` (`"static-only"` + the measured file's `reason`, and no `renderer`, when it was static-only), `renderer`, `artifacts`, the open high/medium `deltas` and `a11y` (when the behaviour checks ran). Never edit it: `verify-build` **blocks** on a key it does not write, a value of the wrong kind, or a verdict, headline or count that the report it names (same sha256) does not say — or any other key that report decides (mode, reason, renderer, the deltas, a11y); the edit reopens a plan the hook had closed, and `--status` then reads blocked (or failed, when a report says fail — that comes first). Re-run `--compare --record-plan` (or restore the block); a residual the builder keeps goes in `deviations[]`, never in the record. The rest of `verification` — `coverage`, notes — is yours, and `deviations`, `waivers`, `descopes` and `status` are never touched. A plan recorded before the block held all of this (or filled by hand) keeps `mode`, `artifacts`, `deltas`, `a11y`… at the top level of `verification`; the first `--record-plan` removes the ones the new record holds (the record has its own, written from the report), with a note — a hand `a11y`, or a `reason` (static-only) or `renderer` (rendered) this report does not give, stays at the top level and is still read from there — and after that a key the record holds — or a hand `headline`/`verdict` — at the top level is ignored, with a warning; recording never reopens a plan (the hook's hash does not cover `verification`; a hook record from before that change is re-stamped in the same write). The plan is the one the compare already uses (`--plan <plan.json>`, else the ONE plan in `design/plan/` that describes the frame); none, or several and no `--plan`, is exit 2 before anything is compared. The plan records project-relative paths only: a report written outside the project (`--out` elsewhere) is exit 1 — the report stays written, the plan is not updated. If the report is edited or re-run later, `verify-build` warns that `plan.verification` records an older run — re-run `--compare --record-plan`; the report, not the plan, carries the verdict.

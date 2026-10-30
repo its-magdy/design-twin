@@ -79,7 +79,7 @@ export interface PlanOptions {
 
 // The profiles build-screen ships. Named in target.json when detection finds nothing, so the user can
 // fill it in without going to look for the list.
-const PROFILES = ["web-tailwind", "web-css-modules", "react-native", "swiftui", "android-compose", "flutter"];
+export const PROFILES = ["web-tailwind", "web-css-modules", "react-native", "swiftui", "android-compose", "flutter"];
 
 // The key the MCP server is registered under in .mcp.json — matches the server's own name
 // (bridge/src/figma-mcp.ts), so its tools surface as mcp__designtwin__figma_status etc.

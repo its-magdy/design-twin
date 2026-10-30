@@ -197,7 +197,7 @@ Read these before writing ANY script against an export JSON (field names guessed
 ## Sizing, boxes and constraints
 
 - **`widthMode`/`heightMode`** — `fill` (stretch in the parent) | `hug` (content-sized); **absent =
-  fixed**. Use fixed only when the design genuinely is.
+  fixed**: the declared `box.w`/`box.h`, kept even inside a hug parent. The profile maps each axis.
 - **`grow`** (flex-grow), **`alignSelf:"stretch"`** (cross-axis stretch), **`absolute:true`** (out of
   the parent's auto-layout flow — badges, overlays; positioned by `x`/`y`).
 - **`sizeLimits`** `{minWidth,maxWidth,minHeight,maxHeight}` → min/max constraints. **`aspectRatio`** —

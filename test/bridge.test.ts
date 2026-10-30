@@ -3226,6 +3226,21 @@ void (async () => {
   ok("[doctor] project: design/ + target.json is ok; a 1h-old export is ok and names its source file",
     byId(fresh, "project").status === "ok" && byId(fresh, "export").status === "ok" && byId(fresh, "export").detail.includes("My File"));
   ok("[doctor] project: an export past 24h is flagged stale", byId(doctor.checkProject(projDir, exportedAt + 3 * 86400000), "export").status === "warn");
+  {
+    // The profile build-screen will use: target.json's profile, bundled or custom, plus the project's design/profile.md.
+    const target = path.join(projDir, "design", "target.json"), overlay = path.join(projDir, "design", "profile.md");
+    const profileOf = (): Check => byId(doctor.checkProject(projDir), "profile");
+    ok("[doctor] profile: no profile in target.json is a note naming the bundled ones", profileOf().status === "warn" && /web-tailwind/.test(profileOf().next ?? ""));
+    fs.writeFileSync(target, JSON.stringify({ profile: "web-tailwind" }));
+    ok("[doctor] profile: a bundled profile is ok and says so", profileOf().status === "ok" && profileOf().detail === "web-tailwind (bundled)");
+    fs.writeFileSync(overlay, "# house rules\n");
+    ok("[doctor] profile: design/profile.md is reported as read after the bundled profile", profileOf().status === "ok" && /web-tailwind \(bundled\) \+ design\/profile\.md/.test(profileOf().detail));
+    fs.writeFileSync(target, JSON.stringify({ profile: "web-vue" }));
+    ok("[doctor] profile: a custom profile written in design/profile.md is ok", profileOf().status === "ok" && /web-vue \(custom\)/.test(profileOf().detail));
+    fs.rmSync(overlay);
+    ok("[doctor] profile: a custom profile with no design/profile.md is a note pointing at the template", profileOf().status === "warn" && /_template\.md/.test(profileOf().next ?? ""));
+    fs.writeFileSync(target, "{}");
+  }
   ok("[doctor] project: no codeconnect.local.json is a note", byId(fresh, "map").status === "warn");
   ok("[doctor] project: a legacy `figma` MCP key pointing at a startable figma-mcp.ts still works, and is told about `designtwin`",
     byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next ?? ""));

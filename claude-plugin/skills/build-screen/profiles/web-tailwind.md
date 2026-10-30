@@ -1,27 +1,29 @@
 # Profile: web-tailwind (React + Tailwind CSS)
 
 ## Contents
-Layout · Grid · Scroll/clip/sticky · Tables · Prototype reactions · Theming (+ dark mode) · Detect the Tailwind
-major · Native controls · Idiomatic web (patterns by structure) · Hints, not output · Component reuse · Effects · Text metrics · Strokes · Fills · Text overflow ·
-Images · Interaction states · Accessibility & RTL · Accessibility naming · Motion · Vector fallback ·
-Tokens · Components · Assets · Fit the existing app ·
-Output
+Layout · Grid · Scroll/clip/sticky · Tables · Theming (+ dark mode) · Detect the Tailwind major · Effects ·
+Text metrics · Strokes · Fills · Text overflow · Interaction states · Tokens · Components · Output
 
-**Layout (IR → Tailwind classes)**
+**Read `web-common.md` beside this file too** — sizing per axis, strokes, mixed text runs, effects, fills, native
+controls, idiomatic web, interaction states, accessibility, motion and assets are the same for both web profiles
+and are written there in plain CSS. This file gives the Tailwind form and what is specific to Tailwind.
+
+**Layout (IR → Tailwind classes)** — each child's size is *Sizing (per axis)* in `web-common.md`: fixed →
+`w-[Npx]`/`h-[Npx]`, plus `flex-none` on the main axis, hug → `flex-none` with no size, fill/`grow` →
+`flex-[1_1_0]` + `min-w-0`/`min-h-0`, cross-axis stretch → `self-stretch`.
 - `display:flex` → `flex`; `flexDirection:"column"` → `flex-col` (row is default).
 - `gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column (not `gap-N`, which also
-  sets the cross axis); N is the nearest scale step (`gap-x-2` ≈ 8px) or `gap-x-[Npx]`. `flexWrap:"wrap"` →
+  sets the cross axis); N is the scale step that equals it exactly, else `gap-x-[Npx]` — never round to a step. `flexWrap:"wrap"` →
   `flex-wrap`, and its track gap: `rowGap` (a wrapping row) → `gap-y-N`, `columnGap` (a wrapping column) →
-  `gap-x-N`, N likewise the nearest scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
+  `gap-x-N`, N likewise the exact scale step or `gap-y-[Npx]`/`gap-x-[Npx]`. An absent track gap is 0 —
   emit none, or `gap-y-0`/`gap-x-0` if a `gap-N` is in play. A wrap's tracks → `content-*`: its
   `alignContent`, else from `alignItems` (`content-start`/`content-center`/`content-end`; `content-stretch`
   when every in-flow child is `alignSelf:"stretch"`; `baseline` → `content-start`, with `items-baseline`
   aligning the items within each track) — Tailwind has no default class here, so don't leave CSS's initial
   `align-content: normal`, which behaves as `stretch` on a multi-line flex container.
-- `padding:[t,r,b,l]` → `pt-/pr-/pb-/pl-`; collapse to `px-`/`py-`/`p-` when symmetric.
+- `padding:[t,r,b,l]` → logical `ps-`/`pe-` with `pt-`/`pb-`; collapse to `px-`/`py-`/`p-` when symmetric.
 - `justifyContent` → `justify-start|center|end|between|evenly|around`; `alignItems` →
-  `items-start|center|end`, and `"baseline"` → `items-baseline` (`align-items: baseline`).
-- `widthMode:"fill"` → `flex-1`/`w-full`; `"hug"` → `w-auto`; `"fixed"` → `w-[Npx]` (avoid if possible).
+  `items-start|center|end` (absent → `items-start`), and `"baseline"` → `items-baseline` (`align-items: baseline`).
 
 **Grid (`layout.display:"grid"`) → CSS grid utilities**
 - Container → `grid`; `columns`/`rows` → `grid-cols-N`/`grid-rows-N` when it's a plain uniform count.
@@ -53,17 +55,6 @@ Output
 - Give the wrapper `relative` when the table holds `sr-only` (absolutely positioned) content, or it escapes the wrapper and widens the page.
 - A visually-hidden `<caption>` can disturb `border-separate` spacing in some engines: check, or use `aria-labelledby`.
 - Text-derived widths differ by fractions of a px between engines: compare with a tolerance.
-
-**Prototype `reactions`/`flows` → behavior, not markup**
-- `flows` (named entry points) are candidate top-level routes for your router; don't render them.
-- A `reactions` entry with `trigger:"on_click"`/`"on_press"` + `actions[].navigation` → an `onClick`
-  handler that does client-side navigation (`next/link`, `react-router` `navigate(destination)`).
-- `type:"overlay"` action → open a modal/dropdown/tooltip component (state toggle), using `overlay.
-  position`/`overlay.closeOnClickOutside`/`overlay.background` on the target node for its behavior.
-- `set_variable`/`set_variable_mode` actions → local component state (`useState`) or a theme-context
-  toggle, keyed by the named `variable`/`collection`/`mode`.
-- Ignore triggers you can't action from static code (`mediaHitTime` scrub points, `keyCodes` with no
-  matching shortcut) rather than guessing at behavior.
 
 **Theming (`resolvedModes`/`variableModes`)**
 - `resolvedModes` (root only) tells you which mode (e.g. Light/Dark) this export is effectively rendered
@@ -114,85 +105,11 @@ Output
   handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) is not written there;
   pass `--also-generic` if you need it, and put it under `design/`, not the app's source tree.
 
-**Native controls, not rebuilt ones** — a Figma widget maps to the HTML element that already has the
-behaviour, keyboard handling and accessibility; style it, don't rebuild it from `div`s. Checkbox →
-`<input type="checkbox">`; radio group → `<input type="radio">` sharing a `name` inside `<fieldset>`/
-`<legend>`; switch/toggle → `<input type="checkbox" role="switch">`; slider → `<input type="range">`;
-text field → `<input>` with the right `type`/`inputmode`/`autocomplete` inferred from the field (email,
-tel, password, one-time-code) and a real `<label>`; multi-line → `<textarea>`; dropdown/picker →
-`<select>` unless the design needs rich options; date → `<input type="date">`; progress → `<progress>`;
-modal/dialog → `<dialog>` + `showModal()` (focus trap, Esc and backdrop come free); menu/tooltip/
-popover → the `popover` attribute; accordion/disclosure → `<details><summary>`. No native element:
-spinner (CSS animation + `role="status"`), tabs and segmented controls (`role="tablist"` pattern with
-arrow-key handling), combobox/autocomplete. **The project's own component or an installed headless
-library (Radix, React Aria, Headless UI…) beats all of the above** — check `design/codeconnect.local.json` and
-`package.json` before writing either.
-
-**Date and select fields keep the drawn text colours** — a native control draws its own text, so the design's
-placeholder/value colours do not arrive by themselves. `::placeholder` never applies to `<input type="date">`
-(it has no placeholder). Chromium/WebKit, non-standard — check in the browser: colour `::-webkit-datetime-edit`
-(and its `-fields-wrapper` / `-text` parts) with the placeholder token while the field is empty (`:invalid` on a
-`required` field, else a `data-empty` attribute you toggle) and the value token once set; with Tailwind, an
-arbitrary variant such as `[&::-webkit-datetime-edit]:text-figma-…`. Firefox: no such pseudo-elements that
-we know of — style `color` on the input itself and check it in the browser. Set `color-scheme` (dark) so the
-native picker usually matches the theme. A `<select>` placeholder is a first
-`<option value="">` on a `required` select (the spec's placeholder label option), coloured with `select:invalid`.
-If you make it `disabled hidden`, also mark it `selected`; in React, use `defaultValue=""` or a controlled
-`value=""` on the `<select>`. Otherwise the first enabled option is selected, the field is valid, and the
-placeholder never shows. Record the substitution in the plan as a `deviations[]` row
-`{nodeId, field: "control", designed, built, reason}` and verify the colour on the element's own text.
-
-**Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
-- Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/
-  actions) → `<header>`, `sticky`/`fixed` per the scroll section; a row of destinations inside it →
-  `<nav>`. The main scrolling column → `<main>`; a bottom bar of links/legal → `<footer>`. One of each
-  per page — if the app already has a layout/shell route, the screen renders INSIDE it, so don't emit
-  a second header.
-- A bottom bar of 3–5 icon+label destinations (mobile web) → `<nav>` with `<a aria-current="page">`,
-  fixed to the bottom with `padding-bottom: env(safe-area-inset-bottom)`.
-- N siblings with the same structure → `<ul><li>` rendered by ONE `.map()` over sample data with a
-  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`.
-  A wrapping set of equal cards → CSS grid (`repeat(auto-fill, minmax(…))`), not fixed columns copied
-  from one frame width.
-- A row that navigates → the whole row is one `<a>`; a card with one primary action → a single link/
-  button (stretch it over the card with a pseudo-element), not nested interactive elements.
-- A labelled group of inputs with a submit action → `<form>` with `onSubmit` (Enter submits, password
-  managers work), not a `div` with a click handler on the button.
-- **Don't double-inset**: the browser pads nothing, but the app's layout/container usually does. If a
-  shell already applies the page gutter or max-width, drop the root frame's own horizontal padding
-  instead of adding both. Drawn browser chrome, status bars, scrollbars and on-screen keyboards in
-  the frame are never elements.
-- The frame's width is ONE viewport, not a fixed canvas: the root is `w-full`/`width:100%` with a
-  `max-width` when the design is centred, and fills are fluid. Add breakpoints only where the project
-  already uses them or a second frame shows the other size. When every exported frame is one desktop width
-  (especially with Tablet/Mobile variable modes), don't silently ship desktop-only: raise the designer question
-  "desktop-only design — how should narrow widths behave?" and build the default: fluid down to a stated minimum
-  width, an existing responsive shell pattern (e.g. collapsible sidebar) reused, wide tables scrolling in their container.
-
-**Hints, not output** — `layoutGrids`, `measurements`, `devStatus`/`devStatusNote`, `devResources` inform
-your column structure and let you sanity-check spacing; never render them as visible UI.
-
-**Component reuse** — before generating markup for an instance's sublayer, check `exposedInstances`,
-`propRefs`, `overrides` on the node: a prop-driven or overridden sublayer maps to a **prop/variant** on
-the already-mapped component (from `design/codeconnect.local.json`), not new markup. `detachedFrom` (`{key}` or
-`{componentId}`) means the node used to be an instance of a component that may still exist in
-`design/codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate (genuinely bespoke).
-
-**Effects → CSS**
-- `background_blur` effect → `backdrop-blur-*` (or `backdrop-blur-[Npx]`) + ensure the element has a
-  translucent background so the blur is visible; `layer_blur` → `blur-*`/`blur-[Npx]` (foreground filter).
-- `noise`/`glass`/`texture`/`shader` effect types have no Tailwind/CSS equivalent. For a subtle `noise`,
-  approximate with a repeating SVG-noise background image; otherwise **use the exported `asset`** (the
-  flattened render) instead of trying to reproduce the effect in CSS — don't invent a shader.
-- `blendMode` (node) → `mix-blend-{mode}`; paint `blend` → `bg-blend-{mode}`; `pass_through`/`normal` → omit.
-  `rotation` (DEGREES, Figma positive = counter-clockwise) → `rotate-[${-rotation}deg]` (negate); `flipped` →
-  `-scale-x-100` (check axis against the `.png`); `skew` (degrees) → `skew-x-[${deg}deg]`.
-- Shadows: `drop_shadow` → `shadow-[x_y_radius_spread_color]` (Figma `radius` == CSS blur radius);
-  `inner_shadow` → `shadow-[inset_x_y_radius_spread_color]`; several → comma-join in one arbitrary value;
-  on a TEXT node → `[text-shadow:x_y_radius_color]` (no spread).
-- Blurs: Figma blur ≈ 2× CSS blur (community-derived — verify visually): `layer_blur` → `blur-[radius/2 px]`,
-  `background_blur` → `backdrop-blur-[radius/2 px]` + translucent bg. `blurType:"progressive"` → mask-image
-  gradient over the blurred layer (approx) or the asset.
+**Effects** (the rules: `web-common.md`) — `background_blur` → `backdrop-blur-[radius/2 px]` + a translucent
+background; `layer_blur` → `blur-[radius/2 px]`. `drop_shadow` → `shadow-[x_y_radius_spread_color]`; `inner_shadow` →
+`shadow-[inset_x_y_radius_spread_color]`; several → comma-join in one arbitrary value; on a TEXT node →
+`[text-shadow:x_y_radius_color]`. `blendMode` → `mix-blend-{mode}`; paint `blend` → `bg-blend-{mode}`. `rotation` →
+`rotate-[${-rotation}deg]` (negate); `flipped` → `-scale-x-100`; `skew` → `skew-x-[${deg}deg]`.
 
 **Text metrics** — sizes in rem (`text-[px/16 rem]`) so user zoom works; fluid type → `clamp()` with rem bounds.
 - `font.lineHeight`: `percent` → unitless `leading-[pct/100]`; `px` → `leading-[Npx]`/rem; `auto` → `leading-normal`.
@@ -200,38 +117,23 @@ the already-mapped component (from `design/codeconnect.local.json`), not new mar
 - `font.leadingTrim:"cap_height"` → `[text-box:trim-both_cap_alphabetic]` (Baseline 2026: Chrome 133,
   Safari 18.2, Firefox 154). `font.weight` is the verbatim style string — use `weightValue` for `font-[N]`.
 
-**Strokes** (`strokes.{weight|weights,align,dash,colors}`)
-- `align:"inside"` → `border-[w]` (Tailwind is `box-border`) or `shadow-[inset_0_0_0_w_color]`; `"outside"` →
-  `outline outline-[w]` or `shadow-[0_0_0_w_color]` (no layout shift); `"center"` → `outline` +
-  `-outline-offset-[w/2]`. Per-side `weights` → `border-t-[N]` etc. `dash` → `border-dashed` (approx) or SVG.
+**Strokes** (the rule: `web-common.md`, keyed on `align` and `strokesInLayout`) — inside with `strokesInLayout` →
+`border-[w]` (Tailwind's preflight is already `box-border`) with the stroke's token as `border-figma-…`; inside
+without → `shadow-[inset_0_0_0_w_var(--color-figma-…)]`; outside → `shadow-[0_0_0_w_…]` or `outline outline-[w]`;
+center → `outline outline-[w] -outline-offset-[w/2]`. Per-side `weights` → `border-t-[N]` etc.; `dash` →
+`border-dashed` (approximate) or an SVG.
 
-**Fills** — gradient: compute the angle from `transform` `[[a,c,e],[b,d,f]]` (don't assume 180deg) →
-`bg-[linear-gradient(...)]` with `stops[].pos` as %; `GRADIENT_RADIAL` → `radial-gradient`, `ANGULAR` →
-`conic-gradient`, `DIAMOND` → no CSS equivalent (asset). Image `scaleMode`: `fill` → `object-cover`, `fit` →
-`object-contain`, `crop` → derive `object-position`/size from `transform` (or a wrapper), `tile` →
-`bg-repeat` + `bg-size` from `scale`. Paint `opacity` multiplies into the color; node `opacity` → `opacity-*`.
-Hex is 8-bit sRGB even when `colorProfile` is display-p3 → `[color:color(display-p3_r_g_b)]` with hex fallback.
+**Fills** — `bg-[linear-gradient(...)]` with the angle from `transform` and `stops[].pos` as %; image `scaleMode`
+`fill` → `object-cover`, `fit` → `object-contain`, `tile` → `bg-repeat` + `bg-size-[…]`; node `opacity` →
+`opacity-*`; display-p3 → `[color:color(display-p3_r_g_b)]` with a hex fallback; `intrinsicSize` → `aspect-[w/h]`.
 
-**Text overflow**
-- `truncate:true` → `truncate` (single line) or, combined with `maxLines:N`, `line-clamp-{N}`.
-- `font.textWrap` mirrors Figma's `textWrapStyle` and is 1:1 with CSS `text-wrap-style`:
-  `"balance"` → `text-balance` (evened-out line lengths — headings/short blocks), `"pretty"` →
-  `text-pretty` (fewer orphans — body copy). Absent means Figma's default (`AUTO`), so emit nothing.
-- `autoResize` tells you whether the text box should hug (`width_and_height`/`height`) or clip
-  (`truncate`/`none`) — pick `w-fit`/`h-fit` vs a fixed box accordingly.
-- Figma's manual line breaks are **not authoritative** (different text engine than browsers) — let text
-  reflow naturally; only preserve an explicit break where it reads as clearly intentional (e.g. a
-  heading) against the `.png`.
+**Text overflow** — `truncate:true` → `truncate` (single line), or with `maxLines:N` → `line-clamp-{N}`;
+`font.textWrap` → `text-balance`/`text-pretty`.
 
-**Images** — use `intrinsicSize` (`{w,h}`) to set `aspect-[w/h]` so layout doesn't jump before the image
-loads; always set explicit width+height on the container (see the base skill's asset-sizing rule).
-
-**Interaction states** — look up the component in `design/export/design-system/components.local.json`'s `components` catalog and
-check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
-visible `focus-visible:` style even if the Figma design only shows a hover state — it's the most commonly
-missed a11y requirement. v4's `outline-hidden` sets `outline-style: none`, so `focus-visible:outline-2` on top
-draws nothing: add `focus-visible:outline-solid`. `hover:` only matters on pointer devices (`@media (hover:hover)` — Tailwind v4's
-default); also `active:`, `disabled:`/`aria-disabled:`.
+**Interaction states** (the rules: `web-common.md`)
+- v4's `outline-hidden` sets `outline-style: none`, so `focus-visible:outline-2` on top draws nothing: add
+  `focus-visible:outline-solid`. `hover:` is gated on `@media (hover:hover)` by default in v4; also `active:`,
+  `disabled:`/`aria-disabled:`.
 - v4 buttons default to `cursor: default` (why every button showed an arrow on the field run). Once, in the CSS
   entry, unless the app already sets it: `@layer base { button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; } }`.
 - Pressed feedback on every pointer type: a design with no Pressed variant still gets a default `active:` treatment
@@ -240,34 +142,7 @@ default); also `active:`, `disabled:`/`aria-disabled:`.
   `disabled`/`aria-disabled` or ask.
 - Hover-revealed controls: `opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100`
   (touch has no hover; `pointer-coarse:` is v4.1+, on v4.0/v3 use `[@media(pointer:coarse)]:opacity-100`); never `invisible`/`hidden`, which drop the control from the tab order (and a `visibility: hidden` opener cannot take focus back when its dialog closes).
-
-**Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
-target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).
-`padding` is PHYSICAL `[t,r,b,l]` → emit logical `ps-`/`pe-`/`ms-`/`me-` so RTL mirrors.
-
-**Accessibility naming — semantic element FIRST, ARIA only to patch**
-- Pick the element from what the node *does*, not how it looks: `<button>` for anything clickable that
-  isn't navigation, `<a href>` for navigation, `<nav>`/`<header>`/`<main>`/`<footer>` for the shell,
-  `<ul><li>` for repeated rows, `<label for>` + real `<input>` for fields. A `div` with `onClick` needs
-  `role`, `tabIndex={0}` and key handlers — just use the right element instead.
-- Headings track document order: one `<h1>` per screen, then `h2`/`h3` with no skipped level. Figma's
-  font size is not the heading level — the visual scale is a Tailwind class, the level is semantics.
-- `aria-label` is for **icon-only** controls (`<button aria-label="Close">`); a control with visible text
-  must not be relabelled. Prefer visually-hidden text (`sr-only`) over `aria-label` where possible.
-- Images: meaningful → real `alt`; decorative/duplicated by adjacent text → `alt=""` (an inline
-  decorative `<svg>` gets `aria-hidden="true"` + `focusable="false"`). Never omit `alt`.
-- State goes through ARIA, not classes: `aria-expanded`, `aria-current="page"`, `aria-selected`,
-  `aria-disabled`; icons that convey state need an accessible name too.
-- Touch target ≥24×24 CSS px (WCAG 2.5.8 AA), 44×44 recommended — grow it with padding or a
-  pseudo-element overlay, not by scaling the icon.
-
-**Motion** — `transition.duration` is SECONDS → `duration-[ms]`; `easing.cubicBezier{x1,y1,x2,y2}` →
-`ease-[cubic-bezier(x1,y1,x2,y2)]`; `spring` → `linear()` approximation or a JS spring. Wrap in
-`motion-safe:` / honor `prefers-reduced-motion`.
-
-**Vector fallback** — a `geometry` field (`fills`/`strokes`: arrays of SVG path `d` strings, plus `w`/`h`)
-appears on a vector node whose SVG export failed. Render it inline as
-`<svg viewBox="0 0 w h"><path d="..." /></svg>` rather than an `<img>` — there is no asset file for it.
+- Logical spacing for RTL: `ps-`/`pe-`/`ms-`/`me-`; visually-hidden text is `sr-only`.
 
 **Tokens** — the right-hand value in `tokens.json` is a Tailwind class. With the generated theme that
 is the `figma-` utility (`bg-figma-primary-primary`, `text-figma-body`, `rounded-figma-md`); in a
@@ -275,7 +150,7 @@ project with its own theme, its own names win (`bg-primary`). Emit it in `classN
 exists, use an arbitrary value over the variable, e.g. `bg-[var(--color-figma-primary-primary)]`.
 
 **Components** — import per `design/codeconnect.local.json`; pass Figma `props` through to component props (see
-**Component reuse** above before generating any markup for an instance's sublayer). A component that takes a
+*Component reuse* in `web-common.md` before generating any markup for an instance's sublayer). A component that takes a
 `className` next to its own variant classes merges them with `tailwind-merge` (`cn = (...c) => twMerge(clsx(c))`):
 in Tailwind the stylesheet order decides a conflict, not the order in `class`. Use the project's existing `cn` if it
 has one; ask before adding `tailwind-merge`/`clsx`. tailwind-merge v3 is for Tailwind v4; on Tailwind v3 use v2.6,
@@ -288,22 +163,5 @@ the two, and a size against another size (`text-sm`) is not merged; `p-figma-spa
 `rounded-figma-md` against `rounded-figma-lg`, keeps both, so the stylesheet order decides and the caller's override
 can lose. Or don't accept conflicting utilities: expose a prop.
 
-**Assets** — use the exported files in `design/export/assets/`: `<img src>` (or `next/image`) for PNG, and for a
-vector either `<img src="….svg">` or an `<Icon/>` wrapper around that file / an SVGR import of it. **Never
-hand-write `<svg><path d="…">` markup** — the only exception is the `geometry` vector fallback above, where
-no asset file exists. Size every asset explicitly (see **Images**).
-A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case
-to watch: the browser antialiases each path independently, so a flattened noise texture renders
-visibly speckled where Figma's canvas is smooth. Ask for a raster re-export — don't try to blur or
-fade the grain away in CSS.
-
-**Fit the existing app (detect before you emit)** — read `package.json` and a neighbouring page first.
-- *Strings.* `next-intl`, `react-intl`, `react-i18next`, `lingui` present → the project's `t()`/`<FormattedMessage>`
-  with a new key; `aria-label`, `alt`, placeholders and errors too. None → literals are fine; say so.
-- *Routing & data.* Next App Router vs Pages vs React Router vs TanStack Router decide the file location,
-  `<Link>` import and whether the component may be a Server Component (`"use client"` only where it
-  has state/handlers). Data states come from the fetching layer in use.
-- *Components & theme.* An installed UI kit (shadcn/ui, Radix, MUI, Headless UI) and the existing
-  Tailwind theme win over new markup and new arbitrary values.
-
-**Output** — React function components (`.tsx`), one screen per file under `outputDir`, colocate helpers.
+**Output** — React function components (`.tsx`), one screen per file under `outputDir`, colocate helpers; an asset
+may also be `next/image` in a Next project.

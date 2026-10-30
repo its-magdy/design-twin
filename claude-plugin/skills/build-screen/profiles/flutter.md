@@ -22,9 +22,22 @@ Output
   `alignItems` → `crossAxisAlignment`
   (`"baseline"` → `CrossAxisAlignment.baseline` **plus** the required `textBaseline:
   TextBaseline.alphabetic` — a `Row` asserts without it).
-- `widthMode:"fill"` → `Expanded`/`Flexible` in the main axis, `double.infinity` width in the cross axis;
-  `"hug"` → `mainAxisSize: MainAxisSize.min`; `"fixed"` → `SizedBox(width: N)`. `grow` → `Expanded(flex:)`;
-  `alignSelf:"stretch"` → `CrossAxisAlignment.stretch`. `sizeLimits` → `ConstrainedBox(BoxConstraints(...))`.
+- Absent `alignItems` is start → `crossAxisAlignment: CrossAxisAlignment.start`: a `Row`/`Column` defaults to
+  `center`, which Figma's start is not, so always set it.
+
+**Sizing (per axis)** — size each axis of each child from its own IR fields; the parent's mode never decides it.
+- **Absent `widthMode`/`heightMode` = fixed**: the export declares that size (`box.w`/`box.h`) → `SizedBox(width: N)` /
+  `height: N`, even inside a hug parent.
+- `hug` → no size (a hugging `Row`/`Column` also gets `mainAxisSize: MainAxisSize.min`). Main-axis `fill` or
+  `grow` → `Expanded(flex: grow)`.
+- Cross-axis `fill` or `alignSelf:"stretch"` → that child's own `width: double.infinity` in a `Column` /
+  `height: double.infinity` in a `Row` (the `Row` needs a bounded height — a fixed height or `IntrinsicHeight`).
+  The parent's `CrossAxisAlignment.stretch` stretches every sibling, so use it only when every child stretches.
+  `alignSelf` `min`/`center`/`max` → wrap that child in `Align`.
+- `sizeLimits` → `ConstrainedBox(BoxConstraints(...))`. A fixed TEXT height → `minHeight`, so text scaling fits.
+- Exceptions: the screen's root frame fills the screen (`Scaffold` body), not its `box` — a root that is a dialog or
+  sheet keeps its declared width; `absolute:true` and `layout.mode:"absolute"` → the next
+  bullet; either way a child is sized by its `box`.
 - `absolute:true` child → `Stack` + `Positioned` (only for genuine overlays); `layout.mode:"absolute"` →
   infer a flow layout, do NOT hardcode coordinates.
 
@@ -59,7 +72,8 @@ eagerly — acceptable only for a short fixed list, never for data-driven conten
 `auto` → omit; add `leadingDistribution: TextLeadingDistribution.even` to match Figma's half-leading.
 `letterSpacing` is logical px: `percent` → pct/100*fontSize. `font.weight` is the verbatim style string →
 `FontWeight.w{weightValue}`. Respect `MediaQuery.textScalerOf`/`TextScaler`; never fixed-height text.
-`truncate`/`maxLines` → `maxLines:` + `overflow: TextOverflow.ellipsis`.
+`truncate`/`maxLines` → `maxLines:` + `overflow: TextOverflow.ellipsis`. `runs[]` (mixed text) → `Text.rich(TextSpan(children:
+[...]))`, one `TextSpan` per run styled from that run's `font`, colour and `tokens`; the node's `font` is only the first run.
 
 **Effects** — shadows → `BoxDecoration(boxShadow: [BoxShadow(color, offset: Offset(x,y), blurRadius: radius,
 spreadRadius: spread)])` (Flutter converts blurRadius to sigma ≈ radius/2 internally, so Figma `radius`
@@ -71,7 +85,11 @@ DEGREES, Figma positive = counter-clockwise → `Transform.rotate(angle: -rotati
 `RoundedSuperellipseBorder` (Flutter 3.32+; iOS/Android only — other platforms fall back to a plain
 rounded rectangle) or `ContinuousRectangleBorder`. `Border.all(width:)` in a
 `BoxDecoration` is inside; `BorderSide.strokeAlign` (`strokeAlignInside`/`Center`/`Outside`) maps `align`
-directly. Per-side `weights` → `Border(top: BorderSide(...))`; `dash` → CustomPainter or a package.
+directly. A `Container` adds its decoration's border inset to its padding (inside `w`, center `w/2`, outside 0), but Figma
+gives layout space only to an inside stroke with `strokesInLayout`: use `decoration` for that one, and draw every
+other stroke (inside without it, center, outside) as `foregroundDecoration`, which takes no space. The
+colour is the stroke's own bound token (`tokens.strokes`). Per-side `weights` → `Border(top: BorderSide(...))`;
+`dash` → CustomPainter or a package.
 
 **Fills & images** — `LinearGradient(begin, end` from `transform`, `stops` from `stops[].pos)`/
 `RadialGradient`/`SweepGradient` (angular); diamond → asset. `scaleMode` `fill` → `BoxFit.cover`, `fit` →

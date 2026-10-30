@@ -24,11 +24,14 @@ const flat = (t: string): string => t.replace(/\s*\n\s*/g, " "); // prose wraps;
 const withRefs = (main: string, refs: readonly string[]): string => flat([read(main), ...refs.map((r) => read(r))].join("\n"));
 const extractRefs = ["claude-plugin/skills/extract/references/cross-check.md", "claude-plugin/skills/extract/references/theme-tokens.md"] as const;
 const skill = withRefs("claude-plugin/skills/build-screen/SKILL.md", [
-  ...["gates", "names", "assets", "measurable", "hook-and-status"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
+  ...["gates", "names", "assets", "measurable", "hook-and-status", "plan", "export-layout", "verify"].map((n) => `claude-plugin/skills/build-screen/references/${n}.md`), ...extractRefs]);
 const extractDocs = withRefs("claude-plugin/skills/extract/SKILL.md", extractRefs);
+// Each web profile sends its reader to web-common.md for the rules both share, so a web profile states a rule when it
+// or web-common.md does.
 const twRaw = read("claude-plugin/skills/build-screen/profiles/web-tailwind.md");
-const tw = flat(twRaw);
-const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md"));
+const webCommonRaw = read("claude-plugin/skills/build-screen/profiles/web-common.md");
+const tw = flat(twRaw + "\n" + webCommonRaw);
+const cssm = flat(read("claude-plugin/skills/build-screen/profiles/web-css-modules.md") + "\n" + webCommonRaw);
 const builder = flat(read("claude-plugin/agents/screen-builder.md"));
 const validate = read("design-to-code/map-validate-core.ts");
 const step = (n: number): string => skill.split(new RegExp(` ${n}\\. \\*\\*`))[1]?.split(/ \d\. \*\*/)[0] ?? "";
@@ -81,7 +84,7 @@ check("the verifier: exit 3 asks the user, exit 4 reports the navigation log, un
 // --help say so, and what to do when it recurs (--check)
 check("exit 4 names a closed or crashed page or browser and --check when it recurs (verifier agent, verify skill, verify-probe --help)",
   /\*\*Exit 4\*\*[^]{0,400}the page or browser closed or crashed; nothing written\)[^]{0,600}closed or crashed page or browser prints no navigation log: if it recurs on the re-run, run `--check`/.test(flat(read("claude-plugin/agents/visual-verifier.md")))
-  && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(flat(read("claude-plugin/skills/verify/SKILL.md")))
+  && /the page or browser closed or crashed\) writes nothing[^.]{0,600}a closed or crashed page or browser prints none: if it recurs, run `--check`/.test(verifySkill)
   && /the page or browser closed or crashed \(re-run once; if it recurs, run --check\) \(nothing written; with --run the/.test(flat(read("design-to-code/verify-probe.ts"))));
 check("no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", verifierGuarded && /the user's to install, never yours/.test(verifier) &&/never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
 check("the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Layer>__<id>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
@@ -220,7 +223,7 @@ console.log("verify docs (run integrity + agent safety):");
     && /`status run <id> not counted — …` with the command that ends the run/.test(verifyRef) && /--phase failed --run <id>` command/.test(verifyRef)
     && /A run cache that is not writable refuses that command the same way, so then the line prints none/.test(flat(verifyRef)));
   check("while the user answers an exit 3 the run stays open: it resumes with the same --run id, and an orchestrator's --wait may end `stalled` meanwhile — wait again with that id (verifier, verify skill, run protocol)",
-    ["claude-plugin/agents/visual-verifier.md", "claude-plugin/skills/verify/SKILL.md", "claude-plugin/skills/verify/references/run-protocol.md"].map((f) => read(f))
+    [read("claude-plugin/agents/visual-verifier.md"), verifySkill, read("claude-plugin/skills/verify/references/run-protocol.md")]
       .every((t) => /stays open\s+at `measuring`/.test(flat(t)) && /never `--new-run`/.test(flat(t)) && /exit 5 `stalled`/.test(flat(t)) && /`--wait` again with the same/.test(flat(t))));
   check("nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
   check("each interaction records outcome (url-changed | dialog-opened | selector-appeared | state-changed | none) and navEvents; a pass needs exactly one match, an allowed outcome, no unexpected navigation; else not-probed; the example carries both fields",
@@ -1078,7 +1081,7 @@ console.log("build-screen docs (wrapped-track gap):");
     && /An absent track gap is 0/.test(cssm));
   check("web-tailwind: gap → gap-x-N (row) / gap-y-N (column), not gap-N; a track gap says nearest scale step or gap-y-[Npx]/gap-x-[Npx]",
     /`gap:N` is the main-axis gap → `gap-x-N` on a row, `gap-y-N` on a column \(not `gap-N`, which also sets the cross axis\)/.test(tw)
-    && /N likewise the nearest scale step or `gap-y-\[Npx\]`\/`gap-x-\[Npx\]`/.test(tw) && /An absent track gap is 0/.test(tw));
+    && /N likewise the exact scale step or `gap-y-\[Npx\]`\/`gap-x-\[Npx\]`/.test(tw) && /never round to a step/.test(tw) && /An absent track gap is 0/.test(tw));
   check("react-native: gap → columnGap (row) / rowGap (column), not the gap style; an absent track gap is 0",
     /`gap:N` is the main-axis gap → `columnGap:N` on a row, `rowGap:N` on a column/.test(prof("react-native"))
     && /not the `gap` style, which also sets the cross axis/.test(prof("react-native")) && /An absent track gap is 0/.test(prof("react-native")));
@@ -1150,6 +1153,84 @@ console.log("build-screen docs (shader property definitions):");
   check("ir-fields: name a shader input by `propertyDefs[defId].name` (the source identifier, not the panel label)",
     /read `propertyDefs\[defId\]\.name` to name a shader input \(the identifier the shader's source declares/.test(irf)
     && /Figma's properties panel can show a different label, which the Plugin API does not expose/.test(irf));
+}
+console.log("build-screen docs (per-axis sizing, strokes, mixed runs — the facts a first build missed):");
+{
+  // The IR never writes a "fixed" sizing mode (doc-types.ts: widthMode/heightMode are "fill" | "hug"; absent = FIXED),
+  // and its alignItems is absent for start (figma-plugin/src/layout.ts). A web profile states a rule when it or
+  // profiles/web-common.md, which it sends the reader to, does.
+  const dir = "claude-plugin/skills/build-screen";
+  const prof = (n: string): string => flat(read(`${dir}/profiles/${n}.md`));
+  const webCommon = flat(read(`${dir}/profiles/web-common.md`));
+  const names = ["web-css-modules", "web-tailwind", "react-native", "swiftui", "android-compose", "flutter"] as const;
+  const doc = (n: string): string => n.startsWith("web-") ? prof(n) + " " + webCommon : prof(n);
+  const all = [...names, "_template"];
+  const phantom = all.filter((n) => /(widthMode|heightMode)[^.;]{0,80}`"fixed"`|`"fixed"` →|avoid if possible/.test(prof(n)) || /avoid if possible/.test(webCommon));
+  check("no profile maps a `\"fixed\"` sizing mode the IR never writes, and none says \"avoid if possible\"" + (phantom.length ? " — " + phantom.join(", ") : ""), phantom.length === 0);
+  for (const n of names) {
+    const d = doc(n);
+    check(`${n}: the sizing card — absent widthMode/heightMode is the declared fixed size, per axis, with grow, alignSelf and the alignItems default`,
+      /absent `widthMode`\/`heightMode` (= fixed|is fixed|means fixed)/i.test(d) && /`heightMode`/.test(d) && /`grow(: ?1)?`/.test(d) && /`alignSelf`/.test(d)
+      && /`alignItems`[^.]{0,80}absent[^.]{0,40}start|absent `alignItems`[^.]{0,80}start/i.test(d)
+      && /even inside a hug parent/i.test(d) && /root frame/i.test(d));
+    check(`${n}: strokes keyed on strokeAlign + strokesInLayout`, /`strokesInLayout`/.test(d) && /inside/.test(d) && /outside/.test(d) && /center/.test(d));
+    check(`${n}: mixed text — one element per run of \`runs[]\`; \`font\` is only the first run`, /`runs\[\]`/.test(d) && /first run/i.test(d));
+  }
+  check("web-common: the CSS per-axis mapping (fixed = width/height + flex:none, flex:1 1 0 + min-width/min-height 0, flex:0 0 auto, align-self:stretch, never `normal`)",
+    /`flex: ?none`/.test(webCommon) && /automatic minimum/.test(webCommon) && /`flex: ?1 1 0`/.test(webCommon) && /`min-width: ?0`/.test(webCommon) && /`min-height: ?0`/.test(webCommon)
+    && /`flex: ?0 0 auto`/.test(webCommon) && /`align-self: ?stretch`/.test(webCommon) && /never leave[^.]{0,60}`normal`/i.test(webCommon));
+  check("web-common: inside + strokesInLayout is a real border with border-box — the verifier's own words — and an inset ring only without it",
+    /use a real border with `?box-sizing: border-box`?, not a box-shadow ring/i.test(webCommon)
+    && /without `strokesInLayout`[^.]{0,120}inset/i.test(webCommon) && /outline-offset: ?-w\/2/.test(webCommon)
+    && /per-side `weights`[^.]{0,120}(spread|box-shadow)[^.]{0,40}(can't|cannot)/i.test(webCommon) && /stroke's own bound token|`tokens\.strokes`/.test(webCommon));
+  check("both web profiles send the reader to web-common.md", /web-common\.md/.test(prof("web-css-modules")) && /web-common\.md/.test(prof("web-tailwind")));
+  check("flutter: a child's alignSelf stretch is its own infinite cross size, not the parent's CrossAxisAlignment.stretch",
+    !/`alignSelf:"stretch"` → `CrossAxisAlignment\.stretch`/.test(prof("flutter")) && /double\.infinity/.test(prof("flutter")));
+  check("react-native has a stroke section", /\*\*Strokes/.test(prof("react-native")));
+  const vref = flat(read(`${dir}/references/verify.md`));
+  check("verify.md fix loop: a fixed size the export does not declare is the regression (absent widthMode/heightMode is a declaration)",
+    /a fixed size the export does not declare \(absent `widthMode`\/`heightMode` is a declaration\)/.test(vref)
+    && !/a fixed size or a\s+magic offset to a node the export lays out with auto layout/.test(vref));
+  check("ir-fields: no 'use fixed only when the design genuinely is'", !/Use fixed only when the design genuinely is/.test(flat(read(`${dir}/references/ir-fields.md`))));
+  const core = read(`${dir}/SKILL.md`);
+  const coreFlat = flat(core);
+  check(`build-screen SKILL.md is a short core (${core.split("\n").length} lines ≤ 230)`, core.split("\n").length <= 230);
+  check("SKILL.md: no anti-fixed wording", !/fixed only when truly fixed/.test(coreFlat) && !/any fixed size that should hug/.test(coreFlat));
+  check("SKILL.md: --expect runs offline before building, and each component is built from its rows",
+    /--expect/.test(step(2)) && /offline/i.test(step(2)) && /rows/.test(step(3)));
+  check("SKILL.md: every designed frame you build gets its own expect + compare, reported frame → verdict | not verified (why)",
+    /every designed frame you build/i.test(coreFlat) && /frame → verdict \| not verified \(why\)/.test(coreFlat));
+  check("SKILL.md: before reusing a shared component or shell, compare every use and make differences props",
+    /compare every use/i.test(coreFlat) && /props?/.test(coreFlat));
+  check("SKILL.md: precedence — the export's value wins; where it is silent the project's own skills and conventions; accessibility never waived",
+    /Where the export gives a value, it wins/.test(coreFlat) && /Where it is silent/.test(coreFlat) && /project's and user's own skills and conventions/.test(coreFlat) && /Accessibility is never waived/.test(coreFlat));
+  check("SKILL.md names the project overlay design/profile.md once, read after the bundled profile", /`design\/profile\.md`/.test(coreFlat) && /after the bundled profile/i.test(coreFlat));
+  check("audit-design and sync-design honour the overlay (no bundled-only profile path)",
+    /design\/profile\.md/.test(read("claude-plugin/skills/audit-design/SKILL.md")) && /design\/profile\.md/.test(read("claude-plugin/skills/sync-design/SKILL.md")));
+  check("help: house rules go in your own skill or design/profile.md, not a fork", /house rules/i.test(flat(read("claude-plugin/skills/help/SKILL.md"))) && /design\/profile\.md/.test(read("claude-plugin/skills/help/SKILL.md")));
+  check("_template: no copy-the-profile-to-override instruction", !/it overrides this skill's bundled profiles/.test(prof("_template")));
+  const sb = read("claude-plugin/agents/screen-builder.md");
+  check(`screen-builder is short (${sb.split("\n").length} lines ≤ 45), with a per-frame table, own regressions fixed or reverted, and failing custom checks`,
+    sb.split("\n").length <= 45 && /per-frame/i.test(builder) && /(fixed or reverted|fix or revert)/i.test(builder) && /exits? non-zero/i.test(builder) && /fail(ing)? once/i.test(builder));
+  // The evals' fixtures carry the facts each eval tests (so an edit to a fixture cannot quietly drop the case).
+  type N = { id?: string; widthMode?: string; heightMode?: string; grow?: number; strokesInLayout?: boolean; strokes?: { align?: string }; box?: { w?: number }; children?: N[] };
+  const evalsRaw = read(`${dir}/evals/evals.json`);
+  let evals: { evals?: { files?: string[] }[] } = {};
+  try { evals = JSON.parse(evalsRaw) as typeof evals; } catch { /* reported below */ }
+  const files = (evals.evals ?? []).flatMap((e) => e.files ?? []);
+  check(`build-screen evals: ≥3 evals, every fixture exists (${files.length})`, (evals.evals?.length ?? 0) >= 3 && files.length >= 3 && files.every((f) => fs.existsSync(path.join(root, dir, f))));
+  const nodes = (f: string): Map<string, N> => {
+    const m = new Map<string, N>();
+    try {
+      const walk = (n: N): void => { if (n.id) m.set(n.id, n); (n.children ?? []).forEach(walk); };
+      ((JSON.parse(read(`${dir}/evals/files/${f}`)) as { nodes?: N[] }).nodes ?? []).forEach(walk);
+    } catch { /* an unreadable fixture leaves the map empty: the checks below fail */ }
+    return m;
+  };
+  const a = nodes("fixed-child-in-hug.json"), b = nodes("grow-beside-fixed.json"), c = nodes("hug-badge-inside-stroke.json");
+  check("eval fixture: a fixed-width label (no widthMode, box.w 141) inside a hug parent", a.get("10:4")?.widthMode === undefined && a.get("10:4")?.box?.w === 141 && a.get("10:2")?.widthMode === "hug");
+  check("eval fixture: a grow:1 form beside a fixed-height sibling", b.get("20:4")?.grow === 1 && b.get("20:6")?.heightMode === undefined && b.get("20:6")?.grow === undefined);
+  check("eval fixture: a hug badge with an inside stroke and strokesInLayout", c.get("30:2")?.widthMode === "hug" && c.get("30:2")?.strokes?.align === "inside" && c.get("30:2")?.strokesInLayout === true);
 }
 console.log("ir-fields ↔ doc-types (every IR field is documented, every documented field exists):");
 {

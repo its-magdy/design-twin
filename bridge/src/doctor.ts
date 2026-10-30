@@ -37,7 +37,7 @@ import type { ExportSource, ExportVerdict } from "./export-verdict.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
-import { isOurMcpEntry, mcpEntryProblems, readMcpJson } from "./init.ts";
+import { isOurMcpEntry, mcpEntryProblems, PROFILES, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
 // The manifest's allowedDomains ports and the FIGMA_BRIDGE_PORT parse — ports.ts, the same list and
 // parse settings.ts reads the port with. A bad value is a finding here (the very case this exists to diagnose).
@@ -51,7 +51,7 @@ import { exitCli } from "./stdio.ts";
 import { daemonAddressOf, readSettings, tokenSetting } from "./settings.ts";
 
 /** Every check this report can carry, by id — what `--json` consumers key on. */
-export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
+export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "profile" | "layout" | "export" | "map" | "mcp";
 
 /** One line of the report. `next` is the single next step (absent, or undefined, when there is none). `skipped`: the
  *  check could not run (a warn), so nothing it would have verified was — the report is not ok beside one. */
@@ -323,6 +323,27 @@ function exportChecks(v: ExportVerdict, rel: string): Check[] {
   return out;
 }
 
+// The profile build-screen, audit-design and sync-design will use: design/target.json's `profile` (a bundled one, or a
+// custom stack written in design/profile.md), plus design/profile.md read after a bundled profile as the project's own
+// rules. An older project's root profiles/<profile>.md is read the same way.
+export const OVERLAY_FILE = path.join(LAYOUT.DESIGN_DIR, "profile.md");
+function checkProfile(cwd: string): Check {
+  let profile: string | null = null;
+  try {
+    const doc: unknown = JSON.parse(fs.readFileSync(path.join(cwd, LAYOUT.TARGET_FILE), "utf8"));
+    const p = doc && typeof doc === "object" ? (doc as { profile?: unknown }).profile : undefined;
+    if (typeof p === "string" && p.trim()) profile = p.trim();
+  } catch { /* unreadable or not JSON: no profile chosen */ }
+  const overlay = fs.existsSync(path.join(cwd, OVERLAY_FILE));
+  const legacy = profile !== null && fs.existsSync(path.join(cwd, "profiles", profile + ".md"));
+  const extra = [overlay ? "design/profile.md (the project's rules, read after it)" : "", legacy ? `profiles/${profile}.md (older location, read the same way)` : ""].filter(Boolean).join(" + ");
+  if (profile === null) return warn("profile", "Profile", "design/target.json names no profile yet", "build-screen asks on its first run, or set `profile` to one of " + PROFILES.join(", "));
+  if (PROFILES.includes(profile)) return ok("profile", "Profile", `${profile} (bundled)${extra ? " + " + extra : ""}`);
+  if (overlay || legacy) return ok("profile", "Profile", `${profile} (custom) — ${extra}`);
+  return warn("profile", "Profile", `${profile} is not a bundled profile, and design/profile.md does not exist`,
+    "write design/profile.md from the plugin's skills/build-screen/profiles/_template.md, or set `profile` to one of " + PROFILES.join(", "));
+}
+
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
 // project (to debug the connection), where all of this is legitimately absent.
 function checkProject(cwd: string, now: number = Date.now()): Check[] {
@@ -333,6 +354,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
   } else {
     const hasTarget = fs.existsSync(path.join(cwd, LAYOUT.TARGET_FILE));
     out.push(hasTarget ? ok("project", "Project", "design/ and design/target.json present") : warn("project", "Project", "design/ present, but no design/target.json", "run `dtwin init` (it detects the stack), or build-screen will ask on first run"));
+    if (hasTarget) out.push(checkProfile(cwd));
 
     // Which layout this project uses, said out loud. A project created before the export/ split keeps
     // working, but "where do my files land" must never be a thing the user has to infer.

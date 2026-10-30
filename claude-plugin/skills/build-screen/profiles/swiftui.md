@@ -25,7 +25,22 @@ Output
   `Spacer()` before the first and after the last child (edge space too).
 - `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`);
   `"baseline"` → `HStack(alignment: .firstTextBaseline)`.
-- `widthMode:"fill"` → `.frame(maxWidth: .infinity)`; `"hug"` → natural size; `"fixed"` → `.frame(width: N)`.
+
+**Sizing (per axis)** — size each axis of each child from its own IR fields; the parent's mode never decides it.
+- **Absent `widthMode`/`heightMode` = fixed**: the export declares that size (`box.w`/`box.h`) → `.frame(width: N)` /
+  `.frame(height: N)`, even inside a hug parent.
+- `hug` → natural size. `fill` or `grow` on the stack's axis → `.frame(maxWidth: .infinity)` (HStack) /
+  `.frame(maxHeight: .infinity)` (VStack); cross-axis `fill` or `alignSelf:"stretch"` → the same on the other axis.
+- Set the stack's `alignment:` from the IR: absent `alignItems` = start → `VStack(alignment: .leading)` /
+  `HStack(alignment: .top)`. A stack's default is `.center`, which Figma's start is not. One child aligned
+  differently (`alignSelf` `min`/`center`/`max`) → a frame on the stack's cross axis around it, keeping its own size
+  inside: `.frame(maxWidth: .infinity, alignment: …)` in a `VStack`, `.frame(maxHeight: .infinity, alignment: …)` in
+  an `HStack`.
+- `sizeLimits` → `.frame(minWidth:maxWidth:minHeight:maxHeight:)`. A fixed TEXT height → `minHeight`, so Dynamic
+  Type fits.
+- Exceptions: the screen's root frame is the device screen (safe area, not its `box`) — a root that is a sheet or
+  popover keeps its declared width; an `absolute:true` child → `.position`/`.offset`
+  in a `ZStack`, sized by `box`; inside a `layout.mode:"absolute"` parent infer the flow, each child sized by `box`.
 
 **Grid (`layout.display:"grid"`).** Pick the container by whether any child spans:
 - **No spans** → `LazyVGrid`/`LazyHGrid`. `columns`/`columnSizes` (per-track `{type:"flex"|"fixed"|"hug",
@@ -58,7 +73,9 @@ asset catalog, or `Theme.spacing.md`). Emit these, not literals.
 
 **Components** — your SwiftUI `View`s per `design/codeconnect.local.json`; pass Figma `props` via init params/modifiers.
 
-**Text** — `Text(...)` with `.font(...)`; map `font.size/weight` to your type scale.
+**Text** — `Text(...)` with `.font(...)`; map `font.size/weight` to your type scale. `runs[]` (mixed text) → one
+styled segment per run — an `AttributedString` with each run's attributes, or `Text` values joined with `+` — from
+that run's `font`, colour and `tokens`; the node's `font` is only the first run.
 
 **Assets** — SVG usually needs importing into the Xcode asset catalog (as a PDF/vector) → `Image("name")`;
 PNG → `Image("name")`. Flag any asset the user must add to the catalog.
@@ -138,8 +155,11 @@ avoid shadowing every child; UIKit: set `shadowPath`. `background_blur` → `.ba
 family; `glass` → iOS 26 `.glassEffect`. `rotation` is DEGREES, Figma positive = counter-clockwise →
 `.rotationEffect(.degrees(-rotation))`.
 
-**Strokes** — `align:"inside"` → `.strokeBorder`, `"center"` → `.stroke`, `"outside"` → `.overlay` of a
-stroke with `.padding(-w/2)`. `dash` → `StrokeStyle(lineWidth:, dash:)`; per-side `weights` → edge overlays.
+**Strokes** (`strokesInLayout` decides layout space) — an `.overlay` never takes layout space. `align:"inside"` →
+`.strokeBorder` in an `.overlay`; with `strokesInLayout` the stroke counts toward the size, so the padding inside it
+grows by `w` (`.padding(p + w)` before the overlay). `"center"` → `.stroke`, `"outside"` → an `.overlay` of a stroke
+with `.padding(-w/2)`. The colour is the stroke's own bound token (`tokens.strokes`). `dash` →
+`StrokeStyle(lineWidth:, dash:)`; per-side `weights` → edge overlays.
 
 **Fills & images** — gradients → `LinearGradient`/`RadialGradient`/`AngularGradient` (points from
 `transform`); diamond → asset. Image `scaleMode` `fill` → `.scaledToFill()` + `.clipped()`, `fit` →

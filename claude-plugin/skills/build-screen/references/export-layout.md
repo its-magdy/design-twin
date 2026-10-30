@@ -5,6 +5,7 @@ live, how a browser-downloaded export differs from a CLI one.
 For what the fields on a node mean once you've opened it, see `ir-fields.md`.
 
 ## Contents
+- [Where everything is](#where-everything-is)
 - [`design/export/` is dtwin's; the rest of `design/` is yours](#designexport-is-dtwins-the-rest-of-design-is-yours)
 - [Read the manifest first](#read-the-manifest-first)
 - [`design-system.json` + `design-system/`](#design-systemjson--design-system)
@@ -12,6 +13,60 @@ For what the fields on a node mean once you've opened it, see `ir-fields.md`.
 - [`pages/index.json` — finding a screen](#pagesindexjson--finding-a-screen)
 - [Browser "Download layers" flat naming](#browser-download-layers-flat-naming)
 - [Single-screen exports, assets, config maps](#single-screen-exports-assets-config-maps)
+
+## Where everything is
+
+`dtwin` writes to **`design/export/` and nowhere else**; everything beside it under `design/` is
+decisions and evidence that a re-pull must never destroy. (A project created before that split has
+its export directly in `design/` — every path below works either way, just drop the `export/`.)
+
+- **The screen JSON** — `design/export/pages/index.json` (the root — it carries a row per
+  screen: `name`, `title`, `texts[]`, `page`, `pageId`, `id`, size and every sibling file's path) →
+  the layer's `file`. Screen files are `pages/<Page>/<Screen>__<node-id>.json`; the node id is in the
+  name because a frame name does not identify a frame (two `Popup`s on one page are two screens, and
+  a name ending in a space sanitises to a trailing `_`). Read the index rather than reconstructing a filename.
+  The Figma layer name and the visible on-screen title are often different strings ("build the Members screen"
+  when no layer is named that): resolve with
+  `bun --no-install --no-env-file "<scripts>/resolve-screen.js" <exportDir> "<name>" design/plan`, which prints the one
+  screen it resolved and its `stem` — the `<Layer>__<id>` a NEW plan and the verify set take (an existing plan keeps its own name) — or stops
+  and prints the candidates (a match only once spaces, `-` and `_` are ignored is one too) — confirm a candidate by
+  node id with the user rather than building from a guess.
+- **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.
+  `assets/<id>_ref.png`), held by the `reference` field: **`nodes[0].reference`** in a single-screen
+  pull (the field sits on the node), or the **root `reference`** of a page-walk layer file — check the right one
+  before concluding there is none. A hand-exported PNG is the fallback for when the field is absent. **Always read it.**
+- **`…__<id>.vars.json`** beside the screen — the variables of every collection THAT screen
+  references (a superset of what its nodes bind; the node's own `tokens` say what is bound).
+  **`design/export/variables.json`** — the union of every screen pulled so far. It **accumulates**:
+  a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
+  are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
+  `hygiene` before generating a theme from it. It holds only the variables bound by pulled nodes: look up
+  library colours with `bun --no-install --no-env-file "<scripts>/tokens.js" <library tokens.json> --lookup <hex>`
+  on the library catalog (COLOR variables, per mode, through aliases; pass `ffbc1c` or a quoted `'#ffbc1c'` —
+  an unquoted `#` starts a shell comment).
+- **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
+  `duplicates` (the same artwork under different names), `monochrome` (safe to recolour) and `heavy` (too big to inline).
+  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names. **Use only files
+  THIS screen's `.assets.json` lists** (`files[].file`): a file another screen lists is that screen's art, so
+  never substitute it (a row with `reusedFrom` is listed here, so it is fine). A node with no file (`assetSkipped`, no row) is an extract/designer question, not a reuse.
+- **`design/export/design-system/`** — tokens, styles and component catalogs. Written only by a
+  `--design-system` (or full) pull, so legitimately **absent** after a single-screen pull; step 1 says
+  what to do then. **`design/export/assets/`** — real icon/image files, named after their Figma layer
+  and deduped by content.
+- **`design/codeconnect.local.json`** — Figma component → code component, keyed by the stable publish
+  **`key`**. Scaffold with `bun --no-install --no-env-file "<scripts>/map-bootstrap.js"
+  design/export/design-system/components.local.json --out design/codeconnect.local.json` (re-running
+  merges, never overwrites your edits). *(Older projects keep it at the repo root; `dtwin doctor` finds either. Prefer the `design/` location.)*
+- **`design/tokens.dtcg.json`** (`bun --no-install --no-env-file "<scripts>/tokens.js" <variables file> design/`)
+  plus **`design/tokens.json`** overrides — Figma value → your token. The input you feed `tokens.js` changes the
+  values (a pulled library's catalog, the defining file's design system, the screen's own `.vars.json`, the merged
+  union last); `theme-tokens.md` has the order and why. Add the flag your profile names to also get ONE theme
+  source file in the stack's own shape (`--native <profile>` on a native stack; the web profiles say which `--web`
+  target and what the generated names look like).
+- **`design/audit/<screen>.json|md`** — the pre-build audit, if run. Read its `crossFile` section
+  first: it answers whether this screen even comes from the design system sitting beside it.
+- **`design/target.json`** — which stack to emit. `dtwin init` always writes it; `profile: null` means
+  nobody has decided yet, which is your cue to ask and then fill it in.
 
 ## `design/export/` is dtwin's; the rest of `design/` is yours
 
@@ -238,6 +293,6 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   detect drift, so prefer `design/codeconnect.local.json` where both are present.)*
 - `design/export/variables.json` — full Figma variable snapshot (for the drift check).
 - `design/target.json` — the target stack config (optional; auto-detected if absent).
-- `profiles/<profile>.md` — how to translate the IR into a specific stack. A project can override or
-  add one by placing `profiles/<profile>.md` at its own repo root; **check there first**, fall back to
-  this skill's bundled `profiles/`.
+- `profiles/<profile>.md` — how to translate the IR into a specific stack, bundled with this skill; the project's
+  `design/profile.md`, when it has one, is read after it and wins where the two differ (an older project's root
+  `profiles/<profile>.md` is read the same way).

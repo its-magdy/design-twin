@@ -232,7 +232,8 @@ open file is seen), then each file's `hello` (so it is named).
    bridge (almost always the MCP server), or held by something unrelated.
 5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
    says so with both fingerprints, instead of the "nothing connected" that case otherwise looks like.
-6. **Project** (the current directory) — `design/`, `design/target.json`, which export LAYOUT it
+6. **Project** (the current directory) — `design/`, `design/target.json` and the profile build-screen will use
+   (bundled or custom, plus the project's own `design/profile.md` when it exists), which export LAYOUT it
    found, the age of the last export (its newest stamp; stale past 24h), **which Figma files that export mixes**, the component map
    (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
    registration (a legacy `figma` key still works; new setups use `designtwin`). A registered entry that

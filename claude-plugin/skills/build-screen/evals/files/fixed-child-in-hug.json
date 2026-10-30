@@ -1,0 +1,55 @@
+{
+  "nodes": [
+    {
+      "id": "10:1",
+      "name": "Sidebar",
+      "type": "FRAME",
+      "box": { "w": 240, "h": 120, "x": -1200, "y": 400 },
+      "layout": { "display": "flex", "flexDirection": "column", "gap": 4, "padding": [12, 12, 12, 12] },
+      "fills": [{ "type": "solid", "color": "#FFFFFF", "tokens": { "color": "Surfaces/Panel" } }],
+      "reference": "assets/10_1_ref.png",
+      "children": [
+        {
+          "id": "10:2",
+          "name": "Nav group",
+          "type": "FRAME",
+          "box": { "w": 217, "h": 36 },
+          "widthMode": "hug",
+          "heightMode": "hug",
+          "layout": { "display": "flex", "flexDirection": "row", "gap": 8, "padding": [8, 12, 8, 12], "alignItems": "center" },
+          "radius": 8,
+          "children": [
+            {
+              "id": "10:3",
+              "name": "Icon",
+              "type": "VECTOR",
+              "box": { "w": 16, "h": 16 },
+              "asset": "assets/Icon.svg"
+            },
+            {
+              "id": "10:4",
+              "name": "Label",
+              "type": "TEXT",
+              "text": "Configuration",
+              "box": { "w": 141, "h": 20 },
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 14, "weight": "Medium", "weightValue": 500, "lineHeight": { "value": 20, "unit": "px" }, "color": "#344054" },
+              "tokens": { "fills": "Text/Secondary" }
+            },
+            {
+              "id": "10:5",
+              "name": "Count",
+              "type": "TEXT",
+              "text": "12",
+              "box": { "w": 20, "h": 20 },
+              "widthMode": "hug",
+              "heightMode": "hug",
+              "font": { "family": "Inter", "size": 14, "weight": "Regular", "weightValue": 400, "lineHeight": { "value": 20, "unit": "px" }, "color": "#667085" },
+              "tokens": { "fills": "Text/Tertiary" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
