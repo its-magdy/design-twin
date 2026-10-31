@@ -26,6 +26,10 @@ The formula installs the same npm package into Homebrew's prefix; every release 
 (the `.mcp.json` server entry) are spelt through `$(brew --prefix)/opt/dtwin/…`, which
 survives an upgrade — not the versioned `Cellar/dtwin/<version>/` folder the next `brew upgrade` deletes. The Figma
 plugin is imported from its per-user copy (`dtwin plugin`), which `brew upgrade` leaves where it is.
+The package carries its own `bun.lock` (the versions and sha512s this repo's lockfile pins, dependencies of
+dependencies too), and the formula installs from it with `--frozen-lockfile`. So a Homebrew install gets the exact
+dependency tree the release was tested with, never a newer one published since. `bun add -g`, `npm i -g`, `npx` and
+`bunx` do not read a package's own lockfile and resolve the dependency ranges fresh.
 
 Or from a clone (to work on the code):
 ```

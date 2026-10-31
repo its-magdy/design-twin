@@ -416,7 +416,13 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   `bun --no-install --no-env-file …`: the plugin's hooks (exec form, no shell), every script call in the skills,
   the `.mcp.json` `dtwin init --mcp` writes (absolute `bun` path), and the `dtwin` bin's shebang; the probe also
   accepts a Playwright/axe-core only from the project's own `node_modules`. In this repo, `bunfig.toml` sets
-  the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`. The plugin's
+  the same (`env = false`, `install.auto = "disable"`) plus a 7-day `minimumReleaseAge`.
+- Release: a `v*` tag on a commit of main publishes one tarball, packed and checked in the release workflow's preflight
+  and published byte for byte with npm provenance. It carries a `bun.lock` derived from the root one (`bridge/pack.ts`
+  refuses one that is not the root's exact pins with a full sha512 each), and preflight installs it the way the
+  Homebrew formula does (`--production --frozen-lockfile`, empty cache), then loads the code and lists the MCP tools
+  (`bridge/verify-pack.ts`). So the formula's sha256 of the tarball covers the whole dependency tree, not dtwin's code
+  alone. Installs that resolve ranges themselves (`bun add -g`, npm, npx, bunx) are not pinned. The plugin's
   SessionStart hook checks `bun` is on PATH and new enough (on startup, resume, fork, clear and compact) and, when it
   is not, says so to the user and to Claude — including that the verifier guard cannot run. The guard fails open
   (no `onFailure: block`): Claude Code ignores hooks in a plugin agent's frontmatter, so its PreToolUse entry runs on

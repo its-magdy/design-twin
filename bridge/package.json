@@ -33,6 +33,7 @@
     "src",
     "layer",
     "figma-plugin",
+    "bun.lock",
     "README.md",
     "LICENSE"
   ],

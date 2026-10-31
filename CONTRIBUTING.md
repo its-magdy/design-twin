@@ -46,7 +46,9 @@ request; CI runs the same suites, split across several runners.
   (with the read scopes that take them — `read-plan.ts` and each MCP tool's schema follow from that row);
   new runtime modules of the bridge go in `bridge/package.json` `files`.
 - **Dependencies.** `bun.lock` is the lockfile (`bun install --frozen-lockfile` in CI); `bunfig.toml` holds back any
-  version published less than 7 days ago, as Dependabot's cooldown does.
+  version published less than 7 days ago, as Dependabot's cooldown does. The npm package ships a `bun.lock` of its
+  own, derived from the root one at pack time (`bridge/pack.ts`), and the release installs the packed tarball from it
+  before publishing (`bridge/verify-pack.ts`).
 
 ## Commits and pull requests
 
