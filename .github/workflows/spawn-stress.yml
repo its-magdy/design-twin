@@ -38,8 +38,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # both macOS images (the bugs were reported on Apple silicon under load), and Linux/Windows for the pipe family
-        os: [macos-15, macos-14, ubuntu-24.04, windows-latest]
+        # macOS on Apple silicon (the bugs were reported there under load), and Linux/Windows for the pipe family.
+        # macos-14 is gone: GitHub retires that image on 2026-11-02 and its brownouts already cancel the job.
+        os: [macos-15, ubuntu-24.04, windows-latest]
     defaults:
       run:
         shell: bash
