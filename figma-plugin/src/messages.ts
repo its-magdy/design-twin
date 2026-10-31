@@ -13,6 +13,10 @@ export interface SetTokenMsg { type: "set-token"; token?: string; }
 export interface GetIdentityMsg { type: "get-identity"; }
 export interface RunSelectionMsg { type: "run-selection"; }
 export interface RunFullMsg { type: "run-full"; }
+// The "Allow edits" checkbox (edits.ts): ask for its saved state, or set it. Only the window's own checkbox
+// sends these — relay.ts never turns a socket frame into either.
+export interface GetAllowEditsMsg { type: "get-allow-edits"; }
+export interface SetAllowEditsMsg { type: "set-allow-edits"; allowed: boolean; }
 // Three meanings, one message type (main.ts `case "cancel"`):
 //   no `id`, no `scope` — the designer's Cancel button (answered with `cancel-ack`, unchanged);
 //   `id`                — the bridge gave up on request <id> (relay.ts forwards the socket's
@@ -29,11 +33,13 @@ export type UIToMain =
   | GetIdentityMsg
   | RunSelectionMsg
   | RunFullMsg
+  | GetAllowEditsMsg
+  | SetAllowEditsMsg
   | CancelMsg
   | BridgeMsg;
 
 const UI_TO_MAIN_TYPES: ReadonlySet<UIToMain["type"]> = new Set([
-  "get-token", "set-token", "get-identity", "run-selection", "run-full", "cancel", "bridge",
+  "get-token", "set-token", "get-identity", "run-selection", "run-full", "get-allow-edits", "set-allow-edits", "cancel", "bridge",
 ]);
 
 export function isUIToMain(x: unknown): x is UIToMain {
@@ -95,6 +101,10 @@ export interface TokenMsg { type: "token"; token: string; }
 export interface IdentityMsg { type: "identity"; identity: unknown; }
 export interface SelectionMsg { type: "selection"; count: number; name: string | null; }
 export interface CancelAckMsg { type: "cancel-ack"; accepted: boolean; label: string | null; }
+/** The Allow edits setting as the main thread holds it (the answer to get-/set-allow-edits). */
+export interface AllowEditsMsg { type: "allow-edits"; allowed: boolean; }
+/** A write batch changed the file, or was refused (writes.ts announce): `text` is the sentence Figma's toast showed. */
+export interface WritesMsg { type: "writes"; applied: number; ok: boolean; text: string; }
 export interface BridgeResultMsg { type: "bridge-result"; id?: string; ok: boolean; result: unknown; error?: string; }
 
 export type MainToUI =
@@ -104,6 +114,8 @@ export type MainToUI =
   | IdentityMsg
   | SelectionMsg
   | CancelAckMsg
+  | AllowEditsMsg
+  | WritesMsg
   | BridgeResultMsg
   // run-begin / progress / run-end, posted by progress.ts
   | ProgressPost;

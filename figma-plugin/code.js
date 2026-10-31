@@ -792,6 +792,7 @@
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
+  var EDITS_OFF_MESSAGE = "Edits are off in the Design Twin plugin \u2014 tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
   var COMMAND_TRAITS = {
     ping: { run: "identity", export: false },
     whoami: { run: "identity", export: false },
@@ -3847,6 +3848,35 @@
     return { designSystem, layersDoc, assets: r.assets.slice() };
   }
 
+  // src/edits.ts
+  var KEY = "allowEdits";
+  var allowed = false;
+  var loaded = (async () => {
+    try {
+      allowed = await figma.clientStorage.getAsync(KEY) === true;
+    } catch (e) {
+      console.error("[export] could not read the Allow edits setting; edits stay off:", e);
+      allowed = false;
+    }
+  })();
+  async function editsAllowed() {
+    await loaded;
+    return allowed;
+  }
+  function editsAllowedNow() {
+    return allowed;
+  }
+  async function setEditsAllowed(on) {
+    await loaded;
+    allowed = on;
+    try {
+      await figma.clientStorage.setAsync(KEY, on);
+    } catch (e) {
+      console.error("[export] could not save the Allow edits setting:", e);
+    }
+    return allowed;
+  }
+
   // src/writes.ts
   function solidPaint(hex, what) {
     const c = parseHexColor(hex);
@@ -3868,11 +3898,17 @@
     if (p.type === "PAGE") await p.loadAsync();
     return p;
   }
+  var EditsRevoked = class extends Error {
+  };
+  function consent() {
+    if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch \u2014 the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
+  }
   async function applyWrite(op) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
         const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null;
+        consent();
         const f = figma.createFrame();
         if (op.name) f.name = op.name;
         if (op.width && op.height) f.resize(op.width, op.height);
@@ -3891,8 +3927,13 @@
       case "createText": {
         const parent = await resolveParent(op.parentId);
         const fill = op.fill ? solidPaint(op.fill, "createText fill") : null;
+        consent();
         const t = figma.createText();
         await figma.loadFontAsync(t.fontName);
+        if (!editsAllowedNow()) {
+          t.remove();
+          consent();
+        }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
         if (fill) t.fills = [fill];
@@ -3907,7 +3948,9 @@
         const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-        nd.fills = [solidPaint(op.color, "setFill color")];
+        const paint = solidPaint(op.color, "setFill color");
+        consent();
+        nd.fills = [paint];
         return ifDefined("id", op.nodeId);
       }
       case "setText": {
@@ -3915,6 +3958,7 @@
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
+        consent();
         nd.characters = op.text || "";
         return ifDefined("id", op.nodeId);
       }
@@ -3923,8 +3967,31 @@
     }
   }
   async function applyWrites(ops) {
-    const list = Array.isArray(ops) ? ops : [];
+    const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+    announce(r);
+    return r;
+  }
+  function announce(r) {
+    const n = r.applied.length;
+    const edits = n + " edit" + (n === 1 ? "" : "s");
+    let text = null;
+    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
+    else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
+    else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+    if (text === null) return;
+    try {
+      figma.notify(text, r.ok ? void 0 : { error: true });
+    } catch (e) {
+      console.error("[export] figma.notify failed:", e);
+    }
+    const m = { type: "writes", applied: n, ok: r.ok, text };
+    figma.ui.postMessage(m);
+  }
+  async function gatedWrites(list) {
     const applied = [];
+    if (list.length && !await editsAllowed()) {
+      return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    }
     if (list.length && figma.editorType === "dev") {
       const first2 = list[0];
       return {
@@ -3948,7 +4015,8 @@
           applied,
           failedAt: i,
           failedOp: op && op.op,
-          error: errMsg(e)
+          error: errMsg(e),
+          ...e instanceof EditsRevoked ? { refused: "edits-off" } : {}
         };
       }
     }
@@ -4003,7 +4071,9 @@
             // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
             pluginVersion: "0.1.0",
             fileKey: fileKey === void 0 ? null : fileKey,
-            fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
+            fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
+            // So figma_write's dry run can say a real write would be refused before anyone sends one.
+            editsAllowed: await editsAllowed()
           };
           return r;
         };
@@ -4065,6 +4135,8 @@
       // cost class as listPages depth 2, not that of an export.
       case "listLibraries":
         return () => listLibraries();
+      // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
+      // here, so no caller of it can skip it.
       case "write": {
         const ops = req.args.ops;
         return () => applyWrites(ops);
@@ -4083,6 +4155,8 @@
     "get-identity",
     "run-selection",
     "run-full",
+    "get-allow-edits",
+    "set-allow-edits",
     "cancel",
     "bridge"
   ]);
@@ -4157,6 +4231,14 @@
           identity = { error: errMsg(e) };
         }
         post2({ type: "identity", identity });
+        break;
+      }
+      case "get-allow-edits": {
+        post2({ type: "allow-edits", allowed: await editsAllowed() });
+        break;
+      }
+      case "set-allow-edits": {
+        post2({ type: "allow-edits", allowed: await setEditsAllowed(raw.allowed === true) });
         break;
       }
       case "run-selection": {

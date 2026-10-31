@@ -2,7 +2,9 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
-import { writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { editsAllowed, editsAllowedNow } from "./edits";
+import type { WritesMsg } from "./messages";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -49,11 +51,20 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
 // applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same. applyWrites
 // has already checked every op against its WRITE_OPS row (a known op, typed fields, the required ones
 // present); the default branch below still refuses anything else, as a last line.
+// The designer can untick "Allow edits" while a batch is running: the window's message is handled at any await
+// below (a node lookup, a font load). So consent is re-checked right before each mutation, not only once per
+// batch, and a revoked one stops the batch there (gatedWrites reports the applied prefix as refused).
+class EditsRevoked extends Error {}
+function consent(): void {
+  if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch — the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
+}
+
 async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
       const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null; // likewise: a bad colour leaves no node
+      consent();
       const f = figma.createFrame();
       if (op.name) f.name = op.name;
       if (op.width && op.height) f.resize(op.width, op.height);
@@ -72,8 +83,11 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
     case "createText": {
       const parent = await resolveParent(op.parentId); // before createText — no orphan on a bad parent
       const fill = op.fill ? solidPaint(op.fill, "createText fill") : null; // likewise: a bad colour leaves no node
+      consent();
       const t = figma.createText();
       await figma.loadFontAsync(t.fontName as FontName);
+      // Revoked during the font load: take back the empty node this op just made, so it leaves nothing.
+      if (!editsAllowedNow()) { t.remove(); consent(); }
       t.characters = op.text || "";
       if (op.fontSize) t.fontSize = op.fontSize;
       if (fill) t.fills = [fill];
@@ -88,7 +102,9 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-      (nd as GeometryMixin).fills = [solidPaint(op.color, "setFill color")];
+      const paint = solidPaint(op.color, "setFill color");
+      consent();
+      (nd as GeometryMixin).fills = [paint];
       return ifDefined("id", op.nodeId);
     }
     case "setText": {
@@ -96,6 +112,7 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
+      consent();
       nd.characters = op.text || "";
       return ifDefined("id", op.nodeId);
     }
@@ -110,8 +127,38 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
 // the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
-  const list = Array.isArray(ops) ? ops : [];
+  const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+  announce(r);
+  return r;
+}
+
+// A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own
+// toast AND on the plugin window's status line (ui.template.html `writes`). An empty batch changed nothing and
+// says nothing.
+function announce(r: WriteResult): void {
+  const n = r.applied.length;
+  const edits = n + " edit" + (n === 1 ? "" : "s");
+  let text: string | null = null;
+  if (r.refused === "edits-off") text = n
+    ? "Design Twin applied " + edits + ", then stopped — 'Allow edits' was turned off."
+    : "Design Twin refused an edit request — 'Allow edits' is off.";
+  else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
+  else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+  if (text === null) return;
+  try { figma.notify(text, r.ok ? undefined : { error: true }); } catch (e) { console.error("[export] figma.notify failed:", e); }
+  const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
+  figma.ui.postMessage(m);
+}
+
+async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const applied: AppliedWrite[] = [];
+  // The designer's consent (edits.ts): with "Allow edits" off the whole batch is refused before any op is
+  // checked or run, with the refusal named so figma_write can tell the agent to ask the person at the window.
+  // First, so it is the answer whatever else is wrong. Here, not in bridge.ts, so every caller of applyWrites —
+  // the __designExport test surface included — meets the same gate.
+  if (list.length && !(await editsAllowed())) {
+    return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+  }
   // Dev Mode (manifest editorType "dev") is read-only: every op below would throw its own opaque
   // Plugin-API error, the first one partway into the batch. Refuse the whole batch up front, with the
   // fix, in the same shape a mid-batch failure reports.
@@ -143,6 +190,7 @@ export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
         failedAt: i,
         failedOp: op && op.op,
         error: errMsg(e),
+        ...(e instanceof EditsRevoked ? { refused: "edits-off" as const } : {}),
       };
     }
   }

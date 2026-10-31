@@ -1,5 +1,5 @@
 // The WRITE plane (writes.ts) and parentId.
-import { argsShapeError, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
+import { argsShapeError, EDITS_OFF_MESSAGE, WRITE_OP_NAMES, WRITE_OPS, writeOpPreview, type WriteOp, type WriteOpName } from "../../bridge/src/commands.ts";
 import { ok } from "../assert.ts";
 import { must } from "../fixtures.ts";
 import type { FakeNode } from "../fake-figma.ts";
@@ -15,16 +15,23 @@ const targetsOf = () => {
 };
 
 /** A file the plugin can write to: createFrame/createText record what they made in `created`, fonts load, and the
- *  open page accepts children. `editorType`, when given, is the editor the file is open in. */
-function writableWorld(nodes: Record<string, FakeNode>, editorType?: string) {
+ *  open page accepts children. `editorType`, when given, is the editor the file is open in. "Allow edits" is
+ *  still OFF (its default): a case that applies writes ticks it, the way the window does (`writableOn`). */
+function writableWorld(nodes: Record<string, FakeNode>, editorType?: string, clientStorage?: Record<string, unknown>) {
   const created: FakeNode[] = [];
-  const w = world({ nodes, ...(editorType !== undefined ? { file: { editorType } } : {}) }, {
+  const w = world({ nodes, ...(editorType !== undefined ? { file: { editorType } } : {}), ...(clientStorage ? { clientStorage } : {}) }, {
     createFrame: () => { const f = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }; created.push(f); return f; },
     createText: () => { const t = { id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } }; created.push(t); return t; },
     loadFontAsync: async () => {},
   });
   w.figma.currentPage.appendChild = () => {};
   return { ...w, created };
+}
+/** writableWorld with "Allow edits" ticked. */
+async function writableOn(nodes: Record<string, FakeNode>, editorType?: string) {
+  const w = writableWorld(nodes, editorType);
+  await w.allowEdits();
+  return w;
 }
 
 export const cases: Case[] = [{
@@ -35,7 +42,7 @@ export const cases: Case[] = [{
     // a write that didn't happen must NOT report success, and a failed batch must still surface what
     // it already applied (Figma gives no transaction, so the earlier ops are committed for good).
     const { textTarget, rectTarget, groupTarget } = targetsOf();
-    const w = writableWorld({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
+    const w = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
     const { api, created } = w;
 
     const wOk = await api.applyWrites([{ op: "createFrame", name: "Card", fill: "#ff0000" }, { op: "setText", nodeId: "t:1", text: "new" }]);
@@ -110,7 +117,7 @@ export const cases: Case[] = [{
     // figma_write's dry-run step (writeOpPreview), the wire check (argsShapeError) and the plugin's applyWrites in the
     // VM. A dry run that refuses what applying accepts (or the reverse) is the drift this table exists to stop.
     const { textTarget, rectTarget, groupTarget } = targetsOf();
-    const { api, created } = writableWorld({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
+    const { api, created } = await writableOn({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget });
     const complete: { [K in WriteOpName]: WriteOp } = {
       createFrame: { op: "createFrame", name: "F", width: 10, height: 10, fill: "#fff" },
       createText: { op: "createText", text: "T", fontSize: 12, fill: "#000" },
@@ -151,7 +158,7 @@ export const cases: Case[] = [{
     const leafTarget = { id: "lf:1", type: "TEXT", name: "Leaf" }; // no appendChild — cannot hold children
     const { textTarget, rectTarget, groupTarget } = targetsOf();
     // The parentId checks run in the Figma editor with the create/font stubs installed.
-    const { api, created } = writableWorld(
+    const { api, created } = await writableOn(
       { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "c:1": containerTarget, "pg:1": pageTarget, "lf:1": leafTarget }, "figma");
 
     const pOk = await api.applyWrites([{ op: "createFrame", name: "Child", parentId: "c:1" }]);
@@ -173,5 +180,73 @@ export const cases: Case[] = [{
     // documentAccess:"dynamic-page" — appendChild on a PageNode throws unless the page is loaded first.
     const pPage = await api.applyWrites([{ op: "createFrame", parentId: "pg:1" }]);
     ok("write: PAGE parent is loadAsync'd before appendChild", pPage.ok === true && pageLoads.length === 1);
+  },
+}, {
+  name: "Allow edits (edits.ts): off by default, refused while off, applied while on, persisted",
+  async run() {
+    const { textTarget, rectTarget, groupTarget } = targetsOf();
+    const nodes = { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget };
+    const w = writableWorld(nodes);
+    const batch = [{ op: "createFrame", name: "Card" }, { op: "setText", nodeId: "t:1", text: "changed" }];
+
+    // Default: off — nothing saved, the window is told "off", and whoami (what the dry run reads) says so.
+    const asked = await w.send({ type: "get-allow-edits" });
+    ok("[EDITS] default is OFF: nothing saved, the window is told allowed:false",
+      !w.storage.has("allowEdits") && asked.length === 1 && asked[0]?.type === "allow-edits" && (asked[0] as { allowed?: unknown }).allowed === false);
+    const who = await w.send({ type: "bridge", id: "who1", cmd: "whoami", args: {} });
+    ok("[EDITS] whoami reports editsAllowed:false by default", (who.find((m) => m.type === "bridge-result")?.result as { editsAllowed?: unknown } | undefined)?.editsAllowed === false);
+
+    // Off: refused whole before any op runs, with the typed refusal and the actionable sentence — through the
+    // __designExport surface AND through the bridge's own `write` command (no bypass either way).
+    const direct = await w.api.applyWrites(batch);
+    ok("[EDITS] refused while off (direct applyWrites): refused:'edits-off', the fix in the error, nothing applied",
+      direct.ok === false && direct.refused === "edits-off" && direct.error === EDITS_OFF_MESSAGE && direct.applied.length === 0 && direct.failedAt === undefined);
+    const viaBridge = await w.send({ type: "bridge", id: "w1", cmd: "write", args: { ops: batch } });
+    const reply = viaBridge.find((m) => m.type === "bridge-result");
+    ok("[EDITS] refused while off (bridge `write`): the reply carries the same refusal",
+      reply?.ok === true && (reply.result as { refused?: unknown } | undefined)?.refused === "edits-off");
+    ok("[EDITS] …and the document was not touched", w.created.length === 0 && textTarget.characters === "old");
+    ok("[EDITS] …and the refusal is not silent: a Figma toast and a window notice",
+      w.notified.some((t) => /refused an edit request/.test(t) && /Allow edits/.test(t)) && w.posted.some((m) => m.type === "writes" && m.ok === false));
+    // A forged value is not consent: only a literal true turns edits on.
+    await w.send({ type: "set-allow-edits", allowed: "yes" });
+    ok("[EDITS] set-allow-edits with a non-boolean leaves edits off", (await w.api.applyWrites(batch)).refused === "edits-off" && w.created.length === 0);
+
+    // On: applied, saved for next time, and announced.
+    w.notified.length = 0;
+    const ticked = await w.send({ type: "set-allow-edits", allowed: true });
+    ok("[EDITS] ticking it is echoed to the window and saved in clientStorage",
+      (ticked[0] as { allowed?: unknown } | undefined)?.allowed === true && w.storage.get("allowEdits") === true);
+    const applied = await w.api.applyWrites(batch);
+    ok("[EDITS] applied while on", applied.ok === true && applied.refused === undefined && applied.applied.length === 2 && textTarget.characters === "changed");
+    ok("[EDITS] …and announced (toast + window notice naming the count)",
+      w.notified.some((t) => /applied 2 edits/.test(t)) && w.posted.some((m) => m.type === "writes" && m.ok === true));
+
+    // Cleared again: refused again, and the saved value follows.
+    await w.allowEdits(false);
+    ok("[EDITS] clearing it refuses the next write and saves false", (await w.api.applyWrites(batch)).refused === "edits-off" && w.storage.get("allowEdits") === false);
+
+    // Unticked WHILE a batch runs (the window's message lands during a font load): the batch stops before the
+    // next mutation, keeps the prefix it already applied, and reports the refusal.
+    await w.allowEdits(true);
+    const textBefore = textTarget.characters;
+    let release: () => void = () => {};
+    w.figma.loadFontAsync = () => new Promise<void>((res) => { release = res; });
+    const racing = w.api.applyWrites([{ op: "createFrame", name: "First" }, { op: "setText", nodeId: "t:1", text: "late" }]);
+    await new Promise((r) => setTimeout(r, 0)); // setText is now waiting on its font
+    await w.allowEdits(false);
+    release();
+    const raced = await racing;
+    ok("[EDITS] unticked mid-batch: the next mutation is refused, the applied prefix is reported",
+      raced.ok === false && raced.refused === "edits-off" && raced.failedAt === 1 && raced.applied.length === 1 && textTarget.characters === textBefore);
+    w.figma.loadFontAsync = async () => {};
+
+    // Saved last session: a fresh plugin run reads it before its first write (no tick needed, no start-up race).
+    const again = writableWorld(nodes, undefined, { allowEdits: true });
+    const first = await again.api.applyWrites([{ op: "createFrame", name: "Next" }]);
+    ok("[EDITS] an 'on' saved last session is honoured from the first write", first.ok === true && again.created.length === 1);
+    // Anything but a stored `true` reads as off.
+    const odd = writableWorld(nodes, undefined, { allowEdits: "true" });
+    ok("[EDITS] a stored non-boolean reads as off", (await odd.api.applyWrites(batch)).refused === "edits-off");
   },
 }];

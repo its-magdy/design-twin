@@ -59,6 +59,13 @@
      have to look ALIVE — a bar frozen at 0% reads as a hang. */
   #progress.indet #bar { width: 30%; animation: indet 1.2s linear infinite; }
   @keyframes indet { from { margin-left: -30%; } to { margin-left: 100%; } }
+  /* "Allow edits": always visible (never inside the collapsed connection section), because it is the one
+     control an agent will ask the designer to find. */
+  #edits-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; margin: 6px 0; }
+  #edits-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0; }
+  #edits-state { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 9px;
+                 background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-tertiary, #888); }
+  #edits-state.on { background: var(--figma-color-bg-warning-tertiary, #fff4e0); color: var(--figma-color-text-warning, #8a5a00); }
   #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
 </style>
 
@@ -83,6 +90,17 @@
 <button id="assets" disabled>Download assets (<span id="acount">0</span>)</button>
 
 <div class="hint">Save the downloads into your project's <code>design/</code> folder (assets into <code>design/assets/</code>).</div>
+
+<div class="sep"></div>
+<div class="label">Edits</div>
+<!-- Off by default. While it is off the plugin only READS this file: every edit request from the bridge is
+     refused before anything changes (figma-plugin/src/edits.ts is the authority, not this checkbox). -->
+<label id="edits-row" for="allow-edits">
+  <input id="allow-edits" type="checkbox" disabled />
+  <span>Allow edits</span>
+  <span id="edits-state">off</span>
+</label>
+<div class="hint" id="edits-hint" style="margin-top:2px">Lets Claude Code change this file over the bridge (add frames and text, set fills and text). Off: it can only read. Every change is announced here.</div>
 
 <div class="sep"></div>
 <!-- Optional. Closed by default; opened automatically only when it needs the user (a rejected token). -->
@@ -184,9 +202,9 @@
       var p = $("progress"); if (p) p.hidden = false;
       setProgress(null);
       setBusy(true);
-      setStatus(info.source === "bridge"
-        ? "Export in progress — requested over the bridge (" + info.label + ")…"
-        : "Exporting…");
+      setStatus(info.source !== "bridge" ? "Exporting…"
+        : info.label === "write" ? "Applying edits requested over the bridge…"
+        : "Export in progress — requested over the bridge (" + info.label + ")…");
     }
     // Tear the run chrome down. Deliberately does NOT clear `cancelSent`: the main thread sends
     // run-end BEFORE the error that the cancellation produced, and both need to know it was a cancel.
@@ -327,6 +345,18 @@
         layerFilesState = m.layerFiles || [];
         var lc = $("lcount"); if (lc) lc.textContent = layerFilesState.length;
         syncBatchButtons();
+        return;
+      }
+      if (m.type === "allow-edits") {
+        // The main thread's answer is the truth (edits.ts): the checkbox only ever shows what it holds.
+        var ae = $("allow-edits"); if (ae) { ae.checked = !!m.allowed; ae.disabled = false; }
+        var es = $("edits-state"); if (es) { es.textContent = m.allowed ? "on" : "off"; es.className = m.allowed ? "on" : ""; }
+        return;
+      }
+      if (m.type === "writes") {
+        // A write batch changed the file (or was refused): never silent. It arrives inside the write's own run
+        // (run-begin … run-end, and run-end leaves the status alone), so it replaces that run's line.
+        setStatus(m.text, !m.ok);
         return;
       }
       if (m.type === "token") {
@@ -549,6 +579,12 @@
             return a.text != null ? new Blob([a.text], { type: type }) : new Blob([b64ToBytes(a.base64)], { type: type });
           });
         };
+        var ae = $("allow-edits"); if (ae) ae.onchange = function () {
+          // Disabled until the main thread confirms, so a double toggle cannot race its own answer.
+          ae.disabled = true;
+          parent.postMessage({ pluginMessage: { type: "set-allow-edits", allowed: !!ae.checked } }, "*");
+        };
+        parent.postMessage({ pluginMessage: { type: "get-allow-edits" } }, "*");
         // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.
         parent.postMessage({ pluginMessage: { type: "get-token" } }, "*");
         setStatus("Ready — select a frame, or use the blue button.");

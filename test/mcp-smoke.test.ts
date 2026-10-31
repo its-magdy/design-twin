@@ -16,7 +16,8 @@ import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.j
 // The plugin stand-in — see fake-plugin.ts.
 import { fakePlugin, fail, HANG, type FakePlugin } from "./fake-plugin.ts";
 import { malformed } from "./fixtures.ts";
-import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply } from "../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE } from "../bridge/src/commands.ts";
+import type { PingReply, ScreenReply, ScreenshotReply, WhoamiReply, WriteResult } from "../bridge/src/commands.ts";
 import type { BridgeFrame, CommandFrame } from "../bridge/src/server-core.ts";
 // Type-only: erased before Bun runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
@@ -49,7 +50,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
-interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }> }
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }>; editsAllowed: boolean | null; wouldRefuse?: string; note: string }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
 interface WrittenExport { note: string }
 
@@ -87,6 +88,7 @@ void (async () => {
     const dry = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }, { op: "setFill", nodeId: "1:2", color: "#ff0000" }, { op: "setText", nodeId: "1:3" }] } });
     const preview = JSON.parse(firstText(dry)) as WritePreview;
     ok("dryRun previews without a plugin connected, and applies nothing", !dry.isError && preview.dryRun === true && preview.applied === false);
+    ok("…and with no plugin connected it cannot tell whether edits are allowed (editsAllowed:null), without waiting for one", preview.editsAllowed === null && preview.wouldRefuse === undefined);
     ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1]?.target === "1:2" && /missing text/.test(preview.steps[2]?.invalid ?? ""));
 
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
@@ -330,6 +332,30 @@ void (async () => {
     late.close();
     plugin.close();
     await sleep(200); // both sockets gone: the bridge has NO client now
+
+    // ---- "Allow edits" (figma-plugin/src/edits.ts), as figma_write sees it. The fake plugin answers whoami with the
+    // checkbox's state and refuses a write the way writes.ts does while it is off.
+    let editsOn = false;
+    const editsPlugin = fakePlugin(8789, { token: "smoke-test-token", hello: { instanceId: "fig-edits", file: "Edits File" }, unhandled: HANG, on: {
+      whoami: (): WhoamiReply => ({ instanceId: "fig-edits", startedAt: 0, uptimeMs: 1, file: "Edits File", page: "Page", pageId: "0:1", editorType: "figma", pluginVersion: "0.0.0", fileKey: null, fileKeyAvailable: false, editsAllowed: editsOn }),
+      write: (): WriteResult => editsOn ? { ok: true, applied: [{ id: "1:9" }] } : { ok: false, applied: [], refused: "edits-off", error: EDITS_OFF_MESSAGE },
+    } });
+    await editsPlugin.opened;
+    const card = [{ op: "createFrame", name: "Card" }];
+    const dryOff = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
+    ok("[EDITS] dryRun while edits are off still previews, and says a real write would be refused",
+      dryOff.dryRun === true && dryOff.applied === false && dryOff.creates === 1 && dryOff.editsAllowed === false
+      && dryOff.wouldRefuse === EDITS_OFF_MESSAGE && /would be REFUSED/.test(dryOff.note) && editsPlugin.commands("write").length === 0);
+    const realOff = await client.callTool({ name: "figma_write", arguments: { ops: card } });
+    ok("[EDITS] a write while edits are off is an error naming the fix (tick 'Allow edits'), not a generic failure",
+      realOff.isError === true && firstText(realOff) === EDITS_OFF_MESSAGE && !/Write failed at op/.test(firstText(realOff)));
+    editsOn = true;
+    const dryOn = JSON.parse(firstText(await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: card } }))) as WritePreview;
+    ok("[EDITS] dryRun with edits on reports editsAllowed:true and no refusal", dryOn.editsAllowed === true && dryOn.wouldRefuse === undefined);
+    const realOn = await client.callTool({ name: "figma_write", arguments: { ops: card } });
+    ok("[EDITS] a write with edits on is applied", !realOn.isError && (JSON.parse(firstText(realOn)) as WriteResult).applied[0]?.id === "1:9");
+    editsPlugin.close();
+    await sleep(200);
 
     // With NOTHING connected — every window mid-redial right after a bridge
     // restart — `figma_status {client:"<name>"}` must not answer `connected:false` in 10 ms: a zero-clients

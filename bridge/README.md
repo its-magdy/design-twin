@@ -819,12 +819,37 @@ execution**, unlike some community servers; a `fill` / `color` must be a hex col
 `#rrggbb` or `#rrggbbaa` with the `#`, never a name like `red` — and anything else is refused (by the
 schema here, and by the plugin for a write from another client) instead of painted as a wrong colour; `dryRun: true` returns a preview of what each op would
 create or overwrite without touching the file — there is no undo from the MCP side, so preview anything
-that overwrites; refused outright when the file is in read-only Dev Mode), and two that read the export already on disk and
+that overwrites; refused outright when the file is in read-only Dev Mode — and **refused unless the designer has
+ticked "Allow edits"** in the plugin window, see below), and two that read the export already on disk and
 need no Figma connection — `design_get_component` (one component's variant node trees) and
 `design_drift_lint` (the component map vs the export; see below). The frame-walking export tools accept opt-in read flags
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
 take them (it never walks a node — see below) but DOES take `variantVisuals`, since the component
 catalog it builds is exactly what that flag enriches.
+
+### "Allow edits" — the plugin changes nothing until the designer opts in
+The plugin window has an **Allow edits** checkbox, **off by default**. While it is off the plugin only reads:
+every `figma_write` batch is refused whole, before any op runs, and the tool returns this error (nothing in the
+file changed):
+
+> Edits are off in the Design Twin plugin — tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.
+
+That is not something an agent can fix. **Ask the user to tick "Allow edits" in the Design Twin plugin window,
+then retry the same call.** The plugin's main thread holds the setting and checks it on every write; nothing on
+the bridge side can turn it on.
+
+- **Dry run still works while it is off.** `dryRun: true` previews the batch as before and adds `editsAllowed`
+  (read from the plugin's `whoami`): `false` → a real write would be refused right now (the preview also carries
+  `wouldRefuse` with the sentence above); `true` → it would be applied; `null` → unknown (no plugin connected,
+  several connected with no `client`, or a plugin built before the opt-in). Check it before asking the user to
+  review a preview, so the request to tick the box comes in the same breath.
+- **The setting is per user, for every file.** It is saved in Figma's `clientStorage`, which is already scoped
+  to one user and this plugin. It is not per file: the plugin cannot reliably name a file (`fileKey` is only for
+  private plugins, and file names repeat), and a per-file flag stored in the document would itself be an edit.
+  Untick it when you are done.
+- **No write is silent.** Each applied batch (and each refused one) shows a Figma toast and a line in the plugin
+  window, e.g. "Design Twin applied 3 edits to this file."
+- `dtwin whoami` prints the state (`edits: off — …` / `edits: ALLOWED — …`) and `editsAllowed` is in its JSON.
 
 ### `writeToDisk` — the export path that doesn't go through the context window
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
