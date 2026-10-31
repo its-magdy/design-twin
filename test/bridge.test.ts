@@ -1076,6 +1076,8 @@ void (async () => {
     // The real CLI run from a Homebrew-shaped install, through the opt link the formula's wrapper uses: Bun resolves that
     // link (import.meta.dirname is the Cellar folder), and the entry must still name opt — then survive an upgrade.
     ok("[init] CLI: run through Homebrew's opt link, --mcp writes the opt path to figma-mcp.ts, which still exists after an upgrade", (() => {
+      // Homebrew is macOS/Linux only; the unit checks above still cover stableKegPath's rule on Windows.
+      if (process.platform === "win32") return true;
       const b = fakeBrew();
       if (!b) return true;
       const install = (v: string) => {
