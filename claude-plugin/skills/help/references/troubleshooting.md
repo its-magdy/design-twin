@@ -25,12 +25,13 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 
 ## Connecting the plugin and the bridge
 
-- **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
-  manifest…* → the file `dtwin plugin path` prints. It lives under **Plugins → Development**, not the main
-  plugin list.
-- **"plugin vX is older than this bridge"** → `dtwin plugin update` (any `dtwin` that starts a bridge does it
-  too), then reopen the plugin — no re-import. Still old? It was imported from somewhere else: `dtwin plugin
-  status` names the folder to import from; remove the other one in Plugins → Manage plugins.
+- **Plugin isn't in the menu** → import it via *Import plugin from manifest…* → the file `dtwin plugin path`
+  prints. It lives under **Plugins → Development**, not the main plugin list.
+- **"plugin vX is older than this bridge" / a manifest change didn't take** → `dtwin plugin update` (any `dtwin`
+  that starts a bridge does it too), turn on **Plugins → Development → Hot reload plugin**, then reopen the plugin —
+  no re-import (with hot reload off, Figma keeps running the code it loaded). Still old? It was imported from
+  somewhere else: `dtwin plugin status` names the folder to import from; remove the other one in Plugins → Manage
+  plugins. A new permission that still does not work after a reopen: re-import once.
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
   `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
   through it and nothing needs stopping, so this means something *else* holds the port: a one-shot
@@ -92,7 +93,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `ui.html`) — those are the only three it can dial, so `FIGMA_BRIDGE_PORT` must be one of them.
   Usually easier to just free `8787` than to move the server.
 - **`--list-libraries` / `figma_list_libraries` returns nothing** → in this order: (1) the plugin in
-  Figma predates the manifest's `"permissions": ["teamlibrary"]` — **re-import it**; (2) no team
+  Figma predates the manifest's `"permissions": ["teamlibrary"]` — **reopen it with hot reload on, else re-import it**; (2) no team
   library is enabled for the file (Figma UI → Assets → Libraries; no API can do this); (3) free plan.
   All three are normal, and the command's own output says which.
 - **"N Figma files are connected — say which one to use"** → pass `--client` (CLI) or `client` (MCP);

@@ -100,9 +100,10 @@ path). `dtwin init` does the install too. In a clone, import `design-twin/figma-
 
 `code.js` and `ui.html` are pre-built (committed in the repo, copied into the package), so there is nothing to build.
 Upgrading the package updates the installed copy in place the next time `dtwin` starts a bridge (or run
-`dtwin plugin update`): reopen the plugin and it runs the new code, with no re-import. Only a release whose manifest
-changed (new permissions, such as library reads) needs one re-import, and `dtwin` says so. After pulling a new version
-of a clone, re-import only if `figma-plugin/manifest.json` changed.
+`dtwin plugin update`): with **Plugins → Development → Hot reload plugin** on, reopen the plugin and it runs the new
+code — new manifest permissions included — with no re-import. (With hot reload off, Figma keeps running the code it
+already loaded.) Re-import only if a new permission still does not work after that. The same goes for a clone after
+`git pull`.
 
 ### 3. Install the Claude Code plugin
 

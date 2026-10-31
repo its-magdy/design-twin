@@ -124,8 +124,9 @@ its PATH. The plugin's SessionStart hook prints this when `bun` is missing or ol
    never moves and prints its `manifest.json` (`dtwin plugin path` prints it again). Figma desktop → **Plugins →
    Development → Import plugin from manifest…** → pick that file (the folder is hidden: ⌘⇧G in the macOS file
    picker, or paste the path into Windows' File name box). In a clone of the Design Twin repo, import its
-   `figma-plugin/manifest.json` instead. Later versions replace the files in place — reopening the plugin runs
-   them; `dtwin` says when a manifest change needs one re-import. Already imported from somewhere else (the
+   `figma-plugin/manifest.json` instead. Later versions replace the files in place — with Plugins → Development →
+   Hot reload plugin on, reopening the plugin runs them (with it off, Figma keeps the old code); re-import only if
+   a new permission still does not work after that. Already imported from somewhere else (the
    package folder, an old clone)? Remove that one in Plugins → Manage plugins.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
