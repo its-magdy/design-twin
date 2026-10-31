@@ -36,7 +36,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every route request below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
-import { WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteOp } from "./commands.ts";
+import { EDITS_OFF_MESSAGE, WRITE_OP_NAMES, writeOpPreview, type Cmd, type Commands, type ExportReply, type WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -681,7 +681,10 @@ const writeOpShape = z.object({
 }).passthrough();
 
 // Each step is commands.ts writeOpPreview — the op's WRITE_OPS row, which the plugin's wire check (writeOpError) reads too.
-function previewWrites(ops: WriteOp[]) {
+// `editsAllowed` is the plugin's "Allow edits" checkbox as its whoami reports it: false => a real write would be
+// refused (and `wouldRefuse` says what to ask the designer); null => unknown (no plugin reachable, or one built
+// before the opt-in).
+function previewWrites(ops: WriteOp[], editsAllowed: boolean | null) {
   const steps = ops.map(writeOpPreview);
   return {
     dryRun: true,
@@ -690,8 +693,28 @@ function previewWrites(ops: WriteOp[]) {
     overwrites: steps.filter((s) => s.effect === "overwrites").length,
     invalid: steps.filter((s) => "invalid" in s).length,
     steps,
-    note: "Nothing was changed. Overwrites cannot be undone from here (only Cmd-Z in Figma). Re-call without dryRun to apply.",
+    editsAllowed,
+    ...(editsAllowed === false ? { wouldRefuse: EDITS_OFF_MESSAGE } : {}),
+    note: "Nothing was changed. Overwrites cannot be undone from here (only Cmd-Z in Figma). " +
+      (editsAllowed === false
+        ? "A real write would be REFUSED right now: 'Allow edits' is off in the Design Twin plugin window — ask the designer to tick it, then re-call without dryRun."
+        : editsAllowed === null
+          ? "Could not read the plugin's 'Allow edits' setting (no single plugin reachable); a real write is refused while it is off. Re-call without dryRun to apply."
+          : "Re-call without dryRun to apply."),
   };
+}
+
+// The dry run's read of the "Allow edits" checkbox. Never waits for a plugin to connect (the preview must answer
+// with none): nothing connected, several connected with no `client` named, or any failure, is `null` (unknown).
+async function readEditsAllowed(a: { client?: string | undefined } | undefined): Promise<boolean | null> {
+  try {
+    const n = (await route.listClients()).length;
+    if (n === 0 || (!(a && a.client) && n > 1)) return null;
+    const who = await ask("whoami", {}, { timeoutMs: TIMEOUTS.command, target: a && a.client });
+    return typeof who.editsAllowed === "boolean" ? who.editsAllowed : null;
+  } catch {
+    return null;
+  }
 }
 
 server.registerTool(
@@ -705,7 +728,10 @@ server.registerTool(
       "Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied " +
       "and their node ids are reported alongside the error so you can continue or clean up. " +
       "There is no undo from here (only the designer's own Cmd-Z) — so for anything that OVERWRITES " +
-      "(setFill/setText), call once with dryRun:true, show the user the preview, and only then apply.",
+      "(setFill/setText), call once with dryRun:true, show the user the preview, and only then apply. " +
+      "The plugin applies nothing unless the designer has ticked 'Allow edits' in its window (off by default); " +
+      "while it is off a write is refused with that instruction, and a dry run reports editsAllowed:false — " +
+      "ask the designer to tick it, then retry.",
     inputSchema: {
       ...clientShape,
       // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
@@ -715,7 +741,7 @@ server.registerTool(
         // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
         .max(50, "at most 50 ops per call — split a larger job into several calls (writes cannot be undone from here)")
         .describe("Ordered list of write operations (each must have an `op` field). At most 50 per call."),
-      dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection)."),
+      dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection; when one is connected it also reports editsAllowed — false means a real write would be refused)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
     // performs only additive updates" — but setFill/setText OVERWRITE properties on nodes the user
@@ -728,10 +754,13 @@ server.registerTool(
   guarded(async (a) => {
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
-    if (a.dryRun) return textResult(previewWrites(a.ops || []));
+    if (a.dryRun) return textResult(previewWrites(a.ops || [], await readEditsAllowed(a)));
     // No cancel signal here (unlike the reads): a write cannot be un-applied, and aborting the wait would
     // only lose the `applied` ids below.
     const r = await ask("write", { ops: a.ops || [] }, { target: a && a.client });
+    // The designer has not consented: nothing was tried, so there is no op index and nothing to clean up. The
+    // fix is the PERSON's (a checkbox in the plugin window), so say exactly that rather than "write failed".
+    if (r.refused === "edits-off") return errorResult(r.error || EDITS_OFF_MESSAGE);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo.
     if (!r.ok) {

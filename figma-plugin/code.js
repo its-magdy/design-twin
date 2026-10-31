@@ -792,6 +792,7 @@
   function missingWriteFields(op, fields) {
     return WRITE_OPS[op].required.filter((k) => fields[k] === void 0);
   }
+  var EDITS_OFF_MESSAGE = "Edits are off in the Design Twin plugin \u2014 tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
   var COMMAND_TRAITS = {
     ping: { run: "identity", export: false },
     whoami: { run: "identity", export: false },
@@ -3847,6 +3848,32 @@
     return { designSystem, layersDoc, assets: r.assets.slice() };
   }
 
+  // src/edits.ts
+  var KEY = "allowEdits";
+  var allowed = false;
+  var loaded = (async () => {
+    try {
+      allowed = await figma.clientStorage.getAsync(KEY) === true;
+    } catch (e) {
+      console.error("[export] could not read the Allow edits setting; edits stay off:", e);
+      allowed = false;
+    }
+  })();
+  async function editsAllowed() {
+    await loaded;
+    return allowed;
+  }
+  async function setEditsAllowed(on) {
+    await loaded;
+    allowed = on;
+    try {
+      await figma.clientStorage.setAsync(KEY, on);
+    } catch (e) {
+      console.error("[export] could not save the Allow edits setting:", e);
+    }
+    return allowed;
+  }
+
   // src/writes.ts
   function solidPaint(hex, what) {
     const c = parseHexColor(hex);
@@ -3923,7 +3950,27 @@
     }
   }
   async function applyWrites(ops) {
-    const list = Array.isArray(ops) ? ops : [];
+    const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+    announce(r);
+    return r;
+  }
+  function announce(r) {
+    const n = r.applied.length;
+    const edits = n + " edit" + (n === 1 ? "" : "s");
+    let text = null;
+    if (r.refused === "edits-off") text = "Design Twin refused an edit request \u2014 'Allow edits' is off.";
+    else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
+    else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+    if (text === null) return;
+    try {
+      figma.notify(text, r.ok ? void 0 : { error: true });
+    } catch (e) {
+      console.error("[export] figma.notify failed:", e);
+    }
+    const m = { type: "writes", applied: n, ok: r.ok, text };
+    figma.ui.postMessage(m);
+  }
+  async function gatedWrites(list) {
     const applied = [];
     if (list.length && figma.editorType === "dev") {
       const first2 = list[0];
@@ -3934,6 +3981,9 @@
         ...ifDefined("failedOp", first2 && first2.op),
         error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
       };
+    }
+    if (list.length && !await editsAllowed()) {
+      return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     }
     for (const [i, op] of list.entries()) {
       const bad = writeOpError(op, i);
@@ -4003,7 +4053,9 @@
             // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
             pluginVersion: "0.1.0",
             fileKey: fileKey === void 0 ? null : fileKey,
-            fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0
+            fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
+            // So figma_write's dry run can say a real write would be refused before anyone sends one.
+            editsAllowed: await editsAllowed()
           };
           return r;
         };
@@ -4065,6 +4117,8 @@
       // cost class as listPages depth 2, not that of an export.
       case "listLibraries":
         return () => listLibraries();
+      // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
+      // here, so no caller of it can skip it.
       case "write": {
         const ops = req.args.ops;
         return () => applyWrites(ops);
@@ -4083,6 +4137,8 @@
     "get-identity",
     "run-selection",
     "run-full",
+    "get-allow-edits",
+    "set-allow-edits",
     "cancel",
     "bridge"
   ]);
@@ -4157,6 +4213,14 @@
           identity = { error: errMsg(e) };
         }
         post2({ type: "identity", identity });
+        break;
+      }
+      case "get-allow-edits": {
+        post2({ type: "allow-edits", allowed: await editsAllowed() });
+        break;
+      }
+      case "set-allow-edits": {
+        post2({ type: "allow-edits", allowed: await setEditsAllowed(raw.allowed === true) });
         break;
       }
       case "run-selection": {

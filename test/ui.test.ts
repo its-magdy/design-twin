@@ -21,7 +21,9 @@ const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..",
 interface FakeEl {
   id: string; textContent: string; className: string; hidden: boolean; open: boolean; disabled: boolean;
   value: string; style: Record<string, string>; appendChild(): void; innerHTML: string;
+  checked?: boolean;
   onclick?: () => void;
+  onchange?: () => void;
 }
 interface FakeSocket {
   url: string; readyState: number;
@@ -31,7 +33,7 @@ interface FakeSocket {
   close(): void; send(d: string): void;
 }
 interface Timer { fn: (() => void) | null; ms: number }
-interface PluginMsg { type: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
+interface PluginMsg { type: string; allowed?: unknown; applied?: number; text?: string; token?: string; source?: string; label?: string; phase?: string; requestId?: string; id?: string; scope?: string; ok?: boolean; result?: unknown; identity?: unknown }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
@@ -74,7 +76,7 @@ check("the relay is bundled into the window's one script, which stays sloppy-mod
   /var DesignTwinRelay = /.test(script) && !/^\s*"use strict"/.test(script));
 
 console.log("markup the script depends on:");
-const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge"];
+const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge", "allow-edits", "edits-state"];
 check("every element id the script looks up exists in the markup", ids.every((id) => new RegExp(`id="${id}"`).test(html)));
 check("the token input has a real <label for>, not just a placeholder", /<label[^>]*for="token"/.test(html));
 check("status and banner are live regions (a finished export is announced)", /id="status"[^>]*aria-live/.test(html) && /id="banner"[^>]*role="alert"/.test(html));
@@ -227,6 +229,39 @@ check("a frame for a socket that is not open is dropped, not thrown", (() => {
   const w = boot(); w.msg({ type: "token", token: "t" }); const s = w.last(); // still CONNECTING
   w.msg({ type: "bridge-result", id: "r-3", ok: true, result: 1 });
   return s.sent.length === 0 && w.el("status").className !== "err";
+})());
+
+console.log("Allow edits:");
+check("the checkbox is labelled 'Allow edits', unchecked in the markup, and outside the collapsed connection section", (() => {
+  const box = /<input id="allow-edits" type="checkbox"[^>]*>/.exec(html)?.[0] ?? "";
+  const connectAt = html.indexOf('<details id="connect">');
+  return box !== "" && !/checked/.test(box) && /<label id="edits-row" for="allow-edits">[\s\S]*?Allow edits/.test(html)
+    && html.indexOf('id="allow-edits"') < connectAt;
+})());
+check("the window asks the main thread for the saved setting on load, and keeps the box disabled until it answers", (() => {
+  const w = boot(); // the fake DOM does not parse markup, so the initial `disabled` is read from the markup itself
+  return w.posted.some((p) => p.type === "get-allow-edits") && /<input id="allow-edits" type="checkbox" disabled/.test(html);
+})());
+check("allow-edits from the main thread drives the box and its on/off tag (the main thread is the truth)", (() => {
+  const w = boot();
+  w.msg({ type: "allow-edits", allowed: true });
+  const on = w.el("allow-edits").checked === true && !w.el("allow-edits").disabled && w.el("edits-state").textContent === "on";
+  w.msg({ type: "allow-edits", allowed: false });
+  return on && w.el("allow-edits").checked === false && w.el("edits-state").textContent === "off";
+})());
+check("ticking the box posts set-allow-edits {allowed:true} and disables it until the answer", (() => {
+  const w = boot();
+  w.msg({ type: "allow-edits", allowed: false });
+  const box = w.el("allow-edits"); box.checked = true; box.onchange?.();
+  const sent = w.posted.filter((p) => p.type === "set-allow-edits");
+  return sent.length === 1 && sent[0]?.allowed === true && box.disabled === true;
+})());
+check("a write notice from the main thread lands on the status line (red when refused)", (() => {
+  const w = boot();
+  w.msg({ type: "writes", applied: 2, ok: true, text: "Design Twin applied 2 edits to this file." });
+  const shown = w.el("status").textContent === "Design Twin applied 2 edits to this file." && w.el("status").className !== "err";
+  w.msg({ type: "writes", applied: 0, ok: false, text: "Design Twin refused an edit request — 'Allow edits' is off." });
+  return shown && /refused/.test(w.el("status").textContent) && w.el("status").className === "err";
 })());
 
 report();

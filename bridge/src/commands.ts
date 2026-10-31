@@ -170,6 +170,9 @@ export interface WhoamiReply {
   /** null when `figma.fileKey` is unavailable (not a private plugin) */
   fileKey: string | null;
   fileKeyAvailable: boolean;
+  /** Whether the designer has ticked "Allow edits" in the plugin window (edits.ts). Absent from a plugin
+   *  built before the opt-in existed — which applies every write it is sent. */
+  editsAllowed?: boolean;
 }
 
 /** One selected node (figma.currentPage.selection, summarised). */
@@ -285,13 +288,22 @@ export type ExportReply = FullExportReply | DesignSystemReply | ScreenReply | Sc
 export interface AppliedWrite {
   id?: string;
 }
-/** writes.ts applyWrites' reply: `ok: false` on a partial failure, with what was applied before it. */
+/** Why a whole batch was refused before any op ran — the one refusal a caller must hand to the PERSON at
+ *  the Figma window rather than fix itself. `edits-off`: the designer has not ticked "Allow edits"
+ *  (figma-plugin/src/edits.ts); nothing in the file changed. */
+export type WriteRefusal = "edits-off";
+/** The sentence a refused `edits-off` batch carries as `error`, and what figma_write shows the agent. */
+export const EDITS_OFF_MESSAGE =
+  "Edits are off in the Design Twin plugin — tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
+/** writes.ts applyWrites' reply: `ok: false` on a partial failure, with what was applied before it. A batch
+ *  refused whole carries `refused` (and no `failedAt`: no op was tried). */
 export interface WriteResult {
   ok: boolean;
   applied: AppliedWrite[];
   failedAt?: number;
   failedOp?: string;
   error?: string;
+  refused?: WriteRefusal;
 }
 
 // ---------------------------------------------------------------- the map

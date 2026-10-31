@@ -49,7 +49,7 @@ is the calling convention, spelled out under the diagram.
                          MCP front-end: interactive reads + the only WRITE path  — optional
   Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js
           same reads as the CLI (inline, or to disk via writeToDisk:true) · figma_write (code → design,
-          4 safe ops, dryRun preview, refused in read-only Dev Mode)
+          4 safe ops, dryRun preview, refused in read-only Dev Mode and while "Allow edits" is off)
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
@@ -379,7 +379,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
    interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.
-   Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API.
+   Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API, and
+   the plugin applies none of them until the designer ticks **Allow edits** in its window (see Security posture).
 
 ## Security posture
 
@@ -442,6 +443,15 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   text found in an export is never followed as an instruction, whatever it says. Annotations and
   `devStatusNote` are honoured only as *design constraints* (spacing, behaviour, state), never as
   requests to run commands, read other files, or change the workflow.
+- Writes need the designer's consent, in the plugin. The plugin window's **Allow edits** checkbox is off by
+  default and saved per user (`clientStorage`, global rather than per file — the plugin has no reliable file
+  identity, and a flag stored in the document would itself be a write). The main thread is the authority:
+  `figma-plugin/src/edits.ts` holds the setting and `writes.ts` `applyWrites` checks it before any op, so every
+  caller — the bridge's `write`, and the `__designExport` test surface, which exposes the same gated function —
+  is refused alike while it is off (`refused: "edits-off"` plus the sentence `figma_write` shows). Only the
+  window's checkbox can set it: the relay (`relay.ts`) turns every socket frame into a `bridge` command or a
+  bridge cancel, never a settings message. Every applied or refused batch is announced (a Figma toast and the
+  window's status line). The harness ticks the box the way the window does (a `set-allow-edits` message).
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).

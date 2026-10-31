@@ -68,7 +68,10 @@ export interface FakeFigma {
   on(): void;
   /** `onmessage` is main.ts's UI -> main handler once code.js has been evaluated. */
   ui: { onmessage: ((msg: unknown) => Promise<void>) | null; postMessage(m: PostedMessage): void };
-  clientStorage: { getAsync(): Promise<string>; setAsync(): Promise<void> };
+  /** Per-user plugin storage, keyed like the real one (the bridge token, the Allow edits setting). */
+  clientStorage: { getAsync(key: string): Promise<unknown>; setAsync(key: string, value: unknown): Promise<void> };
+  /** Figma's toast; the fake records each message in `World.notified`. */
+  notify(message: string, options?: { error?: boolean }): void;
   currentPage: FakePage;
   fileKey: string;
   root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
@@ -137,7 +140,7 @@ export interface ListChildrenResult {
   assets?: undefined;
 }
 /** writes.ts WriteResult (applied rows are `{ id }`) */
-export interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string }
+export interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string; refused?: "edits-off" }
 interface WriteOp { op: string; [field: string]: unknown }
 /** progress.ts RunInfo */
 export interface RunInfo { source: "ui" | "bridge"; label: string; requestId?: string }
@@ -191,6 +194,8 @@ export interface Scene {
   images?: Record<string, FakeImage>;
   teamLibrary?: FakeTeamLibrary;
   rootPluginData?: (key: string) => string;
+  /** what figma.clientStorage holds when the plugin starts (e.g. `{ allowEdits: true }` saved last session) */
+  clientStorage?: Record<string, unknown>;
 }
 /** A scene with every table present: what a world's lookups read, live. */
 export interface ResolvedScene {
@@ -213,6 +218,12 @@ export interface World {
   posted: PostedMessage[];
   /** one UI -> main message through main.ts's handler; resolves to what the plugin posted while handling it */
   send(msg: unknown): Promise<PostedMessage[]>;
+  /** every figma.notify message, in order */
+  notified: string[];
+  /** what clientStorage holds (seed it with Scene.clientStorage) */
+  storage: Map<string, unknown>;
+  /** Tick "Allow edits" the way the plugin window does (a set-allow-edits message) — what a write case needs. */
+  allowEdits(on?: boolean): Promise<void>;
 }
 
 /** figma.mixed. One symbol for every world, so a fixture can carry it before its world exists. */
@@ -295,6 +306,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const selection = delta.selection ?? base.selection;
   if (selection) currentPage.selection = selection;
   const posted: PostedMessage[] = [];
+  const notified: string[] = [];
+  const storage = new Map<string, unknown>(Object.entries(delta.clientStorage ?? base.clientStorage ?? {}));
   const rootPluginData = delta.rootPluginData ?? base.rootPluginData;
   const teamLibrary = delta.teamLibrary ?? base.teamLibrary;
 
@@ -302,7 +315,8 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
     mixed: MIXED,
     showUI: noop, on: noop,
     ui: { onmessage: null, postMessage: (m) => { posted.push(m); } },
-    clientStorage: { getAsync: async () => "", setAsync: async () => {} },
+    clientStorage: { getAsync: async (k) => storage.get(k), setAsync: async (k, v) => { storage.set(k, v); } },
+    notify: (m) => { notified.push(m); },
     currentPage,
     fileKey: file.fileKey ?? "",
     root: {
@@ -346,14 +360,15 @@ export function fakeWorld(base: Scene, delta: Scene = {}, overrides: FakeOverrid
   const api: Record<string, unknown> = typeof exported === "object" && exported !== null ? { ...exported } : {};
   if (!isApi(api)) throw new Error(`code.js did not expose the export API: missing ${missingApi(api).join(", ")}`);
 
+  const send = async (msg: unknown): Promise<PostedMessage[]> => {
+    const handler = figma.ui.onmessage;
+    if (!handler) throw new Error("code.js did not register figma.ui.onmessage");
+    const from = posted.length;
+    await handler(msg);
+    return posted.slice(from);
+  };
   return {
-    figma, api, scene, posted,
-    async send(msg) {
-      const handler = figma.ui.onmessage;
-      if (!handler) throw new Error("code.js did not register figma.ui.onmessage");
-      const from = posted.length;
-      await handler(msg);
-      return posted.slice(from);
-    },
+    figma, api, scene, posted, send, notified, storage,
+    async allowEdits(on = true) { await send({ type: "set-allow-edits", allowed: on }); },
   };
 }

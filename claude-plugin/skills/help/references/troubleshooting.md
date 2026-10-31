@@ -133,6 +133,11 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `profile` in `design/target.json`. For a stack the plugin does not bundle, write
   `design/profile.md` from `<plugin>/skills/build-screen/profiles/_template.md` and name it in `target.json`.
+- **`figma_write` returns "Edits are off in the Design Twin plugin — tick 'Allow edits' …"** (or a dry run
+  says `editsAllowed: false`) → the designer has not let the plugin change this file. Writes are off by
+  default. Nothing was changed, and the agent cannot turn it on: **ask the user to tick "Allow edits" in the
+  Design Twin plugin window**, then retry the same call. The setting is saved for this user in every file, so
+  remind them to untick it when they are done. Reads and exports work either way.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.

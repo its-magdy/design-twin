@@ -24,11 +24,14 @@ import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
+import { editsAllowed, setEditsAllowed } from "./edits";
 import { isUIToMain, type ExportFile, type ExportLayerFile, type MainToUI } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in
-// the isolated plugin realm; not referenced by the UI or bridge.
+// the isolated plugin realm; not referenced by the UI or bridge. `applyWrites` here is the SAME gated
+// function the bridge's `write` runs — it refuses while "Allow edits" is off (edits.ts), so this surface is
+// no way around the designer's consent; the harness turns edits on the way the window does (set-allow-edits).
 // serializeRun/requestCancel ride along because progress + cancellation only exist INSIDE a bracketed
 // run (see progress.ts): a harness that called a collector directly would see neither, so the test
 // surface has to be the same entry point main.ts and bridge.ts use. assetRetention is a read-only
@@ -144,6 +147,15 @@ figma.ui.onmessage = async (raw: unknown) => {
         identity = { error: errMsg(e) };
       }
       post({ type: "identity", identity });
+      break;
+    }
+    case "get-allow-edits": {
+      post({ type: "allow-edits", allowed: await editsAllowed() });
+      break;
+    }
+    case "set-allow-edits": {
+      // Only `allowed: true` turns edits on; every other value posted here leaves the file read-only.
+      post({ type: "allow-edits", allowed: await setEditsAllowed(raw.allowed === true) });
       break;
     }
     case "run-selection": {

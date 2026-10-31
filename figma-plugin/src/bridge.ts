@@ -1,6 +1,7 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { applyWrites } from "./writes";
+import { editsAllowed } from "./edits";
 import { listLibraries } from "./libraries";
 import { scheduleRun } from "./state";
 import { type RunInfo } from "./progress";
@@ -88,6 +89,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
         pluginVersion: __PLUGIN_VERSION__,
         fileKey: fileKey === undefined ? null : fileKey,
         fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
+        // So figma_write's dry run can say a real write would be refused before anyone sends one.
+        editsAllowed: await editsAllowed(),
       };
       return r;
     };
@@ -149,6 +152,8 @@ function work(req: CommandRequest): () => Promise<Commands[Cmd]["reply"]> {
     // cost class as listPages depth 2, not that of an export.
     case "listLibraries":
       return () => listLibraries();
+    // applyWrites refuses the batch whole while "Allow edits" is off (edits.ts) — the gate lives there, not
+    // here, so no caller of it can skip it.
     case "write": {
       const ops = req.args.ops;
       return () => applyWrites(ops);

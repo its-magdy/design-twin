@@ -2,7 +2,9 @@
 import { errMsg } from "./util";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { parseHexColor, HEX_COLOR_HINT } from "../../bridge/src/hex-color.ts";
-import { writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { EDITS_OFF_MESSAGE, writeOpError, type AppliedWrite, type WriteOp, type WriteResult } from "../../bridge/src/commands.ts";
+import { editsAllowed } from "./edits";
+import type { WritesMsg } from "./messages";
 
 // Hex colours (#rgb, #rgba, #rrggbb, #rrggbbaa) are the only form accepted; the 4th pair is alpha,
 // which Figma carries as paint.opacity (not in .color). Anything else throws, so the batch reports
@@ -110,7 +112,28 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
 // the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
-  const list = Array.isArray(ops) ? ops : [];
+  const r = await gatedWrites(Array.isArray(ops) ? ops : []);
+  announce(r);
+  return r;
+}
+
+// A write is never silent: whatever changed the file (or was refused from changing it) is said in Figma's own
+// toast AND on the plugin window's status line (ui.template.html `writes`). An empty batch changed nothing and
+// says nothing.
+function announce(r: WriteResult): void {
+  const n = r.applied.length;
+  const edits = n + " edit" + (n === 1 ? "" : "s");
+  let text: string | null = null;
+  if (r.refused === "edits-off") text = "Design Twin refused an edit request — 'Allow edits' is off.";
+  else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
+  else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
+  if (text === null) return;
+  try { figma.notify(text, r.ok ? undefined : { error: true }); } catch (e) { console.error("[export] figma.notify failed:", e); }
+  const m: WritesMsg = { type: "writes", applied: n, ok: r.ok, text };
+  figma.ui.postMessage(m);
+}
+
+async function gatedWrites(list: WriteOp[]): Promise<WriteResult> {
   const applied: AppliedWrite[] = [];
   // Dev Mode (manifest editorType "dev") is read-only: every op below would throw its own opaque
   // Plugin-API error, the first one partway into the batch. Refuse the whole batch up front, with the
@@ -124,6 +147,13 @@ export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
       ...ifDefined("failedOp", first && first.op),
       error: "the file is open in Dev Mode, which is read-only for plugins — switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode.",
     };
+  }
+  // The designer's consent (edits.ts): with "Allow edits" off the whole batch is refused before any op is
+  // checked or run, with the refusal named so figma_write can tell the agent to ask the person at the window.
+  // Here, not in bridge.ts, so every caller of applyWrites — the __designExport test surface included — meets
+  // the same gate.
+  if (list.length && !(await editsAllowed())) {
+    return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
   }
   // Every op is checked against its WRITE_OPS row (commands.ts writeOpError, the row figma_write's dry run reads)
   // BEFORE the first one runs: a batch the preview calls invalid is refused whole, never half-applied up to its bad

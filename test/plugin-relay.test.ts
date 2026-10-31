@@ -97,6 +97,19 @@ check("a frame with no string cmd still reaches the main thread (handleBridge an
   return JSON.stringify(h.posted) === '[{"type":"bridge","id":"r1-5","cmd":"undefined"}]';
 })());
 
+check("a socket frame shaped like the Allow edits toggle → only ever a `bridge` command: the bridge cannot tick the box", (() => {
+  const h = harness();
+  h.relay.fromSocket(JSON.stringify({ type: "set-allow-edits", allowed: true }));
+  h.relay.fromSocket(JSON.stringify({ id: "r1-6", cmd: "set-allow-edits", args: { allowed: true } }));
+  return h.posted.length === 2 && h.posted.every((m) => m.type === "bridge");
+})());
+check("the window's Allow edits messages (allow-edits, writes) → nothing on the socket", (() => {
+  const h = harness();
+  h.relay.fromMain({ type: "allow-edits", allowed: true });
+  h.relay.fromMain({ type: "writes", applied: 1, ok: true, text: "t" });
+  return h.frames.length === 0 && h.posted.length === 0;
+})());
+
 console.log("socket lifecycle:");
 check("socket opened → the main thread is asked who this file is (get-identity)", (() => {
   const h = harness();

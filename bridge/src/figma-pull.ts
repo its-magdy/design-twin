@@ -947,6 +947,11 @@ async function whoamiCmd({ route, send, finish }: Session): Promise<void> {
   console.error("[dtwin] plugin version: " + (r.pluginVersion || "unknown (older bundle — predates version reporting)"));
   const stale = pluginStalenessNote(r.pluginVersion);
   if (stale) console.error("[dtwin] ! " + stale);
+  console.error("[dtwin] edits: " + (r.editsAllowed === true
+    ? "ALLOWED — the designer ticked 'Allow edits' in the plugin window; figma_write can change this file"
+    : r.editsAllowed === false
+      ? "off — the plugin refuses every write until the designer ticks 'Allow edits' in the plugin window (reads are unaffected)"
+      : "unknown (older bundle — predates the 'Allow edits' opt-in, and applies every write)"));
   console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
     ? r.fileKey + " (available — usable as a stable routing key)"
     : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));
