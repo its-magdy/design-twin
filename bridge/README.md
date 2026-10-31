@@ -1,10 +1,25 @@
-# Design Twin — bridge
+# Design Twin — `dtwin`
 
-**figma-pull (read CLI) + figma-mcp (write MCP).**
+> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
 
-Local, loopback-only bridge between Claude Code and the **Design Twin** Figma plugin.
-The plugin's hidden UI iframe is a WebSocket **client**; these processes are the **server**
-(`127.0.0.1:8787`). Nothing touches the internet. See `../ARCHITECTURE.md` for the full design.
+`@design-twin/dtwin` is the **`dtwin` CLI** (pulls a design onto disk) and the **MCP server** (the same reads as live
+tools, plus the only write path) of [Design Twin](https://github.com/its-magdy/design-twin). It also ships the Figma
+plugin they talk to. The bridge is local and loopback-only: the plugin's hidden UI iframe is a WebSocket **client**,
+and these processes are the **server** (`127.0.0.1:8787`). Nothing touches the internet. See
+[ARCHITECTURE.md](https://github.com/its-magdy/design-twin/blob/main/ARCHITECTURE.md) for the full design.
+
+**Quick start**, in the project you are building, after the install below:
+
+```
+dtwin init --mcp   # design/, the bridge token, the Figma plugin's copy, a .mcp.json entry
+dtwin plugin path  # import this manifest once: Figma desktop → Plugins → Development → Import plugin from manifest…
+dtwin token show   # paste into the plugin: Connect to Claude Code (optional) → Bridge token → Save
+dtwin doctor       # checks everything and names the next step
+dtwin list         # then: dtwin pull --node <id>
+```
+
+For the Claude Code skills (audit, build, verify, sync), see the
+[project README](https://github.com/its-magdy/design-twin#readme).
 
 ## Install (once)
 It needs [Bun](https://bun.sh/install) ≥ 1.4.2 (`engines.bun`) on your PATH; Node is not supported. Install Bun
