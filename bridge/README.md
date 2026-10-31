@@ -18,6 +18,14 @@ bun add -g @design-twin/dtwin   # puts `dtwin` in ~/.bun/bin (on your PATH via t
 inside it — `dtwin init` prints the full path to import) and the design-to-code bundles the MCP server's
 `design_get_component` / `design_drift_lint` load (`layer/`).
 
+Or with Homebrew (macOS, Linux), which installs Bun for you and keeps both up to date with `brew upgrade`:
+```
+brew install its-magdy/tap/dtwin
+```
+The formula installs the same npm package into Homebrew's prefix; every release updates it. Paths `dtwin init` writes
+(the `.mcp.json` server entry, the plugin manifest it prints) are spelt through `$(brew --prefix)/opt/dtwin/…`, which
+survives an upgrade — not the versioned `Cellar/dtwin/<version>/` folder the next `brew upgrade` deletes.
+
 Or from a clone (to work on the code):
 ```
 git clone https://github.com/its-magdy/design-twin.git && cd design-twin

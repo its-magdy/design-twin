@@ -926,7 +926,8 @@ void (async () => {
     })());
     // An entry of ours that WILL start: this bun, with the shebang's flags, at the real figma-mcp.ts.
     const realMcp = path.resolve(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
-    const healthy = { command: process.execPath, args: ["--no-install", "--no-env-file", realMcp] };
+    // stableKegPath: on a machine whose bun is Homebrew's, process.execPath is a Cellar path — itself a problem now.
+    const healthy = { command: init.stableKegPath(process.execPath), args: ["--no-install", "--no-env-file", realMcp] };
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
       const before = JSON.stringify({ mcpServers: { figma: healthy } });
       const d = mk({ ".mcp.json": before });
@@ -1011,6 +1012,89 @@ void (async () => {
       fs.writeFileSync(other, "");
       return init.stableBunPath(process.execPath, link) === link && init.stableBunPath(process.execPath, other) === process.execPath
         && init.stableBunPath(process.execPath, null) === process.execPath && init.stableBunPath(process.execPath, path.join(dir, "gone")) === process.execPath;
+    })());
+    // A Homebrew layout in a temp dir: <prefix>/Cellar/<formula>/<version>/… with <prefix>/opt/<formula> linking the
+    // current version. `brew upgrade` deletes the old version folder, so only the opt spelling survives one.
+    const fakeBrew = (): { prefix: string; keg: (f: string, v: string) => string; link: (f: string, v: string) => void } | null => {
+      const prefix = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-brew-")));
+      fs.mkdirSync(path.join(prefix, "opt"));
+      const keg = (f: string, v: string) => path.join(prefix, "Cellar", f, v);
+      const link = (f: string, v: string) => { fs.rmSync(path.join(prefix, "opt", f), { force: true }); fs.symlinkSync(path.join("..", "Cellar", f, v), path.join(prefix, "opt", f)); };
+      try { fs.symlinkSync(prefix, path.join(prefix, "probe")); } catch { return null; } // no symlinks here (Windows without the privilege)
+      return { prefix, keg, link };
+    };
+    ok("[init] stableKegPath: a path in a Homebrew Cellar version folder is spelt through opt when that resolves to the same file; anything else is left as is", (() => {
+      const b = fakeBrew();
+      if (!b) return true;
+      const script = path.join(b.keg("dtwin", "0.1.0"), "libexec", "src", "figma-mcp.ts");
+      fs.mkdirSync(path.dirname(script), { recursive: true });
+      fs.writeFileSync(script, "");
+      fs.mkdirSync(b.keg("other", "1.0"), { recursive: true }); // a keg with no opt link
+      fs.mkdirSync(b.keg("dtwin", "0.0.9"), { recursive: true }); // an older version opt does not point at
+      b.link("dtwin", "0.1.0");
+      const opt = path.join(b.prefix, "opt", "dtwin", "libexec", "src");
+      return init.stableKegPath(script) === path.join(opt, "figma-mcp.ts") && init.stableKegPath(path.dirname(script)) === opt
+        && init.stableKegPath(b.keg("dtwin", "0.1.0")) === path.join(b.prefix, "opt", "dtwin")
+        && init.stableKegPath(b.keg("other", "1.0")) === b.keg("other", "1.0") && init.stableKegPath(b.keg("dtwin", "0.0.9")) === b.keg("dtwin", "0.0.9")
+        && init.stableKegPath(realMcp) === realMcp && init.stableKegPath(path.join(b.prefix, "Cellar", "gone", "1", "x")) === path.join(b.prefix, "Cellar", "gone", "1", "x");
+    })());
+    ok("[init] stableBunPath: a Homebrew bun that is not the one on PATH is still named through opt, not its Cellar version folder", (() => {
+      const b = fakeBrew();
+      if (!b) return true;
+      const cellarBun = path.join(b.keg("bun", "1.4.4"), "bin", "bun");
+      fs.mkdirSync(path.dirname(cellarBun), { recursive: true });
+      fs.symlinkSync(process.execPath, cellarBun);
+      b.link("bun", "1.4.4");
+      const optBun = path.join(b.prefix, "opt", "bun", "bin", "bun");
+      const other = path.join(b.prefix, "other-bun");
+      fs.writeFileSync(other, "");
+      return init.stableBunPath(cellarBun, null) === optBun && init.stableBunPath(cellarBun, other) === optBun && init.stableBunPath(cellarBun, optBun) === optBun;
+    })());
+    ok("[init] an entry spelt through a Homebrew Cellar version folder is a problem init --mcp repairs to the opt spelling and doctor fails", (() => {
+      const b = fakeBrew();
+      if (!b) return true;
+      const kegScript = path.join(b.keg("dtwin", "0.1.0"), "libexec", "src", "figma-mcp.ts");
+      const kegBun = path.join(b.keg("bun", "1.4.4"), "bin", "bun");
+      fs.mkdirSync(path.dirname(kegScript), { recursive: true });
+      fs.writeFileSync(kegScript, "");
+      fs.mkdirSync(path.dirname(kegBun), { recursive: true });
+      fs.symlinkSync(process.execPath, kegBun);
+      b.link("dtwin", "0.1.0");
+      b.link("bun", "1.4.4");
+      const optEntry = { command: path.join(b.prefix, "opt", "bun", "bin", "bun"), args: ["--no-install", "--no-env-file", path.join(b.prefix, "opt", "dtwin", "libexec", "src", "figma-mcp.ts")] };
+      const kegEntry = { command: kegBun, args: ["--no-install", "--no-env-file", kegScript] };
+      const problems = init.mcpEntryProblems(kegEntry);
+      const d = mk({ ".mcp.json": JSON.stringify({ mcpServers: { designtwin: kegEntry } }) });
+      const check = doctorMod.checkProject(d).find((c) => c.id === "mcp");
+      const plan = init.plan(d, { mcp: true, mcpEntry: optEntry, token: tok });
+      init.apply(d, plan, () => {});
+      const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+      return problems.length === 2 && problems.every((p) => /versioned Homebrew folder/.test(p)) && init.mcpEntryProblems(optEntry).length === 0
+        && check?.status === "fail" && /versioned Homebrew folder/.test(check.detail)
+        && JSON.stringify(e) === JSON.stringify(optEntry) && plan.some((a) => a.kind === "write" && /REPAIRED.*versioned Homebrew folder/.test(a.note));
+    })());
+    // The real CLI run from a Homebrew-shaped install, through the opt link the formula's wrapper uses: Bun resolves that
+    // link (import.meta.dirname is the Cellar folder), and the entry must still name opt — then survive an upgrade.
+    ok("[init] CLI: run through Homebrew's opt link, --mcp writes the opt path to figma-mcp.ts, which still exists after an upgrade", (() => {
+      const b = fakeBrew();
+      if (!b) return true;
+      const install = (v: string) => {
+        const libexec = path.join(b.keg("dtwin", v), "libexec");
+        fs.mkdirSync(libexec, { recursive: true });
+        fs.cpSync(path.resolve(import.meta.dirname, "..", "bridge", "src"), path.join(libexec, "src"), { recursive: true });
+        fs.copyFileSync(path.resolve(import.meta.dirname, "..", "bridge", "package.json"), path.join(libexec, "package.json"));
+        fs.symlinkSync(path.resolve(import.meta.dirname, "..", "node_modules"), path.join(libexec, "node_modules"));
+        b.link("dtwin", v);
+      };
+      install("0.1.0");
+      const d = mk({});
+      const r = bunSync([path.join(b.prefix, "opt", "dtwin", "libexec", "src", "figma-pull.ts"), "init", "--mcp"], { cwd: d, timeoutMs: 10000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const e = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin;
+      const want = path.join(b.prefix, "opt", "dtwin", "libexec", "src", "figma-mcp.ts");
+      const wrote = r.status === 0 && e?.args?.[2] === want && init.mcpEntryProblems(e).length === 0;
+      install("0.2.0");
+      fs.rmSync(b.keg("dtwin", "0.1.0"), { recursive: true });
+      return wrote && fs.existsSync(want) && init.mcpEntryProblems(e).length === 0 && doctorMod.checkProject(d).find((c) => c.id === "mcp")?.status === "ok";
     })());
     ok("[init] --mcp leaves a foreign designtwin entry, and an invalid .mcp.json, untouched", (() => {
       const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });

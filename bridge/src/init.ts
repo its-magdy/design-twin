@@ -9,7 +9,7 @@
 // Rules it keeps:
 //   - Never overwrites. Every file it would write is skipped, and said so, if it already exists;
 //     .mcp.json is MERGED (an existing "figma" entry is left exactly as it is). The one exception is
-//     an entry of OURS that can no longer start (mcpEntryProblems: a bun or figma-mcp.ts that is gone,
+//     an entry of OURS that can no longer start (mcpEntryProblems: a bun or figma-mcp.ts that is gone or spelt through a versioned Homebrew Cellar folder,
 //     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags, a `bunx @design-twin/dtwin mcp` that fetches the
 //     package at start-up): --mcp re-points that entry, under
 //     its own key and keeping its other fields, at this install — and says so (--dry-run only says so).
@@ -106,8 +106,21 @@ const BUN_FLAGS = ["--no-install", "--no-env-file"] as const;
  *  process.execPath alone is the resolved file, and for a Homebrew (or any versioned) install that is a versioned path
  *  (…/Cellar/bun/1.4.2/bin/bun) the next `brew upgrade` deletes, leaving Claude Code a server it cannot start. */
 function stableBunPath(execPath: string = process.execPath, onPath: string | null = Bun.which("bun")): string {
-  if (!onPath) return execPath;
-  try { return fs.realpathSync(onPath) === fs.realpathSync(execPath) ? onPath : execPath; } catch { return execPath; }
+  if (!onPath) return stableKegPath(execPath);
+  try { return fs.realpathSync(onPath) === fs.realpathSync(execPath) ? onPath : stableKegPath(execPath); } catch { return stableKegPath(execPath); }
+}
+
+/** The upgrade-proof spelling of a path inside a Homebrew keg. Homebrew installs a formula into a versioned folder,
+ *  `<prefix>/Cellar/<formula>/<version>/…`, that the next `brew upgrade` deletes, and keeps `<prefix>/opt/<formula>` as a
+ *  symlink to whichever version is current. Bun resolves symlinks, so a file run through that opt link still sees its
+ *  Cellar path (import.meta.dirname, process.execPath) — and an absolute path written from it (.mcp.json's server and
+ *  bun, the plugin manifest Figma remembers) would stop working after one upgrade. Returns the opt spelling when it
+ *  resolves to the very same file, else `p` unchanged (not in a Cellar, or a layout where opt is elsewhere). */
+function stableKegPath(p: string): string {
+  const m = /^(.*)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+(?:[\\/](.*))?$/.exec(p);
+  if (!m || m[1] === undefined || m[2] === undefined) return p;
+  const opt = path.join(m[1], "opt", m[2], m[3] ?? "");
+  try { return fs.realpathSync(opt) === fs.realpathSync(p) ? opt : p; } catch { return p; }
 }
 
 /** The bunx cache directory `dir` sits in, or null. `bunx @design-twin/dtwin …` installs the package into a cache tree
@@ -129,9 +142,16 @@ export interface EntryProbe {
   cwd?: string;
 }
 
+/** A path that works today but sits in a versioned Homebrew folder the next `brew upgrade` deletes — when the opt
+ *  spelling of it exists (stableKegPath), so init's repair has somewhere stable to point. Empty otherwise. */
+function kegProblem(what: string, p: string): string[] {
+  const stable = stableKegPath(p);
+  return stable === p ? [] : [`${what} ${p} is in a versioned Homebrew folder the next \`brew upgrade\` deletes (the stable spelling is ${stable})`];
+}
+
 /** What is wrong with an .mcp.json entry of OURS (isOurMcpEntry), one phrase each — empty when it will start: its command
  *  exists, it runs on Bun (not Node, not the old bridge/dist build), it names a server script (not a package bunx would
- *  fetch), that script exists outside a bunx cache, and bun gets the two flags before that script. The ONE rule for init (repair it) and doctor (report it). */
+ *  fetch), that script exists outside a bunx cache, neither is spelt through a versioned Homebrew Cellar folder, and bun gets the two flags before that script. The ONE rule for init (repair it) and doctor (report it). */
 function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => Bun.which(c), cwd = process.cwd() }: EntryProbe = {}): string[] {
   if (!isRecord(e) || typeof e.command !== "string" || e.command === "") return ["it has no `command`"];
   const command = e.command;
@@ -142,6 +162,7 @@ function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => B
   if (nodeShaped) out.push(`it runs on Node (\`${command}\`) — Design Twin runs on Bun only`);
   const found = /[\\/]/.test(command) ? exists(path.resolve(cwd, command)) : which(command) !== null;
   if (!found) out.push(`its command \`${command}\` ${/[\\/]/.test(command) ? "does not exist" : "is not on PATH"}`);
+  else if (/[\\/]/.test(command)) out.push(...kegProblem("its command", path.resolve(cwd, command)));
   const i = args.findIndex((a) => FIGMA_MCP_SCRIPT.test(a));
   const script = args[i];
   // No server script: the package-runner form (`bunx @design-twin/dtwin mcp`, `bun x @design-twin/dtwin mcp`, an older `npx designtwin
@@ -156,6 +177,7 @@ function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => B
   // figma-mcp.js / .mjs (bridge/dist, or the older bridge/figma-mcp.mjs) is the Node-era build: the package ships .ts now
   if (/\.m?js$/.test(script)) out.push(`it points at the old Node build (${script})`);
   else if (!exists(abs)) out.push(`its server script ${script} does not exist`);
+  else out.push(...kegProblem("its server script", abs));
   const cache = bunxCacheOf(abs);
   if (cache) out.push(`its server script is in a bunx cache (${cache}) that Bun replaces or deletes on its own`);
   if (!nodeShaped) {
@@ -367,7 +389,9 @@ function main(argv: string[]): void {
   // ran init is one this package is known to work with, spelt the way that survives its upgrades
   // (stableBunPath). The flags are the shebang's (figma-pull.ts): no auto-install from the network, and
   // the project's .env stays out of the server's environment.
-  const mcpEntry: McpEntry = { command: stableBunPath(), args: [...BUN_FLAGS, path.join(import.meta.dirname, "figma-mcp.ts")] };
+  // Under Homebrew this file runs from a versioned Cellar folder, so the directory is spelt through opt (stableKegPath).
+  const here = stableKegPath(import.meta.dirname);
+  const mcpEntry: McpEntry = { command: stableBunPath(), args: [...BUN_FLAGS, path.join(here, "figma-mcp.ts")] };
   // Run through `bunx @design-twin/dtwin init`: this very file is in bunx's cache, so no entry may point at it.
   const cache = bunxCacheOf(import.meta.dirname);
   const refuseMcp = cache ? bunxRefusal(cache) : undefined;
@@ -378,7 +402,8 @@ function main(argv: string[]): void {
 
   // The Figma plugin's manifest: a repo checkout's (bridge/src/ -> ../../figma-plugin/), else the copy the npm
   // package carries (../figma-plugin/, put there by bridge/pack.ts). Neither: the step names the repo instead.
-  const manifest = [path.join(import.meta.dirname, "..", "..", "figma-plugin", "manifest.json"), path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json")].find((m) => fs.existsSync(m));
+  // Spelt from `here` too: Figma remembers the path a plugin was imported from, and a Cellar one is gone after an upgrade.
+  const manifest = [path.join(here, "..", "..", "figma-plugin", "manifest.json"), path.join(here, "..", "figma-plugin", "manifest.json")].find((m) => fs.existsSync(m));
   // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
   // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
   // marker is there, saying "install the plugin" is noise at best and confusing at worst.
@@ -421,4 +446,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, mcpEntryProblems, stableBunPath, bunxCacheOf, readMcpJson, usesTailwind, usesVite };
+export { detectProfile, plan, apply, main, isOurMcpEntry, mcpEntryProblems, stableBunPath, stableKegPath, bunxCacheOf, readMcpJson, usesTailwind, usesVite };
