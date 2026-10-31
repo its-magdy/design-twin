@@ -972,8 +972,8 @@ void (async () => {
     // start — the ephemeral registration init refuses to write. Their commands exist (the which seam), so the only problem
     // is the form itself; init --mcp repairs it to this install keeping the entry's other fields, and doctor fails it.
     const doctorMod = await import("../bridge/src/doctor.ts");
-    ok("[init] `bunx designtwin mcp` and `bun x designtwin mcp` are problems init --mcp repairs (other fields kept) and doctor fails", (() => {
-      const forms = [{ command: "bunx", args: ["designtwin", "mcp"] }, { command: "bun", args: ["x", "designtwin", "mcp"] }, { command: "bunx", args: ["--no-install", "designtwin", "mcp"] }];
+    ok("[init] `bunx @design-twin/dtwin mcp`, `bun x … mcp` and the old unscoped `designtwin` name are problems init --mcp repairs (other fields kept) and doctor fails", (() => {
+      const forms = [{ command: "bunx", args: ["@design-twin/dtwin", "mcp"] }, { command: "bun", args: ["x", "@design-twin/dtwin", "mcp"] }, { command: "bunx", args: ["designtwin", "mcp"] }, { command: "bun", args: ["x", "designtwin", "mcp"] }, { command: "bunx", args: ["--no-install", "designtwin", "mcp"] }];
       const which = (c: string) => (c === "bunx" || c === "bun" ? `/x/${c}` : null);
       return forms.every((form) => {
         const problems = init.mcpEntryProblems(form, { which });

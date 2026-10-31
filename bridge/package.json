@@ -1,5 +1,5 @@
 {
-  "name": "designtwin",
+  "name": "@design-twin/dtwin",
   "version": "0.1.0-alpha.0",
   "description": "Design Twin bridge: local CLI + MCP server between Claude Code and the Design Twin Figma plugin. Reads a design on the free Figma plan, fully offline.",
   "license": "MIT",

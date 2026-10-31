@@ -754,7 +754,7 @@ server.registerTool(
 // consumer.
 // Loaded LAZILY, on call, and never at module scope. ../../design-to-code/ is a SIBLING of this package
 // root (bridge/), so npm — whose `files` cannot reach outside the package root — does not ship it.
-// Importing it eagerly would take the whole server down with a module-not-found on a `bun add -g designtwin`
+// Importing it eagerly would take the whole server down with a module-not-found on a `bun add -g @design-twin/dtwin`
 // install, killing the other twelve tools over two that merely cannot work. So the server always
 // starts and only these two report, precisely, that they need the repo checkout.
 // The slice of each layer module this server calls, declared HERE (over doc-types.ts shapes) rather
