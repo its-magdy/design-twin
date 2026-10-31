@@ -32,6 +32,12 @@ export async function editsAllowed(): Promise<boolean> {
   return allowed;
 }
 
+/** The current value, without waiting: for the re-check right before each mutation (writes.ts consent), which
+ *  runs only after editsAllowed() has already awaited the saved setting. */
+export function editsAllowedNow(): boolean {
+  return allowed;
+}
+
 /** The designer ticked or cleared the checkbox. Takes effect at once, then is saved; a failed save is
  *  logged and the session keeps the choice the designer just made. */
 export async function setEditsAllowed(on: boolean): Promise<boolean> {

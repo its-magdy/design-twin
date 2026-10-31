@@ -226,6 +226,21 @@ export const cases: Case[] = [{
     await w.allowEdits(false);
     ok("[EDITS] clearing it refuses the next write and saves false", (await w.api.applyWrites(batch)).refused === "edits-off" && w.storage.get("allowEdits") === false);
 
+    // Unticked WHILE a batch runs (the window's message lands during a font load): the batch stops before the
+    // next mutation, keeps the prefix it already applied, and reports the refusal.
+    await w.allowEdits(true);
+    const textBefore = textTarget.characters;
+    let release: () => void = () => {};
+    w.figma.loadFontAsync = () => new Promise<void>((res) => { release = res; });
+    const racing = w.api.applyWrites([{ op: "createFrame", name: "First" }, { op: "setText", nodeId: "t:1", text: "late" }]);
+    await new Promise((r) => setTimeout(r, 0)); // setText is now waiting on its font
+    await w.allowEdits(false);
+    release();
+    const raced = await racing;
+    ok("[EDITS] unticked mid-batch: the next mutation is refused, the applied prefix is reported",
+      raced.ok === false && raced.refused === "edits-off" && raced.failedAt === 1 && raced.applied.length === 1 && textTarget.characters === textBefore);
+    w.figma.loadFontAsync = async () => {};
+
     // Saved last session: a fresh plugin run reads it before its first write (no tick needed, no start-up race).
     const again = writableWorld(nodes, undefined, { allowEdits: true });
     const first = await again.api.applyWrites([{ op: "createFrame", name: "Next" }]);

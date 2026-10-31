@@ -296,7 +296,8 @@ export type WriteRefusal = "edits-off";
 export const EDITS_OFF_MESSAGE =
   "Edits are off in the Design Twin plugin — tick 'Allow edits' in the plugin window, then retry. Nothing in the file was changed.";
 /** writes.ts applyWrites' reply: `ok: false` on a partial failure, with what was applied before it. A batch
- *  refused whole carries `refused` (and no `failedAt`: no op was tried). */
+ *  refused whole carries `refused` (and no `failedAt`: no op was tried); one stopped partway because the designer
+ *  unticked "Allow edits" carries `refused` AND `failedAt`, with the applied prefix. */
 export interface WriteResult {
   ok: boolean;
   applied: AppliedWrite[];

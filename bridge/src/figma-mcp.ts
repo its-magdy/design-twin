@@ -760,7 +760,7 @@ server.registerTool(
     const r = await ask("write", { ops: a.ops || [] }, { target: a && a.client });
     // The designer has not consented: nothing was tried, so there is no op index and nothing to clean up. The
     // fix is the PERSON's (a checkbox in the plugin window), so say exactly that rather than "write failed".
-    if (r.refused === "edits-off") return errorResult(r.error || EDITS_OFF_MESSAGE);
+    if (r.refused === "edits-off" && !r.applied.length) return errorResult(r.error || EDITS_OFF_MESSAGE);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo.
     if (!r.ok) {

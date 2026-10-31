@@ -3863,6 +3863,9 @@
     await loaded;
     return allowed;
   }
+  function editsAllowedNow() {
+    return allowed;
+  }
   async function setEditsAllowed(on) {
     await loaded;
     allowed = on;
@@ -3895,11 +3898,17 @@
     if (p.type === "PAGE") await p.loadAsync();
     return p;
   }
+  var EditsRevoked = class extends Error {
+  };
+  function consent() {
+    if (!editsAllowedNow()) throw new EditsRevoked(EDITS_OFF_MESSAGE);
+  }
   async function applyWrite(op) {
     switch (op.op) {
       case "createFrame": {
         const parent = await resolveParent(op.parentId);
         const fill = op.fill ? solidPaint(op.fill, "createFrame fill") : null;
+        consent();
         const f = figma.createFrame();
         if (op.name) f.name = op.name;
         if (op.width && op.height) f.resize(op.width, op.height);
@@ -3918,8 +3927,13 @@
       case "createText": {
         const parent = await resolveParent(op.parentId);
         const fill = op.fill ? solidPaint(op.fill, "createText fill") : null;
+        consent();
         const t = figma.createText();
         await figma.loadFontAsync(t.fontName);
+        if (!editsAllowedNow()) {
+          t.remove();
+          consent();
+        }
         t.characters = op.text || "";
         if (op.fontSize) t.fontSize = op.fontSize;
         if (fill) t.fills = [fill];
@@ -3934,7 +3948,9 @@
         const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-        nd.fills = [solidPaint(op.color, "setFill color")];
+        const paint = solidPaint(op.color, "setFill color");
+        consent();
+        nd.fills = [paint];
         return ifDefined("id", op.nodeId);
       }
       case "setText": {
@@ -3942,6 +3958,7 @@
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
+        consent();
         nd.characters = op.text || "";
         return ifDefined("id", op.nodeId);
       }
@@ -3958,7 +3975,7 @@
     const n = r.applied.length;
     const edits = n + " edit" + (n === 1 ? "" : "s");
     let text = null;
-    if (r.refused === "edits-off") text = "Design Twin refused an edit request \u2014 'Allow edits' is off.";
+    if (r.refused === "edits-off") text = n ? "Design Twin applied " + edits + ", then stopped \u2014 'Allow edits' was turned off." : "Design Twin refused an edit request \u2014 'Allow edits' is off.";
     else if (r.ok && n) text = "Design Twin applied " + edits + " to this file.";
     else if (!r.ok && n) text = "Design Twin applied " + edits + ", then one failed: " + (r.error || "unknown error");
     if (text === null) return;
@@ -3972,6 +3989,9 @@
   }
   async function gatedWrites(list) {
     const applied = [];
+    if (list.length && !await editsAllowed()) {
+      return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
+    }
     if (list.length && figma.editorType === "dev") {
       const first2 = list[0];
       return {
@@ -3981,9 +4001,6 @@
         ...ifDefined("failedOp", first2 && first2.op),
         error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
       };
-    }
-    if (list.length && !await editsAllowed()) {
-      return { ok: false, applied, refused: "edits-off", error: EDITS_OFF_MESSAGE };
     }
     for (const [i, op] of list.entries()) {
       const bad = writeOpError(op, i);
@@ -3998,7 +4015,8 @@
           applied,
           failedAt: i,
           failedOp: op && op.op,
-          error: errMsg(e)
+          error: errMsg(e),
+          ...e instanceof EditsRevoked ? { refused: "edits-off" } : {}
         };
       }
     }
