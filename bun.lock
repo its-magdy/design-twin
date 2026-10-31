@@ -14,7 +14,7 @@
     },
     "bridge": {
       "name": "@design-twin/dtwin",
-      "version": "0.1.0-alpha.0",
+      "version": "0.1.0",
       "bin": {
         "dtwin": "src/figma-pull.ts",
       },
