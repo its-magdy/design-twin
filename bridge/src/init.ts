@@ -10,7 +10,7 @@
 //   - Never overwrites. Every file it would write is skipped, and said so, if it already exists;
 //     .mcp.json is MERGED (an existing "figma" entry is left exactly as it is). The one exception is
 //     an entry of OURS that can no longer start (mcpEntryProblems: a bun or figma-mcp.ts that is gone,
-//     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags, a `bunx designtwin mcp` that fetches the
+//     a Node-era `node …/dist/figma-mcp.js`, bun without its two flags, a `bunx @design-twin/dtwin mcp` that fetches the
 //     package at start-up): --mcp re-points that entry, under
 //     its own key and keeping its other fields, at this install — and says so (--dry-run only says so).
 //   - Needs no bridge, no plugin, no port: it only touches the project directory and the per-user
@@ -87,12 +87,13 @@ const MCP_KEY = "designtwin";
 
 // Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.{ts,js} (what
 // init writes: bridge/src/figma-mcp.ts — or the bridge/dist/figma-mcp.js / .mjs / .mts an older init
-// wrote), or runs `designtwin mcp` (the npx/bunx form — ours, but one init repairs). One rule for init (don't double-register)
-// and doctor (report it).
+// wrote), or runs `@design-twin/dtwin mcp` (the npx/bunx form — ours, but one init repairs; `designtwin` is the package's
+// name before it moved under the npm org). One rule for init (don't double-register) and doctor (report it).
+const PACKAGE_NAMES: readonly string[] = ["@design-twin/dtwin", "designtwin"];
 const isOurMcpEntry = (e: unknown): boolean => {
   // Untyped JSON from the user's .mcp.json: only an object can carry `args` (JSON has no other shape that does).
   const args: unknown = e && typeof e === "object" ? (e as { args?: unknown }).args : undefined;
-  return !!e && Array.isArray(args) && (args.some((a) => FIGMA_MCP_SCRIPT.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
+  return !!e && Array.isArray(args) && (args.some((a) => FIGMA_MCP_SCRIPT.test(String(a))) || (args.some((a) => PACKAGE_NAMES.includes(String(a))) && args.includes("mcp")));
 };
 const FIGMA_MCP_SCRIPT = /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/;
 
@@ -109,7 +110,7 @@ function stableBunPath(execPath: string = process.execPath, onPath: string | nul
   try { return fs.realpathSync(onPath) === fs.realpathSync(execPath) ? onPath : execPath; } catch { return execPath; }
 }
 
-/** The bunx cache directory `dir` sits in, or null. `bunx designtwin …` installs the package into a cache tree
+/** The bunx cache directory `dir` sits in, or null. `bunx @design-twin/dtwin …` installs the package into a cache tree
  *  (`<tmp or install cache>/.bunx-<uid>/<pkg>`, `<tmp>/bunx-<uid>-<pkg>` on Windows and older Bun) that Bun refreshes
  *  and deletes on its own schedule, so a .mcp.json path into it is a server that one day does not start. */
 function bunxCacheOf(dir: string): string | null {
@@ -143,7 +144,7 @@ function mcpEntryProblems(e: unknown, { exists = fs.existsSync, which = (c) => B
   if (!found) out.push(`its command \`${command}\` ${/[\\/]/.test(command) ? "does not exist" : "is not on PATH"}`);
   const i = args.findIndex((a) => FIGMA_MCP_SCRIPT.test(a));
   const script = args[i];
-  // No server script: the package-runner form (`bunx designtwin mcp`, `bun x designtwin mcp`, an older `npx designtwin
+  // No server script: the package-runner form (`bunx @design-twin/dtwin mcp`, `bun x @design-twin/dtwin mcp`, an older `npx designtwin
   // mcp`). It names a package, not this install: bunx fetches it from the registry at start-up (network, unpinned, outside
   // any lockfile) and, with or without --no-install, may run whatever copy sits in its own cache — the one Bun replaces or
   // deletes on its own. That is the ephemeral registration init refuses to write, so it is one to repair, not to keep.
@@ -295,7 +296,7 @@ function plan(cwd: string, { mcp = false, mcpEntry, refuseMcp, probe, token }: P
       const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
       // Ours, but it cannot start: a bun or a figma-mcp.ts that has since moved (a deleted clone, a Homebrew upgrade, a
       // bunx cache Bun cleaned), a Node-era entry (`node …/bridge/dist/figma-mcp.js`), or one that starts only as long
-      // as bunx can fetch the package (`bunx designtwin mcp`). Left as is, Claude Code would
+      // as bunx can fetch the package (`bunx @design-twin/dtwin mcp`). Left as is, Claude Code would
       // show a failed server and no tools; the one write that fixes it is re-pointing THAT entry, under its own key, at
       // this install. Every other field the user put on it (env, …) is kept.
       const broken = mine === undefined ? [] : mcpEntryProblems(servers[mine], { cwd, ...probe });
@@ -359,7 +360,7 @@ function main(argv: string[]): void {
 
   const token = tokenStore.resolve({ persist: !dry });
   // Absolute paths to THIS install's server and to the bun running it now: works for a repo clone and a
-  // global install alike, and needs no network at Claude Code start-up (unlike `bunx designtwin mcp`).
+  // global install alike, and needs no network at Claude Code start-up (unlike `bunx @design-twin/dtwin mcp`).
   // The server is the figma-mcp.ts that sits beside THIS file (a checkout and an install both carry the
   // source; there is no build). The command is an absolute bun, not "bun": Claude Code starts the server
   // with ITS environment, whose PATH may not have the ~/.bun/bin a shell profile adds — and the bun that
@@ -367,7 +368,7 @@ function main(argv: string[]): void {
   // (stableBunPath). The flags are the shebang's (figma-pull.ts): no auto-install from the network, and
   // the project's .env stays out of the server's environment.
   const mcpEntry: McpEntry = { command: stableBunPath(), args: [...BUN_FLAGS, path.join(import.meta.dirname, "figma-mcp.ts")] };
-  // Run through `bunx designtwin init`: this very file is in bunx's cache, so no entry may point at it.
+  // Run through `bunx @design-twin/dtwin init`: this very file is in bunx's cache, so no entry may point at it.
   const cache = bunxCacheOf(import.meta.dirname);
   const refuseMcp = cache ? bunxRefusal(cache) : undefined;
   if (cache && !argv.includes("--mcp")) log(`note    this dtwin runs from a bunx cache (${cache}) — install it for good (in a clone: \`bun install\`, then \`cd bridge && bun link\`) to have \`dtwin\` on PATH and to register the MCP server`);
