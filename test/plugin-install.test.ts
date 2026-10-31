@@ -74,12 +74,12 @@ console.log("installPlugin — idempotent, only what differs, the manifest last:
   t("pluginState sees the copy is not this dtwin's", () => pluginState(src, home).current === false);
   const code = installPlugin(src, home);
   t("a code change: updated, only code.js written, no re-import", () => code.status === "updated" && code.written.join() === "code.js" && !code.manifestChanged);
-  t("…the next step is reopening the plugin, not re-importing", () => (nextSteps(code)[0] ?? "").includes("reopen") && !(nextSteps(code)[0] ?? "").includes("re-import once"));
+  t("…the next step is reopening the plugin with hot reload on, not re-importing", () => (nextSteps(code)[0] ?? "").includes("reopen") && (nextSteps(code)[0] ?? "").includes("Hot reload plugin on") && !(nextSteps(code)[0] ?? "").includes("re-import once"));
   t("pluginState: installed and current again", () => { const s = pluginState(src, home); return s.installed && s.current === true; });
 
   fs.writeFileSync(path.join(src.dir, "manifest.json"), "{\"main\":\"code.js\",\"ui\":\"ui.html\",\"permissions\":[\"teamlibrary\"]}\n");
   const man = installPlugin(src, home);
-  t("a manifest change says so: re-import once", () => man.status === "updated" && man.manifestChanged && (nextSteps(man)[0] ?? "").includes("re-import once"));
+  t("a manifest change says so: reopen first, re-import once as the fallback", () => man.status === "updated" && man.manifestChanged && (nextSteps(man)[0] ?? "").startsWith("reopen") && (nextSteps(man)[0] ?? "").includes("re-import once"));
 }
 
 console.log("pluginState / describeState:");

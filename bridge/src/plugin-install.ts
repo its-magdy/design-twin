@@ -1,17 +1,17 @@
 // plugin-install.ts — the Figma plugin's per-user copy, and `dtwin plugin install|update|status|path|uninstall`.
 //
 // The plugin cannot be listed on Figma Community, so it is imported as a development plugin: Plugins → Development →
-// Import plugin from manifest…. Figma remembers the manifest's PATH and reads code.js / ui.html from disk each time
-// the plugin runs, so the folder it was imported from must not move — and then replacing the files there is the whole
-// update: reopen the plugin and it runs the new code. A path inside the npm package does move (Bun's and npm's global
+// Import plugin from manifest…. Figma remembers the manifest's PATH, so the folder it was imported from must not move —
+// and then replacing the files there is the whole update. With Plugins → Development → Hot reload plugin ON,
+// reopening the plugin runs the new code and picks up a changed manifest's permissions too (seen live, Figma
+// desktop 126); with it OFF, Figma kept running the code it had loaded. A path inside the npm package does move (Bun's and npm's global
 // folders differ, a Node version manager gives every Node its own prefix, a bunx cache is replaced whenever Bun likes,
 // an uninstall deletes it), so an install copies the plugin to ONE per-user folder, next to the bridge token:
 // <configDir>/figma-plugin (token-store.ts: ~/.config/design-twin, %APPDATA%\design-twin on Windows,
 // DESIGNTWIN_CONFIG_DIR overriding both). That is the path to import, once.
 //
-// What a file copy cannot change: the grants Figma took from the manifest when it was imported (permissions,
-// networkAccess). A copy whose manifest.json changed says so ("re-import once"), because reopening the plugin keeps
-// the old grants.
+// A copy whose manifest.json changed (permissions, networkAccess) says so, with re-importing as the fallback for when
+// reopening does not pick the change up.
 //
 // The copy is refreshed — never created — whenever this process is about to bind a bridge (refreshInstalledPlugin,
 // from bridge-holder.ts): an upgraded package brings its plugin along with no command to remember, and at that moment
@@ -100,7 +100,7 @@ export interface InstallResult {
   version: string | null;
   /** the files rewritten, in the order written */
   written: PluginFile[];
-  /** an earlier copy's manifest.json differed: Figma keeps the grants of the manifest it imported — re-import once */
+  /** an earlier copy's manifest.json differed (permissions / network access): if reopening does not pick it up, re-import */
   manifestChanged: boolean;
 }
 
@@ -146,6 +146,8 @@ export function uninstallPlugin(home: string = pluginHome()): string[] {
   });
 }
 
+// Reopening runs replaced files only while Figma's hot reload is on; with it off, Figma kept the old code.
+const REOPEN = "reopen the plugin in Figma (Plugins → Development → Design Twin) with Plugins → Development → Hot reload plugin on, to run the new code";
 const importStep = (manifest: string): string => "Plugins → Development → Import plugin from manifest… → " + manifest;
 /** The manifest's folder is hidden in a file picker (a dot folder, or AppData on Windows): how to get there anyway. */
 export function hiddenHint(manifest: string): string | null {
@@ -160,8 +162,8 @@ export function nextSteps(r: InstallResult): string[] {
     return ["once, in Figma DESKTOP: " + importStep(r.manifest), ...(hint ? [hint] : []),
       "imported the plugin from somewhere else before (a clone, the package folder)? Remove that one: Plugins → Manage plugins"];
   }
-  if (r.manifestChanged) return ["its manifest (permissions / network access) changed: reopening keeps the old grants — re-import once: " + importStep(r.manifest)];
-  if (r.status === "updated") return ["reopen the plugin in Figma (Plugins → Development → Design Twin) to run the new code — no re-import needed"];
+  if (r.manifestChanged) return [REOPEN + "; its manifest (permissions / network access) changed too — if a new permission still does not work, re-import once: " + importStep(r.manifest)];
+  if (r.status === "updated") return [REOPEN + " — no re-import needed"];
   return [];
 }
 
@@ -212,14 +214,14 @@ export const PLUGIN_HELP =
   "  The Figma plugin is imported into Figma DESKTOP as a development plugin, from a folder that must not move.\n" +
   "  install    copy this dtwin's plugin to a per-user folder (" + path.join("<config dir>", "figma-plugin") + ", beside the bridge\n" +
   "             token; DESIGNTWIN_CONFIG_DIR moves it) and print the one-time import step. Writes only what differs.\n" +
-  "  update     the same; says whether to reopen the plugin or (manifest changed) re-import it once\n" +
+  "  update     the same, then says to reopen the plugin (with Plugins → Development → Hot reload plugin on)\n" +
   "  status     (default) where it is installed, and whether it matches this dtwin\n" +
   "  path       print the manifest to import (stdout): a checkout's own figma-plugin/manifest.json, else the copy's\n" +
   "  uninstall  remove the copied files (then remove the plugin in Figma: Plugins → Manage plugins)\n\n" +
   "  --json     machine output on stdout\n" +
   "  --open     show the manifest in Finder / Explorer (install, update, path)\n\n" +
   "  Once installed, the copy is kept current by itself: every dtwin that starts a bridge refreshes it from its own\n" +
-  "  package, so after upgrading @design-twin/dtwin you only reopen the plugin. Never from a repo checkout.\n" +
+  "  package, so after upgrading @design-twin/dtwin you only reopen the plugin (hot reload on). Never from a checkout.\n" +
   "  Needs no bridge, no plugin and no token; never touches the network.";
 
 const SUBS = ["install", "update", "status", "path", "uninstall"] as const;
