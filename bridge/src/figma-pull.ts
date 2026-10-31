@@ -1146,6 +1146,7 @@ const ROUTES = {
   init: async (args) => { (await import("./init.ts")).main(args); },
   doctor: async (args) => { await (await import("./doctor.ts")).main(args); },
   seed: async (args) => { (await import("./seed-components.ts")).main(args); },
+  plugin: async (args) => { (await import("./plugin-install.ts")).main(args); },
 } satisfies Record<RoutedVerb, (args: string[]) => Promise<void>>;
 const routed = (word: string | undefined): word is RoutedVerb => word !== undefined && Object.hasOwn(ROUTES, word);
 
@@ -1177,7 +1178,7 @@ async function runMcp(args: string[]): Promise<void> {
 // first, then --version/--help, then the arguments are parsed, THEN the settings are read (settings.ts — port, token
 // with --token-file, limits) and the command runs.
 async function cli(argv: string[]): Promise<void> {
-  // `dtwin mcp|init|doctor|seed` — their own entry points, before anything else runs (in particular before
+  // `dtwin mcp|init|doctor|seed|plugin` — their own entry points, before anything else runs (in particular before
   // the settings are read): `dtwin mcp` is taken ONLY when the first argument is exactly "mcp", so `dtwin …` and
   // importing this module from the test suites are untouched, and `bun bridge/src/figma-mcp.ts` still works.
   const word = argv[0];

@@ -31,6 +31,8 @@ import type { ResolvedToken } from "./token-store.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { exitCli } from "./stdio.ts";
+import { errMsg } from "./errmsg.ts";
+import { hiddenHint, installPlugin, nextSteps, pluginHome, pluginSource } from "./plugin-install.ts";
 
 /** One .mcp.json server entry, as init writes it. */
 export interface McpEntry {
@@ -400,10 +402,25 @@ function main(argv: string[]): void {
   if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
-  // The Figma plugin's manifest: a repo checkout's (bridge/src/ -> ../../figma-plugin/), else the copy the npm
-  // package carries (../figma-plugin/, put there by bridge/pack.ts). Neither: the step names the repo instead.
-  // Spelt from `here` too: Figma remembers the path a plugin was imported from, and a Cellar one is gone after an upgrade.
-  const manifest = [path.join(here, "..", "..", "figma-plugin", "manifest.json"), path.join(here, "..", "figma-plugin", "manifest.json")].find((m) => fs.existsSync(m));
+  // The Figma plugin's manifest: a repo checkout's own figma-plugin/, else the per-user copy (plugin-install.ts),
+  // installed — or refreshed — here from the files the npm package carries, so the path to import never moves.
+  // Neither: the step names the repo instead.
+  const manifest = ((): string | null => {
+    const source = pluginSource();
+    if (!source) return null;
+    if (source.kind === "checkout") return path.join(source.dir, "manifest.json");
+    if (dry) { log(`would install the Figma plugin to ${pluginHome()} (dtwin plugin install)`); return path.join(pluginHome(), "manifest.json"); }
+    try {
+      const r = installPlugin(source);
+      log(`plugin  Figma plugin v${r.version ?? "?"} ${r.status === "current" ? "already up to date" : r.status} at ${r.home}`);
+      if (r.status !== "installed") for (const s of nextSteps(r)) log("        " + s);
+      return r.manifest;
+    } catch (e) {
+      log(`warn    could not install the Figma plugin to ${pluginHome()} (${errMsg(e)}); import the package's own copy instead`);
+      // Spelt through opt under Homebrew: Figma remembers the path, and a Cellar one is gone after an upgrade.
+      return path.join(stableKegPath(source.dir), "manifest.json");
+    }
+  })();
   // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
   // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
   // marker is there, saying "install the plugin" is noise at best and confusing at worst.
@@ -425,7 +442,8 @@ function main(argv: string[]): void {
   })();
 
   const steps = [
-    "In Figma DESKTOP: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)"),
+    "In Figma DESKTOP, once: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
+      (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : ""),
     "Run the plugin (Plugins → Development → Design Twin), paste the bridge token into its \"Bridge token\" field, Save:  dtwin --show-token | pbcopy",
   ];
   if (!pluginInstalled) {

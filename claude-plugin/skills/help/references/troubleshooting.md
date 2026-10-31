@@ -26,7 +26,11 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 ## Connecting the plugin and the bridge
 
 - **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
-  manifest…*. It lives under **Plugins → Development**, not the main plugin list.
+  manifest…* → the file `dtwin plugin path` prints. It lives under **Plugins → Development**, not the main
+  plugin list.
+- **"plugin vX is older than this bridge"** → `dtwin plugin update` (any `dtwin` that starts a bridge does it
+  too), then reopen the plugin — no re-import. Still old? It was imported from somewhere else: `dtwin plugin
+  status` names the folder to import from; remove the other one in Plugins → Manage plugins.
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
   `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
   through it and nothing needs stopping, so this means something *else* holds the port: a one-shot

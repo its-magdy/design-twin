@@ -13,6 +13,7 @@
 // Run from bridge/ (npm runs lifecycle scripts in the package dir):  bun pack.ts [--clean]
 import path from "node:path";
 import fs from "node:fs";
+import { PLUGIN_FILES } from "./src/plugin-install.ts";
 
 const PKG = import.meta.dirname;
 const REPO = path.join(PKG, "..");
@@ -21,7 +22,8 @@ const BUNDLES = path.join(REPO, "claude-plugin", "scripts");
 // beside the bundle itself, so a hint naming a script not shipped here would be a command that cannot run).
 // pack() holds this list to that (missingHints).
 export const LAYER: readonly string[] = ["get-component", "drift-lint", "map-bootstrap", "map-validate", "cross-check"];
-const PLUGIN: readonly string[] = ["manifest.json", "code.js", "ui.html"];
+// The files Figma loads — one list with the per-user install that copies them on (`dtwin plugin install`).
+const PLUGIN: readonly string[] = PLUGIN_FILES;
 export const OUT = { layer: path.join(PKG, "layer"), plugin: path.join(PKG, "figma-plugin") } as const;
 
 /** The scripts a bundle's printed hints name (`scriptCmd("<name>")`) that `shipped` does not hold. */

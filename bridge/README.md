@@ -14,17 +14,18 @@ the package, `@design-twin/dtwin`, from npm:
 bun add -g @design-twin/dtwin   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer)
 ```
 `npm i -g @design-twin/dtwin` installs the same thing, but `dtwin` still runs on Bun: without Bun on PATH it stops at
-`env: bun: No such file or directory`. The package also carries the built Figma plugin (`figma-plugin/manifest.json`
-inside it — `dtwin init` prints the full path to import) and the design-to-code bundles the MCP server's
-`design_get_component` / `design_drift_lint` load (`layer/`).
+`env: bun: No such file or directory`. The package also carries the built Figma plugin, which `dtwin plugin install`
+(or `dtwin init`) copies to a per-user folder for you to import once — see [The Figma plugin: `dtwin plugin`](#the-figma-plugin-dtwin-plugin) —
+and the design-to-code bundles the MCP server's `design_get_component` / `design_drift_lint` load (`layer/`).
 
 Or with Homebrew (macOS, Linux), which installs Bun for you and keeps both up to date with `brew upgrade`:
 ```
 brew install its-magdy/tap/dtwin
 ```
 The formula installs the same npm package into Homebrew's prefix; every release updates it. Paths `dtwin init` writes
-(the `.mcp.json` server entry, the plugin manifest it prints) are spelt through `$(brew --prefix)/opt/dtwin/…`, which
-survives an upgrade — not the versioned `Cellar/dtwin/<version>/` folder the next `brew upgrade` deletes.
+(the `.mcp.json` server entry) are spelt through `$(brew --prefix)/opt/dtwin/…`, which
+survives an upgrade — not the versioned `Cellar/dtwin/<version>/` folder the next `brew upgrade` deletes. The Figma
+plugin is imported from its per-user copy (`dtwin plugin`), which `brew upgrade` leaves where it is.
 
 Or from a clone (to work on the code):
 ```
@@ -47,7 +48,9 @@ validated against them and exits rather than binding a port nothing could ever r
 > `"permissions": ["teamlibrary"]`, without which Figma denies the team-library APIs. A plugin
 > imported from an older manifest keeps running happily and simply returns **no libraries** — a silent
 > empty result, not an error. If `--list-libraries` / `figma_list_libraries` shows nothing, re-import
-> `figma-plugin/manifest.json` (Plugins → Development → Import plugin from manifest…) first.
+> the manifest `dtwin plugin path` prints (Plugins → Development → Import plugin from manifest…) first.
+> A code-only update needs no re-import: `dtwin plugin update` (or any dtwin that starts a bridge) replaces the
+> files in place, and reopening the plugin runs them; it says when the manifest itself changed.
 
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
@@ -190,7 +193,7 @@ README documents the flags, and either spelling is fine everywhere:
 | `dtwin serve` · `stop` · `status` | `--serve` · `--stop` · `--daemon-status` |
 | `dtwin token` · `token show` · `token rotate` · `token forget` | `--token-status` · `--show-token` · `--rotate-token` · `--forget-token` |
 | `dtwin help` | `--help` |
-| `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` | their own entry points (no flag form) |
+| `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` · `dtwin plugin` | their own entry points (no flag form) |
 
 Every verb has its own page: `dtwin <verb> --help` (e.g. `dtwin whoami --help`, `dtwin serve --help`) prints
 that verb's flags and exits without starting a bridge. `outDir` is **positional** (`dtwin pull my-dir`):
@@ -203,6 +206,36 @@ A command is only recognised as the **first** argument, so `dtwin my-dir` still 
 With no outDir the export lands in `design/export` — the only place doctor, cross-check, audit and
 build-screen read. Never pull into bare `design`: that writes a second, parallel export tree beside
 `design/export/` (dtwin warns when it sees one).
+
+## The Figma plugin: `dtwin plugin`
+
+The plugin is not on Figma Community; it is imported into Figma **desktop** as a development plugin (Plugins →
+Development → Import plugin from manifest…). Figma remembers the manifest's path and reads `code.js` / `ui.html` from
+there each time the plugin runs, so the folder must not move — and a path inside the npm package does (Bun's and npm's
+global folders differ, a Node version manager gives each Node its own, a `bunx` cache comes and goes, an uninstall
+deletes it). So the package's plugin is copied to one per-user folder, beside the bridge token, and imported from there
+once:
+
+```
+dtwin plugin install     # copy it to <config dir>/figma-plugin and print the one-time import step (--open shows it)
+dtwin plugin update      # the same; says "reopen the plugin" — or, when the manifest changed, "re-import once"
+dtwin plugin status      # (default) installed where, and is it this dtwin's? (--json)
+dtwin plugin path        # the manifest to import, on stdout
+dtwin plugin uninstall   # remove the copied files (then remove the plugin in Figma: Plugins → Manage plugins)
+```
+
+`<config dir>` is the bridge token's: `~/.config/design-twin` (or `$XDG_CONFIG_HOME/design-twin`), `%APPDATA%\design-twin`
+on Windows, `DESIGNTWIN_CONFIG_DIR` overriding both. The folder is hidden in a file picker: on macOS press ⌘⇧G and paste
+the path; on Windows paste it into the File name box. `dtwin init` installs (or refreshes) the copy and prints the same
+step. Install writes only the files that differ, each one atomically, under a lock, and is safe to run any number of times.
+
+**Updates need no command.** Once a copy is installed, every `dtwin` that starts a bridge (a command, `dtwin serve`, the
+MCP server) first brings it up to its own package's files, so after `bun add -g @design-twin/dtwin@latest` you only
+reopen the plugin. A code change never needs a re-import. A **manifest** change (permissions, network access) does:
+Figma keeps the grants of the manifest it imported, and the update says so. Nothing is created that you did not
+install, the network is never touched, and a `dtwin` running from a **repo checkout** never refreshes the copy —
+developers import `figma-plugin/manifest.json` from the checkout itself (`dtwin plugin path` prints that one there).
+`dtwin doctor` reports the copy as its "Plugin files" line.
 
 ## Seed the component map from Code Connect: `dtwin seed`
 
