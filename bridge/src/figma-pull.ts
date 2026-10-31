@@ -110,7 +110,7 @@ ${COMMAND_SUMMARY}
 
 Full reference:
   dtwin init [--mcp]          # set up the project you are BUILDING: design/, target.json, the bridge
-                              # token, (optionally) .mcp.json — then prints the steps left. See init --help
+                              # token, the Figma plugin copy, (optionally) .mcp.json — then the steps left. See init --help
   dtwin [outDir]              # full: design-system.json + current-page frames + assets
   dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
   dtwin [outDir] --selection  # just the current selection

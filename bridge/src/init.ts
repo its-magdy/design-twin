@@ -362,14 +362,17 @@ function main(argv: string[]): void {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(
       "dtwin init [--mcp] [--dry-run]\n\n" +
-      "  Run in the root of the project you are BUILDING. Creates exactly these four things:\n" +
+      "  Run in the root of the project you are BUILDING. In it, creates exactly these four things\n" +
+      "  (plus ./.mcp.json with --mcp):\n" +
       "    design/                  the directory your decisions live under\n" +
       "    design/export/           where every dtwin pull lands, empty at first — safe to delete and re-pull\n" +
       "    design/README.md         which half of design/ a re-pull is allowed to destroy\n" +
       "    design/target.json       the detected stack, or profile:null for build-screen to fill in\n" +
       "  It does NOT create codeconnect.local.json, plan/, audit/ or verify/ — those are written later,\n" +
       "  on demand, by map-bootstrap.ts, build-screen, audit-design and verify respectively.\n" +
-      "  …makes sure a bridge token exists, and prints the remaining steps.\n\n" +
+      "  Outside the project it makes sure a bridge token exists and installs (or refreshes) the Figma\n" +
+      "  plugin's per-user copy (`dtwin plugin install`; a repo checkout imports its own instead), then\n" +
+      "  prints the steps left.\n\n" +
       "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten;\n" +
       "             an entry of ours that can no longer start — a moved bun or figma-mcp.ts, a Node-era\n" +
       "             entry — is repaired in place, and the output says so)\n" +
@@ -444,10 +447,10 @@ function main(argv: string[]): void {
   const steps = [
     "In Figma DESKTOP, once: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
       (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : ""),
-    "Run the plugin (Plugins → Development → Design Twin), paste the bridge token into its \"Bridge token\" field, Save:  dtwin --show-token | pbcopy",
+    "Run the plugin (Plugins → Development → Design Twin), open \"Connect to Claude Code (optional)\", paste the bridge token into \"Bridge token\", Save:  dtwin --show-token | pbcopy",
   ];
   if (!pluginInstalled) {
-    steps.push("In Claude Code, once:  claude plugin marketplace add <path-or-repo of Design Twin>  then  claude plugin install designtwin@designtwin-marketplace");
+    steps.push("In Claude Code, once:  claude plugin marketplace add its-magdy/design-twin  then  claude plugin install designtwin@designtwin-marketplace");
   }
   steps.push(
     "Then, with the Figma file open and the plugin running:  dtwin list   →  /designtwin:extract  →  /designtwin:audit-design <screen>  →  /designtwin:build-screen <screen>"
