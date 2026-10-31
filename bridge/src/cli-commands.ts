@@ -280,9 +280,11 @@ export const MCP_HELP =
   "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
   "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
   "  route through it rather than starting a second one — `dtwin doctor` says who holds the port.\n\n" +
-  "  Its tools mirror the CLI: figma_list_clients / figma_list / figma_export_* / figma_screenshot /\n" +
-  "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
-  "  of node payloads inline — asset bytes are never returned inline.";
+  "  Its tools mirror the CLI: figma_status / figma_whoami / figma_list_clients / figma_list_pages /\n" +
+  "  figma_list_children / figma_list_libraries / figma_get_selection / figma_screenshot / figma_export_*,\n" +
+  "  plus figma_write (refused until the designer ticks \"Allow edits\" in the plugin) and two that read\n" +
+  "  the export on disk: design_get_component / design_drift_lint. Pass writeToDisk:true to get\n" +
+  "  files plus a compact index instead of node payloads inline — asset bytes are never returned inline.";
 
 // Row order is the order of `dtwin --help`'s command summary.
 export const VERB_ROWS = [
@@ -407,7 +409,7 @@ export const VERB_ROWS = [
   { word: "doctor", to: "routed", usage: "  dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help" },
   { word: "init", to: "routed", usage: "  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help" },
   { word: "seed", to: "routed", usage: "  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help", help: SEED_HELP },
-  { word: "plugin", to: "routed", usage: "  dtwin plugin [install|update|status|path] # the Figma plugin's per-user copy, to import once. See plugin --help" },
+  { word: "plugin", to: "routed", usage: "  dtwin plugin [install|update|status|path|uninstall]  # the Figma plugin's per-user copy, to import once. See plugin --help" },
   { word: "mcp", to: "routed", usage: "  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help", help: MCP_HELP },
   { word: "help", to: "--help", usage: "  dtwin help                               = --help" },
   {
