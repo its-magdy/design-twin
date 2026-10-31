@@ -3901,7 +3901,7 @@
   var EditsRevoked = class extends Error {
   };
   function consent() {
-    if (!editsAllowedNow()) throw new EditsRevoked(EDITS_OFF_MESSAGE);
+    if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch \u2014 the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
   }
   async function applyWrite(op) {
     switch (op.op) {

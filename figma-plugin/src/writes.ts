@@ -56,7 +56,7 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
 // batch, and a revoked one stops the batch there (gatedWrites reports the applied prefix as refused).
 class EditsRevoked extends Error {}
 function consent(): void {
-  if (!editsAllowedNow()) throw new EditsRevoked(EDITS_OFF_MESSAGE);
+  if (!editsAllowedNow()) throw new EditsRevoked("'Allow edits' was turned off in the Design Twin plugin partway through this batch — the ops before this one were applied. Tick 'Allow edits' in the plugin window, then retry the rest.");
 }
 
 async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
