@@ -7,13 +7,23 @@ The plugin's hidden UI iframe is a WebSocket **client**; these processes are the
 (`127.0.0.1:8787`). Nothing touches the internet. See `../ARCHITECTURE.md` for the full design.
 
 ## Install (once)
-The `designtwin` package is not on npm; install it from a clone:
+It needs [Bun](https://bun.sh/install) ≥ 1.4.2 (`engines.bun`) on your PATH; Node is not supported. Install Bun
+first (`curl -fsSL https://bun.sh/install | bash`, or `powershell -c "irm bun.sh/install.ps1 | iex"` on Windows), then
+the package, `@design-twin/dtwin`, from npm:
+```
+bun add -g @design-twin/dtwin   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer)
+```
+`npm i -g @design-twin/dtwin` installs the same thing, but `dtwin` still runs on Bun: without Bun on PATH it stops at
+`env: bun: No such file or directory`. The package also carries the built Figma plugin (`figma-plugin/manifest.json`
+inside it — `dtwin init` prints the full path to import) and the design-to-code bundles the MCP server's
+`design_get_component` / `design_drift_lint` load (`layer/`).
+
+Or from a clone (to work on the code):
 ```
 git clone https://github.com/its-magdy/design-twin.git && cd design-twin
 bun install                     # @modelcontextprotocol/sdk (+ zod), for every workspace
 cd bridge && bun link           # puts `dtwin` in ~/.bun/bin (on your PATH); nothing to build
 ```
-It needs [Bun](https://bun.sh/install) ≥ 1.4.2 (`engines.bun`); Node is not supported.
 Or skip the link and run `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever
 this README says `dtwin` (those two flags are what the bin's shebang adds: without them, Bun loads the `.env` of the
 project you run it in and may fetch a missing package from the registry).
@@ -34,7 +44,7 @@ validated against them and exits rather than binding a port nothing could ever r
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
 Bun runs it directly with **zero build** (`bun bridge/src/figma-pull.ts …`, `bun bridge/src/figma-mcp.ts`), and the
-package ships the same TypeScript: its `dtwin` bin — what `bun link` puts on your PATH — is `src/figma-pull.ts`,
+package ships the same TypeScript: its `dtwin` bin — what `bun add -g` or `bun link` puts on your PATH — is `src/figma-pull.ts`,
 whose shebang is `#!/usr/bin/env -S bun --no-install --no-env-file` (so a `.env` or a missing package in the
 project you run it from can neither change its environment nor make Bun fetch a module from the registry;
 `env -S` needs GNU coreutils ≥ 8.30 or a BSD/macOS `env` — on BusyBox, call `bun --no-install --no-env-file` on

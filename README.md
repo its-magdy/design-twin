@@ -32,8 +32,8 @@ The repo ships **three products**, installed separately:
 
 | Piece | What it is | How you install it |
 |---|---|---|
-| `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest |
-| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | From a clone (not on npm): root `bun install`, then `bun link` in `bridge/` |
+| `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest (in a clone, or inside the npm package) |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `bun add -g @design-twin/dtwin` (or from a clone: root `bun install`, then `bun link` in `bridge/`) |
 | `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies beyond Bun on PATH. | `claude plugin install` |
 
 There are three ways to get a design out of Figma:
@@ -57,13 +57,23 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
   CLI, the MCP server, the plugin's scripts and hooks; Node is not supported. Install: `curl -fsSL https://bun.sh/install | bash`
   (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows).
 - **Claude Code**, for the skills.
-- **git**, to clone this repo.
+- **git**, only if you install from a clone.
 
 ---
 
 ## Installation
 
-### 1. Clone and install the CLI
+### 1. Install the CLI
+
+```bash
+bun add -g @design-twin/dtwin   # puts `dtwin` in ~/.bun/bin (on your PATH via the Bun installer)
+dtwin --version
+```
+
+`npm i -g @design-twin/dtwin` works too, but `dtwin` runs on Bun either way: without Bun on PATH it stops at
+`env: bun: No such file or directory`.
+
+Or from a clone (to work on the code):
 
 ```bash
 git clone https://github.com/its-magdy/design-twin.git
@@ -73,18 +83,21 @@ bun install
 dtwin --version
 ```
 
-If you skip `bun link`, use `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever this
+In a clone, if you skip `bun link`, use `bun --no-install --no-env-file /path/to/design-twin/bridge/src/figma-pull.ts` wherever this
 README says `dtwin` — the two flags keep your project's `.env` out of the bridge and stop Bun fetching a missing package
 from the registry (the linked `dtwin` gets them from its shebang, `#!/usr/bin/env -S bun …`, which needs an `env` with
 `-S`: GNU coreutils ≥ 8.30 or macOS; on BusyBox/Alpine, run the `bun --no-install --no-env-file …` form instead).
 
 ### 2. Import the Figma plugin
 
-In Figma desktop, go to **Plugins → Development → Import plugin from manifest…** and pick
+In Figma desktop, go to **Plugins → Development → Import plugin from manifest…** and pick the plugin's
+`manifest.json`: `dtwin init --dry-run` prints its path (and writes nothing). With the npm package it is `figma-plugin/manifest.json` inside the
+installed package (for `bun add -g`, under `~/.bun/install/global/node_modules/@design-twin/dtwin/`); in a clone it is
 `design-twin/figma-plugin/manifest.json`.
 
-`code.js` and `ui.html` are committed pre-built, so there is nothing to build. After pulling a new version of this
-repo, import the manifest again, or new permissions (such as library reads) quietly return nothing.
+`code.js` and `ui.html` are pre-built (committed in the repo, copied into the package), so there is nothing to build.
+After upgrading the package or pulling a new version of the repo, import the manifest again, or new permissions (such
+as library reads) quietly return nothing.
 
 ### 3. Install the Claude Code plugin
 
@@ -121,7 +134,7 @@ design/
 
 It also creates the bridge token if one doesn't exist, and it never overwrites an existing file.
 With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json` (it runs the server with the absolute path of the
-`bun` that ran `dtwin init`, as `bun --no-install --no-env-file <clone>/bridge/src/figma-mcp.ts`). Enable it with `/mcp`, then
+`bun` that ran `dtwin init`, as `bun --no-install --no-env-file <package>/src/figma-mcp.ts` — `<package>` is the installed package, or `bridge/` in a clone). Enable it with `/mcp`, then
 restart Claude Code.
 
 ### 2. Connect the Figma plugin

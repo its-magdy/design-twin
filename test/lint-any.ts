@@ -48,7 +48,7 @@ import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DIRS = ["test", "design-to-code", "bridge/src", "figma-plugin/src"];
-const FILES = ["claude-plugin/build-scripts.ts", "figma-plugin/build.ts", "figma-plugin/figma-augment.d.ts"];
+const FILES = ["bridge/pack.ts", "claude-plugin/build-scripts.ts", "figma-plugin/build.ts", "figma-plugin/figma-augment.d.ts"];
 const SELF = path.resolve(import.meta.filename);
 const LITERAL = /: any|as any|<any>|any\[\]|Record<string, any>/;
 const TS = /\.(ts|mts|cts)$/;

@@ -752,14 +752,16 @@ server.registerTool(
 // — without these the agent has the figma_* tools and no way in, and the map and the codegen skill drift
 // into two different formats. Registering them here is what makes that layer exist for its actual
 // consumer.
-// Loaded LAZILY, on call, and never at module scope. ../../design-to-code/ is a SIBLING of this package
-// root (bridge/), so npm — whose `files` cannot reach outside the package root — does not ship it.
-// Importing it eagerly would take the whole server down with a module-not-found on a `bun add -g @design-twin/dtwin`
-// install, killing the other twelve tools over two that merely cannot work. So the server always
-// starts and only these two report, precisely, that they need the repo checkout.
+// Loaded LAZILY, on call, and never at module scope, from one of two places. In a repo checkout it is
+// ../../design-to-code/<mod>.ts, a SIBLING of this package root (bridge/) — which npm's `files` cannot reach. So
+// the npm package carries the layer as bundles instead: `prepack` (bridge/pack.ts) copies the committed,
+// self-contained claude-plugin/scripts/<mod>.js into ../layer/. Neither there (a checkout without design-to-code/,
+// a package packed without its prepack): importing eagerly would take the whole server down with a
+// module-not-found, killing the other tools over two that merely cannot work — so the server always starts and only
+// these two report, precisely, what is missing.
 // The slice of each layer module this server calls, declared HERE (over doc-types.ts shapes) rather
 // than as `typeof import("../../design-to-code/x.ts")`: even a type-only reference pulls that file and
-// its imports into the bridge program, and the published package (src/ alone) would then name files it
+// its imports into the bridge program, and the published package (src/ is TypeScript, the layer only bundles) would name files it
 // does not ship (see doc-types.ts). So bridge/src has no dependency of any kind on the layer — only the
 // dynamic import below, which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult and
 // design-to-code/drift-lint.ts runDriftLint(); keep them in step (test/mcp-smoke.test.ts checks the real modules still satisfy these at compile time).
@@ -775,27 +777,27 @@ export interface DriftLintModule {
     | { status: "linted"; errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown; catalogs: ReadonlyArray<{ file: string }>; coverage: { coverage: object; warnings: unknown[] } | null };
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
-  // The layer sits beside bridge/ in a repo checkout and nowhere in the npm package. Whether it is there
+  // The source in a checkout first (what the repo's tests run), else the package's bundle. Whether either is there
   // is asked of the file system, before the import: the import's own failure cannot say it — a missing
   // dependency OF the layer fails the same way, and the error's code and url fields differ between
   // runtimes (Bun reports neither the way Node did). Any error from an import of a file that IS there
   // is passed on as it is.
-  const url = new URL("../../design-to-code/" + mod, import.meta.url);
-  if (!fs.existsSync(url)) {
+  const url = [new URL(`../../design-to-code/${mod}.ts`, import.meta.url), new URL(`../layer/${mod}.js`, import.meta.url)].find((u) => fs.existsSync(u));
+  if (!url) {
     throw new Error(
-      `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
-        `Design Twin repository, not with the published npm package — run this MCP server from a repo ` +
-        `checkout (bun bridge/src/figma-mcp.ts) to use it. Everything else on this server works either way.`
+      `${tool} needs the design-to-code layer, which is not present in this install: neither a repo checkout's ` +
+        `design-to-code/${mod}.ts nor the npm package's layer/${mod}.js. Reinstall @design-twin/dtwin, or run this MCP ` +
+        `server from a repo checkout (bun bridge/src/figma-mcp.ts). Everything else on this server works either way.`
     );
   }
   return (await import(url.href)) as T;
 }
 const getComponent = async (catalogFile: string, handle: string) =>
-  (await loadLayer<GetComponentModule>("get-component.ts", "design_get_component")).getComponent(
+  (await loadLayer<GetComponentModule>("get-component", "design_get_component")).getComponent(
     catalogFile,
     handle
   );
-const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint");
+const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint", "design_drift_lint");
 
 // The export's component catalog is export-reader.ts readComponentCatalog's: the `files.componentsLocal` pointer
 // (inside the export only), else an older export's inline components[] in design-system.json — the catalog `dtwin
