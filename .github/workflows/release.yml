@@ -1,7 +1,7 @@
 name: release
 
 # Pushing a v* tag publishes bridge/ (the @design-twin/dtwin package, `dtwin` CLI) to npm, then creates the GitHub Release.
-# Bump bridge/package.json's version, merge, then tag that commit: git tag v0.1.0 && git push origin v0.1.0
+# bun run release:bump <x.y.z> (every version file, code.js, bun.lock), merge, then tag that commit: git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
     tags:
@@ -36,6 +36,15 @@ jobs:
             echo "::error file=bridge/package.json::bridge/package.json is $v, tag is $GITHUB_REF_NAME. Bump it before tagging."
             exit 1
           fi
+          # One version for everything a release ships (bun run release:bump sets them all): the Figma plugin reports
+          # its own in the hello, and the bridge compares the two.
+          for f in figma-plugin/package.json claude-plugin/.claude-plugin/plugin.json; do
+            fv=$(jq -r .version "$f")
+            if [ "$fv" != "$version" ]; then
+              echo "::error file=$f::$f is $fv, tag is $GITHUB_REF_NAME. Run bun run release:bump $version before tagging."
+              exit 1
+            fi
+          done
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:

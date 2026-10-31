@@ -32,7 +32,7 @@ The repo ships **three products**, installed separately:
 
 | Piece | What it is | How you install it |
 |---|---|---|
-| `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest (in a clone, or inside the npm package) |
+| `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | `dtwin plugin install`, then imported once into Figma desktop from its manifest (or straight from a clone) |
 | `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `bun add -g @design-twin/dtwin` (or from a clone: root `bun install`, then `bun link` in `bridge/`) |
 | `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies beyond Bun on PATH. | `claude plugin install` |
 
@@ -90,14 +90,19 @@ from the registry (the linked `dtwin` gets them from its shebang, `#!/usr/bin/en
 
 ### 2. Import the Figma plugin
 
-In Figma desktop, go to **Plugins → Development → Import plugin from manifest…** and pick the plugin's
-`manifest.json`: `dtwin init --dry-run` prints its path (and writes nothing). With the npm package it is `figma-plugin/manifest.json` inside the
-installed package (for `bun add -g`, under `~/.bun/install/global/node_modules/@design-twin/dtwin/`); in a clone it is
-`design-twin/figma-plugin/manifest.json`.
+```bash
+dtwin plugin install   # copies the plugin to a per-user folder that never moves, and prints its manifest path
+```
+
+Then, once, in Figma desktop: **Plugins → Development → Import plugin from manifest…** and pick that `manifest.json`
+(`dtwin plugin path` prints it again; the folder is hidden, so on macOS press ⌘⇧G in the file picker and paste the
+path). `dtwin init` does the install too. In a clone, import `design-twin/figma-plugin/manifest.json` directly instead.
 
 `code.js` and `ui.html` are pre-built (committed in the repo, copied into the package), so there is nothing to build.
-After upgrading the package or pulling a new version of the repo, import the manifest again, or new permissions (such
-as library reads) quietly return nothing.
+Upgrading the package updates the installed copy in place the next time `dtwin` starts a bridge (or run
+`dtwin plugin update`): reopen the plugin and it runs the new code, with no re-import. Only a release whose manifest
+changed (new permissions, such as library reads) needs one re-import, and `dtwin` says so. After pulling a new version
+of a clone, re-import only if `figma-plugin/manifest.json` changed.
 
 ### 3. Install the Claude Code plugin
 

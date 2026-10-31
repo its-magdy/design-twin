@@ -120,9 +120,13 @@ manual version:
 (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows) — and restart Claude Code so `bun` is on
 its PATH. The plugin's SessionStart hook prints this when `bun` is missing or older than 1.4.2.
 
-1. **Import the Figma plugin.** Figma desktop → **Plugins → Development → Import plugin from
-   manifest…** → pick the plugin's `manifest.json`: `dtwin init --dry-run` prints its path (inside the installed
-   npm package, `figma-plugin/manifest.json`), or `figma-plugin/manifest.json` in a clone of the Design Twin repo.
+1. **Import the Figma plugin, once.** `dtwin plugin install` (or `dtwin init`) copies it to a per-user folder that
+   never moves and prints its `manifest.json` (`dtwin plugin path` prints it again). Figma desktop → **Plugins →
+   Development → Import plugin from manifest…** → pick that file (the folder is hidden: ⌘⇧G in the macOS file
+   picker, or paste the path into Windows' File name box). In a clone of the Design Twin repo, import its
+   `figma-plugin/manifest.json` instead. Later versions replace the files in place — reopening the plugin runs
+   them; `dtwin` says when a manifest change needs one re-import. Already imported from somewhere else (the
+   package folder, an old clone)? Remove that one in Plugins → Manage plugins.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
@@ -202,8 +206,8 @@ waived by either.
 plugin and is always readable. The repository docs are a different thing: `README.md` (workflow,
 config-map shapes), `bridge/README.md` (full CLI + MCP surface, token, daemon, limits),
 `figma-plugin/README.md` (the plugin's UI and outputs), `ARCHITECTURE.md` (CLI vs MCP front-ends,
-security). Point a user at those only if they actually have a clone — the one-time setup step that
-imports the Figma plugin does need one, since `figma-plugin/manifest.json` exists only there.
+security). Point a user at those only if they actually have a clone — the one-time step that imports the Figma
+plugin does not need one: `dtwin plugin install` puts the plugin's manifest in a per-user folder.
 
 ## Subagents this plugin ships
 

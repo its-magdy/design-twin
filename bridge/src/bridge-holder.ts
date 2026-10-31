@@ -30,6 +30,7 @@ import { commitToken, daemonAddressOf, humanMs } from "./settings.ts";
 import type { BridgeSettings } from "./settings.ts";
 import type { Bridge, BridgeOptions } from "./server-core.ts";
 import { errMsg } from "./errmsg.ts";
+import { refreshInstalledPlugin } from "./plugin-install.ts";
 
 export type Lifetime = "one-shot" | "serve" | "session";
 
@@ -131,6 +132,9 @@ export function bridgeHolder(lifetime: Lifetime, deps: HolderDeps): Holder {
       settings = c.settings;
       for (const line of c.notice) log(line);
     }
+    // About to hold the bridge, so no plugin is connected to this process yet: the moment to bring an installed
+    // per-user copy of the plugin up to this package's (plugin-install.ts — once per process, never from a checkout).
+    refreshInstalledPlugin(log);
     let failed: (e: Error) => void = () => {};
     const bindFailed = new Promise<never>((_, reject) => { failed = reject; });
     const b = deps.createBridge(settings, survive ? { onListenError: (e) => failed(e) } : {});

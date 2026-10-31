@@ -407,6 +407,7 @@ export const VERB_ROWS = [
   { word: "doctor", to: "routed", usage: "  dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help" },
   { word: "init", to: "routed", usage: "  dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help" },
   { word: "seed", to: "routed", usage: "  dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help", help: SEED_HELP },
+  { word: "plugin", to: "routed", usage: "  dtwin plugin [install|update|status|path] # the Figma plugin's per-user copy, to import once. See plugin --help" },
   { word: "mcp", to: "routed", usage: "  dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help", help: MCP_HELP },
   { word: "help", to: "--help", usage: "  dtwin help                               = --help" },
   {

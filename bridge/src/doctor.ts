@@ -39,6 +39,8 @@ import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { isOurMcpEntry, mcpEntryProblems, PROFILES, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
+import { describeState, pluginState } from "./plugin-install.ts";
+import type { PluginState } from "./plugin-install.ts";
 // The manifest's allowedDomains ports and the FIGMA_BRIDGE_PORT parse — ports.ts, the same list and
 // parse settings.ts reads the port with. A bad value is a finding here (the very case this exists to diagnose).
 import { ALLOWED_PORTS, parsePortEnv } from "./ports.ts";
@@ -51,7 +53,7 @@ import { exitCli } from "./stdio.ts";
 import { daemonAddressOf, readSettings, tokenSetting } from "./settings.ts";
 
 /** Every check this report can carry, by id — what `--json` consumers key on. */
-export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "project" | "profile" | "layout" | "export" | "map" | "mcp";
+export type CheckId = "bun" | "token" | "daemon" | "port" | "plugin" | "plugin-files" | "project" | "profile" | "layout" | "export" | "map" | "mcp";
 
 /** One line of the report. `next` is the single next step (absent, or undefined, when there is none). `skipped`: the
  *  check could not run (a warn), so nothing it would have verified was — the report is not ok beside one. */
@@ -327,6 +329,14 @@ function exportChecks(v: ExportVerdict, rel: string): Check[] {
 // custom stack written in design/profile.md), plus design/profile.md read after a bundled profile as the project's own
 // rules. An older project's root profiles/<profile>.md is read the same way.
 export const OVERLAY_FILE = path.join(LAYOUT.DESIGN_DIR, "profile.md");
+// The plugin's files on disk (plugin-install.ts), not the running plugin: is there a per-user copy to import, and is it
+// this dtwin's? Read only — doctor never installs or refreshes it. A note, never a failure: someone who imported from
+// a clone or the package folder before is still working.
+function checkPluginFiles(s: PluginState): Check {
+  const d = describeState(s);
+  return d.ok ? ok("plugin-files", "Plugin files", d.detail) : warn("plugin-files", "Plugin files", d.detail, d.next);
+}
+
 function checkProfile(cwd: string): Check {
   let profile: string | null = null;
   try {
@@ -549,6 +559,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
     }
   }
   if (tok.shadowed) add(checkToken(tok, pluginCheck, viaDaemon));
+  add(checkPluginFiles(pluginState()));
 
   add(...checkProject(cwd));
   return { ok: reportOk(checks), checks };
@@ -599,4 +610,4 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkProject, exportChecks, reportOk, probePort, probePlugin, run, main };
+export { checkBun, checkToken, checkDaemon, sharedTokenNote, resolvePort, ephemeralPortWarning, checkPort, checkPlugin, checkPluginFiles, checkProject, exportChecks, reportOk, probePort, probePlugin, run, main };
