@@ -285,8 +285,8 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   token, in the form your target uses.
 - `design/codeconnect.local.json` — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
-  unmap it. Scaffold from the Figma side with `bun --no-install --no-env-file "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
-  side from **Code Connect files** in the repo with `dtwin seed`. Check it with
+  unmap it. Scaffold from the Figma side with `bun --no-install --no-env-file "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or, from **Code Connect files** in the repo,
+  `dtwin seed` writes the legacy name-keyed `design/components.json` (below). Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(Older projects keep this file at the repo ROOT; `dtwin doctor` finds either and says which. A
   legacy `design/components.json` keyed by component NAME also exists in some projects; it cannot

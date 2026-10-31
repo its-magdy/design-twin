@@ -26,7 +26,8 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 ## Connecting the plugin and the bridge
 
 - **Plugin isn't in the menu** → import it via *Import plugin from manifest…* → the file `dtwin plugin path`
-  prints. It lives under **Plugins → Development**, not the main plugin list.
+  prints (`dtwin plugin install` first if it was never installed; `--open` shows the hidden folder). It lives
+  under **Plugins → Development**, not the main plugin list.
 - **"plugin vX is older than this bridge" / a manifest change didn't take** → `dtwin plugin update` (any `dtwin`
   that starts a bridge does it too), turn on **Plugins → Development → Hot reload plugin**, then reopen the plugin —
   no re-import (with hot reload off, Figma keeps running the code it loaded). Still old? It was imported from
@@ -82,6 +83,10 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 
 ## Commands, tokens and ports
 
+- **`dtwin: command not found`** → not installed, or its bin dir is not on this PATH: `bun add -g
+  @design-twin/dtwin` (lands in `~/.bun/bin`) or `brew install its-magdy/tap/dtwin`; a clone needs `bun link`
+  in `bridge/`. **`env: bun: No such file or directory`** → `dtwin` is there but Bun is not (an npm install
+  still runs on Bun) — see the `bun: command not found` entry below.
 - **`dtwin pull --out <dir>` → "outDir is positional"** → write `dtwin pull <dir>`. There is also no
   `--port`: set `FIGMA_BRIDGE_PORT` (`DTWIN_PORT` is not read; `dtwin doctor` warns about it).
 - **Token rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
@@ -128,14 +133,14 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 
 ## Project setup and the MCP server
 
-- **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
-  here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
-  `.mcp.json` there whose `command` is the absolute path of `bun` and whose `args` are
-  `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` (`dtwin init --mcp` writes exactly that) — no token needed in it,
-  since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
+- **MCP `designtwin` not showing up** → it is registered per project, in the project you are *building*
+  (the Design Twin repo itself registers none, by choice). Run `dtwin init --mcp` there: it adds a `.mcp.json`
+  entry whose `command` is the absolute path of `bun` and whose `args` are
+  `["--no-install", "--no-env-file", "<package>/src/figma-mcp.ts"]` (`bridge/src/…` in a clone) — no token needed
+  in it, since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
   and restart.
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
-  generated drop-target and doesn't exist until an export runs. Do Path A/B first.
+  generated drop-target and doesn't exist until an export runs (or `dtwin init`). Export first: `/designtwin:extract`.
 - **Wrong stack generated** → set `profile` in `design/target.json`. For a stack the plugin does not bundle, write
   `design/profile.md` from `<plugin>/skills/build-screen/profiles/_template.md` and name it in `target.json`.
 - **`figma_write` returns "Edits are off in the Design Twin plugin — tick 'Allow edits' …"** (or a dry run
@@ -143,9 +148,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   default. Nothing was changed, and the agent cannot turn it on: **ask the user to tick "Allow edits" in the
   Design Twin plugin window**, then retry the same call. The setting is saved for this user in every file, so
   remind them to untick it when they are done. Reads and exports work either way.
-- **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
+- **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/export/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
-  Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
+  Re-pull (`/designtwin:extract`). Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
 
 ## Audit, scripts and the verify probe
 
@@ -177,7 +182,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   the Bash tool, so `bun --no-install --no-env-file "$CLAUDE_PLUGIN_ROOT/scripts/…"` typed into a shell always fails. Copy the path
   exactly as the skill shows it; a script's own usage/hint lines also print their real path. If the skill
   text itself still shows the literal `${…}` form (it was preloaded into an agent), the agent's prompt
-  names the folder. The folder is missing → re-run `/plugin install designtwin`. Working from a clone of
+  names the folder. The folder is missing → reinstall: `claude plugin install designtwin@designtwin-marketplace`. Working from a clone of
   the Design Twin repo instead? The same scripts are `bun design-to-code/<name>.ts`.
 - **`verify-probe` exits 3: "chromium did not launch" / no usable browser** → Playwright's Chromium is not
   installed (or not the revision this Playwright expects). The install line the probe prints downloads a browser —

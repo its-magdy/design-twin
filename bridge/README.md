@@ -75,8 +75,9 @@ access control (a sandboxed browser iframe on any site the user visits sends `Or
 could otherwise drive the plugin), so the token is the real gate.
 
 **You do not have to set anything up.** The first time a bridge starts it generates a token, saves it,
-prints it once, and reuses it forever after. Paste it into the plugin's **Bridge token** field (the
-plugin saves it per-user in `clientStorage`) and neither side asks again.
+prints it once, and reuses it forever after. Paste it into the plugin's **Bridge token** field, under the
+window's collapsed **Connect to Claude Code (optional)** section, and press **Save** (the plugin keeps it
+per-user in `clientStorage`); neither side asks again.
 
 ```
 dtwin --token-status    # where it lives, which source wins, its fingerprint — never the token
@@ -234,14 +235,15 @@ the path; on Windows paste it into the File name box. `dtwin init` installs (or 
 step. Install writes only the files that differ, each one atomically, under a lock, and is safe to run any number of times.
 
 **Updates need no command.** Once a copy is installed, every `dtwin` that starts a bridge (a command, `dtwin serve`, the
-MCP server) first brings it up to its own package's files, so after `bun add -g @design-twin/dtwin@latest` you only
+MCP server) first brings it up to its own package's files, so after `bun add -g @design-twin/dtwin@latest` (or
+`brew upgrade dtwin`) you only
 reopen the plugin — with Plugins → Development → **Hot reload plugin** on. With it on, reopening runs the replaced
 `code.js` / `ui.html` and picks up a changed manifest's permissions too (seen in Figma desktop 126); with it off, Figma
 kept running the code it had already loaded. An update whose manifest changed says so, with re-importing as the
 fallback if a new permission still does not work. Nothing is created that you did not
 install, the network is never touched, and a `dtwin` running from a **repo checkout** never refreshes the copy —
 developers import `figma-plugin/manifest.json` from the checkout itself (`dtwin plugin path` prints that one there).
-`dtwin doctor` reports the copy as its "Plugin files" line.
+`dtwin doctor` reports the copy as its "Plugin files" check.
 
 ## Seed the component map from Code Connect: `dtwin seed`
 
@@ -289,7 +291,9 @@ open file is seen), then each file's `hello` (so it is named).
    bridge (almost always the MCP server), or held by something unrelated.
 5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
    says so with both fingerprints, instead of the "nothing connected" that case otherwise looks like.
-6. **Project** (the current directory) — `design/`, `design/target.json` and the profile build-screen will use
+6. **Plugin files** — the per-user plugin copy `dtwin plugin` manages: installed or not, where, and whether it
+   matches this dtwin.
+7. **Project** (the current directory) — `design/`, `design/target.json` and the profile build-screen will use
    (bundled or custom, plus the project's own `design/profile.md` when it exists), which export LAYOUT it
    found, the age of the last export (its newest stamp; stale past 24h), **which Figma files that export mixes**, the component map
    (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
@@ -840,7 +844,7 @@ Behaviour worth knowing:
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
 there that runs `bridge/src/figma-mcp.ts` on Bun — `"command"`: the absolute path of `bun`, `"args"`:
 `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` — under the key `designtwin` (`dtwin init --mcp`
-writes exactly that, with the `bun` and the clone that ran it; an absolute `bun` keeps working when Claude Code is
+writes exactly that, with the `bun` and the install — package or clone — that ran it; an absolute `bun` keeps working when Claude Code is
 started without `~/.bun/bin` on its PATH). Claude Code then launches it over stdio, and its tools surface as
 `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_status`).
 No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI

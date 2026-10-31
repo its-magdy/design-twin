@@ -53,15 +53,16 @@ skill's job, not this one — use it if the user hasn't got a connection working
 **Default to manual export when the bridge isn't already working.** It needs zero setup and always
 works; walking a user through CLI/token setup mid-task is worse than just clicking the buttons.
 
-**Only one bridge can hold port 8787** at a time (CLI, daemon, and MCP all bind it) — if the MCP
-server is already running, use its own export tools with `writeToDisk: true` instead of also trying
-the CLI.
+**Port 8787 has one owner at a time, and the owner shares**: while the MCP server or a `dtwin serve` daemon
+holds it, ordinary `dtwin` commands route through it. Only a plain one-shot `dtwin pull` does not share — a
+second bridge started meanwhile exits with `EADDRINUSE`. In an MCP session, the export tools with
+`writeToDisk: true` are still the simplest way to get files.
 
 **Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when the npm package is installed
-(`bun add -g @design-twin/dtwin`) or it was linked from a clone (`bun install`, then `bun link` in its `bridge/` folder).
-Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
-`bun bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
-export buttons, which need nothing.
+(`bun add -g @design-twin/dtwin`), installed with Homebrew (`brew install its-magdy/tap/dtwin`), or it was linked from a clone (`bun install`, then `bun link` in its `bridge/` folder).
+If it is missing and you are inside a clone of the Design Twin repo, every `dtwin` below is
+`bun bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: install it (`help` has the steps) or
+fall back to the plugin's own export buttons, which need only the imported plugin.
 
 ## Discover, then scope — never open with a whole-file pull
 
@@ -203,7 +204,7 @@ rewritten only when its text changes, and a `SCHEMA.md` you wrote yourself is ne
 
 - Every pull that writes to disk also leaves **`design/export/SCHEMA.md`** (the scripting quick keys).
 - `--node <id>` / a selection → `design/export/pages/<Page>/<Screen>__<node-id>.json` (keys:
-  `exportedAt`, `screen`, `page`, `pageId`, `nodeId`, `nodes[]`, `manifest`), plus three siblings:
+  `exportedAt`, `screen`, `page`, `pageId`, `nodeId`, `nodes[]`, `manifest`, `sourceFile`), plus three siblings:
   `…__<id>.vars.json` (the tokens THIS screen binds), `…__<id>.assets.json` (which assets it uses,
   with content hashes), and a row in `design/export/pages/index.json`. Also
   `design/export/variables.json` and `design/export/assets/`. **No `design/export/design-system/`** —

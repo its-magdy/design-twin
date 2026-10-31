@@ -31,7 +31,7 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 | | Manual export | `dtwin` CLI | `figma-mcp` server |
 |---|---|---|---|
 | What it is | Clicking the plugin's own export buttons, saving downloads into `design/export/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/export/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
-| Setup | **None** — no bridge, no token | Once, from a clone: `bun install`, then `bun link` in `bridge/` (Bun ≥ 1.4.2 — the CLI, the MCP server and the plugin's scripts all run on it); the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
+| Setup | **None** beyond importing the plugin — no bridge, no token | Once: `bun add -g @design-twin/dtwin` or `brew install its-magdy/tap/dtwin` (Bun ≥ 1.4.2 — the CLI, the MCP server and the plugin's scripts all run on it); the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration (`dtwin init --mcp`) — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
@@ -61,8 +61,8 @@ or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
 ## What each one lets Claude actually do
 
 **Through the CLI**, Claude runs `dtwin`. Check `which dtwin` first — it is normally already a
-global binary, and only if it is missing are you inside a clone of the Design Twin repo, where every
-`dtwin` is `bun bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
+global binary; missing, either it is not installed yet (setup below) or you are inside a clone of the
+Design Twin repo, where every `dtwin` is `bun bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
 `dtwin list --help`, `dtwin pull --help`, `dtwin whoami --help`, `dtwin mcp --help` — every verb has one)
 without doing anything else while doing so. The output directory is positional and defaults to `design/export` (`dtwin pull`
@@ -112,7 +112,7 @@ writeToDisk:true}` for look-alikes) → `figma_export_url {url:"<node id>", writ
 `--mcp` to also register the MCP server; `--dry-run` to preview). It creates `design/` and
 `design/export/`, writes `design/README.md` and `design/target.json` (the detected stack, or
 `profile: null` for build-screen to fill in on its first run), makes sure a bridge token exists,
-merges `.mcp.json` without overwriting anything, and prints the steps that are clicks in Figma. The
+installs the Figma plugin's per-user copy (step 2), merges `.mcp.json` without overwriting anything, and prints the steps that are clicks in Figma. The
 manual version:
 
 **Bun first, whichever lane.** The plugin's scripts and hooks, the `dtwin` CLI and the MCP server all run on
@@ -120,23 +120,31 @@ manual version:
 (macOS, Linux) or `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows) — and restart Claude Code so `bun` is on
 its PATH. The plugin's SessionStart hook prints this when `bun` is missing or older than 1.4.2.
 
-1. **Import the Figma plugin, once.** `dtwin plugin install` (or `dtwin init`) copies it to a per-user folder that
-   never moves and prints its `manifest.json` (`dtwin plugin path` prints it again). Figma desktop → **Plugins →
+**This Claude Code plugin** is installed if this skill loaded. On another machine: `claude plugin marketplace add
+its-magdy/design-twin`, then `claude plugin install designtwin@designtwin-marketplace`;
+`claude plugin update designtwin@designtwin-marketplace` (then restart) picks up a release.
+
+1. **Install `dtwin`** — it also carries the Figma plugin, so even the manual lane wants it. `which dtwin`; if it
+   isn't there: `bun add -g @design-twin/dtwin` (it needs Bun on PATH, even installed with npm; `dtwin` lands in
+   `~/.bun/bin`), or `brew install its-magdy/tap/dtwin` (Homebrew installs Bun with it; `brew upgrade` keeps both
+   current, and the paths `dtwin init` writes survive it), or in a clone of the Design Twin repo `bun install`, then
+   `bun link` inside `bridge/` — or use `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in
+   place of `dtwin` (the two flags keep the project's `.env` and Bun's auto-install out of it, as the linked
+   `dtwin`'s shebang does). `dtwin --version` confirms it.
+2. **Import the Figma plugin, once.** `dtwin plugin install` (or `dtwin init`) copies it to a per-user folder that
+   never moves (`<config dir>/figma-plugin`, beside the bridge token) and prints its `manifest.json`
+   (`dtwin plugin path` prints it again; `--open` shows it in Finder / Explorer). Figma desktop → **Plugins →
    Development → Import plugin from manifest…** → pick that file (the folder is hidden: ⌘⇧G in the macOS file
    picker, or paste the path into Windows' File name box). In a clone of the Design Twin repo, import its
-   `figma-plugin/manifest.json` instead. Later versions replace the files in place — with Plugins → Development →
-   Hot reload plugin on, reopening the plugin runs them (with it off, Figma keeps the old code); re-import only if
-   a new permission still does not work after that. Already imported from somewhere else (the
-   package folder, an old clone)? Remove that one in Plugins → Manage plugins.
-2. **Pick a lane:**
-   - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
+   `figma-plugin/manifest.json` instead. Later versions replace the files in place (every `dtwin` that starts a
+   bridge refreshes the copy; `dtwin plugin update` does it now) — with Plugins → Development → Hot reload plugin
+   on, reopening the plugin runs them (with it off, Figma keeps the old code); re-import only if a new permission
+   still does not work after that. Already imported from somewhere else (the package folder, an old clone)?
+   Remove that one in Plugins → Manage plugins; `dtwin plugin status` says which copy is current.
+3. **Pick a lane:**
+   - **Just one screen, no bridge** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
-   - **The CLI** → `which dtwin`; if it isn't there, `bun add -g @design-twin/dtwin` (it needs Bun on PATH, even
-     installed with npm; `dtwin` lands in `~/.bun/bin`), or `brew install its-magdy/tap/dtwin` (Homebrew
-     installs Bun with it; `brew upgrade` keeps both current, and the paths `dtwin init` writes survive it), or in a clone of this repo run `bun install`, then
-     `bun link` inside `bridge/`, or use
-     `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in place of `dtwin` (the two flags keep the
-     project's `.env` and Bun's auto-install out of it, as the linked `dtwin`'s shebang does). There is no token to make by hand: the first bridge start generates one, saves it per-user
+   - **The CLI** → there is no token to make by hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
      it into the plugin's **Bridge token** field (Save) and neither side asks again.
      `dtwin token show` reprints it, `dtwin token rotate` replaces it, `dtwin token` says which token
@@ -149,11 +157,12 @@ its PATH. The plugin's SessionStart hook prints this when `bun` is missing or ol
      `dtwin doctor` says when you will need it. (MCP: a `client` argument on each tool.) A partial
      file name is the form to reach for: `figma.fileKey` is gated to private plugins, so on a
      self-imported plugin it is `null` and cannot address anything.
-   - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
-     that project* running `bridge/src/figma-mcp.ts` by absolute path on Bun (`command`: the absolute `bun`, `args`:
-     `["--no-install", "--no-env-file", "<abs path>/bridge/src/figma-mcp.ts"]` — `dtwin init --mcp` writes it); enable it via `/mcp` and
-     restart. No token goes in that file — the MCP server reads the same per-user stored token.
-3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
+   - **Live MCP tools in the project being built** → same install and token as the CLI, plus a `.mcp.json`
+     *in that project*: run `dtwin init --mcp` there. It writes a `designtwin` entry running the installed
+     `figma-mcp.ts` on Bun (`command`: the absolute `bun`, `args`: `["--no-install", "--no-env-file",
+     "<package>/src/figma-mcp.ts"]` — `<package>` is the installed package, `bridge/` in a clone); enable it via
+     `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.
+4. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
    code token — hand-authored; do NOT confuse with the generated `design/export/design-system/tokens.json`,
    which is Figma's own raw values), and the component map `design/codeconnect.local.json` (scaffold it with

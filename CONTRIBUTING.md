@@ -44,7 +44,8 @@ request; CI runs the same suites, split across several runners.
   and help follow from it, and figma-pull.ts will not compile until the row has a runner) or a modifier — and
   read options in `bridge/src/read-opts.ts`
   (with the read scopes that take them — `read-plan.ts` and each MCP tool's schema follow from that row);
-  new runtime modules of the bridge go in `bridge/package.json` `files`.
+  the npm package ships `bridge/src/` whole, so a runtime file the bridge needs from anywhere else must be added to
+  `bridge/package.json` `files` (or copied in at pack time by `bridge/pack.ts`).
 - **Dependencies.** `bun.lock` is the lockfile (`bun install --frozen-lockfile` in CI); `bunfig.toml` holds back any
   version published less than 7 days ago, as Dependabot's cooldown does. The npm package ships a `bun.lock` of its
   own, derived from the root one at pack time (`bridge/pack.ts`), and the release installs the packed tarball from it

@@ -100,8 +100,8 @@ bun --no-install --no-env-file "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" -
 It resolves the project's Playwright and launches Chromium once (exit 0 = ok, nothing written).
 
 Exit 3 → stop and ask before step 3 (step 2 needs no browser), saying exactly what is missing and the commands that fix
-it (the probe prints them: `npm i -D playwright`, then `npx playwright install chromium`, a large browser
-download). Never run either yourself — only the user does, or says so: one edits the project's
+it (the probe prints them for the project's package manager: `npm i -D playwright`, then `npx playwright install
+chromium` — `bun add -d` / `bunx` in a Bun project — a large browser download). Never run either yourself — only the user does, or says so: one edits the project's
 dependencies, the other a large download. "No playwright package" can be a false negative — a Yarn
 Plug'n'Play project (no `node_modules`) needs `nodeLinker: node-modules` in .yarnrc.yml and a `yarn install` (the user's
 call) before the probe can find Playwright, or a project that drives the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of
