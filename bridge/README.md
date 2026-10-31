@@ -44,13 +44,13 @@ The plugin manifest allows the bridge in **both** dev and published builds
 (`allowedDomains: ws://localhost:{8787,8788,8789}`). Those three ports are the only ones the plugin can dial — `FIGMA_BRIDGE_PORT` is
 validated against them and exits rather than binding a port nothing could ever reach.
 
-> **Re-import the plugin after its manifest changes — required for library reads.** The manifest declares
-> `"permissions": ["teamlibrary"]`, without which Figma denies the team-library APIs. A plugin
-> imported from an older manifest keeps running happily and simply returns **no libraries** — a silent
-> empty result, not an error. If `--list-libraries` / `figma_list_libraries` shows nothing, re-import
-> the manifest `dtwin plugin path` prints (Plugins → Development → Import plugin from manifest…) first.
-> A code-only update needs no re-import: `dtwin plugin update` (or any dtwin that starts a bridge) replaces the
-> files in place, and reopening the plugin runs them; it says when the manifest itself changed.
+> **Library reads need the manifest's permission.** The manifest declares `"permissions": ["teamlibrary"]`,
+> without which Figma denies the team-library APIs. A plugin still running an older manifest keeps working
+> and simply returns **no libraries** — a silent empty result, not an error. If `--list-libraries` /
+> `figma_list_libraries` shows nothing, turn on Plugins → Development → **Hot reload plugin** and reopen the plugin;
+> if it is still empty, re-import the manifest `dtwin plugin path` prints (Plugins → Development → Import plugin from
+> manifest…). Updates need no re-import: `dtwin plugin update` (or any dtwin that starts a bridge) replaces the files
+> in place, and with hot reload on, reopening the plugin runs them — a changed manifest's permissions included.
 
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
@@ -210,15 +210,15 @@ build-screen read. Never pull into bare `design`: that writes a second, parallel
 ## The Figma plugin: `dtwin plugin`
 
 The plugin is not on Figma Community; it is imported into Figma **desktop** as a development plugin (Plugins →
-Development → Import plugin from manifest…). Figma remembers the manifest's path and reads `code.js` / `ui.html` from
-there each time the plugin runs, so the folder must not move — and a path inside the npm package does (Bun's and npm's
+Development → Import plugin from manifest…). Figma remembers the manifest's path, so the folder must not move — and a
+path inside the npm package does (Bun's and npm's
 global folders differ, a Node version manager gives each Node its own, a `bunx` cache comes and goes, an uninstall
 deletes it). So the package's plugin is copied to one per-user folder, beside the bridge token, and imported from there
 once:
 
 ```
 dtwin plugin install     # copy it to <config dir>/figma-plugin and print the one-time import step (--open shows it)
-dtwin plugin update      # the same; says "reopen the plugin" — or, when the manifest changed, "re-import once"
+dtwin plugin update      # the same, then says to reopen the plugin (and when the manifest changed too)
 dtwin plugin status      # (default) installed where, and is it this dtwin's? (--json)
 dtwin plugin path        # the manifest to import, on stdout
 dtwin plugin uninstall   # remove the copied files (then remove the plugin in Figma: Plugins → Manage plugins)
@@ -231,8 +231,10 @@ step. Install writes only the files that differ, each one atomically, under a lo
 
 **Updates need no command.** Once a copy is installed, every `dtwin` that starts a bridge (a command, `dtwin serve`, the
 MCP server) first brings it up to its own package's files, so after `bun add -g @design-twin/dtwin@latest` you only
-reopen the plugin. A code change never needs a re-import. A **manifest** change (permissions, network access) does:
-Figma keeps the grants of the manifest it imported, and the update says so. Nothing is created that you did not
+reopen the plugin — with Plugins → Development → **Hot reload plugin** on. With it on, reopening runs the replaced
+`code.js` / `ui.html` and picks up a changed manifest's permissions too (seen in Figma desktop 126); with it off, Figma
+kept running the code it had already loaded. An update whose manifest changed says so, with re-importing as the
+fallback if a new permission still does not work. Nothing is created that you did not
 install, the network is never touched, and a `dtwin` running from a **repo checkout** never refreshes the copy —
 developers import `figma-plugin/manifest.json` from the checkout itself (`dtwin plugin path` prints that one there).
 `dtwin doctor` reports the copy as its "Plugin files" line.
