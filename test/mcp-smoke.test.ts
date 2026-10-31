@@ -24,10 +24,11 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 import type * as GetComponentMod from "../design-to-code/get-component.ts";
 import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
 import { isUnknownArray } from "../bridge/src/json-util.ts";
+import { LAYER, missingHints } from "../bridge/pack.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
-// lazily (it cannot reference them: the bridge package ships bridge/src alone). Nothing else ties those local interfaces to
+// lazily (it cannot reference them: the bridge package ships bridge/src and, in place of the layer, bundles of it). Nothing else ties those local interfaces to
 // the real modules, so drift between them would only show at runtime, inside a tool call. The test
 // program sees both trees, so it checks here that the real modules still satisfy the server's view.
 type Assert<T extends true> = T;
@@ -564,10 +565,11 @@ void (async () => {
     await client.close().catch(() => {});
   }
 
-  // The published-package shape: bridge/ on its own, with no design-to-code/ beside it. The two design_* tools
-  // say they need the repo checkout — decided by whether the layer FILE exists (figma-mcp.ts loadLayer), not by
-  // the import's error fields — and the server stays up for every other tool. Its bridge binds an ephemeral port
-  // (DT_TEST_EPHEMERAL_PORT) and its daemon socket lives under a TMPDIR of its own.
+  // The published-package shape: bridge/ on its own, with no design-to-code/ beside it. Without layer/ (what
+  // `prepack`, bridge/pack.ts, copies in) the two design_* tools say what is missing — decided by whether the layer
+  // FILE exists (figma-mcp.ts loadLayer), not by the import's error fields — and the server stays up for every other
+  // tool. With it, they answer from the bundles. Its bridge binds an ephemeral port (DT_TEST_EPHEMERAL_PORT) and its
+  // daemon socket lives under a TMPDIR of its own.
   {
     const inst = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-inst-"));
     const repo = path.join(import.meta.dirname, "..");
@@ -590,16 +592,34 @@ void (async () => {
         stderr: "ignore",
       }));
       const r = await instClient.callTool({ name: "design_get_component", arguments: { handle: "Btn" } });
-      ok("an install without design-to-code/: design_get_component is a tool error saying it needs the repo checkout",
-        r.isError === true && /needs the design-to-code layer, which is not present in this install/.test(firstText(r)) && /bun bridge\/src\/figma-mcp\.ts/.test(firstText(r)));
+      ok("an install without design-to-code/ or layer/: design_get_component is a tool error naming both places",
+        r.isError === true && /needs the design-to-code layer, which is not present in this install/.test(firstText(r)) && /layer\/get-component\.js/.test(firstText(r)) && /bun bridge\/src\/figma-mcp\.ts/.test(firstText(r)));
       const dry = await instClient.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }] } });
       ok("…and the rest of the server works on (a figma_write dryRun answers)", !dry.isError && (JSON.parse(firstText(dry)) as WritePreview).dryRun === true);
+      // The packed shape: the bundles pack.ts ships, in bridge/layer/. Asked per call, so the same server picks them up.
+      fs.mkdirSync(path.join(inst, "bridge", "layer"));
+      for (const n of LAYER) fs.copyFileSync(path.join(repo, "claude-plugin", "scripts", n + ".js"), path.join(inst, "bridge", "layer", n + ".js"));
+      fs.writeFileSync(path.join(cwd, "design", "export", "design-system", "components.local.json"), JSON.stringify({ components: [{ key: "k-btn", id: "1:1", name: "Btn", type: "COMPONENT" }] }));
+      const got = await instClient.callTool({ name: "design_get_component", arguments: { handle: "Btn" } });
+      ok(`an install with layer/: design_get_component answers from the bundle (got ${firstText(got).slice(0, 120)})`,
+        got.isError !== true && /"k-btn"/.test(firstText(got)));
+      fs.writeFileSync(path.join(cwd, "map.json"), JSON.stringify({ components: "not-an-object" }));
+      const lint = await instClient.callTool({ name: "design_drift_lint", arguments: { map: "map.json" } });
+      const hinted = /"([^"]+map-validate\.js)"/.exec(firstText(lint))?.[1];
+      ok(`…design_drift_lint runs from the bundle, and its hint names a script the package ships (got ${firstText(lint).slice(-200)})`,
+        lint.isError === true && /\[map-invalid\]/.test(firstText(lint)) && hinted !== undefined && fs.existsSync(hinted) && hinted.startsWith(path.join(fs.realpathSync(inst), "bridge", "layer")));
     } catch (e) {
       ok("the install-shaped server ran without throwing — " + (e instanceof Error ? e.message : e), false);
     } finally {
       await instClient.close().catch(() => {});
       fs.rmSync(inst, { recursive: true, force: true });
     }
+  }
+  // Every script a shipped bundle's hints name is shipped too (pack.ts refuses to pack otherwise — this says so
+  // before a release does).
+  for (const n of LAYER) {
+    const dangling = missingHints(fs.readFileSync(path.join(import.meta.dirname, "..", "claude-plugin", "scripts", n + ".js"), "utf8"), LAYER);
+    ok(`packed layer: ${n}.js names only scripts the package ships${dangling.length ? " (not: " + dangling.join(", ") + ")" : ""}`, dangling.length === 0);
   }
   report();
 })();

@@ -369,10 +369,13 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    is the first test gate. See `figma-plugin/README.md`.
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
-   the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` package, which is
-   **not on npm**: clone, `bun install`, then `bun link` in `bridge/` (or run `bun bridge/src/figma-pull.ts` from the
-   clone); it runs as TypeScript on Bun (≥ 1.4.2), with no build step;
-   `bridge/src/figma-pull.ts` is its entry point. `dtwin init` sets a consumer project up in one command.
+   the same files, exits. Removes the manual click. No MCP. Published to npm as `@design-twin/dtwin`
+   (`bun add -g @design-twin/dtwin`; or from a clone: `bun install`, then `bun link` in `bridge/`, or run
+   `bun bridge/src/figma-pull.ts`); it runs as TypeScript on Bun (≥ 1.4.2), with no build step;
+   `bridge/src/figma-pull.ts` is its entry point. npm's `files` cannot reach outside `bridge/`, so `prepack`
+   (`bridge/pack.ts`) copies in the two things the package needs from beside it: the built Figma plugin
+   (`figma-plugin/`) and the self-contained design-to-code bundles the MCP server's two `design_*` tools load
+   (`layer/`, from `claude-plugin/scripts/`). bridge/src itself still imports nothing from design-to-code. `dtwin init` sets a consumer project up in one command.
 3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
    interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.

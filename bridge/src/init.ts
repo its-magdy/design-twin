@@ -119,7 +119,7 @@ function bunxCacheOf(dir: string): string | null {
 }
 const bunxRefusal = (cache: string): string =>
   `this dtwin runs from a bunx cache (${cache}) that Bun replaces or deletes on its own — a .mcp.json entry pointing into it would stop starting one day. ` +
-  "Install it for good (in a clone: `bun install`, then `cd bridge && bun link`), and run `dtwin init --mcp` from that install";
+  "Install it for good (`bun add -g @design-twin/dtwin`, or in a clone: `bun install`, then `cd bridge && bun link`), and run `dtwin init --mcp` from that install";
 
 /** How to look at the machine (seams for the suites): does a path exist, and what does a bare command resolve to. */
 export interface EntryProbe {
@@ -371,14 +371,14 @@ function main(argv: string[]): void {
   // Run through `bunx @design-twin/dtwin init`: this very file is in bunx's cache, so no entry may point at it.
   const cache = bunxCacheOf(import.meta.dirname);
   const refuseMcp = cache ? bunxRefusal(cache) : undefined;
-  if (cache && !argv.includes("--mcp")) log(`note    this dtwin runs from a bunx cache (${cache}) — install it for good (in a clone: \`bun install\`, then \`cd bridge && bun link\`) to have \`dtwin\` on PATH and to register the MCP server`);
+  if (cache && !argv.includes("--mcp")) log(`note    this dtwin runs from a bunx cache (${cache}) — install it for good (\`bun add -g @design-twin/dtwin\`, or in a clone: \`bun install\`, then \`cd bridge && bun link\`) to have \`dtwin\` on PATH and to register the MCP server`);
   const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, ...ifDefined("refuseMcp", refuseMcp), token });
   if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
-  // The plugin manifest of a repo checkout: bridge/src/ -> ../../figma-plugin/. A package
-  // install has no figma-plugin/ beside it, so the step below falls back to naming the repo instead.
-  const manifest = path.join(import.meta.dirname, "..", "..", "figma-plugin", "manifest.json");
+  // The Figma plugin's manifest: a repo checkout's (bridge/src/ -> ../../figma-plugin/), else the copy the npm
+  // package carries (../figma-plugin/, put there by bridge/pack.ts). Neither: the step names the repo instead.
+  const manifest = [path.join(import.meta.dirname, "..", "..", "figma-plugin", "manifest.json"), path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json")].find((m) => fs.existsSync(m));
   // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
   // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
   // marker is there, saying "install the plugin" is noise at best and confusing at worst.
@@ -400,7 +400,7 @@ function main(argv: string[]): void {
   })();
 
   const steps = [
-    "In Figma DESKTOP: Plugins → Development → Import plugin from manifest… → " + (fs.existsSync(manifest) ? manifest : "figma-plugin/manifest.json from a clone of the Design Twin repo (the npm package does not include it)"),
+    "In Figma DESKTOP: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)"),
     "Run the plugin (Plugins → Development → Design Twin), paste the bridge token into its \"Bridge token\" field, Save:  dtwin --show-token | pbcopy",
   ];
   if (!pluginInstalled) {

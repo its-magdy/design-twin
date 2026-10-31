@@ -57,8 +57,8 @@ works; walking a user through CLI/token setup mid-task is worse than just clicki
 server is already running, use its own export tools with `writeToDisk: true` instead of also trying
 the CLI.
 
-**Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when it was linked from a clone
-(`bun install`, then `bun link` in its `bridge/` folder; the package is not on npm).
+**Where `dtwin` comes from.** Check `which dtwin` first — it is on PATH when the npm package is installed
+(`bun add -g @design-twin/dtwin`) or it was linked from a clone (`bun install`, then `bun link` in its `bridge/` folder).
 Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
 `bun bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
 export buttons, which need nothing.

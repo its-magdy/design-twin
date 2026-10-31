@@ -31,11 +31,15 @@
   },
   "files": [
     "src",
+    "layer",
+    "figma-plugin",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "prepack": "bun --no-install --no-env-file pack.ts",
+    "postpack": "bun --no-install --no-env-file pack.ts --clean",
     "pull": "bun src/figma-pull.ts",
     "pull:selection": "bun src/figma-pull.ts design --selection",
     "mcp": "bun src/figma-mcp.ts"

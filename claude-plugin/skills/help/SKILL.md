@@ -119,12 +119,14 @@ manual version:
 its PATH. The plugin's SessionStart hook prints this when `bun` is missing or older than 1.4.2.
 
 1. **Import the Figma plugin.** Figma desktop → **Plugins → Development → Import plugin from
-   manifest…** → pick `figma-plugin/manifest.json` from a clone of the Design Twin repo.
+   manifest…** → pick the plugin's `manifest.json`: `dtwin init --dry-run` prints its path (inside the installed
+   npm package, `figma-plugin/manifest.json`), or `figma-plugin/manifest.json` in a clone of the Design Twin repo.
 2. **Pick a lane:**
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
-   - **The CLI** → `which dtwin`; if it isn't there, in a clone of this repo run `bun install`,
-     then `bun link` inside `bridge/` (it is not on npm; `dtwin` lands in `~/.bun/bin`), or use
+   - **The CLI** → `which dtwin`; if it isn't there, `bun add -g @design-twin/dtwin` (it needs Bun on PATH, even
+     installed with npm; `dtwin` lands in `~/.bun/bin`), or in a clone of this repo run `bun install`, then
+     `bun link` inside `bridge/`, or use
      `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in place of `dtwin` (the two flags keep the
      project's `.env` and Bun's auto-install out of it, as the linked `dtwin`'s shebang does). There is no token to make by hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
