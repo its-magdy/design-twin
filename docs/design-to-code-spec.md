@@ -117,8 +117,9 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
 - Scripts `design-to-code/*.ts`: token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
 - drift-lint: `build-screen` and `sync-design` run it as a step; wire it into your own CI / pre-commit to
   catch drift automatically. The plugin ships no drift-lint hook — its hooks are the `verify-build.ts`
-  plan gate (a Stop hook on `build-screen`/`sync-design`, a SubagentStop hook on `screen-builder`) and the
-  `verifier-guard.ts` PreToolUse guard on the `visual-verifier` agent (its write scope, pattern kills, installs).
+  plan gate (a Stop hook on `build-screen`/`sync-design`, a SubagentStop hook on `screen-builder`), the
+  `verifier-guard.ts` PreToolUse guard on the `visual-verifier` agent (its write scope, pattern kills, installs),
+  and a SessionStart check that Bun ≥ 1.4.2 is on PATH (`claude-plugin/hooks/check-bun.sh`).
 - Skill: the fuzzy-match confirm loop and the codegen resolver live in `build-screen`, where model
   judgment meets the map. Multi-screen runs fan out to the `screen-builder` agent, which preloads that
   same skill — one screen per agent, so each screen's node JSON stays out of the main context.

@@ -9,6 +9,6 @@
 ## Checklist
 
 - [ ] `bun run test` passes locally
-- [ ] Committed build output rebuilt (`bun run build`) if `figma-plugin/src`, `bridge/src` or `design-to-code` changed
+- [ ] Committed build output rebuilt (`bun run build`) if `figma-plugin/src`, `figma-plugin/ui.template.html`, `bridge/src` or `design-to-code` changed
 - [ ] No real file, company or layer names in code, fixtures or docs
 - [ ] Docs updated (README, `bridge/README.md`, skills) if behaviour or flags changed

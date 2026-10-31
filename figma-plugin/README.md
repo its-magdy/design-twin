@@ -12,6 +12,7 @@ into Figma with **zero build** for consumers. You only build when you edit `src/
 ```
 src/
   main.ts        entry: showUI, message + bridge wiring, test surface
+  bridge.ts      bridge dispatch: each CLI / MCP command -> its collect / list / write function
   collect.ts     collectSelection / collectNode / collectFull / collectScreenshot (+ read options)
   serialize.ts   the recursive SceneNode -> compact JSON serializer
   paint.ts       fills & strokes (Paint union)
@@ -20,7 +21,9 @@ src/
   text.ts        TEXT / TEXT_PATH typography + styled-text runs
   variables.ts   design tokens, style refs, variable modes, boundVariables resolution
   prototype.ts   reactions / actions / transitions (the free interaction layer)
-  components.ts   instances, component-prop refs/overrides, whole-file design-system catalog
+  components.ts  instances, component-prop refs/overrides, whole-file design-system catalog
+  libraries.ts   team-library discovery (which libraries the file uses, usage-derived counts)
+  motion.ts      motion / animation reads (the `motion` read option)
   assets.ts      vector/icon -> SVG, image -> PNG, reference PNG (whole-frame + on-demand single-node), dev-resource links
   writes.ts      minimal, explicit, no-eval write ops (code -> design), refused while "Allow edits" is off
   edits.ts       the "Allow edits" opt-in: off by default, saved per user in clientStorage
@@ -61,8 +64,13 @@ bun run build        # esbuild src/main.ts -> code.js, ui.template.html + src/re
 bun run watch        # rebuild on save
 ```
 
-Then in Figma: **Plugins → Development → Import plugin from manifest…** → `manifest.json`.
-After a rebuild, close & reopen the plugin window (a stale window runs stale `code.js` / `ui.html`).
+Then in Figma desktop: **Plugins → Development → Import plugin from manifest…** → this folder's
+`manifest.json` (`dtwin plugin path` prints it when run from the checkout). Turn on **Plugins →
+Development → Hot reload plugin**, then after a rebuild close & reopen the plugin window — with hot
+reload off, Figma keeps running the `code.js` / `ui.html` it already loaded.
+
+Using the package rather than a checkout? `dtwin plugin install` copies the built plugin to a per-user
+folder and prints the manifest to import once; see `../bridge/README.md` ("The Figma plugin: `dtwin plugin`").
 
 ## Type-safety notes
 
@@ -143,7 +151,7 @@ CLI flags (`--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared
   (red; the section opens itself and says to run `dtwin --show-token`).
 - **Why "token rejected" is possible at all:** a browser socket cannot read an HTTP 401, so the bridge
   admits the plugin's iframe just long enough to close it with code `4401` — see `admit` in
-  `bridge/server-core.js`. It is never registered as a client.
+  `bridge/src/server-core.ts`. It is never registered as a client.
 - `test/ui.test.ts` runs `ui.html`'s script (built in memory from the current sources) against a fake DOM +
   WebSocket and covers these states; `test/plugin-relay.test.ts` covers each relay translation on its own.
 

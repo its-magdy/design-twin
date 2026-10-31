@@ -2,7 +2,9 @@
 
 ## Supported versions
 
-Design Twin is not published to a package registry yet. Security fixes land on `main`; use the latest commit.
+Only the latest release is supported: `@design-twin/dtwin` on npm (published from a `v*` tag with npm provenance) and
+the Homebrew formula (`its-magdy/tap/dtwin`), which follows it. Security fixes land on `main` and ship in the next
+release; upgrade with `bun add -g @design-twin/dtwin@latest` or `brew upgrade dtwin`.
 
 ## Reporting a vulnerability
 
@@ -11,7 +13,7 @@ Please **do not open a public issue**. Report it privately through GitHub:
 ([private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)).
 
 Include what you found, the steps or a proof of concept, the affected piece (Figma plugin, `dtwin` CLI, MCP
-server, daemon, or the Claude Code plugin) and the commit you tested. This is a one-maintainer project: reports are
+server, daemon, or the Claude Code plugin) and the version (`dtwin --version`) or commit you tested. This is a one-maintainer project: reports are
 handled on a best-effort basis, and you will be credited in the advisory unless you ask not to be.
 
 ## What is in scope
@@ -23,7 +25,8 @@ its guarantees are especially welcome, for example:
 - a connection to the bridge succeeding without the bridge token, or from a foreign origin;
 - the daemon socket being reachable by another user;
 - design content (layer names, text, annotations) being followed as instructions by the skills or tools;
-- a write to the Figma file through any path other than the MCP server's opt-in `figma_write`.
+- a write to the Figma file through any path other than the MCP server's opt-in `figma_write`, or any write applied
+  while the plugin's **Allow edits** checkbox is off.
 
 Out of scope: a malicious process already running as your user (it can read the token file), and issues in Figma,
 Claude Code or other third-party tools themselves — report those to their vendors.

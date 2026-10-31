@@ -14,6 +14,7 @@ changes. The Figma plugin can only reach `ws://localhost`, so it cannot phone ho
 ---
 
 - [How it works](#how-it-works)
+- [Quick start for agents](#quick-start-for-agents)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Set up your project](#set-up-your-project)
@@ -33,7 +34,7 @@ The repo ships **three products**, installed separately:
 | Piece | What it is | How you install it |
 |---|---|---|
 | `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | `dtwin plugin install`, then imported once into Figma desktop from its manifest (or straight from a clone) |
-| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `bun add -g @design-twin/dtwin` (or from a clone: root `bun install`, then `bun link` in `bridge/`) |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `bun add -g @design-twin/dtwin` or `brew install its-magdy/tap/dtwin` (or from a clone: root `bun install`, then `bun link` in `bridge/`) |
 | `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies beyond Bun on PATH. | `claude plugin install` |
 
 There are three ways to get a design out of Figma:
@@ -47,6 +48,31 @@ There are three ways to get a design out of Figma:
 Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`,
 `android-compose`, `flutter`. To add another, copy
 `claude-plugin/skills/build-screen/profiles/_template.md` to `profiles/<name>.md` in your project.
+
+---
+
+## Quick start for agents
+
+If you are an agent setting this up for a user, run these in the root of the project being **built**. Three steps
+are clicks in Figma that only the user can do. Ask for them; don't try to script them.
+
+```bash
+which dtwin || bun add -g @design-twin/dtwin   # or: brew install its-magdy/tap/dtwin
+dtwin --version
+dtwin init --mcp          # design/, target.json, bridge token, plugin copy, .mcp.json entry
+dtwin plugin path         # the manifest.json the user imports into Figma
+dtwin token show          # the token the user pastes into the plugin
+dtwin doctor              # every check, with the next step for each failure
+```
+
+The user's part, in Figma desktop:
+
+1. **Plugins → Development → Import plugin from manifest…** and pick the file `dtwin plugin path` printed (once).
+2. Run **Plugins → Development → Design Twin**. Open **Connect to Claude Code (optional)**, paste the token, and press **Save** (once).
+3. Only before a `figma_write`: tick **Allow edits** in the plugin window. It is off by default, and no agent can turn it on.
+
+Then `/designtwin:help` covers the rest. Its troubleshooting reference matches each `dtwin doctor` failure to a fix.
+Working on this repo itself? Read [`CLAUDE.md`](CLAUDE.md) first.
 
 ---
 
@@ -72,6 +98,13 @@ dtwin --version
 
 `npm i -g @design-twin/dtwin` works too, but `dtwin` runs on Bun either way: without Bun on PATH it stops at
 `env: bun: No such file or directory`.
+
+Or with Homebrew (macOS, Linux), which installs Bun as a dependency:
+
+```bash
+brew install its-magdy/tap/dtwin
+dtwin --version
+```
 
 Or from a clone (to work on the code):
 
@@ -104,6 +137,15 @@ Upgrading the package updates the installed copy in place the next time `dtwin` 
 code — new manifest permissions included — with no re-import. (With hot reload off, Figma keeps running the code it
 already loaded.) Re-import only if a new permission still does not work after that. The same goes for a clone after
 `git pull`.
+
+To upgrade:
+
+```bash
+bun add -g @design-twin/dtwin@latest   # or: brew upgrade dtwin
+dtwin plugin status                    # confirms the plugin copy matches this dtwin
+```
+
+Then reopen the plugin in Figma, with hot reload on.
 
 ### 3. Install the Claude Code plugin
 
@@ -149,8 +191,11 @@ restart Claude Code.
 dtwin token show      # prints the per-user bridge token (~/.config/design-twin/bridge-token)
 ```
 
-Open your Figma file and run **Plugins → Development → Design Twin**. Paste the token into the
-plugin's **Bridge token** field. You only have to do this once.
+Open your Figma file and run **Plugins → Development → Design Twin**. Expand **Connect to Claude Code
+(optional)**, paste the token into **Bridge token**, and press **Save**. You only have to do this once.
+
+The plugin only reads until you tick **Allow edits** in its window. Tick it only when you want Claude to write to
+the file through `figma_write`. The setting is per user, so untick it when you are done.
 
 ### 3. Check everything
 
@@ -241,7 +286,10 @@ work the same way on those files.
 | `dtwin whoami` | Which Figma file/plugin is connected |
 | `dtwin serve \| stop \| status` | Keep a background daemon connected so pulls skip the reconnect |
 | `dtwin token [status\|show\|rotate\|forget]` | Manage the bridge token |
+| `dtwin plugin [install\|update\|status\|path\|uninstall] [--open]` | The Figma plugin's per-user copy, imported once |
+| `dtwin seed [codeRoot] [outDir] [--dry-run]` | `design/components.json` from your Code Connect files (offline) |
 | `dtwin mcp` | Run the MCP server (what `.mcp.json` points at) |
+| `dtwin --version` | Print the installed version |
 
 Every command accepts `--help`. Unknown flags are rejected, not ignored.
 
@@ -276,7 +324,11 @@ Every command accepts `--help`. Unknown flags are rejected, not ignored.
 Registered as `designtwin`, so tools appear as `mcp__designtwin__<tool>`:
 `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_list_pages`, `figma_list_children`,
 `figma_list_libraries`, `figma_get_selection`, `figma_screenshot`, `figma_export_full`,
-`figma_export_selection`, `figma_export_url`, `figma_export_design_system`, `figma_write`.
+`figma_export_selection`, `figma_export_url`, `figma_export_design_system`, `figma_write`. Two more read the export
+already on disk and need no Figma connection: `design_get_component` and `design_drift_lint`.
+
+`figma_write` applies a small set of safe ops (create a frame or text, set a fill, set text) and runs no arbitrary
+code. Pass `dryRun: true` to preview a batch. The plugin refuses every write until the user ticks **Allow edits**.
 
 Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset
 files through MCP. A running MCP server or `dtwin serve` daemon owns port `8787` and shares it with

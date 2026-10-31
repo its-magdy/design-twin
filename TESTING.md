@@ -101,7 +101,7 @@ bun test/identity.test.ts             # expect: all checks pass, exit 0 — toke
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
 bun test/resolve-screen.test.ts       # expect: all checks pass, exit 0 — the shared node-id/layer-name/indexed-title
-                                       # resolver every skill uses to turn "the Jet Roles screen" into one exact file
+                                       # resolver every skill uses to turn "the Settings screen" into one exact file
 bun test/node-artefacts.test.ts       # expect: all checks pass, exit 0 — which plan / verify sets / audit report a node has,
                                        # which node each is of, and the one "one node, one X" refusal, on temp projects
 bun test/report-freshness.test.ts     # expect: all checks pass, exit 0 — what a report is stamped with, fresh or stale (and why),
@@ -183,7 +183,7 @@ bun test/bridge.test.ts        # expect: all checks pass, exit 0 — determinist
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
-                                 # in bridge/src/doctor.ts) so they never race a daemon that only ever
+                                 # in bridge/src/ports.ts) so they never race a daemon that only ever
                                  # holds one port at a time.
 # NOTE: run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases spawn
 # with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config dir but
@@ -225,6 +225,13 @@ bun test/mcp-delivery.test.ts  # expect: all checks pass, exit 0 — how an MCP 
                                  # tools IN PROCESS (figma-mcp.ts loaded as a module — it starts nothing on import — over an
                                  # in-memory transport) through a recording daemon on FIGMA_BRIDGE_PORT=8789's socket, every
                                  # writeToDisk / outDir / reply-kind path; and that `bun figma-mcp.ts` and `dtwin mcp` both serve
+bun test/plugin-install.test.ts # expect: all checks pass, exit 0 — `dtwin plugin`'s per-user copy (plugin-install.ts): install
+                                 # writes only what differs, the manifest-changed signal, a bridge start's refresh (never
+                                 # from a checkout), uninstall; temp DESIGNTWIN_CONFIG_DIR only, binds no port
+bun test/pack-lock.test.ts     # expect: all checks pass, exit 0 — the npm package's bun.lock (bridge/pack.ts) held to the
+                                 # root lock's exact pins and sha512s; no ports, no network
+bun test/version-sync.test.ts  # expect: all checks pass, exit 0 — one version across the CLI package, the Figma plugin and
+                                 # the Claude Code plugin (what `bun run release:bump` sets)
 bun build --no-bundle --outdir "$(mktemp -d)" bridge/src/server-core.ts bridge/src/route.ts bridge/src/read-plan.ts bridge/src/delivery.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/served-session.ts bridge/src/pending-requests.ts bridge/src/clock.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/cli-commands.ts bridge/src/doctor.ts
 ```
 
@@ -256,8 +263,9 @@ output and the CSS output.
    (or ⌘/ → "Import plugin from manifest"). Importing via the *widget* path fails with
    `Manifest error: Expected "manifest.containsWidget" to have type true but got undefined` and the
    plugin never loads (UI looks frozen on "Loading…"). The manifest is correct as-is — it's a plugin.
-2. **A stale plugin window runs stale code.** After editing `code.js`/`ui.html`, **close the plugin
-   window and re-run it** (or re-import) so Figma reloads from disk.
+2. **A stale plugin window runs stale code.** Turn on **Plugins → Development → Hot reload plugin**;
+   after editing `code.js`/`ui.html`, **close the plugin window and re-run it** so Figma reloads from
+   disk. With hot reload off, Figma keeps running the code it already loaded; re-importing is the fallback.
 3. **`Unrecognized feature: 'local-network-access'` in the console is harmless noise** from Figma's own
    internals — ignore it. It is *not* a plugin error.
 4. **The localhost bridge works in the Figma desktop app** (checked on v126.7.8): the plugin iframe
@@ -267,13 +275,14 @@ output and the CSS output.
    *Symptom if it ever does block:* the bridge sits on "Open your Figma file and run…" and no
    `ESTABLISHED` socket appears in `lsof -nP -iTCP:8787`.
 5. **To see plugin errors:** turn on **Plugins → Development → Use Developer VM**, then
-   **Plugins → Development → Open Console**. The main thread logs `[export] code.js loaded` and
+   **Plugins → Development → Open Console**. The main thread logs `[export] main.ts loaded (main thread)` and
    `[export] main thread ready — onmessage registered`; the UI surfaces any error as red text in the
    plugin window itself. A healthy load shows the status change from "Loading…" to "N selected".
 
 ### Procedure (manual download — recommended)
 
-1. Open a real design file. Import the plugin (gotcha #1). Run **Plugins → Development → Design Twin**.
+1. Open a real design file. Import the plugin from `figma-plugin/manifest.json` (gotcha #1; from an
+   installed package, `dtwin plugin install` prints the manifest to import). Run **Plugins → Development → Design Twin**.
 2. Confirm health: status shows **"N selected"** or a select-a-frame hint (not stuck on "Loading…").
 3. **Select a frame**, click **"Export current selection"** → click **Download `<screen>.json`** and
    **Download `variables.json`** (and **Download assets** if a count shows). Files land in `~/Downloads`.
@@ -284,7 +293,7 @@ output and the CSS output.
 4. Hand the files to the agent: it reads `~/Downloads/<screen>.json` (and `variables.json` /
    `design-system.json` + `design-system/` (or `design-system__*.json` from the browser download) /
    `pages/index.json` + the per-page `index.json` + the per-layer files) and
-   validates against the checklist below. Move the files into `design/` when you want to actually build
+   validates against the checklist below. Move the files into `design/export/` (assets into its `assets/`) when you want to actually build
    from them.
 
 ### Layers are split per-page, per-file
@@ -374,7 +383,7 @@ Paint/Text/Effect/Grid style system, plus custom animation styles), `components.
   `design-system/components/<name>__<id>.json`, pointed at by the entry's `variantsFile` (absent when
   no node trees were exported for that set). A standalone `COMPONENT` (not a variant inside a set) gets
   the same treatment under `variantVisuals`, but its node tree is attached directly as `entry.node` and
-  split out via `nodeFile` instead — there's no `variants[]` to hang it off of. `node
+  split out via `nodeFile` instead — there's no `variants[]` to hang it off of. `bun
   design-to-code/get-component.ts <components.local.json> <key|id|name>` resolves one entry and follows its
   `variantsFile`/`nodeFile` to print the full detail.
 - `design-system/hygiene.json` → `hygiene[]` — design-system smells (ALL_SCOPES, semantic-holds-raw, broken alias, variant>30, unnamed/dupe)
