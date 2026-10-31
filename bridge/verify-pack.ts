@@ -61,10 +61,12 @@ async function mcpHandshake(pkg: string): Promise<{ tools: number } | { error: s
       break;
     }
   } finally {
-    clearTimeout(timer);
     await proc.stdin.end();
   }
+  // The timer stays armed until the server is gone: one still serving another session through the shared bridge after
+  // stdin closes is killed at the same deadline rather than hanging the check.
   const code = await proc.exited;
+  clearTimeout(timer);
   if ("error" in result) result = { error: `${result.error} (exit ${code}): ${(await new Response(proc.stderr).text()).trim().slice(-600)}` };
   return result;
 }
