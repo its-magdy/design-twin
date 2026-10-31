@@ -4069,7 +4069,7 @@
             // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
             // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
             // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
-            pluginVersion: "0.1.2",
+            pluginVersion: "0.1.3",
             fileKey: fileKey === void 0 ? null : fileKey,
             fileKeyAvailable: typeof fileKey === "string" && fileKey.length > 0,
             // So figma_write's dry run can say a real write would be refused before anyone sends one.
