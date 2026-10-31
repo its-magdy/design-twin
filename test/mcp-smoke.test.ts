@@ -605,9 +605,12 @@ void (async () => {
         got.isError !== true && /"k-btn"/.test(firstText(got)));
       fs.writeFileSync(path.join(cwd, "map.json"), JSON.stringify({ components: "not-an-object" }));
       const lint = await instClient.callTool({ name: "design_drift_lint", arguments: { map: "map.json" } });
-      const hinted = /"([^"]+map-validate\.js)"/.exec(firstText(lint))?.[1];
+      // cli-args.ts shellQuote: double quotes, or single ones for a path holding a backslash (Windows)
+      const hinted = /["']([^"']+map-validate\.js)["']/.exec(firstText(lint))?.[1];
       ok(`…design_drift_lint runs from the bundle, and its hint names a script the package ships (got ${firstText(lint).slice(-200)})`,
-        lint.isError === true && /\[map-invalid\]/.test(firstText(lint)) && hinted !== undefined && fs.existsSync(hinted) && hinted.startsWith(path.join(fs.realpathSync(inst), "bridge", "layer")));
+        lint.isError === true && /\[map-invalid\]/.test(firstText(lint)) && hinted !== undefined && fs.existsSync(hinted) &&
+        // native realpath on both sides: macOS /var vs /private/var, Windows 8.3 short names (RUNNER~1)
+        fs.realpathSync.native(hinted) === path.join(fs.realpathSync.native(inst), "bridge", "layer", "map-validate.js"));
     } catch (e) {
       ok("the install-shaped server ran without throwing — " + (e instanceof Error ? e.message : e), false);
     } finally {
