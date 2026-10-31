@@ -132,3 +132,51 @@ jobs:
           prerelease=""
           case "$TAG" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $prerelease
+
+  # Last: tell the Homebrew tap (its-magdy/homebrew-tap) to move Formula/dtwin.rb to this version. Its update-dtwin.yml
+  # workflow fetches the npm tarball just published, recomputes the sha256 and commits the formula. Needs a GitHub App
+  # installed on homebrew-tap with Contents: write (repository_dispatch requires it), whose client ID and private key are
+  # this repo's HOMEBREW_APP_CLIENT_ID / HOMEBREW_APP_PRIVATE_KEY secrets. A prerelease is not dispatched: `brew install`
+  # follows npm's `latest`, never a prerelease dist-tag.
+  homebrew:
+    name: homebrew tap
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      # Fail loudly, by name, rather than as an opaque token error: npm and the GitHub Release are already out, so all
+      # that is left undone is the formula bump, which the tap's "Update dtwin formula" workflow can also run by hand.
+      - name: Homebrew App secrets are set
+        env:
+          CLIENT_ID: ${{ secrets.HOMEBREW_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$CLIENT_ID" ] || missing="$missing HOMEBREW_APP_CLIENT_ID"
+          [ -n "$PRIVATE_KEY" ] || missing="$missing HOMEBREW_APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Homebrew tap NOT updated: repository secret(s) missing:$missing. npm and the GitHub Release are published. Add the secret(s) (Settings → Secrets and variables → Actions), then re-run this job, or run its-magdy/homebrew-tap's \"Update dtwin formula\" workflow with version ${GITHUB_REF_NAME#v}."
+            exit 1
+          fi
+
+      - name: Homebrew tap token
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.HOMEBREW_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: its-magdy
+          repositories: homebrew-tap
+          permission-contents: write
+
+      - name: Trigger Homebrew tap update
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh api repos/its-magdy/homebrew-tap/dispatches \
+            --method POST \
+            --field event_type=dtwin-release \
+            --field client_payload[version]="${VERSION#v}"

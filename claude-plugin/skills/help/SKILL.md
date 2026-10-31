@@ -125,7 +125,8 @@ its PATH. The plugin's SessionStart hook prints this when `bun` is missing or ol
    - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
      into `design/export/`. Done.
    - **The CLI** → `which dtwin`; if it isn't there, `bun add -g @design-twin/dtwin` (it needs Bun on PATH, even
-     installed with npm; `dtwin` lands in `~/.bun/bin`), or in a clone of this repo run `bun install`, then
+     installed with npm; `dtwin` lands in `~/.bun/bin`), or `brew install its-magdy/tap/dtwin` (Homebrew
+     installs Bun with it; `brew upgrade` keeps both current, and the paths `dtwin init` writes survive it), or in a clone of this repo run `bun install`, then
      `bun link` inside `bridge/`, or use
      `bun --no-install --no-env-file <the clone>/bridge/src/figma-pull.ts` in place of `dtwin` (the two flags keep the
      project's `.env` and Bun's auto-install out of it, as the linked `dtwin`'s shebang does). There is no token to make by hand: the first bridge start generates one, saves it per-user
