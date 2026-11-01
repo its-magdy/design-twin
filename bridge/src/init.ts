@@ -32,7 +32,8 @@ import * as LAYOUT from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { exitCli } from "./stdio.ts";
 import { errMsg } from "./errmsg.ts";
-import { hiddenHint, installPlugin, nextSteps, pluginHome, pluginSource } from "./plugin-install.ts";
+import { hiddenHint, importStep, installPlugin, nextSteps, pluginHome } from "./plugin-install.ts";
+import { bunxCacheOf, installOf, stableBunPath, stableKegPath } from "./install-layout.ts";
 
 /** One .mcp.json server entry, as init writes it. */
 export interface McpEntry {
@@ -103,35 +104,6 @@ const FIGMA_MCP_SCRIPT = /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/;
 // project's .env stays out of the server's environment.
 const BUN_FLAGS = ["--no-install", "--no-env-file"] as const;
 
-/** The bun to name in .mcp.json: the one on PATH (Bun.which) when it IS the bun running now — a stable spelling such as
- *  ~/.bun/bin/bun or Homebrew's /opt/homebrew/bin/bun, which survives an upgrade — else this process's own executable.
- *  process.execPath alone is the resolved file, and for a Homebrew (or any versioned) install that is a versioned path
- *  (…/Cellar/bun/1.4.2/bin/bun) the next `brew upgrade` deletes, leaving Claude Code a server it cannot start. */
-function stableBunPath(execPath: string = process.execPath, onPath: string | null = Bun.which("bun")): string {
-  if (!onPath) return stableKegPath(execPath);
-  try { return fs.realpathSync(onPath) === fs.realpathSync(execPath) ? onPath : stableKegPath(execPath); } catch { return stableKegPath(execPath); }
-}
-
-/** The upgrade-proof spelling of a path inside a Homebrew keg. Homebrew installs a formula into a versioned folder,
- *  `<prefix>/Cellar/<formula>/<version>/…`, that the next `brew upgrade` deletes, and keeps `<prefix>/opt/<formula>` as a
- *  symlink to whichever version is current. Bun resolves symlinks, so a file run through that opt link still sees its
- *  Cellar path (import.meta.dirname, process.execPath) — and an absolute path written from it (.mcp.json's server and
- *  bun, the plugin manifest Figma remembers) would stop working after one upgrade. Returns the opt spelling when it
- *  resolves to the very same file, else `p` unchanged (not in a Cellar, or a layout where opt is elsewhere). */
-function stableKegPath(p: string): string {
-  const m = /^(.*)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+(?:[\\/](.*))?$/.exec(p);
-  if (!m || m[1] === undefined || m[2] === undefined) return p;
-  const opt = path.join(m[1], "opt", m[2], m[3] ?? "");
-  try { return fs.realpathSync(opt) === fs.realpathSync(p) ? opt : p; } catch { return p; }
-}
-
-/** The bunx cache directory `dir` sits in, or null. `bunx @design-twin/dtwin …` installs the package into a cache tree
- *  (`<tmp or install cache>/.bunx-<uid>/<pkg>`, `<tmp>/bunx-<uid>-<pkg>` on Windows and older Bun) that Bun refreshes
- *  and deletes on its own schedule, so a .mcp.json path into it is a server that one day does not start. */
-function bunxCacheOf(dir: string): string | null {
-  const m = /^(.*?[\\/]\.?bunx-[^\\/]+)(?:[\\/]|$)/.exec(dir);
-  return m?.[1] ?? null;
-}
 const bunxRefusal = (cache: string): string =>
   `this dtwin runs from a bunx cache (${cache}) that Bun replaces or deletes on its own — a .mcp.json entry pointing into it would stop starting one day. ` +
   "Install it for good (`bun add -g @design-twin/dtwin`, or in a clone: `bun install`, then `cd bridge && bun link`), and run `dtwin init --mcp` from that install";
@@ -355,6 +327,25 @@ function apply(cwd: string, actions: InitAction[], log: (m: string) => void): vo
   }
 }
 
+// Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
+// which is the documented path. Claude Code records installed plugins under ~/.claude; when the
+// marker is there, saying "install the plugin" is noise at best and confusing at worst.
+function claudePluginInstalled(home: string | undefined = process.env.HOME || process.env.USERPROFILE): boolean {
+  if (!home) return false;
+  const root = path.join(home, ".claude", "plugins");
+  // installed_plugins.json is the authoritative record; the per-plugin directories under data/ and
+  // repos/ are the fallback for older layouts. Any of them naming designtwin means step 3 is done.
+  try {
+    if (/designtwin/i.test(fs.readFileSync(path.join(root, "installed_plugins.json"), "utf8"))) return true;
+  } catch { /* absent — try the directories */ }
+  for (const p of ["data", "repos", "marketplaces", "."]) {
+    try {
+      if (fs.readdirSync(path.join(root, p)).some((d) => /designtwin/i.test(d))) return true;
+    } catch { /* not there — fall through */ }
+  }
+  return false;
+}
+
 function main(argv: string[]): void {
   const known = ["--mcp", "--dry-run", "--help", "-h"];
   const bad = argv.filter((a) => !known.includes(a));
@@ -395,10 +386,11 @@ function main(argv: string[]): void {
   // (stableBunPath). The flags are the shebang's (figma-pull.ts): no auto-install from the network, and
   // the project's .env stays out of the server's environment.
   // Under Homebrew this file runs from a versioned Cellar folder, so the directory is spelt through opt (stableKegPath).
-  const here = stableKegPath(import.meta.dirname);
+  const layout = installOf();
+  const here = layout.stable(import.meta.dirname);
   const mcpEntry: McpEntry = { command: stableBunPath(), args: [...BUN_FLAGS, path.join(here, "figma-mcp.ts")] };
   // Run through `bunx @design-twin/dtwin init`: this very file is in bunx's cache, so no entry may point at it.
-  const cache = bunxCacheOf(import.meta.dirname);
+  const cache = layout.bunxCache;
   const refuseMcp = cache ? bunxRefusal(cache) : undefined;
   if (cache && !argv.includes("--mcp")) log(`note    this dtwin runs from a bunx cache (${cache}) — install it for good (\`bun add -g @design-twin/dtwin\`, or in a clone: \`bun install\`, then \`cd bridge && bun link\`) to have \`dtwin\` on PATH and to register the MCP server`);
   const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, ...ifDefined("refuseMcp", refuseMcp), token });
@@ -409,7 +401,7 @@ function main(argv: string[]): void {
   // installed — or refreshed — here from the files the npm package carries, so the path to import never moves.
   // Neither: the step names the repo instead.
   const manifest = ((): string | null => {
-    const source = pluginSource();
+    const source = layout.pluginSource;
     if (!source) return null;
     if (source.kind === "checkout") return path.join(source.dir, "manifest.json");
     if (dry) { log(`would install the Figma plugin to ${pluginHome()} (dtwin plugin install)`); return path.join(pluginHome(), "manifest.json"); }
@@ -421,31 +413,13 @@ function main(argv: string[]): void {
     } catch (e) {
       log(`warn    could not install the Figma plugin to ${pluginHome()} (${errMsg(e)}); import the package's own copy instead`);
       // Spelt through opt under Homebrew: Figma remembers the path, and a Cellar one is gone after an upgrade.
-      return path.join(stableKegPath(source.dir), "manifest.json");
+      return path.join(layout.stable(source.dir), "manifest.json");
     }
   })();
-  // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
-  // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
-  // marker is there, saying "install the plugin" is noise at best and confusing at worst.
-  const pluginInstalled = (() => {
-    const home = process.env.HOME || process.env.USERPROFILE;
-    if (!home) return false;
-    const root = path.join(home, ".claude", "plugins");
-    // installed_plugins.json is the authoritative record; the per-plugin directories under data/ and
-    // repos/ are the fallback for older layouts. Any of them naming designtwin means step 3 is done.
-    try {
-      if (/designtwin/i.test(fs.readFileSync(path.join(root, "installed_plugins.json"), "utf8"))) return true;
-    } catch { /* absent — try the directories */ }
-    for (const p of ["data", "repos", "marketplaces", "."]) {
-      try {
-        if (fs.readdirSync(path.join(root, p)).some((d) => /designtwin/i.test(d))) return true;
-      } catch { /* not there — fall through */ }
-    }
-    return false;
-  })();
+  const pluginInstalled = claudePluginInstalled();
 
   const steps = [
-    "In Figma DESKTOP, once: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
+    "In Figma DESKTOP, once: " + importStep(manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
       (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : ""),
     "Run the plugin (Plugins → Development → Design Twin), open \"Connect to Claude Code (optional)\", paste the bridge token into \"Bridge token\", Save:  dtwin --show-token | pbcopy",
   ];
@@ -467,4 +441,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, mcpEntryProblems, stableBunPath, stableKegPath, bunxCacheOf, readMcpJson, usesTailwind, usesVite };
+export { detectProfile, plan, apply, main, claudePluginInstalled, isOurMcpEntry, mcpEntryProblems, stableBunPath, stableKegPath, bunxCacheOf, readMcpJson, usesTailwind, usesVite };

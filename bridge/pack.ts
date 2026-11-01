@@ -1,6 +1,7 @@
 // What the npm package carries from OUTSIDE bridge/: npm's `files` cannot reach past the package root, so `prepack`
 // copies it in and `postpack` takes it out again (both gitignored; a checkout never reads these copies — the repo's
-// own design-to-code/ and figma-plugin/ come first, see figma-mcp.ts loadLayer and init.ts).
+// own design-to-code/ and figma-plugin/ come first). The folder names are install-layout.ts's PACKAGE_DIRS, the same
+// constants installOf reads an installed package with.
 //
 //   layer/         the design-to-code bundles design_get_component / design_drift_lint load in an installed package.
 //                  The committed claude-plugin/scripts/*.js, not design-to-code/*.ts: each bundle is self-contained
@@ -21,19 +22,20 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
-import { PLUGIN_FILES } from "./src/plugin-install.ts";
+import { CHECKOUT_DIRS, PACKAGE_DIRS, PLUGIN_FILES } from "./src/install-layout.ts";
 import { errMsg } from "./src/errmsg.ts";
 
 const PKG = import.meta.dirname;
 const REPO = path.join(PKG, "..");
 const BUNDLES = path.join(REPO, "claude-plugin", "scripts");
+const PLUGIN_SRC = path.join(REPO, CHECKOUT_DIRS.plugin);
 // The two the MCP server loads, and every script their printed hints name (scriptCmd — cli-args.ts makes it a path
 // beside the bundle itself, so a hint naming a script not shipped here would be a command that cannot run).
 // pack() holds this list to that (missingHints).
 export const LAYER: readonly string[] = ["get-component", "drift-lint", "map-bootstrap", "map-validate", "cross-check"];
 // The files Figma loads — one list with the per-user install that copies them on (`dtwin plugin install`).
 const PLUGIN: readonly string[] = PLUGIN_FILES;
-export const OUT = { layer: path.join(PKG, "layer"), plugin: path.join(PKG, "figma-plugin"), lock: path.join(PKG, "bun.lock") } as const;
+export const OUT = { layer: path.join(PKG, PACKAGE_DIRS.layer), plugin: path.join(PKG, PACKAGE_DIRS.plugin), lock: path.join(PKG, PACKAGE_DIRS.lock) } as const;
 export const ROOT_LOCK = path.join(REPO, "bun.lock");
 
 /** The scripts a bundle's printed hints name (`scriptCmd("<name>")`) that `shipped` does not hold. */
@@ -101,14 +103,14 @@ export function pack(): void {
     if (dangling.length) problems.push(`${n}.js names ${dangling.join(", ")}, which the package does not ship — add it to LAYER`);
     fs.copyFileSync(src, path.join(OUT.layer, n + ".js"));
   }
-  const manifest: unknown = JSON.parse(fs.readFileSync(path.join(REPO, "figma-plugin", "manifest.json"), "utf8"));
+  const manifest: unknown = JSON.parse(fs.readFileSync(path.join(PLUGIN_SRC, "manifest.json"), "utf8"));
   // The manifest names the files Figma loads; ship exactly those, so a renamed bundle cannot leave a manifest
   // pointing at nothing.
   if (typeof manifest !== "object" || manifest === null || !("main" in manifest) || !("ui" in manifest) ||
     !PLUGIN.includes(String(manifest.main)) || !PLUGIN.includes(String(manifest.ui))) {
     problems.push("figma-plugin/manifest.json's main/ui are not among the files shipped — update PLUGIN");
   }
-  for (const f of PLUGIN) fs.copyFileSync(path.join(REPO, "figma-plugin", f), path.join(OUT.plugin, f));
+  for (const f of PLUGIN) fs.copyFileSync(path.join(PLUGIN_SRC, f), path.join(OUT.plugin, f));
   try {
     const lock = deriveLock();
     const wrong = lockProblems(Bun.JSONC.parse(fs.readFileSync(ROOT_LOCK, "utf8")), Bun.JSONC.parse(lock));
