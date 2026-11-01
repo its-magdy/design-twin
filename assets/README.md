@@ -13,7 +13,7 @@ sprite in `dtwin --version`, and the companion character.
 | `logo-16.svg` | The mark drawn on a 16 px grid, crisp at exactly 16 px (the plugin window uses it inline). Use it for anything 16–23 px. |
 | `wordmark-light.svg` / `wordmark-dark.svg` | The mark plus "Design Twin", with the text converted to outlines (Inter Bold). The README header uses them in a `<picture>`. |
 | `wordmark-light.png` | The light wordmark as a PNG, for places that show neither SVG nor `<picture>`. The npm page uses it. |
-| `avatar.svg` / `avatar-512.png` | A square avatar for GitHub, npm or Discord. The mark sits inside the circle those sites crop to. |
+| `avatar.svg` / `avatar-512.png` | A square avatar for GitHub, npm or Discord. The mark sits inside the circle those sites crop to. `claude-plugin/.claude-plugin/icon.png` is a copy: the Claude Code plugin's icon. |
 | `social-preview.svg` / `social-preview.png` | GitHub's social preview, 1280×640. Upload the PNG in the repo's Settings → General → Social preview. |
 | `bo.svg` | Bo, the character (hello pose). |
 | `bo-states.svg` | Bo's states: hello, reading, drawing, matched, off. |

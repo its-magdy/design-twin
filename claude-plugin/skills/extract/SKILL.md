@@ -8,8 +8,9 @@ argument-hint: "[what to pull: page, frame name, node id or Figma URL]"
 
 Get design data onto disk. Nothing here writes code — that's `build-screen`.
 
-**Everything runs locally.** The Figma plugin's `allowedDomains` names only `ws://localhost`, so design data
-never leaves the machine. There is no Figma API key and no cloud round-trip.
+**The export runs locally.** The Figma plugin's `allowedDomains` names only `ws://localhost`, so it sends design
+data only to the local bridge. There is no Figma API key and no cloud service in between; what the coding agent then
+sends to its model is up to the agent.
 
 ## Before anything: is the plugin running?
 
