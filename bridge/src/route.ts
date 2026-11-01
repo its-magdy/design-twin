@@ -169,8 +169,10 @@ export interface RouteRequest {
 export interface Route {
   /** Spend the connect window (a one-shot route over its own bridge; otherwise nothing to wait for here) —
    *  once: later calls answer the first one's result. Requests and listClients call it themselves; a caller
-   *  calls it first only to time the wait. `target` is what that first wait waits for. */
-  connect(target?: string | null): Promise<{ waitedMs: number }>;
+   *  calls it first only to time the wait. `target` is what that first wait waits for. A window in which no plugin
+   *  ever connected throws the never-connected text here, before the caller says what it is about to do — unless
+   *  `listing` (the clients listing, whose answer is then "none"). */
+  connect(target?: string | null, o?: { listing?: boolean }): Promise<{ waitedMs: number }>;
   request<C extends Cmd>(cmd: C, args: Commands[C]["args"], o?: RouteRequest): Promise<Sent<C>>;
   listClients(): Promise<ClientRow[]>;
   /** The socket half of whoami for `connId` (the connection a request was answered by), and who holds it. */
@@ -206,8 +208,9 @@ export function createRoute(upstream: () => Promise<Upstream>, policy: RoutePoli
   }
 
   return {
-    async connect(target) {
-      const { waitedMs } = await spend(await upstream(), target);
+    async connect(target, { listing = false } = {}) {
+      const { waitedMs, everConnected } = await spend(await upstream(), target);
+      if (everConnected === false && !listing) throw neverConnected(policy.connectWaitMs);
       return { waitedMs };
     },
     async request(cmd, args, o = {}) {

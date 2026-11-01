@@ -9,6 +9,12 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Fixed
+
+- `dtwin list`, `pull` and the other commands no longer print "plugin connected — …" when no plugin connected. With
+  Figma closed, or with a plugin whose bridge token does not match, they now go straight to the "no Figma plugin
+  connected" error and its next step.
+
 ## [0.1.4] - 2026-11-01
 
 ### Added
