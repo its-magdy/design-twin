@@ -337,7 +337,7 @@ function plan(cwd: string, { mcp = false, mcpEntry, refuseMcp, probe, token }: P
         const next = { ...doc, mcpServers: { ...servers, [MCP_KEY]: mcpEntry } };
         // merge:true — the ONE write allowed onto an existing file: it re-serialises the user's own
         // document with one key added. Everything else is written with "wx" and cannot clobber.
-        actions.push({ kind: "write", merge: fs.existsSync(file), path: rel(file), content: JSON.stringify(next, null, 2) + "\n", note: `registered the "${MCP_KEY}" MCP server (enable it with /mcp, then restart Claude Code). While it runs it holds port 8787 — use its writeToDisk:true instead of one-shot dtwin pulls` });
+        actions.push({ kind: "write", merge: fs.existsSync(file), path: rel(file), content: JSON.stringify(next, null, 2) + "\n", note: `registered the "${MCP_KEY}" MCP server (restart Claude Code here and approve it when asked; /mcp shows its status). While it runs it holds port 8787 — use its writeToDisk:true instead of one-shot dtwin pulls` });
       }
     }
   }
