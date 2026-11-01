@@ -257,6 +257,10 @@ async function rules(): Promise<void> {
       const never = await failure(route.request("ping", {}));
       check("[never] …and a command is the never-connected text, naming the window",
         /^no Figma plugin connected within 0s\. In Figma DESKTOP open the file/.test(never));
+      check("[never] …and so is connect(), before the caller says it is connected",
+        /^no Figma plugin connected within 0s\. In Figma DESKTOP open the file/.test(await failure(route.connect())));
+      check("[never] …but connect() for the clients listing answers, the empty list is its result",
+        typeof (await route.connect(null, { listing: true })).waitedMs === "number");
     } finally {
       rig.stop();
     }

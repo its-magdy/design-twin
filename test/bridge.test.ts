@@ -3186,6 +3186,8 @@ void (async () => {
     const noPlugin = runCli(["list", "--timeout", "2"], { FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "t".repeat(32) });
     ok("[verbs-cli] --timeout bounds the WAIT FOR THE PLUGIN too: no plugin → exit 1 in seconds with the next step, not a 10-minute hang",
       noPlugin.status === 1 && Date.now() - t0 < 15000 && /no Figma plugin connected within 2s/.test(noPlugin.stderr) && /dtwin doctor/.test(noPlugin.stderr));
+    ok("[verbs-cli] …and it never says \"plugin connected\" first (the old `plugin connected — listing structure…` line)",
+      !/\[dtwin\] plugin connected/.test(noPlugin.stderr));
   }
 
   // `dtwin list` against a fake plugin that answers listPages with the REAL reply shape

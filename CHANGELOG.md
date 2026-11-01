@@ -11,13 +11,16 @@ list of merged PRs.
 
 ### Added
 
-- The Claude Code plugin has an icon: Bo, the Design Twin mark.
+- The Claude Code plugin has an icon: Bo, the Design Twin mark (#136).
 
 ### Fixed
 
 - The npm description and the extract skill no longer say design data never leaves your machine. The Figma plugin
   sends it only to the local bridge, but your coding agent then sends it to its model. They now say what the README
-  says: no REST API key, and no cloud service in between.
+  says: no REST API key, and no cloud service in between (#136).
+- `dtwin list`, `pull` and the other commands no longer print "plugin connected — …" when no plugin connected. With
+  Figma closed, or with a plugin whose bridge token does not match, they now go straight to the "no Figma plugin
+  connected" error and its next step.
 
 ## [0.1.4] - 2026-11-01
 

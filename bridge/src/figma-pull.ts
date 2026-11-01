@@ -894,7 +894,9 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   // one gets more time once a plugin is connected, and with no target or a file name the fresh bridge
   // settles first (timeouts.ts SETTLE_MS), so a second open file a redial behind is connected — and the
   // command refused as ambiguous, or listed — instead of the first file to land being taken silently.
-  timing.connectMs = (await route.connect(client)).waitedMs;
+  // No plugin in the whole window fails here (route.ts), so no command prints "plugin connected — …" first; the
+  // clients listing alone answers "none".
+  timing.connectMs = (await route.connect(client, { listing: command.id === "listClients" })).waitedMs;
   // Where the time went, for the closing `done in …` line. The connect wait is measured above
   // (own bridge only — a daemon does its waiting inside the request), the export is the time inside
   // every request, the write is every write-out (read-run.ts adds both to `timing`). All measured from
