@@ -1,4 +1,9 @@
-# Design Twin
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
+    <img alt="Design Twin" src="assets/wordmark-light.svg" height="72">
+  </picture>
+</h1>
 
 > Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
 

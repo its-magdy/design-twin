@@ -45,7 +45,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `dtwin --version`, or the commit you are on.
+      description: Output of `dtwin --version | cat` (piped, it prints just the version), or the commit you are on.
     validations:
       required: true
   - type: input
