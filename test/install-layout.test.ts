@@ -37,7 +37,8 @@ const under = (root: string, rel: readonly string[]): string[] => rel.map((r) =>
 const pluginFiles = (dir: string): string[] => PLUGIN_FILES.map((f) => path.join(dir, PACKAGE_DIRS.plugin, f));
 const layerFiles = (dir: string): string[] => ["get-component.js", "drift-lint.js"].map((f) => path.join(dir, PACKAGE_DIRS.layer, f));
 
-const ROOT = path.join(path.sep, "x");
+// Resolved, so on Windows it carries a drive (D:\x): a file URL of a drive-less path gains the current drive.
+const ROOT = path.resolve(path.sep, "x");
 const clone = path.join(ROOT, "src", "design-twin");
 const npmPkg = path.join(ROOT, "lib", "node_modules", "@design-twin", "dtwin");
 const prefix = path.join(ROOT, "brew");
