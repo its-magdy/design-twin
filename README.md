@@ -8,7 +8,7 @@
 > Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
 
 Design Twin reads a Figma screen through a local plugin and has Claude Code build it in your stack, with your own
-components and tokens, then measures the result against the design.
+components and tokens, then checks the result against the design.
 
 <!-- demo.gif goes here -->
 <!-- TODO(owner): record a ~15 s demo (pull a frame → /designtwin:build-screen → verify report) and embed it here. -->
@@ -48,8 +48,8 @@ the app you are building.
    claude plugin marketplace add its-magdy/design-twin
    claude plugin install designtwin@designtwin-marketplace
    ```
-3. Set up the project. This creates `design/`, the bridge token, the Figma plugin's copy and an `.mcp.json` entry.
-   Then enable the server with `/mcp` and restart Claude Code.
+3. Set up the project. This creates `design/` (with your detected stack in `design/target.json`), the bridge token,
+   the Figma plugin's copy and an `.mcp.json` entry. Then enable the server with `/mcp` and restart Claude Code.
    ```bash
    dtwin init --mcp
    ```
@@ -58,63 +58,82 @@ the app you are building.
    ```bash
    dtwin plugin path
    ```
-5. Connect the plugin, once: run **Plugins → Development → Design Twin**, open **Connect to Claude Code
-   (optional)**, paste the token this prints, and press **Save**.
+5. Connect the plugin, once: run **Plugins → Development → Design Twin — Design Export for AI**, open **Connect to
+   Claude Code (optional)**, paste the token this prints, and press **Save**.
    ```bash
    dtwin token show
    ```
-6. In Claude Code, build a screen. Copy the frame's link in Figma (right-click it → **Copy/Paste as → Copy link to
-   selection**), and keep the file open with the plugin running.
+6. In Claude Code, pull the screen. Copy the frame's link in Figma (right-click it → **Copy/Paste as → Copy link to
+   selection**; the label varies between Figma versions), and keep the file open with the plugin running.
+   ```
+   /designtwin:extract <Figma frame link>
+   ```
+7. Build it.
    ```
    /designtwin:build-screen <Figma frame link>
    ```
 
 Something not working? `dtwin doctor` checks every piece and prints the next step for each failure, and
-`/designtwin:help` covers the rest. For other install routes and upgrades, see
-[Installation details](#installation-details).
+`/designtwin:help` covers the rest. To check a web build against the design afterwards, `/designtwin:verify` needs
+your dev server running and Playwright in the project (it asks before installing anything). For other install
+routes and upgrades, see [Installation details](#installation-details).
 
 ---
 
 ## Why Design Twin?
 
-Figma's own MCP server and Dev Mode, and most design-to-code tools, read the design through Figma's REST API or a
-hosted service, and their limits follow your Figma plan and seat. Design Twin reads through the **Figma Plugin API**
-instead: a plugin running in your own Figma desktop app, on your machine.
+Figma's own MCP server and Dev Mode are gated by your Figma plan and seat, and Figma's recommended MCP server is
+hosted by Figma. Most other design-to-code tools read the design through Figma's REST API, which has its own monthly
+limits. Design Twin reads through the **Figma Plugin API** instead: a plugin running in your own Figma desktop app,
+on your machine.
 
 | | Design Twin | Figma's official MCP server / Dev Mode | Typical design-to-code tools |
 |---|---|---|---|
-| **Figma plan** | Any, including the free Starter plan. No Dev seat, and the Plugin API has no documented request quota | The desktop server needs a Dev or Full seat on a paid plan. View and Collab seats (the only seats on Starter) get 20 tool calls a month | Many read through the REST API, where View and Collab seats get up to 20 file reads a month (Figma documents as few as 6 a month for a file on the Starter plan) |
-| **Where your design goes** | Nowhere. The plugin's manifest allows only `ws://localhost:8787`–`8789`, so it cannot reach the internet | The recommended remote server runs on Figma's hosted endpoint | Often a hosted service |
-| **Your components and tokens** | Built in, free: `design/codeconnect.local.json` maps Figma components to yours, `design/tokens.json` maps variables to your tokens, and drift-lint checks the code against both | Code Connect, which needs a Dev or Full seat on the Professional, Organization or Enterprise plan. Variables over REST are Enterprise-only | Varies |
-| **Checking the build** | `verify` renders the screen, measures every node against the design's own numbers and computes the verdict from that report. Anything nobody measured is `not-probed`, never a pass | Left to the agent | Varies |
+| **Figma plan** | Any, including the free Starter plan. No Dev seat, and the Plugin API has no documented request quota | The desktop server needs a Dev or Full seat on a Professional, Organization or Enterprise plan (or Education or Government). On the Starter plan, and for View and Collab seats on any plan, it allows 20 tool calls a month | Many read through the REST API, where View and Collab seats get up to 20 file reads a month (Figma's own example: up to 6 a month for a file on the Starter plan) |
+| **Where your design goes** | To your coding agent only. The plugin's manifest allows only `ws://localhost:8787`–`8789`, so it cannot reach the internet, and Design Twin needs no Figma API key | The recommended remote server runs on Figma's hosted endpoint | Often a hosted service |
+| **Your components and tokens** | Built in, free: `design/codeconnect.local.json` maps Figma components to yours, `design/tokens.json` maps variables to your tokens (build-screen reads both), and drift-lint checks the component map against the live Figma catalog | Code Connect, which needs a Dev or Full seat on the Professional, Organization or Enterprise plan. Variables over REST are Enterprise-only | Varies |
+| **Checking the build** | On web, `verify` renders the screen and measures each node against the design's own numbers. The verdict is computed from that report, and any node left unmeasured blocks a pass | Left to the agent | Varies |
 | **Target stacks** | Web (Tailwind, CSS Modules), React Native, SwiftUI, Jetpack Compose, Flutter, or your own profile | Any, through the agent | Varies |
 
 Figma's plan and rate-limit figures above were checked against
 [developers.figma.com](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/) on 2026-11-01.
-Figma changes them often, so check there before relying on them.
+Figma changes them often, and its own pages don't always agree, so check there before relying on them.
 
 ---
 
 ## Known limitations & platform support
 
-- **Figma desktop only.** A browser tab can't import a development plugin. The plugin is not listed on Figma
-  Community, by design: you import it once as a development plugin, from the copy `dtwin` installs.
-- **Bun is required.** The CLI, the MCP server, and the Claude Code plugin's scripts and hooks all run on
-  [Bun](https://bun.sh/install) 1.4.2 or later. Node alone won't run them, even when installed with `npm`.
-- **Claude Code for the skills.** The audit, build, verify and sync workflows are a Claude Code plugin.
+- **Your coding agent sees the design.** Nothing goes to Figma's servers or to us, but what Claude Code reads from
+  `design/export/` goes to its model, like any file in your project. drift-lint can call Figma's REST API for file
+  metadata, only if you set `FIGMA_FILE_KEY` and `FIGMA_TOKEN`.
+- **Figma desktop only, and nothing is headless.** A browser tab can't import a development plugin, and every pull
+  needs the file open in Figma desktop with the plugin window running. The plugin is not listed on Figma Community,
+  by design: you import it once as a development plugin, from the copy `dtwin` installs.
+- **Bun is required.** The CLI, the MCP server and the Claude Code plugin's scripts run on
+  [Bun](https://bun.sh/install) 1.4.2 or later, and so do two of the plugin's three hooks (the start-up check is a
+  small `sh` script). Node alone won't run them, even when installed with `npm`.
+- **The skills need Claude Code.** The audit, build, verify and sync workflows are a Claude Code plugin. The `dtwin`
+  CLI and the MCP server (a standard stdio MCP server) work without it.
+- **One bridge, one port.** The MCP server or a `dtwin serve` daemon holds port `8787` and shares it with later
+  `dtwin` commands, but a plain one-shot `dtwin pull` does not share: a second pull started while it runs exits with
+  `EADDRINUSE`. With more than one Figma file connected, every command needs `--client` to say which.
+- **Big files are slow.** A whole-file pull of a large file can take many minutes (the default budget is 300 s, and
+  900 s with `--all-pages`), so pull one screen or page at a time.
 - **Writes are deliberately small.** `figma_write` (MCP only) applies a few safe ops: create a frame or text, set a
   fill, set text. It runs no arbitrary code, and the plugin refuses every write until you tick **Allow edits** in its
-  window. The box is off by default, and no agent can tick it.
+  window. The box is off by default and nothing on the bridge or MCP side can turn it on. Once ticked, it stays on for
+  every file until you untick it.
 - **Build quality varies by stack.** On web, `verify` drives a real Chromium through your project's Playwright and
-  measures every node. On native stacks, it uses the stack's own tools (simulator, emulator, Flutter golden tests),
-  which you set up. The Kotlin (Compose) and Dart (Flutter) token files have never been compiled in this repo's CI,
-  which has no Android or Flutter toolchain.
+  measures node by node. Native stacks have no node-by-node probe: the agent renders the screen with the stack's own
+  tools (simulator, emulator, Flutter golden tests, which you set up) and compares images. The generated Swift,
+  Kotlin and Dart token files are not compiled in CI. Swift was type-checked with `swiftc` when the emitter was written;
+  Kotlin and Dart never have been.
 
 | OS | Status |
 |---|---|
 | **macOS** | Tested with a live Figma file, and in CI (the quick suites, on macOS 15). |
-| **Windows** | CI runs the quick suites on Windows, including the `dtwin serve` daemon, which uses a named pipe behind a token handshake there ([#12](https://github.com/its-magdy/design-twin/issues/12)). Live Figma runs so far have been on macOS. The Claude Code plugin's start-up hook needs `sh` (for example from Git Bash); without it, the hook errors. |
-| **Linux** | CI runs every suite here, including the browser verify tests. Figma has no official desktop app for Linux, and the plugin can only reach `localhost`, so live pulls need Figma desktop on the same machine: a Mac or Windows PC. The skills also work on a manual export copied over from one. |
+| **Windows** | CI runs the quick suites on Windows, including the `dtwin serve` daemon, which uses a named pipe behind a token handshake there ([#61](https://github.com/its-magdy/design-twin/pull/61), closing [#12](https://github.com/its-magdy/design-twin/issues/12)). A few raw-socket daemon checks are POSIX-only and skipped there. Live Figma runs so far have been on macOS. The Claude Code plugin's start-up check needs `sh` (for example from Git Bash); without it, that one check fails as a non-blocking hook error. |
+| **Linux** | CI runs every suite here, including the browser verify tests. Figma has no official desktop app for Linux (unofficial builds exist, untested), and the plugin can only reach `localhost`, so live pulls need Figma desktop on the same machine: a Mac or Windows PC. The skills also work on a manual export copied over from one. |
 
 ---
 
@@ -357,7 +376,8 @@ Plain-language requests work too, for example "is this design ready to build?" o
   ends with a verdict and a list of questions for the designer, each with a default answer.
 - **verify** renders the screen and compares every visible node's type, colour, radius, spacing, size
   and position with the design. The verdict is computed from `design/verify/<Layer>__<id>.report.json`, so
-  a pass is never just asserted. Anything nobody probed is reported as `not-probed`, never as passed.
+  a pass is never just asserted. A node left unmeasured blocks a pass, and a designed interaction nobody drove is
+  reported as `not-probed`, never as passed.
 - **sync-design** keeps the hand edits you made after the build. Commit `design/` so a previous export exists to diff against.
 
 ### No terminal?
