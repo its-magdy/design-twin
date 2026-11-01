@@ -370,6 +370,7 @@ the rules CI enforces. [`TESTING.md`](TESTING.md) lists each suite and the live-
 ## Further reading
 
 - [`docs/setup.md`](docs/setup.md): every install route, project setup, the agent setup steps, and upgrading
+- [`CHANGELOG.md`](CHANGELOG.md): what changed in each release
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): the plugin's two-context model, CLI vs MCP, and the security model
 - [`bridge/README.md`](bridge/README.md): every CLI flag, the daemon, MCP tools, and limits
 - [`figma-plugin/README.md`](figma-plugin/README.md): editing the extractor

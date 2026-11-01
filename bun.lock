@@ -14,7 +14,7 @@
     },
     "bridge": {
       "name": "@design-twin/dtwin",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "bin": {
         "dtwin": "src/figma-pull.ts",
       },
@@ -29,7 +29,7 @@
     },
     "figma-plugin": {
       "name": "design-twin-figma-plugin",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "devDependencies": {
         "@figma/plugin-typings": "^1.141.0",
         "acorn": "8.19.0",
