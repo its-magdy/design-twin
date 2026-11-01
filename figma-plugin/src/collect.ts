@@ -771,7 +771,7 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Desig
 async function collectDesignSystemTree(opts?: CollectOpts): Promise<DesignSystemResult> {
   const r = claimRun({ sourceBytes: false }); // the reply has no `assets`: an image fill keeps its size, its original bytes go unread
   r.useReads(opts);
-  const designSystem = await buildDesignSystem(undefined, serialize);
+  const designSystem = await buildDesignSystem();
   // A cancel armed during the catalog's opt-in variant walk is caught there per variant (each one
   // warned "unreadable" and skipped, components.ts), so it must not end here as a delivered doc with
   // every variant missing: the flag is still armed, and this throws it.
@@ -806,7 +806,7 @@ async function collectLibraryTree(opts?: CollectOpts & { asLibrary?: string }): 
   const r = claimRun({ sourceBytes: false }); // as collectDesignSystemOnly: the reply has no `assets`
   r.useReads(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
-  const designSystem = await buildDesignSystem({ asLibrary }, serialize);
+  const designSystem = await buildDesignSystem({ asLibrary });
   checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly
   // Replaces collectDesignSystemOnly's caveat, which is FALSE here: nothing is limited to what a walk
   // referenced, because nothing in this file is remote.
@@ -929,7 +929,7 @@ async function collectFullTree(opts?: CollectOpts): Promise<FullResult> {
   // AFTER the page walk: buildDesignSystem ends in dumpVariables, which uses the ids resolved during
   // that walk to also emit the LIBRARY variables the layers reference (see variables.ts). Building it
   // first would run the dump against an empty reference set.
-  const designSystem = await buildDesignSystem(undefined, serialize);
+  const designSystem = await buildDesignSystem();
   checkCancelled(); // the variant-walk backstop — see collectDesignSystemOnly
   // Measurements are a PER-PAGE read. Scoping them to figma.currentPage while exporting a DIFFERENT
   // page attached another page's redlines to this doc — silently, and mislabelled. Read them from

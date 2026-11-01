@@ -951,7 +951,9 @@ export interface CatalogComponent {
   remote?: true;
   docs?: string[];
   props?: Record<string, ComponentPropDef>;
-  visuals?: { fills?: Paint[]; strokes?: Strokes; effects?: Effect[]; radius?: number | RadiusCorners; opacity?: number; blendMode?: string };
+  /** the node's own visuals, read as a page walk reads them: `radius` rounded, a fully rounded corner as half the
+   *  shorter side with `radiusFull: true` */
+  visuals?: { fills?: Paint[]; strokes?: Strokes; effects?: Effect[]; radiusFull?: true; radius?: number | RadiusCorners; opacity?: number; blendMode?: string };
   publish?: string;
   /** COMPONENT_SET: the variants (their node trees split out to `variantsFile`) */
   variants?: CatalogVariant[];

@@ -381,6 +381,7 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 | Concern | File → field |
 |---|---|
 | Variant states | `design-system/components.local.json` `components[].props[*] {key, type:"VARIANT", options[], default}` — states are option VALUES (property often "Property 1") |
+| Component visuals | `components.local.json` entry `visuals {fills, strokes, effects, radius, radiusFull, opacity, blendMode}` — the same values a page pull writes on that node |
 | Per-variant trees | entry `variantsFile` / `nodeFile` (opt-in `--variant-visuals`) |
 | Slot rules | `components.local.json` `props[*]` with `type:"SLOT"` → `slotSettings {minChildren, maxChildren, allowPreferredValuesOnly, stretchChildOnInsert, displayEmptyByDefault}` (each only as set; no min/max = unlimited) |
 | Library components | `components.library.json` — props SAMPLED from instances in this file |

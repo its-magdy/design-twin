@@ -2,56 +2,26 @@
 // modules. Reads are defensive (`"x" in node` guards) because it runs over the whole SceneNode
 // union; per-property values are typed inside the helpers it calls.
 import type {
-  IrNode, Box, SizeLimits, RadiusCorners, LayoutGridSpec, TableCell, ComponentPropValues, TokenMap,
+  IrNode, Box, SizeLimits, LayoutGridSpec, TableCell, ComponentPropValues, TokenMap,
   Annotation as IrAnnotation, ExportSetting as IrExportSetting, Overlay as IrOverlay,
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, numProp, isList } from "./util";
 import { run } from "./run";
 import { layout, GRID_SELF, simplifyGrid } from "./layout";
-import { simplifyFills, simplifyStrokes } from "./paint";
-import { simplifyEffects } from "./effects";
+import { simplifyFills } from "./paint";
+import { nodePaints, nodeCorners, nodeOpacity, nodeBlendMode } from "./node-visuals";
 import { serializeText } from "./text";
 import { boundTokens, nodeStyles, variableModes, resolveBoundMap } from "./variables";
 import { simplifyReactions } from "./prototype";
 import { collectAsset, type AssetPolicy } from "./assets";
-import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./components";
+import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./instance-refs";
 import { collectMotion } from "./motion";
 import { checkCancelled } from "./progress";
 
 const MAX_DEPTH = 60;
 
-// Hoisted: these were fresh arrays allocated on EVERY node, the vast majority of which have neither
-// size limits nor mixed corner radii.
+// Hoisted: this was a fresh array allocated on EVERY node, the vast majority of which have no size limits.
 const SIZE_LIMIT_KEYS: Array<keyof SizeLimits> = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
-const CORNER_KEYS: Array<[string, keyof RadiusCorners]> = [
-  ["topLeftRadius", "tl"],
-  ["topRightRadius", "tr"],
-  ["bottomRightRadius", "br"],
-  ["bottomLeftRadius", "bl"],
-];
-
-// A corner radius, made safe to transcribe.
-//
-// Two things reach this field that must not land verbatim in generated code. Figma's "fully rounded"
-// corner exports as a literal 1000000000 — a sentinel, not a measurement, and `border-radius:
-// 1000000000px` is nobody's intent. And an unrounded float arrives as
-// 60.00000762939453 / 34.000003814697266, float dust from a resize that a builder then copies into
-// CSS.
-//
-// So: round to 2dp like every other number this serializer emits, and replace the sentinel with what
-// Figma ACTUALLY renders — half the shorter side — while setting `radiusFull` so the builder can emit
-// the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) instead of a
-// number. The value stays faithful to the render; the intent stays recoverable.
-const RADIUS_SENTINEL = 10000;
-function radiusOut(out: IrNode, raw: number): number {
-  if (raw < RADIUS_SENTINEL) return round(raw);
-  out.radiusFull = true;
-  const box = out.box;
-  const w = box && typeof box.w === "number" ? box.w : undefined;
-  const h = box && typeof box.h === "number" ? box.h : undefined;
-  if (w === undefined && h === undefined) return round(raw); // no box to clamp against — keep it honest and let the flag carry the meaning
-  return round(Math.min(w === undefined ? Infinity : w, h === undefined ? Infinity : h) / 2);
-}
 
 // Own-scope plugin data (getPluginData) written by THIS plugin — round-trip metadata (e.g. a future
 // Code-Connect mapping our write plane stamps). Shared namespaces can't be enumerated by the API, so
@@ -277,30 +247,18 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // Three INDEPENDENT paint reads that each end in resolveBoundMap (a getVariableByIdAsync round trip
   // on a cache miss), awaited one after another for no reason — none consumes another's result, and
   // they write distinct keys. Same treatment as the fan-out at the end of this function.
-  const [fills, strokes, effects] = await Promise.all([
-    simplifyFills("fills" in node ? node.fills : undefined),
-    simplifyStrokes(node),
-    simplifyEffects("effects" in node ? node.effects : undefined),
-  ]);
+  const { fills, strokes, effects } = await nodePaints(node);
   if (fills) out.fills = fills;
   if (strokes) out.strokes = strokes;
   // Whether stroke weight counts toward auto-layout size (border-box vs content-box).
   if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
   if (effects) out.effects = effects;
 
-  if ("cornerRadius" in node) {
-    if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = radiusOut(out, node.cornerRadius);
-    else if (node.cornerRadius === figma.mixed) {
-      // Per-corner fallback (pills/cards with asymmetric corners).
-      const corners: RadiusCorners = {};
-      for (const [k, s] of CORNER_KEYS) {
-        const v = numProp(node, k);
-        if (k in node && typeof v === "number" && v) corners[s] = radiusOut(out, v);
-      }
-      putNonEmpty(out, "radius", corners);
-    }
-  }
-  if ("opacity" in node && node.opacity < 1) out.opacity = round(node.opacity);
+  const { radiusFull, radius } = nodeCorners(node, out.box);
+  if (radiusFull) out.radiusFull = true;
+  if (radius !== undefined) out.radius = radius;
+  const opacity = nodeOpacity(node);
+  if (opacity !== undefined) out.opacity = opacity;
   if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
   // Transform decomposition. `rotation` above covers the rotation term; this recovers the two parts
   // of relativeTransform that were being thrown away.
@@ -319,7 +277,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
       if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
     }
   }
-  if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = node.blendMode.toLowerCase();
+  const blendMode = nodeBlendMode(node);
+  if (blendMode) out.blendMode = blendMode;
   if ("isMask" in node && node.isMask) out.mask = true;
   if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase(); // vector(clip-path) | luminance
   if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing); // squircle -> iOS "continuous" corners
