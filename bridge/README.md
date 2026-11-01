@@ -22,7 +22,10 @@ dtwin list         # then: dtwin pull --node <id>
 ```
 
 For the Claude Code skills (audit, build, verify, sync), see the
-[project README](https://github.com/its-magdy/design-twin#readme).
+[project README](https://github.com/its-magdy/design-twin#readme): its
+[first screen in 5 minutes](https://github.com/its-magdy/design-twin#first-screen-in-5-minutes) goes from install
+to a built screen, and [known limitations](https://github.com/its-magdy/design-twin#known-limitations--platform-support)
+covers what it needs (Figma desktop, Bun) and where it runs.
 
 ## Install (once)
 It needs [Bun](https://bun.sh/install) ≥ 1.4.2 (`engines.bun`) on your PATH; Node is not supported. Install Bun
