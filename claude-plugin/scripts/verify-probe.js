@@ -565,15 +565,16 @@ function freeHoverPoint(arg) {
   const avoidEl = dt.find(arg.avoid);
   const o = owner.getBoundingClientRect();
   const a = avoidEl ? avoidEl.getBoundingClientRect() : null;
-  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
-  const points = [[l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy], [cx, cy]];
-  for (const [x, y] of points) {
-    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || r < l || b < t) continue;
+  for (const [x, y] of dt.samplePoints(o, { inset: 3, order: "corners" })) {
     if (a && a.width > 0 && a.height > 0 && x >= a.x && x <= a.x + a.width && y >= a.y && y <= a.y + a.height) continue;
-    const hit = document.elementFromPoint(x, y);
-    if (!hit || !owner.contains(hit) || avoidEl && avoidEl.contains(hit)) continue;
-    const ctl = hit.closest(INTERACTIVE);
-    if (ctl && ctl !== owner && owner.contains(ctl)) continue;
+    const hit = dt.hitAt(x, y);
+    if (!hit || !dt.within(hit, owner) || avoidEl && dt.within(hit, avoidEl)) continue;
+    let ctl = null;
+    for (let p = hit; p && p !== owner; p = dt.parent(p)) if (p.matches(INTERACTIVE)) {
+      ctl = p;
+      break;
+    }
+    if (ctl) continue;
     return { x: Math.round((x - o.x - owner.clientLeft) * 100) / 100, y: Math.round((y - o.y - owner.clientTop) * 100) / 100 };
   }
   return null;
@@ -585,14 +586,12 @@ function rawHoverPoint(arg) {
   const describe = (e) => dt.describe(e, ["data-dt-node", "id", "class"]);
   const { w: vw, h: vh } = dt.viewport();
   if (arg.at === null) el.scrollIntoView({ block: "center", inline: "center" });
-  const o = el.getBoundingClientRect();
-  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
-  const points = arg.at !== null ? [[arg.at.x, arg.at.y]] : [[cx, cy], [l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+  const given = arg.at !== null ? [[arg.at.x, arg.at.y]] : [];
+  const points = arg.at !== null ? given.filter(([x, y]) => x >= 0 && y >= 0 && x < vw && y < vh) : dt.samplePoints(el.getBoundingClientRect(), { inset: 3, order: "centre" });
   let covered = null;
   for (const [x, y] of points) {
-    if (x < 0 || y < 0 || x >= vw || y >= vh || arg.at === null && (r < l || b < t)) continue;
-    const hit = document.elementFromPoint(x, y);
-    if (hit && el.contains(hit)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
+    const hit = dt.hitAt(x, y);
+    if (hit && dt.within(hit, el)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
     covered ??= describe(hit);
   }
   return { covered };
@@ -829,6 +828,45 @@ function installPageRuntime() {
       if ((x1 - x0) * (y1 - y0) > 0.99) return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, onScreen: true };
     }
     return { x: r.x + r.width / 2, y: r.y + r.height / 2, onScreen: false };
+  };
+  const hitAt = (x, y) => {
+    let hit = document.elementFromPoint(x, y), from = hit;
+    for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
+      const host = hit, sr = hit.shadowRoot;
+      const deeper = sr.elementFromPoint ? sr.elementFromPoint(x, y) : null;
+      let under = false;
+      for (let p = deeper; p; p = parent(p)) if (p === host) {
+        under = true;
+        break;
+      }
+      if (deeper && deeper !== host && under) {
+        hit = deeper;
+        from = deeper;
+        continue;
+      }
+      const slotted = Array.from(host.childNodes).find((t) => {
+        if (t.nodeType !== 3 || !t.assignedSlot) return false;
+        const rg = document.createRange();
+        rg.selectNodeContents(t);
+        return Array.from(rg.getClientRects()).some((q) => x >= q.x && x <= q.right && y >= q.y && y <= q.bottom);
+      });
+      from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
+      break;
+    }
+    return from;
+  };
+  const within = (el, anc) => {
+    for (let p = el; p; p = parent(p)) if (p === anc) return true;
+    return false;
+  };
+  const samplePoints = (rect, o) => {
+    const l = rect.x + o.inset, r = rect.x + rect.width - o.inset, t = rect.y + o.inset, b = rect.y + rect.height - o.inset;
+    if (r < l || b < t) return [];
+    const cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+    const ring = [[l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+    const all = o.order === "centre" ? [[cx, cy], ...ring] : [...ring, [cx, cy]];
+    const { w: vw, h: vh } = viewport();
+    return all.filter(([x, y]) => x >= 0 && y >= 0 && x < vw && y < vh);
   };
   const active = () => {
     let a = document.activeElement;
@@ -1136,6 +1174,9 @@ function installPageRuntime() {
     visible,
     viewport,
     clickPoint,
+    hitAt,
+    within,
+    samplePoints,
     active,
     tagSel,
     tagged,
@@ -2872,12 +2913,13 @@ function submitGuard(el) {
   };
   const own = why(el);
   if (own !== null) return own;
-  const pt = window.__dt.clickPoint(el);
+  const dt = window.__dt;
+  const pt = dt.clickPoint(el);
   if (!pt) return null;
   const { onScreen, x: cx, y: cy } = pt;
   const at = [];
-  const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
-  if (hit && hit !== el && el.contains(hit)) at.push(hit);
+  const hit = onScreen ? dt.hitAt(cx, cy) : null;
+  if (hit && hit !== el && dt.within(hit, el)) at.push(hit);
   else if (!hit) {
     for (const c of Array.from(el.querySelectorAll("button, input"))) {
       const b = c.getBoundingClientRect();
@@ -2911,29 +2953,7 @@ function clickPointControl(el, arg) {
   const presses = (e) => !!e && (e.matches(ACT) || framed(e));
   let at = null;
   if (onScreen) {
-    let hit = document.elementFromPoint(cx, cy), from = hit;
-    for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
-      const host = hit, sr = hit.shadowRoot;
-      const deeper = sr.elementFromPoint ? sr.elementFromPoint(cx, cy) : null;
-      let under = false;
-      for (let p = deeper; p; p = up(p)) if (p === host) {
-        under = true;
-        break;
-      }
-      if (deeper && deeper !== host && under) {
-        hit = deeper;
-        from = deeper;
-        continue;
-      }
-      const slotted = Array.from(host.childNodes).find((t) => {
-        if (t.nodeType !== 3 || !t.assignedSlot) return false;
-        const rg = document.createRange();
-        rg.selectNodeContents(t);
-        return Array.from(rg.getClientRects()).some((q) => cx >= q.x && cx <= q.right && cy >= q.y && cy <= q.bottom);
-      });
-      from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
-      break;
-    }
+    const from = dt.hitAt(cx, cy);
     let found = null;
     for (let p = from; p; p = up(p)) {
       if (p === el) {
@@ -3114,81 +3134,190 @@ async function restoreSettled(page) {
     held = await page.evaluate(scrollHeld) ? held + 1 : 0;
   }
 }
-async function driveRow({ page, loads }, row, hooks) {
-  const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
-  const destId = row.destinationId ?? null;
-  const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
-  let st = await page.evaluate(openerState, { id: row.nodeId });
-  const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
-  if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog \u2014 not driven` };
-  if (st.disabled) return { ...base, ok: null, detail: "opener is disabled \u2014 not driven" };
-  if (st.visible) await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
-  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
-  if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
-  await page.evaluate(tipPreMark, null).catch(() => false);
-  let revealedBy;
-  if (!st.visible) {
-    if (st.hoverPath !== null) {
-      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
-      await page.mouse.move(0, 0);
-      await byPath(page, st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
-      await raf2(page);
-      st = await page.evaluate(openerState, { id: row.nodeId });
-    }
-    if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
+function pointOn(path13) {
+  const dt = window.__dt;
+  const el = dt.find(path13);
+  const pt = el ? dt.clickPoint(el) : null;
+  if (!el || !pt) return null;
+  return { x: pt.x, y: pt.y, onScreen: pt.onScreen, hits: pt.onScreen && dt.within(dt.hitAt(pt.x, pt.y), el) };
+}
+var OPEN_POLL_MS = 2e3;
+var OPEN_GRACE_MS = 500;
+var NO_READ = { lost: false, detectedBy: null, opened: null, dest: null };
+function refusalWhy(r, selector, revealedBy) {
+  switch (r.kind) {
+    case "count":
+      return `the opener ${selector} matched ${r.count} element(s) outside a closed dialog`;
+    case "disabled":
+      return "the opener is disabled";
+    case "submits":
+      return `the opener would submit a form (${r.what})`;
+    case "hidden":
+      return `the opener is not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"}`;
+    case "not-own":
+      return `the opener's click point is another control inside it (${r.ctl}) \u2014 tag that control or the opener's own clickable element${r.why !== void 0 ? ` (${r.why})` : ""}`;
+    case "off-screen":
+      return "the opener's click point is off screen at this scroll, or something else is on top there";
+    case "click":
+      return `the real click could not land (${r.what})`;
+    case "key":
+      return r.what;
   }
-  const openerPath = st.path;
-  await byPath(page, openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
-  await raf2(page);
-  const submitsHovered = await byPath(page, openerPath).first().evaluate(submitGuard);
-  if (submitsHovered !== null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener would submit a form (${submitsHovered}) \u2014 not driven` };
-  const notOwn = (ctl, why) => ({
-    ...base,
-    ok: null,
-    ...revealedBy !== void 0 ? { revealedBy } : {},
-    detail: `the opener's click point is another control inside it (${ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${why !== void 0 ? ` (${why})` : ""}`
-  });
-  const inner = await byPath(page, openerPath).first().evaluate(clickPointControl, { mark: true });
-  if (inner !== null) return notOwn(inner, await page.evaluate(ownWhy, null).catch(() => null) ?? void 0);
-  const px = await ownPixels(page, { park: revealedBy === void 0 });
-  if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
-  const contract = [...DIALOG_CONTRACT];
-  await page.evaluate(armDetector, { destId, contract });
-  const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
-  const loadsBefore = loads();
-  let activation = "mouse", clickWhy = "";
-  await byPath(page, openerPath).first().evaluate(saveScroll);
-  try {
-    await byPath(page, openerPath).first().click({ timeout: 2e3 });
-  } catch (e) {
-    const m = errMsg(e);
-    const kind = pwErrorKind(e, page);
-    if (kind === "gone") throw e;
-    if (kind !== "navigated") {
-      clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
-      activation = "synthetic";
-      await restoreSettled(page);
-      await page.evaluate(syntheticClick, openerPath);
-    }
-  }
+}
+async function detectOpen(page, destId, contract) {
   const t0 = Date.now();
-  let read2 = { lost: false, detectedBy: null, opened: null, dest: null };
+  let read2 = NO_READ;
   let detectedAt = null;
   for (; ; ) {
     try {
       read2 = await page.evaluate(pollDetector, { destId, contract });
     } catch (e) {
       if (pwErrorKind(e, page) !== "navigated") throw e;
-      read2 = { lost: true, detectedBy: null, opened: null, dest: null };
+      return { lost: true, detectedBy: null, opened: null, dest: null };
     }
-    if (read2.lost) break;
-    if (read2.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
-    const destDone = destId === null || read2.dest !== null && read2.dest.inside;
-    if (read2.opened && destDone) break;
-    if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
-    if (Date.now() - t0 >= 2e3) break;
+    if (read2.lost) return read2;
+    if (read2.opened !== null && detectedAt === null) detectedAt = Date.now();
+    if (read2.opened !== null && (destId === null || read2.dest !== null && read2.dest.inside)) return read2;
+    if (detectedAt !== null && Date.now() - detectedAt >= OPEN_GRACE_MS) return read2;
+    if (Date.now() - t0 >= OPEN_POLL_MS) return read2;
     await sleep(100);
   }
+}
+async function openOverlay(page, row, o) {
+  const act = o.act ?? (() => void 0);
+  const destId = row.destinationId ?? null;
+  const contract = [...DIALOG_CONTRACT];
+  const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
+  let selectorCount = 1;
+  let revealedBy;
+  const refuse = (r) => ({
+    opened: null,
+    why: refusalWhy(r, selector, revealedBy),
+    refused: r,
+    activation: null,
+    detectedBy: null,
+    read: NO_READ,
+    selectorCount,
+    ...revealedBy !== void 0 ? { revealedBy } : {}
+  });
+  const finish = async (activation, clickWhy) => {
+    const read2 = await detectOpen(page, destId, contract);
+    return {
+      opened: read2.lost ? null : read2.opened,
+      why: null,
+      refused: null,
+      activation,
+      detectedBy: read2.lost ? null : read2.detectedBy,
+      read: read2,
+      selectorCount,
+      ...revealedBy !== void 0 ? { revealedBy } : {},
+      ...clickWhy !== void 0 ? { clickWhy } : {}
+    };
+  };
+  if (o.activation === "key") {
+    if (o.beforeActivate) await o.beforeActivate();
+    await page.evaluate(armDetector, { destId, contract });
+    const blocked = o.press ? await o.press() : "no key to press";
+    return blocked !== null ? refuse({ kind: "key", what: blocked }) : finish("key");
+  }
+  const scroll = o.scroll !== false;
+  let st = await page.evaluate(openerState, { id: row.nodeId });
+  selectorCount = st.count;
+  if (st.count !== 1 || st.path === null) return refuse({ kind: "count", count: st.count });
+  if (st.disabled) return refuse({ kind: "disabled" });
+  if (scroll && st.visible) {
+    act();
+    await byPath(page, st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
+  }
+  const submits = await byPath(page, st.path).first().evaluate(submitGuard);
+  if (submits !== null) return refuse({ kind: "submits", what: submits });
+  await page.evaluate(tipPreMark, null).catch(() => false);
+  if (!st.visible) {
+    if (st.hoverPath !== null) {
+      revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
+      act();
+      await page.mouse.move(0, 0);
+      if (scroll) await byPath(page, st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+      else {
+        const hp = await page.evaluate(pointOn, st.hoverPath);
+        if (hp !== null && hp.onScreen) await page.mouse.move(hp.x, hp.y);
+      }
+      await raf2(page);
+      st = await page.evaluate(openerState, { id: row.nodeId });
+    }
+    if (!st.visible || st.path === null) return refuse({ kind: "hidden" });
+  }
+  const openerPath = st.path;
+  const loc = byPath(page, openerPath).first();
+  act();
+  if (scroll) await loc.hover({ timeout: 2e3, force: true }).catch(() => void 0);
+  else {
+    const p = await page.evaluate(pointOn, openerPath);
+    if (p === null || !p.onScreen) return refuse({ kind: "off-screen" });
+    await page.mouse.move(p.x, p.y);
+  }
+  await raf2(page);
+  const submitsHovered = await loc.evaluate(submitGuard);
+  if (submitsHovered !== null) return refuse({ kind: "submits", what: submitsHovered });
+  const inner = await loc.evaluate(clickPointControl, { mark: true });
+  if (inner !== null) {
+    const why = await page.evaluate(ownWhy, null).catch(() => null);
+    return refuse({ kind: "not-own", ctl: inner, ...why !== null ? { why } : {} });
+  }
+  act();
+  const px = await ownPixels(page, { park: revealedBy === void 0 });
+  if (px !== null && px.why !== null) return refuse({ kind: "not-own", ctl: px.ctl, why: px.why });
+  if (o.beforeActivate) await o.beforeActivate();
+  await page.evaluate(armDetector, { destId, contract });
+  if (!scroll) {
+    let p = await page.evaluate(pointOn, openerPath);
+    if (p !== null && p.onScreen) {
+      act();
+      await page.mouse.move(p.x, p.y);
+      await raf2(page);
+      p = await page.evaluate(pointOn, openerPath);
+    }
+    if (p === null || !p.hits) return refuse({ kind: "off-screen" });
+    act();
+    await page.mouse.click(p.x, p.y);
+    return finish("mouse");
+  }
+  await loc.evaluate(saveScroll);
+  act();
+  try {
+    await loc.click({ timeout: 2e3 });
+  } catch (e) {
+    const kind = pwErrorKind(e, page);
+    if (kind === "gone") throw e;
+    if (kind !== "navigated") {
+      const what = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(errMsg(e)) || [firstLine(e)])[0] ?? "";
+      await restoreSettled(page);
+      if (o.synthetic === false) return refuse({ kind: "click", what });
+      await page.evaluate(syntheticClick, openerPath);
+      return finish("synthetic", what);
+    }
+  }
+  return finish("mouse");
+}
+async function driveRow({ page, loads }, row, hooks) {
+  const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
+  const destId = row.destinationId ?? null;
+  const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
+  let tokenBefore = "", loadsBefore = 0;
+  const r = await openOverlay(page, row, { activation: "mouse", beforeActivate: async () => {
+    tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
+    loadsBefore = loads();
+  } });
+  const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: r.selectorCount };
+  const revealedBy = r.revealedBy;
+  const revealed = revealedBy !== void 0 ? { revealedBy } : {};
+  if (r.refused !== null) {
+    const f = r.refused;
+    const detail = f.kind === "count" ? `the opener ${selector} matched ${f.count} element(s) outside a closed dialog \u2014 not driven` : f.kind === "disabled" ? "opener is disabled \u2014 not driven" : f.kind === "submits" ? `opener would submit a form (${f.what}) \u2014 not driven` : f.kind === "hidden" ? `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` : f.kind === "not-own" ? `the opener's click point is another control inside it (${f.ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${f.why !== void 0 ? ` (${f.why})` : ""}` : `${r.why ?? "not activated"} \u2014 not driven`;
+    return { ...base, ok: null, ...f.kind === "count" || f.kind === "disabled" ? {} : revealed, detail };
+  }
+  const read2 = r.read;
+  const activation = r.activation === "synthetic" ? "synthetic" : "mouse";
   if (read2.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
   let tokenAfter = "";
   try {
@@ -3204,12 +3333,12 @@ async function driveRow({ page, loads }, row, hooks) {
     navEvents,
     activation,
     ...detectedBy !== void 0 ? { detectedBy } : {},
-    ...revealedBy !== void 0 ? { revealedBy } : {},
+    ...revealed,
     ...destId !== null ? { destination: { nodeId: destId, inside: !read2.lost && !!read2.dest && read2.dest.inside, count: read2.dest ? read2.dest.count : 0 } } : {},
     ...read2.opened && !read2.lost ? { opened: read2.opened } : {}
   };
   const j = judge(action, ev);
-  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
+  const how = `${activation === "mouse" ? "clicked" : `synthetic click (${r.clickWhy ?? ""})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
   const saw = read2.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
   ev.ok = j.ok;
   ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
@@ -4368,8 +4497,8 @@ var park = async (page) => {
   await page.mouse.move(0, 0);
   await raf2(page);
 };
-async function markOpenerSeen(page, id, act) {
-  await page.evaluate(tipPreMark, null).catch(() => false);
+async function markOpenerSeen(page, id, act, o = { tips: true }) {
+  if (o.tips) await page.evaluate(tipPreMark, null).catch(() => false);
   const r = await page.evaluate(markOpener, { id });
   if (!r.sole) return r;
   act();
@@ -4378,6 +4507,13 @@ async function markOpenerSeen(page, id, act) {
   const why = own ? px === null ? "its pixels could not be compared" : px.why : null;
   await page.evaluate(ownDecide, { own, why });
   return { ...r, why };
+}
+async function mouseOpenOn(page, row, act) {
+  const r = await openOverlay(page, row, { activation: "mouse", synthetic: false, act, beforeActivate: async () => {
+    await markOpenerSeen(page, row.nodeId, act, { tips: false });
+  } });
+  if (r.read.lost) throw new UnitNavigated("the page loaded a new document");
+  return r.why !== null ? { opened: null, why: r.why } : { opened: r.opened };
 }
 async function safeCloseOn(page, closedAfter, act) {
   const cands = await page.evaluate(closeCandidates, null);
@@ -4987,9 +5123,8 @@ async function runBattery(ctx) {
     const key = `${row.nodeId}|${row.trigger}`;
     const base = { nodeId: row.nodeId, trigger: row.trigger };
     const destId = row.destinationId ?? null;
-    const contract = [...DIALOG_CONTRACT];
     const uses = destId === null ? [row.nodeId] : [row.nodeId, destId];
-    const b = { row, key, base, destId, contract, uses };
+    const b = { row, key, base, destId, uses };
     await runUnit(ctx, keyUnit(ctx, b));
     if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
     await runUnit(ctx, scrollUnit(ctx, b));
@@ -4997,7 +5132,7 @@ async function runBattery(ctx) {
 }
 function keyUnit(ctx, b) {
   const { keyOpens, nonModal } = ctx;
-  const { row, key, base, destId, contract, uses } = b;
+  const { row, key, base, destId, uses } = b;
   return {
     name: `keyboard ${key}`,
     battery: true,
@@ -5015,41 +5150,12 @@ function keyUnit(ctx, b) {
       const { page } = u;
       const add = (c2) => u.add({ ...c2, ...base });
       await park(page);
-      const detect = async () => {
-        const t = Date.now();
-        for (; ; ) {
-          const r = await page.evaluate(pollDetector, { destId, contract });
-          if (r.lost) throw new UnitNavigated("the page loaded a new document");
-          if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
-          if (Date.now() - t >= 2e3) return r.opened;
-          await sleep4(100);
-        }
-      };
       const keyOpen = async (key2) => {
-        await page.evaluate(armDetector, { destId, contract });
-        const blocked = await pressOnOpener(page, key2, u.act);
-        return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
+        const r = await openOverlay(page, row, { activation: "key", press: () => pressOnOpener(page, key2, u.act), act: u.act });
+        if (r.read.lost) throw new UnitNavigated("the page loaded a new document");
+        return r.why !== null ? { opened: null, blocked: r.why } : { opened: r.opened, blocked: null };
       };
-      const mouseOpen = async () => {
-        let st = await page.evaluate(openerState, { id: row.nodeId });
-        if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
-        if (st.disabled) return { opened: null, why: "the opener is disabled" };
-        if (!st.visible && st.hoverPath !== null) {
-          await page.mouse.move(0, 0);
-          u.act();
-          await byPath(page, st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
-          await raf2(page);
-          st = await page.evaluate(openerState, { id: row.nodeId });
-        }
-        if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
-        const loc = byPath(page, st.path).first();
-        if (await loc.evaluate(submitGuard) !== null) return { opened: null, why: "the opener would submit a form" };
-        await markOpenerSeen(page, row.nodeId, u.act);
-        await page.evaluate(armDetector, { destId, contract });
-        u.act();
-        await loc.click({ timeout: 2e3 });
-        return { opened: await detect() };
-      };
+      const mouseOpen = async () => mouseOpenOn(page, row, u.act);
       u.phase("keyboard.activation");
       const marked = await markOpenerSeen(page, row.nodeId, u.act);
       const walkStarted = await page.evaluate(sentinelInsert, null);
@@ -5241,7 +5347,7 @@ function keyUnit(ctx, b) {
 }
 function scrollUnit(ctx, b) {
   const { keyOpens, nonModal } = ctx;
-  const { row, key, base, destId, contract, uses } = b;
+  const { row, key, base, destId, uses } = b;
   return {
     name: `scroll ${key}`,
     battery: true,
@@ -5255,38 +5361,22 @@ function scrollUnit(ctx, b) {
       const centre = overlayCentred(ov);
       const keyVia = keyOpens.get(key) ?? null;
       await park(page);
-      const detect = async () => {
-        const t = Date.now();
-        for (; ; ) {
-          const r = await page.evaluate(pollDetector, { destId, contract });
-          if (r.lost) throw new UnitNavigated("the page loaded a new document");
-          if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
-          if (Date.now() - t >= 2e3) return r.opened;
-          await sleep4(100);
-        }
-      };
       const openStill = async () => {
-        await page.mouse.move(0, 0);
-        let p = await markOpenerSeen(page, row.nodeId, u.act);
-        if (!p.found) return { why: "the opener is not on the page" };
-        if (!p.visible && p.hover && p.hover.inViewport) {
-          u.act();
-          await page.mouse.move(p.hover.x, p.hover.y);
-          await raf2(page);
-          p = await markOpenerSeen(page, row.nodeId, u.act);
-        }
-        if (p.visible && p.inViewport && p.hits) {
-          await page.evaluate(armDetector, { destId, contract });
-          u.act();
-          await page.mouse.click(p.x, p.y);
-          return { opened: await detect(), how: "a mouse click at its on-screen point" };
-        }
+        const m = await openOverlay(page, row, { activation: "mouse", scroll: false, synthetic: false, act: u.act, beforeActivate: async () => {
+          await markOpenerSeen(page, row.nodeId, u.act, { tips: false });
+        } });
+        if (m.read.lost) throw new UnitNavigated("the page loaded a new document");
+        if (m.refused === null) return { opened: m.opened, how: "a mouse click at its on-screen point" };
+        const f = m.refused;
+        if (f.kind === "count") return { why: "the opener is not on the page" };
+        if (f.kind !== "hidden" && f.kind !== "off-screen") return { why: m.why ?? "the opener was not clicked" };
         if (keyVia !== null) {
+          await markOpenerSeen(page, row.nodeId, u.act);
           await page.evaluate(focusOpener, { preventScroll: true });
-          await page.evaluate(armDetector, { destId, contract });
-          const blocked = await pressOnOpener(page, keyVia, u.act);
-          if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
-          return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
+          const k = await openOverlay(page, row, { activation: "key", press: () => pressOnOpener(page, keyVia, u.act), act: u.act });
+          if (k.read.lost) throw new UnitNavigated("the page loaded a new document");
+          if (k.why !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${k.why})` };
+          return { opened: k.opened, how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
         }
         return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
       };

@@ -1512,6 +1512,8 @@ block("probe-drive:", () => {
     const btn = { tagName: "BUTTON", form: {}, getAttribute: () => null, hasAttribute: () => false, closest: (): unknown => btn };
     const el = { tagName: "SPAN", getAttribute: () => null, hasAttribute: () => false, closest: () => null, getBoundingClientRect: () => rect, getClientRects: () => [rect],
       contains: (o: unknown) => o === btn, querySelectorAll: () => [] };
+    // the button is inside the wrapper in the flat tree too (the runtime's hitAt / within walk parents)
+    Object.assign(btn, { parentElement: el });
     Object.assign(globalThis, { innerWidth: 1024, innerHeight: 700, document: { documentElement: { clientWidth: 1009, clientHeight: 700 }, elementFromPoint: (x: number) => (x < 508 ? btn : el) } });
     const r: unknown = Reflect.apply(sg, undefined, [el]);
     return typeof r === "string" && /at its click point/.test(r);
@@ -1524,6 +1526,7 @@ block("probe-drive:", () => {
     const btn = { tagName: "BUTTON", form: {}, getAttribute: () => null, hasAttribute: () => false, closest: (): unknown => btn };
     const el = { tagName: "DIV", getAttribute: () => null, hasAttribute: () => false, closest: () => null, getBoundingClientRect: () => rect, getClientRects: () => [rect],
       contains: (o: unknown) => o === btn, querySelectorAll: () => [] };
+    Object.assign(btn, { parentElement: el });
     Object.assign(globalThis, { innerWidth: 1024, innerHeight: 640, document: { compatMode: "BackCompat", documentElement: { clientWidth: 1024, clientHeight: 3016 }, elementFromPoint: (_x: number, y: number) => (y > 300 && y < 340 ? btn : el) } });
     const r: unknown = Reflect.apply(sg, undefined, [el]);
     return typeof r === "string" && /at its click point/.test(r);
@@ -2647,9 +2650,11 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
       path(e: FakeEl): string; paths(): (e: FakeEl) => string; find(p: string): FakeEl | null;
       controlText(e: FakeEl): { text: string } | { why: string } | null; ownText(e: FakeEl): string; shownText(e: FakeEl, lines?: boolean): string;
       visible(e: FakeEl, o?: { sized?: boolean; opacity?: boolean }): boolean; active(): FakeEl | null; describe(e: FakeEl | null, keys?: readonly string[], name?: boolean): string;
+      within(e: FakeEl | null, anc: FakeEl): boolean;
+      samplePoints(r: { x: number; y: number; width: number; height: number }, o: { inset: number; order: "corners" | "centre" }): Array<[number, number]>;
     }
     const isFakeDt = (v: unknown): v is FakeDt => typeof v === "object" && v !== null
-      && ["path", "paths", "find", "controlText", "ownText", "shownText", "visible", "active", "describe"].every((k) => typeof Reflect.get(v, k) === "function");
+      && ["path", "paths", "find", "controlText", "ownText", "shownText", "visible", "active", "describe", "within", "samplePoints"].every((k) => typeof Reflect.get(v, k) === "function");
     const installed: unknown = Reflect.get(pageWindow({}), "__dt");
     if (!isFakeDt(installed)) throw new Error("the page runtime did not install window.__dt");
     const dt = installed;
@@ -2665,6 +2670,14 @@ t("behaviourLine: --behaviour off says so; a run lists fail/warn/pass/not-run, a
       dt.find(`${cardAt} div:nth-child(1) > a:nth-child(2)`) === null && dt.find(`${at(1)} > b:nth-child(9)`) === null && dt.find(`${at(1)} b:nth-child(1)`) === null && dt.find("#nope") === null);
     const many = dt.paths();
     check("[page runtime] paths(): one call's path function names every element as path() does", many(save) === savePath && many(must(cases[1], "case 1").node) === at(2) && many(html) === "html");
+    check("[page runtime] within(): an element inside an open shadow root is within its host (Node.contains stops at the root); the host is not within it; null is within nothing",
+      dt.within(save, card) && dt.within(save, body) && dt.within(card, card) && !dt.within(card, save) && !dt.within(null, card));
+    const sp = (r: { x: number; y: number; width: number; height: number }, order: "corners" | "centre"): string => JSON.stringify(dt.samplePoints(r, { inset: 3, order }));
+    check(`[page runtime] samplePoints(): 4 corners, 4 edge midpoints, the centre, inset 3 px ("centre" puts the centre first); off-viewport points dropped (1000×800); an inset box that is empty → none (got ${sp({ x: 10, y: 20, width: 100, height: 40 }, "corners")})`,
+      sp({ x: 10, y: 20, width: 100, height: 40 }, "corners") === "[[13,23],[107,23],[13,57],[107,57],[60,23],[107,40],[60,57],[13,40],[60,40]]"
+      && sp({ x: 10, y: 20, width: 100, height: 40 }, "centre") === "[[60,40],[13,23],[107,23],[13,57],[107,57],[60,23],[107,40],[60,57],[13,40]]"
+      && sp({ x: -60, y: 20, width: 100, height: 40 }, "corners") === "[[37,23],[37,57],[37,40]]"
+      && sp({ x: 10, y: 20, width: 4, height: 40 }, "corners") === "[]");
 
     // ---- text
     const ct = (e: FakeEl): string => JSON.stringify(dt.controlText(e));

@@ -611,9 +611,10 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
 // ---------------------------------------------------------------- owner hover
 /** Where to hover the owner of a drawn state (`owner`, e.g. the row) so that IT is hovered and the measured element
  *  (`avoid`, a control inside it) is not: the first of the owner's 4 corners (inset 3px), 4 edge midpoints (inset 3px),
- *  centre that lies outside the measured element's box, whose document.elementFromPoint is the owner or inside it, and
- *  that is not over an interactive descendant (a control with its own :hover). Relative to the owner's PADDING box
- *  (Playwright's `position`); viewport points only (call it after scrolling the owner into view). SELF-CONTAINED. */
+ *  centre (window.__dt.samplePoints) that lies outside the measured element's box, where what the mouse presses
+ *  (window.__dt.hitAt, through open shadow roots) is the owner or inside it in the flat tree, and that is not over an
+ *  interactive descendant (a control with its own :hover — a web component's shadow <button> too). Relative to the owner's
+ *  PADDING box (Playwright's `position`); viewport points only (call it after scrolling the owner into view). SELF-CONTAINED. */
 export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: number; y: number } | null {
   // tabindex="-1" is not a control — ARIA-grid cells carry it (roving focus); hovering one is a free point
   const INTERACTIVE = "a, button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]:not([tabindex='-1'])";
@@ -623,15 +624,14 @@ export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: numb
   const avoidEl = dt.find(arg.avoid);
   const o = owner.getBoundingClientRect();
   const a = avoidEl ? avoidEl.getBoundingClientRect() : null;
-  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
-  const points: Array<[number, number]> = [[l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy], [cx, cy]];
-  for (const [x, y] of points) {
-    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || r < l || b < t) continue;
+  for (const [x, y] of dt.samplePoints(o, { inset: 3, order: "corners" })) {
     if (a && a.width > 0 && a.height > 0 && x >= a.x && x <= a.x + a.width && y >= a.y && y <= a.y + a.height) continue;
-    const hit = document.elementFromPoint(x, y);
-    if (!hit || !owner.contains(hit) || (avoidEl && avoidEl.contains(hit))) continue;
-    const ctl = hit.closest(INTERACTIVE);
-    if (ctl && ctl !== owner && owner.contains(ctl)) continue;
+    const hit = dt.hitAt(x, y);
+    if (!hit || !dt.within(hit, owner) || (avoidEl && dt.within(hit, avoidEl))) continue;
+    // the nearest interactive element on the way up the flat tree to the owner (closest() stops at a shadow root)
+    let ctl: PageElement | null = null;
+    for (let p: PageElement | null = hit; p && p !== owner; p = dt.parent(p)) if (p.matches(INTERACTIVE)) { ctl = p; break; }
+    if (ctl) continue;
     return { x: Math.round((x - o.x - owner.clientLeft) * 100) / 100, y: Math.round((y - o.y - owner.clientTop) * 100) / 100 };
   }
   return null;
@@ -639,8 +639,9 @@ export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: numb
 
 /** Where the raw pointer (page.mouse: no actionability wait) can hover the element at `path` when Playwright's hover
  *  gave up (an overlay over its centre): it is scrolled to the middle of the viewport, then the first of its centre, 4
- *  corners and 4 edge midpoints (inset 3px) in the viewport whose document.elementFromPoint is the element or inside it
- *  (viewport coordinates, with that element). With `at`, that point only (the check after the move). Else `covered`:
+ *  corners and 4 edge midpoints (inset 3px; window.__dt.samplePoints) in the viewport where what the mouse presses
+ *  (window.__dt.hitAt, through open shadow roots) is the element or inside it in the flat tree (viewport coordinates, with
+ *  that element). With `at`, that point only (the check after the move). Else `covered`:
  *  what is on top at its first point in the viewport (null: no point in it). SELF-CONTAINED. */
 export function rawHoverPoint(arg: { path: string; at: { x: number; y: number } | null }): { x: number; y: number; hit: string } | { covered: string | null } | null {
   const dt = window.__dt;
@@ -649,14 +650,13 @@ export function rawHoverPoint(arg: { path: string; at: { x: number; y: number } 
   const describe = (e: PageElement | null): string => dt.describe(e, ["data-dt-node", "id", "class"]);
   const { w: vw, h: vh } = dt.viewport();
   if (arg.at === null) el.scrollIntoView({ block: "center", inline: "center" });
-  const o = el.getBoundingClientRect();
-  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
-  const points: Array<[number, number]> = arg.at !== null ? [[arg.at.x, arg.at.y]] : [[cx, cy], [l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy]];
+  const given: Array<[number, number]> = arg.at !== null ? [[arg.at.x, arg.at.y]] : [];
+  const points = arg.at !== null ? given.filter(([x, y]) => x >= 0 && y >= 0 && x < vw && y < vh) : dt.samplePoints(el.getBoundingClientRect(), { inset: 3, order: "centre" });
   let covered: string | null = null;
   for (const [x, y] of points) {
-    if (x < 0 || y < 0 || x >= vw || y >= vh || (arg.at === null && (r < l || b < t))) continue;
-    const hit = document.elementFromPoint(x, y);
-    if (hit && el.contains(hit)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
+    // what the mouse presses there, through open shadow roots (an element inside a web component is not covered by its host)
+    const hit = dt.hitAt(x, y);
+    if (hit && dt.within(hit, el)) return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, hit: describe(hit) };
     covered ??= describe(hit);
   }
   return { covered };
