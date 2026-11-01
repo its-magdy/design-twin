@@ -9,6 +9,21 @@ list of merged PRs.
 
 ## [Unreleased]
 
+### Changed
+
+- When no Figma plugin is connected, the CLI, the MCP server, `dtwin doctor` and `dtwin init` now give the same next
+  step: in Figma desktop, open the file and run Plugins → Development → Design Twin, and keep its window open. The
+  steps for picking one of several connected files and for pasting the bridge token are also worded the same
+  everywhere.
+- `figma_whoami` now says who holds the bridge in a `connectionFrom` field, as `dtwin whoami` does ("this process" or
+  "the daemon (pid N)"). It used to put a `via` field inside `connection`.
+- The dry run of `figma_write` no longer waits for a named `client` that is not connected yet. It reports "Allow
+  edits" as unknown instead.
+
+### Fixed
+
+- `dtwin whoami` through a daemon too old to relay its socket stats no longer says no daemon is running.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added

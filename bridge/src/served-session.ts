@@ -268,7 +268,7 @@ export function createServedSession(bridge: DaemonBridge, o: ServedSessionOption
           // one capped at NAMED_CLIENT_WAIT_MS once a plugin is connected (server-core awaitClient), so
           // `--client <name>` does not fail on the first file that happened to reconnect after a Figma
           // restart. A window that runs out is not the error: the request then fails in the bridge's own
-          // resolveClient ("Figma plugin not connected. Open the file in Figma and run the plugin.") —
+          // resolveClient ("Figma plugin not connected — …") —
           // the text every other path prints. A client that leaves during the wait ends it (ac.signal).
           // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
           // verbatim: the bridge owns the matching rules, so the daemon never has to know them.

@@ -37,6 +37,8 @@ import type { Cmd, Commands } from "./commands.ts";
 // Version reporting lives in staleness.ts so the CLI's pure helpers and doctor.ts can use it without
 // loading this module; callers import it from there.
 import { pluginStalenessNote } from "./staleness.ts";
+import { presence } from "./presence.ts";
+import { pickClient, runPlugin, sentence } from "./hints.ts";
 import { exitFlushed } from "./stdio.ts";
 
 // The handshake check keeps the CALLBACK shape of ws's async verifyClient — done(ok, code, message) —
@@ -430,39 +432,21 @@ function createRegistry<S extends RegistrySocket = BridgeSocket>(opts: RegistryO
   //   target                          -> exact connId, then exact fileKey, then case-insensitive
   //                                      substring of the file name. A substring matching several
   //                                      files is refused rather than resolved to the first.
-  // The target rules above, as data: which live entries a target names. resolveClient turns the
-  // outcome into the routed entry or the error; awaitClient waits on it (a `none` may become a `one`
-  // while a second plugin window is still redialling).
-  function matchClient(entries: ClientEntry<S>[], t: string): ClientEntry<S>[] {
-    const byId = entries.find((e) => e.connId === t);
-    if (byId) return [byId];
-    const byKey = entries.find((e) => e.fileKey && e.fileKey === t);
-    if (byKey) return [byKey];
-    const lower = t.toLowerCase();
-    return entries.filter((e) => e.file && e.file.toLowerCase().includes(lower));
-  }
+  // The target rules above are presence.ts's (matchTarget / presence): resolveClient turns the outcome into the
+  // routed entry or the error; awaitClient waits on it (a `none` may become a `one` while a second plugin window is
+  // still redialling).
   function resolveClient(target?: unknown): ClientEntry<S> {
     const entries = live();
-    if (!entries.length) {
-      throw new Error("Figma plugin not connected. Open the file in Figma and run the plugin.");
-    }
+    const t = target === undefined || target === null || target === "" ? null : String(target);
+    const p = presence(entries, t);
+    if (p.kind === "one") return p.row;
+    if (!entries.length) throw new Error(`Figma plugin not connected — ${runPlugin}.`);
     const list = () => entries.map((e) => `  ${e.connId}  ${JSON.stringify(e.file || "(unidentified)")}${e.fileKey ? "  fileKey " + e.fileKey : ""}`).join("\n");
-    if (target === undefined || target === null || target === "") {
-      const [only] = entries;
-      if (entries.length === 1 && only !== undefined) return only; // only is always set when length is 1
-      throw new Error(
-        `${entries.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n` +
-        `Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").`
-      );
+    if (t === null) {
+      throw new Error(`${entries.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n${sentence(pickClient)}`);
     }
-    const t = String(target);
-    const matched = matchClient(entries, t);
-    const [hit] = matched;
-    if (matched.length === 1 && hit !== undefined) return hit; // hit is always set when length is 1
-    if (matched.length > 1) {
-      throw new Error(
-        `'${t}' matches ${matched.length} connected files — be more specific, or use the connId.\n${list()}`
-      );
+    if (p.kind === "ambiguous") {
+      throw new Error(`'${t}' matches ${p.rows.length} connected files — be more specific, or use the connId.\n${list()}`);
     }
     throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
   }
@@ -559,9 +543,8 @@ function createRegistry<S extends RegistrySocket = BridgeSocket>(opts: RegistryO
         // so a window whose socket opened a moment ago is listed by its file name, not as unidentified.
         let ready: boolean;
         if (named) {
-          const matched = matchClient(entries, t);
-          const [only] = matched;
-          ready = (matched.length > 1 && !identifying) || (only !== undefined && (exact(only) || (settled && !identifying)));
+          const p = presence(entries, t);
+          ready = (p.kind === "ambiguous" && !identifying) || (p.kind === "one" && (exact(p.row) || (settled && !identifying)));
         } else {
           const there = connId && entries.some((e) => e.connId === t); // a connId names one socket: identification adds nothing
           ready = there || (entries.length > 0 && !identifying && (connId || settled || entries.length > 1));
