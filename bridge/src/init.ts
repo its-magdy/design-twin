@@ -32,6 +32,7 @@ import * as LAYOUT from "./project-layout.ts";
 import { ifDefined, isRecord } from "./json-util.ts";
 import { exitCli } from "./stdio.ts";
 import { errMsg } from "./errmsg.ts";
+import { pasteToken, runPlugin, sentence } from "./hints.ts";
 import { hiddenHint, installPlugin, nextSteps, pluginHome, pluginSource } from "./plugin-install.ts";
 
 /** One .mcp.json server entry, as init writes it. */
@@ -447,7 +448,7 @@ function main(argv: string[]): void {
   const steps = [
     "In Figma DESKTOP, once: Plugins → Development → Import plugin from manifest… → " + (manifest ?? "figma-plugin/manifest.json from a clone of the Design Twin repo (this install does not include it)") +
       (manifest && hiddenHint(manifest) ? ` (${hiddenHint(manifest) ?? ""})` : ""),
-    "Run the plugin (Plugins → Development → Design Twin), open \"Connect to Claude Code (optional)\", paste the bridge token into \"Bridge token\", Save:  dtwin --show-token | pbcopy",
+    sentence(`${runPlugin}; then, once, ${pasteToken}`),
   ];
   if (!pluginInstalled) {
     steps.push("In Claude Code, once:  claude plugin marketplace add its-magdy/design-twin  then  claude plugin install designtwin@designtwin-marketplace");

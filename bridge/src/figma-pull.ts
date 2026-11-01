@@ -37,6 +37,8 @@ import { errMsg } from "./errmsg.ts";
 import { emitTimings, stageClock, timingsTarget } from "./timings.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
+import { presence } from "./presence.ts";
+import { pickClient, runPlugin, sentence, whoHolds } from "./hints.ts";
 import type { ClientRow } from "./server-core.ts";
 // No load-time effects (settings.ts resolves what it once resolved at load), so a static import.
 import { createBridge } from "./server-core.ts";
@@ -585,9 +587,8 @@ function formatClients(rows: unknown): string {
   const first = list[0];
   if (first === undefined) {
     return "No Figma files are connected to the bridge.\n" +
-      "  Open a file in Figma and run \"Design Twin\" (Plugins → Development). The plugin\n" +
-      "  auto-connects and announces itself. You can open it in SEVERAL files at once — each one\n" +
-      "  becomes a separate row here, addressable with --client.";
+      `  ${sentence(runPlugin)} It connects and announces itself.\n` +
+      "  You can run it in SEVERAL files at once — each one becomes a separate row here, addressable with --client.";
   }
   const lines = [list.length + " Figma file" + (list.length === 1 ? "" : "s") + " connected:", ""];
   for (const c of list) {
@@ -800,7 +801,7 @@ async function serveDaemon(settings: BridgeSettings): Promise<void> {
   const up = await holder.upstream();
   const h = holder.held();
   console.error("[dtwin] bridge listening on " + up.address + " — socket " + (h.kind === "own" ? h.sock ?? "?" : "?"));
-  console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
+  console.error("[dtwin] " + sentence(runPlugin));
   console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
   const idleMs = settings.idleMs; // the ONE rule the served socket uses (an unparsable value disables it)
   console.error("[dtwin] " + (idleMs > 0
@@ -881,7 +882,7 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
   // by a budget sized for silence — the daemon's own per-command `timeoutMs` still bounds it.
   if (!viaDaemon) {
     console.error("[dtwin] listening on " + up.address);
-    console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
+    console.error("[dtwin] " + sentence(runPlugin));
     console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
   }
   const route = createRoute(async () => up, { connectWaitMs, oneShot: true });
@@ -922,9 +923,8 @@ async function openSession(parsed: ParsedArgs, settings: BridgeSettings): Promis
 async function listClientsCmd({ route, finish }: Session, json: boolean): Promise<void> {
   const rows = await route.listClients();
   console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
-  if (rows.length > 1) {
-    console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
-      "to pick one, or commands that need a target will refuse rather than guess.");
+  if (presence(rows).kind === "ambiguous") {
+    console.error("[dtwin] " + rows.length + " files connected — commands that need a target refuse rather than guess: " + pickClient + ".");
   }
   finish();
 }
@@ -940,9 +940,10 @@ async function whoamiCmd({ route, send, finish }: Session): Promise<void> {
   // uptime and takeovers. The socket described is the ADDRESSED file's (the client send() routed to), not
   // whichever connection happens to be first — with two files open `--client <name>` would print the other's.
   const addressed = whoamiClient ? whoamiClient.connId : null;
-  const { connection: conn, owner } = await route.connectionInfo(addressed).catch(() => ({ connection: null, owner: null }));
-  const connFrom = !conn || !owner ? null : owner.kind === "own" ? "this process" : `the daemon (pid ${owner.pid ?? "?"})`;
-  console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
+  const rc = await route.connectionInfo(addressed).catch(() => null);
+  const conn = rc ? rc.connection : null;
+  const connFrom = rc ? whoHolds(rc) : null;
+  console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom ?? undefined }, null, 2));
   console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
     ", up " + Math.round(r.uptimeMs / 1000) + "s.");
   // Printed even when nothing is stale, so "no version at all" (an old bundle that
@@ -962,9 +963,9 @@ async function whoamiCmd({ route, send, finish }: Session): Promise<void> {
     console.error("[dtwin] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
       "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
       (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : ".") +
-      (connFrom && connFrom !== "this process" ? " (from " + connFrom + ")" : ""));
+      (rc && rc.owner.kind === "daemon" ? " (from " + connFrom + ")" : ""));
   } else {
-    console.error("[dtwin] socket stats unavailable — no daemon is running and this process holds no bridge of its own.");
+    console.error("[dtwin] socket stats unavailable — " + (connFrom ? "from " + connFrom + "." : "no daemon is running and this process holds no bridge of its own."));
   }
   console.error("[dtwin] reading it: run this from BOTH open files. Two different instanceIds => " +
     "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +

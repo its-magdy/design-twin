@@ -32,6 +32,7 @@ import { sha256Hex } from "./hash.ts";
 import { BRIDGE_VERSION } from "./staleness.ts";
 import { exitCli } from "./stdio.ts";
 import { configDir } from "./token-store.ts";
+import { PLUGIN_MENU } from "./hints.ts";
 
 /** The files Figma loads: the manifest and the two it names (bridge/pack.ts ships exactly these). */
 export const PLUGIN_FILES = ["manifest.json", "code.js", "ui.html"] as const;
@@ -147,7 +148,7 @@ export function uninstallPlugin(home: string = pluginHome()): string[] {
 }
 
 // Reopening runs replaced files only while Figma's hot reload is on; with it off, Figma kept the old code.
-const REOPEN = "reopen the plugin in Figma (Plugins → Development → Design Twin) with Plugins → Development → Hot reload plugin on, to run the new code";
+const REOPEN = `reopen the plugin in Figma (${PLUGIN_MENU}) with Plugins → Development → Hot reload plugin on, to run the new code`;
 const importStep = (manifest: string): string => "Plugins → Development → Import plugin from manifest… → " + manifest;
 /** The manifest's folder is hidden in a file picker (a dot folder, or AppData on Windows): how to get there anyway. */
 export function hiddenHint(manifest: string): string | null {

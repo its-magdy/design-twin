@@ -3,6 +3,7 @@
 // itself. This module's only load-time effect is reading bridge/package.json for
 // BRIDGE_VERSION. Every caller, server-core.ts included, imports the three public names from here.
 import fs from "node:fs";
+import { PLUGIN_MENU } from "./hints.ts";
 
 // The plugin reports a version so that a stale bundle in Figma (several fixes live only in
 // figma-plugin/code.js — SVG normalisation, case-folded asset names) can be told apart from a fresh
@@ -40,11 +41,11 @@ function versionOlder(a: Version, b: Version): boolean {
 export function pluginStalenessNote(pluginVersion: unknown): string | null {
   if (typeof pluginVersion !== "string" || !pluginVersion) {
     return "plugin bundle predates version reporting (or the daemon was started before this bridge was updated) — " +
-      "re-run Plugins → Development → Design Twin in Figma and restart `dtwin serve`";
+      `re-run ${PLUGIN_MENU} in Figma and restart \`dtwin serve\``;
   }
   const p = parseVersion(pluginVersion), b = parseVersion(BRIDGE_VERSION);
   if (!p || !b || !versionOlder(p, b)) return null;
-  return `plugin v${pluginVersion} is older than this ${BRIDGE_VERSION} bridge — reload the plugin in Figma (Plugins → Development → Design Twin) to pick up recent fixes`;
+  return `plugin v${pluginVersion} is older than this ${BRIDGE_VERSION} bridge — reload the plugin in Figma (${PLUGIN_MENU}) to pick up recent fixes`;
 }
 
 // Distinct from the above: this fires when the CLIENT ROW ITSELF has no `pluginVersion` KEY at all
