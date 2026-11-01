@@ -1,6 +1,6 @@
 {
   "name": "@design-twin/dtwin",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Figma → code with Claude Code: the dtwin CLI + MCP server (and the Figma plugin) that read a design on the free Figma plan into your project. No REST API key, no cloud service in between.",
   "license": "MIT",
   "author": "Mohamed Magdy Omar",
