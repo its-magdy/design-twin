@@ -19,15 +19,17 @@ import { BRIDGE_VERSION } from "../bridge/src/staleness.ts";
 import { PLUGIN_MENU } from "../bridge/src/hints.ts";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-run-"));
+// Inside the user profile: on Windows a token file outside it demotes the daemon check (doctor sharedTokenNote).
+const TOKEN_FILE = path.join(os.homedir(), ".config", "design-twin", "bridge-token");
 const settings = (source: "file" | "ephemeral" = "file"): BridgeSettings => ({
   port: 8787,
-  token: { ok: true, resolved: { token: "t", source, path: "/cfg/bridge-token", created: false } },
+  token: { ok: true, resolved: { token: "t", source, path: TOKEN_FILE, created: false } },
   maxPayload: { mb: 128, bytes: 128 * 1024 * 1024 },
   idleMs: 0,
   idleRaw: undefined,
   ephemeralPort: false,
 });
-const tokS: TokenStatus = { path: "/cfg/bridge-token", stored: true, envSet: false, activeSource: "file", fingerprint: "abcd1234", loosePerms: false, shadowed: false };
+const tokS: TokenStatus = { path: TOKEN_FILE, stored: true, envSet: false, activeSource: "file", fingerprint: "abcd1234", loosePerms: false, shadowed: false };
 
 /** A fake observer that says `holding`, and `own` when watched — recording what it was asked. */
 function fake(holding: Holding, own: OwnView = { via: "own", clients: [], badToken: null, expected: "ffff0000" }) {
