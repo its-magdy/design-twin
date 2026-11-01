@@ -3,7 +3,8 @@
 
 # Design Twin — `dtwin`
 
-> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
+> Figma → code with Claude Code, on the **free** Figma plan. No REST API key, no cloud service in between: the design
+> goes from your Figma app to your coding agent and nowhere else.
 
 `@design-twin/dtwin` is the **`dtwin` CLI** (pulls a design onto disk) and the **MCP server** (the same reads as live
 tools, plus the only write path) of [Design Twin](https://github.com/its-magdy/design-twin). It also ships the Figma

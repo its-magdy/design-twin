@@ -5,7 +5,8 @@
   </picture>
 </h1>
 
-> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
+> Figma → code with Claude Code, on the **free** Figma plan. No REST API key, no cloud service in between: the design
+> goes from your Figma app to your coding agent and nowhere else.
 
 Design Twin reads a Figma screen through a local plugin and has Claude Code build it in your stack, with your own
 components and tokens, then checks the result against the design.
@@ -51,7 +52,7 @@ the app you are building.
 3. Set up the project. This creates `design/` (with your detected stack in `design/target.json`), the bridge token
    (a local secret, so only your Figma plugin can talk to `dtwin`), the Figma plugin's copy, and an `.mcp.json` entry
    for the Design Twin MCP server, which lets Claude call Figma as live tools. Then restart Claude Code in this
-   folder and approve the `designtwin` server when it asks (or enable it under `/mcp`).
+   folder and approve the `designtwin` server when it asks; `/mcp` shows its status.
    ```bash
    dtwin init --mcp
    ```

@@ -6,7 +6,7 @@ argument-hint: "[question or symptom]"
 
 # Design Twin — what it is, how to connect, what to do when it breaks
 
-Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
+Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with no network egress of its own** (the design goes from Figma to your coding agent and nowhere else).
 A self-authored Figma plugin (`allowedDomains`: loopback only) extracts the design as stack-neutral
 JSON + real assets into **`design/export/`**; `/designtwin:audit-design` reviews it for
 implementation gaps, and `/designtwin:build-screen` turns it into code for any stack.
@@ -160,8 +160,8 @@ its-magdy/design-twin`, then `claude plugin install designtwin@designtwin-market
    - **Live MCP tools in the project being built** → same install and token as the CLI, plus a `.mcp.json`
      *in that project*: run `dtwin init --mcp` there. It writes a `designtwin` entry running the installed
      `figma-mcp.ts` on Bun (`command`: the absolute `bun`, `args`: `["--no-install", "--no-env-file",
-     "<package>/src/figma-mcp.ts"]` — `<package>` is the installed package, `bridge/` in a clone); enable it via
-     `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.
+     "<package>/src/figma-mcp.ts"]` — `<package>` is the installed package, `bridge/` in a clone); restart Claude Code in that
+     project and approve the `designtwin` server when it asks (`/mcp` shows its status). No token goes in that file — the MCP server reads the same per-user stored token.
 4. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
    code token — hand-authored; do NOT confuse with the generated `design/export/design-system/tokens.json`,

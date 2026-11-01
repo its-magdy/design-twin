@@ -121,7 +121,7 @@ It also creates the bridge token if one doesn't exist, and it never overwrites a
 With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json` (it runs the server with the absolute path of the
 `bun` that ran `dtwin init`, as `bun --no-install --no-env-file <package>/src/figma-mcp.ts` — `<package>` is the
 installed package, or `bridge/` in a clone). Restart Claude Code in the project folder and approve the `designtwin`
-server when it asks (or enable it under `/mcp`).
+server when it asks; `/mcp` shows its status.
 
 ### 2. Connect the Figma plugin
 
@@ -178,7 +178,7 @@ The user's part:
 
 1. In Figma desktop: **Plugins → Development → Import plugin from manifest…** and pick the file `dtwin plugin path` printed (once).
 2. In Figma desktop: run **Plugins → Development → Design Twin**. Open **Connect to Claude Code (optional)**, paste the token, and press **Save** (once).
-3. Restart Claude Code in the project folder and approve the `designtwin` MCP server when it asks (or enable it under `/mcp`).
+3. Restart Claude Code in the project folder and approve the `designtwin` MCP server when it asks; `/mcp` shows its status.
 4. Only before a `figma_write`: tick **Allow edits** in the plugin window. It is off by default, and nothing on the bridge or MCP side can turn it on.
 
 Wait for the user to confirm, then check:
